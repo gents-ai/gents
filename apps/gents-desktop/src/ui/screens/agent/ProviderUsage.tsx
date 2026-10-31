@@ -9,7 +9,6 @@ import type {
   UsageWindowView,
 } from "@source-inc/gents-desktop-client";
 import { ProviderLogo } from "../ProviderLogo";
-import { FactRow, LongFactRow } from "./editors";
 import { KINDS, SUBSCRIPTION } from "./inferenceKinds";
 
 function shortDuration(ms: number) {
@@ -121,7 +120,7 @@ function Meter({ w, pct }: { w: UsageWindowView; pct: number }) {
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={pct}
-      className="block h-1.5 overflow-hidden rounded-full bg-muted"
+      className="block h-1.5 overflow-hidden rounded-full bg-foreground/10"
     >
       <span
         className={cn("block h-full rounded-full", FILL[usageLevel(pct)])}
@@ -138,14 +137,14 @@ function WindowRow({ w, now }: { w: UsageWindowView; now: number }) {
   return (
     <li
       title={windowDetail(w, now)}
-      className="col-span-4 grid grid-cols-subgrid items-center text-sm"
+      className="col-span-4 grid grid-cols-subgrid items-center text-xs"
     >
       <span className="truncate text-foreground">{w.label}</span>
       <Meter w={w} pct={pct} />
       <span className={cn("text-right tabular-nums", INK[usageLevel(pct)])}>
         {pct}%
       </span>
-      <span className="truncate text-xs text-muted-foreground tabular-nums">
+      <span className="truncate text-muted-foreground tabular-nums">
         {resetsIn(w, now) ?? (w.lastKnown ? "last known" : "")}
       </span>
     </li>
@@ -154,13 +153,31 @@ function WindowRow({ w, now }: { w: UsageWindowView; now: number }) {
 
 /* one window as a bar beside the account's others, its name, percent and
    reset under it */
-function WindowBar({ w, now }: { w: UsageWindowView; now: number }) {
+/* the hairline before each window once they stand side by side: from 20rem
+   of panel for two, 28rem for three */
+const PARTED: Record<number, string> = {
+  2: "@xs:not-first:before:absolute @xs:not-first:before:inset-y-0 @xs:not-first:before:-left-4 @xs:not-first:before:w-px @xs:not-first:before:bg-border",
+  3: "@md:not-first:before:absolute @md:not-first:before:inset-y-0 @md:not-first:before:-left-4 @md:not-first:before:w-px @md:not-first:before:bg-border",
+};
+
+function WindowBar({
+  w,
+  now,
+  parted,
+}: {
+  w: UsageWindowView;
+  now: number;
+  parted: number;
+}) {
   const pct = Math.round(w.usedPct);
   const when = resetsIn(w, now) ?? (w.lastKnown ? "last known" : null);
   return (
-    <li title={windowDetail(w, now)} className="grid min-w-0 gap-1.5">
+    <li
+      title={windowDetail(w, now)}
+      className={cn("relative grid min-w-0 gap-1.5", PARTED[parted])}
+    >
       <Meter w={w} pct={pct} />
-      <p className="flex min-w-0 items-baseline gap-1.5 text-xs tabular-nums">
+      <p className="flex min-w-0 items-baseline gap-1.5 text-xs whitespace-nowrap tabular-nums">
         <span className="text-foreground">{w.label}</span>
         <span className={INK[usageLevel(pct)]}>{pct}%</span>
         {when && <span className="truncate text-muted-foreground">· {when}</span>}
@@ -168,6 +185,12 @@ function WindowBar({ w, now }: { w: UsageWindowView; now: number }) {
     </li>
   );
 }
+
+const providerTitle = (view: AccountUsageView) =>
+  Object.values(SUBSCRIPTION).find((entry) => entry.provider === view.provider)
+    ?.title ??
+  KINDS.find((entry) => entry.value === view.provider)?.label ??
+  view.provider;
 
 /** An account's closest window at a glance: its name, a ring and the percent. */
 export function UsageSummary({ view }: { view?: AccountUsageView }) {
@@ -206,20 +229,26 @@ export function UsageRows({ view }: { view?: AccountUsageView }) {
     <>
       {view?.windows.length ? (
         Array.from(groups, ([label, windows]) => (
-          <section key={label} aria-label={label} className="grid gap-1.5">
+          <section key={label} aria-label={label} className="grid min-w-0 gap-1.5">
             {groups.size > 1 && (
               <p className="text-xs text-muted-foreground">{label}</p>
             )}
             {/* a few windows of one kind read as one meter, side by side;
                 more, or several kinds, as rows */}
             {groups.size === 1 && windows.length <= 3 ? (
-              <ul className="grid [grid-template-columns:repeat(auto-fit,minmax(9rem,1fr))] gap-x-2 gap-y-3">
+              <ul
+                className={cn(
+                  "grid min-w-0 gap-x-8 gap-y-3",
+                  windows.length === 2 && "@xs:grid-cols-2",
+                  windows.length === 3 && "@md:grid-cols-3",
+                )}
+              >
                 {windows.map((w) => (
-                  <WindowBar key={w.label} w={w} now={now} />
+                  <WindowBar key={w.label} w={w} now={now} parted={windows.length} />
                 ))}
               </ul>
             ) : (
-              <ul className="grid grid-cols-[minmax(2.5rem,auto)_minmax(3rem,1fr)_3ch_minmax(0,auto)] gap-x-3 gap-y-1.5">
+              <ul className="grid min-w-0 grid-cols-[minmax(2.5rem,auto)_minmax(3rem,1fr)_3ch_minmax(0,auto)] gap-x-3 gap-y-1.5">
                 {windows.map((w) => (
                   <WindowRow key={w.label} w={w} now={now} />
                 ))}
@@ -228,9 +257,11 @@ export function UsageRows({ view }: { view?: AccountUsageView }) {
           </section>
         ))
       ) : (
-        <FactRow label="Reported">{view?.note ?? "unknown"}</FactRow>
+        <p className="text-xs text-muted-foreground">{view?.note ?? "Usage unknown"}</p>
       )}
-      {read && <LongFactRow label="Last read">{read}</LongFactRow>}
+      {read && (
+        <p className="line-clamp-3 text-xs break-words text-muted-foreground">{read}</p>
+      )}
     </>
   );
 }
@@ -283,13 +314,13 @@ export function AllProviderLimits({
           No account limits have been reported.
         </p>
       )}
-      <div className="grid divide-y divide-border/60">
+      <div className="grid min-w-0 divide-y divide-border/60">
         {views.map((view, index) => (
           <div
             key={`${view.provider}:${view.label}:${index}`}
-            className="grid gap-2 py-3 first:pt-0 last:pb-0"
+            className="@container grid min-w-0 gap-2 py-3 first:pt-0 last:pb-0"
           >
-            <h3 className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <h3 className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <ProviderLogo
                 kind={
                   Object.entries(SUBSCRIPTION).find(
@@ -298,17 +329,13 @@ export function AllProviderLimits({
                 }
                 className="size-3.5"
               />
-              <span className="text-foreground">{view.label}</span>
-              <span className="font-normal">
-                {Object.values(SUBSCRIPTION).find(
-                  (entry) => entry.provider === view.provider,
-                )?.title ??
-                  KINDS.find((entry) => entry.value === view.provider)?.label ??
-                  view.provider}
-              </span>
+              <span className="min-w-0 truncate text-foreground">{view.label}</span>
+              {providerTitle(view) !== view.label && (
+                <span className="shrink-0 font-normal">{providerTitle(view)}</span>
+              )}
             </h3>
             {view.read === "disabled" ? (
-              <p className="text-sm text-muted-foreground">Disabled</p>
+              <p className="text-xs text-muted-foreground">Disabled</p>
             ) : (
               <UsageRows view={view} />
             )}
