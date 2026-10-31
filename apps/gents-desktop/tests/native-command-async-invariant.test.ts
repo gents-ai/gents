@@ -22,9 +22,7 @@ describe("native command async invariants", () => {
     const offenders = rustSources(COMMANDS_DIR)
       .filter((path) => path !== STARTUP_SOURCE)
       .filter((path) =>
-        readFileSync(path, "utf8").includes(
-          "tauri::async_runtime::block_on",
-        ),
+        readFileSync(path, "utf8").includes("tauri::async_runtime::block_on"),
       );
 
     expect(offenders).toEqual([]);
