@@ -9,15 +9,15 @@ pub async fn load_session_context_details(
     session_id: &str,
     request_id: &str,
     call_id: &str,
-) -> anyhow::Result<Option<gents::toolset::SessionContextDetails>> {
+) -> anyhow::Result<Option<gents::tools::native::SessionContextDetails>> {
     let response = access.execute(&format!(
         r#"{{ InferenceCall(filter: {{
             call_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}},
             request_id: {{_eq: "{}"}}, call_kind: {{_eq: "inference"}}
         }}, limit: 2) {{ request_doc_id request_id call_id call_seq queued_at context_accounting_json }} }}"#,
-        gents::graphql::escape_graphql_string(call_id),
-        gents::graphql::escape_graphql_string(node_did),
-        gents::graphql::escape_graphql_string(request_id),
+        gents::store::graphql::escape_graphql_string(call_id),
+        gents::store::graphql::escape_graphql_string(node_did),
+        gents::store::graphql::escape_graphql_string(request_id),
     )).await?;
     let rows = response
         .pointer("/data/InferenceCall")
@@ -34,7 +34,7 @@ pub async fn load_session_context_details(
         return Ok(None);
     };
     let requester = requester_did
-        .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
+        .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let response = access
         .execute(&format!(
@@ -43,10 +43,10 @@ pub async fn load_session_context_details(
             session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}},
             requester_did: {{_eq: {requester}}}
         }}, limit: 2) {{_docID}} }}"#,
-            gents::graphql::escape_graphql_string(physical_id),
-            gents::graphql::escape_graphql_string(node_did),
-            gents::graphql::escape_graphql_string(session_id),
-            gents::graphql::escape_graphql_string(request_id),
+            gents::store::graphql::escape_graphql_string(physical_id),
+            gents::store::graphql::escape_graphql_string(node_did),
+            gents::store::graphql::escape_graphql_string(session_id),
+            gents::store::graphql::escape_graphql_string(request_id),
         ))
         .await?;
     let owners = response
@@ -64,7 +64,7 @@ pub async fn load_session_context_details(
         requester_did,
         session_id,
         physical_id,
-        &gents::toolset::LastRequestContextSnapshot {
+        &gents::tools::native::LastRequestContextSnapshot {
             request_id: context.request_id.clone(),
             call_id: context.call_id.clone(),
             call_sequence: context.call_sequence,
@@ -76,12 +76,12 @@ pub async fn load_session_context_details(
 }
 
 pub(super) async fn load_latest_session_request_context(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> anyhow::Result<Option<LoadedRequestContext>> {
-    let rows = gents::toolset::load_latest_session_context_calls(
+    let rows = gents::tools::native::load_latest_session_context_calls(
         access,
         node_did,
         requester_did,
@@ -94,7 +94,7 @@ pub(super) async fn load_latest_session_request_context(
 /// `request_doc_ids` come from the scoped transcript page, so each one has a
 /// canonical message anchor and needs no second AgentRequest scope check.
 pub(super) async fn load_session_request_context_history(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -105,11 +105,16 @@ pub(super) async fn load_session_request_context_history(
     }
     let physical_ids = request_doc_ids
         .iter()
-        .map(|doc_id| format!(r#""{}""#, gents::graphql::escape_graphql_string(doc_id)))
+        .map(|doc_id| {
+            format!(
+                r#""{}""#,
+                gents::store::graphql::escape_graphql_string(doc_id)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let requester = requester_did
-        .map(gents::graphql::escape_graphql_string)
+        .map(gents::store::graphql::escape_graphql_string)
         .map(|did| format!("\"{did}\""))
         .unwrap_or_else(|| "null".to_string());
     let query = format!(
@@ -129,8 +134,8 @@ pub(super) async fn load_session_request_context_history(
                 order: [{{ queued_at: ASC }}, {{ request_doc_id: ASC }}, {{ call_seq: ASC }}, {{ call_id: ASC }}]
             ) {{ request_doc_id request_id call_id call_seq queued_at context_accounting_json }}
         }}"#,
-        node_did = gents::graphql::escape_graphql_string(node_did),
-        session_id = gents::graphql::escape_graphql_string(session_id),
+        node_did = gents::store::graphql::escape_graphql_string(node_did),
+        session_id = gents::store::graphql::escape_graphql_string(session_id),
     );
     let data = access.execute(&query).await?;
     let result = |collection: &str| {
@@ -167,13 +172,13 @@ pub(super) async fn load_session_request_context_history(
 }
 
 pub(super) async fn load_session_reductions(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> anyhow::Result<Vec<LoadedReduction>> {
     let requester = requester_did
-        .map(gents::graphql::escape_graphql_string)
+        .map(gents::store::graphql::escape_graphql_string)
         .map(|did| format!("\"{did}\""))
         .unwrap_or_else(|| "null".to_string());
     let query = format!(
@@ -190,8 +195,8 @@ pub(super) async fn load_session_reductions(
                 original_tokens compacted_tokens created_at
             }}
         }}"#,
-        node_did = gents::graphql::escape_graphql_string(node_did),
-        session_id = gents::graphql::escape_graphql_string(session_id),
+        node_did = gents::store::graphql::escape_graphql_string(node_did),
+        session_id = gents::store::graphql::escape_graphql_string(session_id),
     );
     let data = access.execute(&query).await?;
     data.pointer("/data/ProviderContextReduction")
@@ -208,17 +213,17 @@ pub(super) async fn load_session_reductions(
 /// request it ran for, by compaction key. A compaction whose request is
 /// unknown (a fork's copy has none) or has no messages here is left out.
 pub(super) async fn load_compaction_request_starts(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> anyhow::Result<RapidHashMap<String, i64>> {
     let scope = format!(
         r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
-        node = gents::graphql::escape_graphql_string(node_did),
-        session = gents::graphql::escape_graphql_string(session_id),
+        node = gents::store::graphql::escape_graphql_string(node_did),
+        session = gents::store::graphql::escape_graphql_string(session_id),
         requester = requester_did
-            .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
+            .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
             .unwrap_or_else(|| "null".to_string()),
     );
     let data = access
@@ -243,7 +248,12 @@ pub(super) async fn load_compaction_request_starts(
     }
     let ids = requests
         .iter()
-        .map(|(_, doc_id)| format!(r#""{}""#, gents::graphql::escape_graphql_string(doc_id)))
+        .map(|(_, doc_id)| {
+            format!(
+                r#""{}""#,
+                gents::store::graphql::escape_graphql_string(doc_id)
+            )
+        })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>()
@@ -292,7 +302,7 @@ pub(super) struct MarkerSummaries {
 }
 
 pub(super) async fn load_marker_summaries(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -305,16 +315,16 @@ pub(super) async fn load_marker_summaries(
     }
     let keys = |keys: &[String]| {
         keys.iter()
-            .map(|key| format!(r#""{}""#, gents::graphql::escape_graphql_string(key)))
+            .map(|key| format!(r#""{}""#, gents::store::graphql::escape_graphql_string(key)))
             .collect::<Vec<_>>()
             .join(", ")
     };
     let scope = format!(
         r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
-        node = gents::graphql::escape_graphql_string(node_did),
-        session = gents::graphql::escape_graphql_string(session_id),
+        node = gents::store::graphql::escape_graphql_string(node_did),
+        session = gents::store::graphql::escape_graphql_string(session_id),
         requester = requester_did
-            .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
+            .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
             .unwrap_or_else(|| "null".to_string()),
     );
     let data = access
@@ -371,7 +381,8 @@ fn decode_reduction_row(row: &serde_json::Value) -> anyhow::Result<LoadedReducti
         .ok_or_else(|| anyhow::anyhow!("ProviderContextReduction row has no reduction_key"))?;
     let anchor_sequence = string("source_boundary_json")
         .and_then(|json| {
-            serde_json::from_str::<gents::provider_context_reduction::SourceBoundary>(&json).ok()
+            serde_json::from_str::<gents::turn::provider_context_reduction::SourceBoundary>(&json)
+                .ok()
         })
         .and_then(|boundary| boundary.canonical_through)
         .map(|fact| fact.sequence);

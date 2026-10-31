@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::document_config::{EvalDefinition, EvalSplit, EvalTier};
+use crate::documents::{EvalDefinition, EvalSplit, EvalTier};
 use crate::eval::runner::freeze::documents::definition_ref;
 use crate::eval::{
     Anchor, CellSpec, OutcomeKind, RunOrigin, RunRecord, StageCompletion, SubjectRef,

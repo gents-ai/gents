@@ -8,9 +8,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
-use gents::plugin_job::dispatch::split_address;
-use gents::plugin_job::view::{list_jobs, load_job_view, JobFilter, JobKey, StateFilter};
+use gents::store::config_client::ConfigAccess;
+use gents::tools::background::job::dispatch::split_address;
+use gents::tools::background::job::view::{
+    list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
+};
 use gents_protocol::job::{
     JobChildState, JobPauseReason, JobPhaseState, JobReadError, JobState, JobView,
 };

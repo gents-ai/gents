@@ -18,7 +18,7 @@ fn binding(root: &Path, value: &policy::Grant<u64, u64>) -> workspace::Binding {
             cwd: root.to_owned(),
             root: root.to_owned(),
             writable_root: Some(root.to_owned()),
-            policy: crate::toolset::CommandExecutionPolicy::write_capable(),
+            policy: crate::tools::native::CommandExecutionPolicy::write_capable(),
         },
     }
 }
@@ -247,11 +247,11 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
     workspace::scope(
         context,
         scope_interactive(true, async {
-            let tools = crate::toolset::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::toolset::CommandExecutionPolicy::write_capable();
+            let tools = crate::tools::native::ToolContext::new(project.clone(), false).unwrap();
+            let policy = crate::tools::native::CommandExecutionPolicy::write_capable();
             let args = vec!["remembered-invocation".to_owned()];
             let run = || {
-                crate::toolset::run_command_for_test(
+                crate::tools::native::run_command_for_test(
                     &tools,
                     "bash",
                     "printf",
@@ -318,9 +318,9 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
     workspace::scope(
         context,
         scope_interactive(true, async {
-            let tools = crate::toolset::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::toolset::CommandExecutionPolicy::write_capable()
-                .with_mode(crate::toolset::CommandExecutionMode::WorkspaceWrite);
+            let tools = crate::tools::native::ToolContext::new(project.clone(), false).unwrap();
+            let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
+                .with_mode(crate::tools::native::CommandExecutionMode::WorkspaceWrite);
             let args = vec![
                 "-c".into(),
                 concat!(
@@ -330,7 +330,7 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
                 .into(),
             ];
             let run = || {
-                crate::toolset::run_command_for_test(
+                crate::tools::native::run_command_for_test(
                     &tools,
                     "bash",
                     "/bin/sh",

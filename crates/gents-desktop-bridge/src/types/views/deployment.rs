@@ -152,7 +152,7 @@ pub struct AgentEnvironmentView {
     pub active_session_count: usize,
 }
 
-pub use gents::document_config::{
+pub use gents::documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
     EventSource, InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule,
     ToolServiceRegistry, Tools, Trigger,
@@ -169,7 +169,7 @@ pub struct TaskView {
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
-    pub hooks: Vec<gents::document_config::TaskHook>,
+    pub hooks: Vec<gents::documents::TaskHook>,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,
     pub tags: Vec<String>,

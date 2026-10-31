@@ -1,4 +1,4 @@
-use gents::session_origin::SessionScope;
+use gents::session::origin::SessionScope;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::provenance::session_provenance;
@@ -66,7 +66,9 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
                 call.request_id.as_str(),
                 call.caused.request_id.as_str(),
                 call.caused.session_id.as_str(),
-                call.caused.lifecycle_state.map(RequestLifecycleState::as_str),
+                call.caused
+                    .lifecycle_state
+                    .map(RequestLifecycleState::as_str),
             )
         })
         .collect();

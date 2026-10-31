@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::row::AgentRequestRow;
 
@@ -181,7 +181,7 @@ impl ClientCore {
         node_did: &str,
         record: Option<&PeerRecord>,
     ) -> Result<(
-        Arc<dyn gents::identity::NodeIdentity>,
+        Arc<dyn gents::store::identity::NodeIdentity>,
         AgentRequestAdmissionRecord,
         String,
     )> {
@@ -207,7 +207,7 @@ impl ClientCore {
                 "enrollment_authorization_expires_at",
                 record.enrollment_authorization_expires_at.as_deref(),
             )?;
-            let signer: Arc<dyn gents::identity::NodeIdentity> =
+            let signer: Arc<dyn gents::store::identity::NodeIdentity> =
                 Arc::new(self.node_identity.clone());
             let admission = AgentRequestAdmissionRecord::enrollment(
                 self.node_identity.did(),
@@ -223,8 +223,8 @@ impl ClientCore {
             record.source.as_deref() == Some("local-standard") && record.node_did == node_did,
             "chat target is not owned by enrollment or a local standard runtime"
         );
-        let signer: Arc<dyn gents::identity::NodeIdentity> =
-            match gents::identity::RegisteredIdentity::from_registered_did(node_did, None) {
+        let signer: Arc<dyn gents::store::identity::NodeIdentity> =
+            match gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None) {
                 Ok(identity) => Arc::new(identity),
                 Err(_) => {
                     let home = required_peer_generation(

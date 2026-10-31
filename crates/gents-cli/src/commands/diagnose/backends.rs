@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::document_config::InferenceBackend;
+use gents::documents::InferenceBackend;
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;
@@ -11,7 +11,7 @@ use crate::shared::ConfigExportBundle;
 pub(super) async fn diagnose_backends(
     access: &ConfigAccess,
     bundle: &ConfigExportBundle,
-    accounts: &[gents::oauth_credential::AccountSummary],
+    accounts: &[gents::inference::auth::credential::AccountSummary],
     runtime_probes: &BTreeMap<String, Value>,
 ) -> Vec<Value> {
     let mut models = BTreeMap::<&str, BTreeSet<&str>>::new();
@@ -62,7 +62,11 @@ pub(super) async fn diagnose_backends(
             .iter()
             .filter(|profile| profile.backend_id == backend.backend_id)
             .filter_map(|profile| {
-                gents::config::unsent_reasoning_effort(backend, profile, observation.as_ref())
+                gents::inference::resolved::unsent_reasoning_effort(
+                    backend,
+                    profile,
+                    observation.as_ref(),
+                )
             })
             .collect::<Vec<_>>();
         if !warnings.is_empty() {
@@ -152,9 +156,9 @@ fn with_runtime_probe_reason(message: String, runtime_probe: Option<&Value>) -> 
 
 fn account_field(
     backend: &InferenceBackend,
-    accounts: &[gents::oauth_credential::AccountSummary],
+    accounts: &[gents::inference::auth::credential::AccountSummary],
 ) -> Option<Value> {
-    gents::oauth_credential::backend_account(backend, accounts)
+    gents::inference::auth::credential::backend_account(backend, accounts)
         .map(|account| account.map_or(Value::Null, |account| json!(account.label)))
 }
 
@@ -164,7 +168,7 @@ const OAUTH_CREDENTIAL_DISCOVERY_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::document_config::BackendAuth;
+    use gents::documents::BackendAuth;
     use std::sync::Arc;
 
     #[tokio::test]

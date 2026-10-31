@@ -7,7 +7,7 @@ use super::validate::{
     validate_manifest, validate_prompt_tool_contracts, validate_task_goal_declarations,
 };
 use crate::desired_state::interpolate::interpolate_with;
-use gents::graphql::validate_collection_identifier;
+use gents::store::graphql::validate_collection_identifier;
 
 pub(super) fn validate_source_pack_path(path: &Path) -> Result<()> {
     anyhow::ensure!(
@@ -41,7 +41,7 @@ pub(super) async fn resolve_scenario_dir(
     registry: Option<&str>,
 ) -> Result<(
     PathBuf,
-    Option<gents::file_lock::FileLock>,
+    Option<gents::store::local::file_lock::FileLock>,
     gents::pack::PackManifest,
 )> {
     let direct = PathBuf::from(target);
@@ -106,7 +106,7 @@ pub(super) fn load_manifest_with(
 fn load_pack_config_with(
     pack: &Path,
     lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<gents::document_config::PackConfig> {
+) -> Result<gents::documents::PackConfig> {
     const VALIDATION_OWNER: &str = "did:key:zScenarioPackValidationOwner";
     let path = pack.join("pack_config.json");
     let raw = std::fs::read_to_string(&path)
@@ -142,7 +142,7 @@ pub(super) fn read_pack_sidecar(pack: &Path, reference: &str) -> Result<String> 
 
 pub(super) fn scenario_config(
     manifest: &ScenarioManifest,
-) -> Result<&gents::document_config::PackConfig> {
+) -> Result<&gents::documents::PackConfig> {
     manifest
         .config
         .as_ref()
@@ -165,17 +165,17 @@ pub(super) fn trigger_source_collections(
 }
 
 fn scenario_event_source<'a>(
-    config: &'a gents::document_config::PackConfig,
+    config: &'a gents::documents::PackConfig,
     trigger_id: &str,
-) -> Result<&'a gents::document_config::EventSource> {
+) -> Result<&'a gents::documents::EventSource> {
     let trigger = config
         .triggers
         .iter()
         .find(|trigger| trigger.trigger_id == trigger_id)
         .with_context(|| format!("missing Trigger {trigger_id}"))?;
     let event_source_id = match &trigger.source {
-        gents::document_config::TriggerSource::Event { event_source_id } => event_source_id,
-        gents::document_config::TriggerSource::Schedule { .. } => {
+        gents::documents::TriggerSource::Event { event_source_id } => event_source_id,
+        gents::documents::TriggerSource::Schedule { .. } => {
             bail!("scenario Trigger {trigger_id} must use an event source")
         }
     };

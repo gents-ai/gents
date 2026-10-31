@@ -4,8 +4,8 @@ use anyhow::{ensure, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::file_inventory::{FileInventoryPageDemand, FileInventoryReply};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use crate::NodeIdentity;
 
 fn require_source(node: &EmbeddedNode, demand: &FileInventoryPageDemand) -> Result<()> {
@@ -57,7 +57,8 @@ async fn load_in_txn(
             escape_graphql_string(&key)
         ))
         .await?;
-    let rows = crate::graphql::required_rows::<serde_json::Value>(&response, "FileInventoryReply")?;
+    let rows =
+        crate::store::graphql::required_rows::<serde_json::Value>(&response, "FileInventoryReply")?;
     ensure!(
         rows.len() <= 1,
         "file inventory recorded reply is ambiguous"
@@ -114,7 +115,7 @@ pub(crate) async fn record_in_txn(
         }}),
     ).await?;
     ensure!(
-        crate::graphql::mutation_documents(&result, "create_FileInventoryReply")?
+        crate::store::graphql::mutation_documents(&result, "create_FileInventoryReply")?
             .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
         "file inventory reply was not retained"
     );

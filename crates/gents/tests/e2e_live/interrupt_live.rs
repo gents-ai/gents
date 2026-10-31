@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{Agent, AgentContext, InferenceProfile, InferenceSampling};
-use gents::graphql::escape_graphql_string;
+use gents::documents::{Agent, AgentContext, InferenceProfile, InferenceSampling};
 use gents::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use gents::session::load_canonical_message_from_node;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents::{
     default_inference_profile_id_for_agent, ensure_node, interrupt_request_by_doc_id, Collection,
     DocumentRuntimeOptions, Gents, NodeIdentity, ReasoningEffort, ToolCeiling,
@@ -559,7 +559,7 @@ async fn apply_fixture_documents(
     node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,
 ) {
-    use gents::config_client::{
+    use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 

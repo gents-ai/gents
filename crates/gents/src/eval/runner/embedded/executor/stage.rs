@@ -454,7 +454,7 @@ async fn interrupt_and_settle(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Result<TerminalObservation> {
-    crate::interrupt::interrupt_request(node, request_id)
+    crate::request::interrupt::interrupt_request(node, request_id)
         .await
         .context("interrupting a cancelled stage")?;
     await_terminal(node, request_id, Some(Duration::ZERO), GRACE).await

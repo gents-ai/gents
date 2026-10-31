@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::document_config::{DatastoreTools, SurfaceToolDecl, Tools};
-use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
+use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
+use gents::session::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
 use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 
 use crate::support::accepted_turn::{
@@ -34,7 +34,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
             prompt,
             accepted_chunks: vec![StreamChunk::tool_call(
                 "mailbox-tool-turn-call",
-                gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
                 serde_json::json!({
                     "title": "Crew ready",
                     "summary": "Two agents configured.\n\n- builder\n- reviewer",
@@ -61,15 +61,15 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
                 datastore_tool_surface_ids: Some(vec![SURFACE.into()]),
                 ..Default::default()
             }),
-            agents: Some(gents::document_config::AgentTools {
+            agents: Some(gents::documents::AgentTools {
                 target_ids: Vec::new(),
                 enabled: Some(true),
             }),
-            built_ins: Some(gents::document_config::BuiltInTools {
+            built_ins: Some(gents::documents::BuiltInTools {
                 enable_session_history_tool: Some(true),
                 ..Default::default()
             }),
-            self_config: Some(gents::self_config::engineer_self_config()),
+            self_config: Some(gents::tools::builtin::self_config::engineer_self_config()),
             ..Default::default()
         },
         vec![(
@@ -122,7 +122,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].title, "Crew ready");
     let outcome = serde_json::to_value(
-        gents::mailbox::NotificationIdentity::Event.write_outcome(false, false),
+        gents::session::mailbox::NotificationIdentity::Event.write_outcome(false, false),
     )
     .unwrap();
     let bodies = runtime.backend.observed_completion_bodies();
@@ -249,7 +249,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
             prompt: "mailbox-question-prompt",
             accepted_chunks: vec![StreamChunk::tool_call(
                 "mailbox-question-call",
-                gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
                 serde_json::json!({"title": "Release", "question": question}).to_string(),
             )],
             child_plans: vec![StreamPlan::new(
@@ -340,7 +340,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     )
     .await
     .unwrap();
-    let reply_doc = gents::graphql::mutation_documents(&response, "create_AgentRequest")
+    let reply_doc = gents::store::graphql::mutation_documents(&response, "create_AgentRequest")
         .unwrap()
         .unwrap()[0]["_docID"]
         .as_str()
@@ -355,7 +355,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         .await,
         "completed"
     );
-    let answered = gents::mailbox::load_mailbox_item(db.node.as_ref(), &item.doc_id)
+    let answered = gents::session::mailbox::load_mailbox_item(db.node.as_ref(), &item.doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -439,7 +439,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
             prompt,
             accepted_chunks: vec![StreamChunk::tool_call(
                 "mailbox-question-busy-call",
-                gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
                 serde_json::json!({"title": "Continue", "question": question}).to_string(),
             )],
             child_plans: vec![StreamPlan::new(
@@ -538,7 +538,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     .await;
     assert_eq!(asking_final, "completed");
     assert_eq!(reply_final, "completed");
-    let answered = gents::mailbox::load_mailbox_item(db.node.as_ref(), &item.doc_id)
+    let answered = gents::session::mailbox::load_mailbox_item(db.node.as_ref(), &item.doc_id)
         .await
         .unwrap()
         .unwrap();

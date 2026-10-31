@@ -87,19 +87,19 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
     "gents_server::commands::serve=info,",
     "gents::shutdown=info,",
-    "gents::agent::runtime=info,",
-    "gents::agent::daemon=info,",
-    "gents::agent::reconcile=info,",
-    "gents::agent::loop_stream=info,",
-    "gents::provider_input=info,",
-    "gents::chatgpt_codex=info,",
-    "gents::hook=info,",
+    "gents::runtime::agent::runtime=info,",
+    "gents::runtime::agent::daemon=info,",
+    "gents::runtime::agent::reconcile=info,",
+    "gents::runtime::agent::loop_stream=info,",
+    "gents::turn::provider_input=info,",
+    "gents::inference::clients::chatgpt_codex=info,",
+    "gents::tools::call::hook=info,",
     "gents::session::sessions=info,",
-    "gents::streaming=info,",
-    "gents::trigger_engine=info"
+    "gents::request::streaming=info,",
+    "gents::triggers::engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
+const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
 const CLI_AFTER_HELP: &str = "\
 Quick start:
   gents init
@@ -638,7 +638,7 @@ pub(crate) async fn resolve_config_access(
     let data_dir = default_data_dir(&home_dir);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let claim = gents::home::lock_store(&home_dir, &data_dir)?;
+    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
     let node = std::sync::Arc::new(
         persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
             .await?
@@ -650,10 +650,12 @@ pub(crate) async fn resolve_config_access(
     );
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local(node, claim)?;
-    gents::migration::ensure_all_runtime_migrations(migration_node)
+    gents::store::schema::migration::ensure_all_runtime_migrations(migration_node)
         .await
-        .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
-    gents::store_key::upgrade::finish(&data_dir)?;
+        .map_err(|error| {
+            gents::store::local::storage_backend::classify_store_error(error, &data_dir)
+        })?;
+    gents::store::local::store_key::upgrade::finish(&data_dir)?;
     Ok((access, home_dir))
 }
 
@@ -661,9 +663,11 @@ pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
 ) -> Result<NodeBuilder> {
-    gents::storage_backend::reject_legacy_store(data_dir)?;
-    let key = gents::store_key::open_home_store_key(home_dir, data_dir).await?;
-    Ok(gents::store_key::persistent_builder(data_dir, &key)?)
+    gents::store::local::storage_backend::reject_legacy_store(data_dir)?;
+    let key = gents::store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
+    Ok(gents::store::local::store_key::persistent_builder(
+        data_dir, &key,
+    )?)
 }
 
 pub(crate) async fn persistent_node_builder_with_stored_identity(
@@ -807,9 +811,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store_key::StoreEncryption::prepare(
-                        gents::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store_key::home_key_file(&home),
+                    gents::store::local::store_key::StoreEncryption::prepare(
+                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents::store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -835,7 +839,7 @@ mod tests {
         config.store_encryption = None;
         write_init_config(&home, &config).unwrap();
         let data = default_data_dir(&home);
-        let key_file = gents::store_key::home_key_file(&home);
+        let key_file = gents::store::local::store_key::home_key_file(&home);
         let before = std::fs::read(&key_file).unwrap();
 
         let error = match persistent_node_builder_with_stored_identity(&home, &data).await {
@@ -866,9 +870,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store_key::StoreEncryption::prepare(
-                        gents::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store_key::home_key_file(&home),
+                    gents::store::local::store_key::StoreEncryption::prepare(
+                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents::store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -882,7 +886,7 @@ mod tests {
             .store_encryption
             .unwrap()
             .initialize(
-                &gents::store_key::home_key_file(&home),
+                &gents::store::local::store_key::home_key_file(&home),
                 &default_data_dir(&home),
             )
             .unwrap();
@@ -900,7 +904,7 @@ mod tests {
             .expect("an offline home opens its store");
         let node = std::sync::Arc::downgrade(node);
 
-        let error = gents::home::lock_store(&home, &default_data_dir(&home))
+        let error = gents::store::local::home::lock_store(&home, &default_data_dir(&home))
             .expect_err("an opened store excludes another runtime");
         assert!(
             error.lock_held().is_some(),
@@ -922,7 +926,7 @@ mod tests {
     async fn an_offline_access_names_the_holder_of_a_claimed_store() {
         let temp = tempfile::tempdir().unwrap();
         let home = initialized_home(temp.path());
-        let _held = gents::home::lock_home_store(&home).unwrap();
+        let _held = gents::store::local::home::lock_home_store(&home).unwrap();
 
         let error = match resolve_config_access(Some(&home), None).await {
             Ok(_) => panic!("a claimed store must not be opened a second time"),
@@ -930,7 +934,7 @@ mod tests {
         };
 
         assert!(
-            gents::home::store_lock_held(error.as_ref()).is_some(),
+            gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
     }
@@ -961,7 +965,7 @@ mod tests {
             let mut input = service.clone();
             input[field] = value;
             assert!(
-                gents::config_client::config_projection(
+                gents::store::config_client::config_projection(
                     gents::Collection::ToolServiceRegistry,
                     Some(&input)
                 )
@@ -974,7 +978,7 @@ mod tests {
     #[test]
     fn canonical_service_import_preserves_optional_endpoint_and_exact_values() {
         let input = serde_json::json!({"node_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
-        let projected = gents::config_client::config_projection(
+        let projected = gents::store::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&input),
         )
@@ -987,7 +991,7 @@ mod tests {
         assert_eq!(projected["node_did"], "owner");
         let mut missing_owner = input;
         missing_owner.as_object_mut().unwrap().remove("node_did");
-        assert!(gents::config_client::config_projection(
+        assert!(gents::store::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&missing_owner)
         )

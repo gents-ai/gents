@@ -82,7 +82,7 @@ async fn skewed_managed_runtime(
         .expect("client core"),
     );
     let mut next_release =
-        gents::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
+        gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
             .await
             .expect("local collection versions");
     next_release
@@ -314,9 +314,9 @@ async fn managed_readiness_authenticates_explicit_start_and_keeps_passive_reads_
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&root).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let server = MockServer::start().await;
     let endpoint = reqwest::Url::parse(&server.uri()).unwrap();
     let config = gents_server::server_host::ServerConfig {
@@ -372,7 +372,7 @@ async fn managed_readiness_authenticates_explicit_start_and_keeps_passive_reads_
         panic!("public status is ready")
     };
     assert!(validate_ready_runtime(&passive, &authority, &home).is_err());
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let explicit = observe_port_readiness_at(&config, OperatorIdentityInteraction::Allow)
         .await
         .unwrap();

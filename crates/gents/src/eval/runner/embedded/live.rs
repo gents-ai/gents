@@ -4,14 +4,14 @@ use std::time::Instant;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::eval::runner::embedded::executor::capture::documents_capture_query;
 use crate::eval::runner::embedded::executor::evidence::usage_of;
 use crate::eval::runner::embedded::observe::request_evidence_from_query_data;
 use crate::eval::runner::executor::{Capture, StageSpec};
 use crate::eval::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
-use crate::graphql::graphql_with_transaction_retry;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::graphql_with_transaction_retry;
 use crate::Collection;
 
 const CONFIGURATION: [Collection; 11] = [
@@ -180,7 +180,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
         .first()?
         .clone();
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
-    let result = crate::tool_call_lifecycle::query::load_tool_call_presentation(
+    let result = crate::tools::call::lifecycle::query::load_tool_call_presentation(
         &ConfigAccess::local(node.clone()),
         row.get("_docID")?.as_str()?,
         row.get("node_did")?.as_str()?,
@@ -263,8 +263,10 @@ mod tests {
     #[tokio::test]
     async fn last_tool_reads_canonical_delivery_and_keeps_running_calls_visible() {
         let (node, path, mut tool) =
-            crate::tool_call_lifecycle::admission_fixture::published_spawn_parent("eval-last-tool")
-                .await;
+            crate::tools::call::lifecycle::admission_fixture::published_spawn_parent(
+                "eval-last-tool",
+            )
+            .await;
         let running = last_tool_call(&node).await.expect("running tool");
         assert_eq!(running.state.as_deref(), Some("running"));
         assert_eq!(running.result, None);

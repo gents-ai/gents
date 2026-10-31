@@ -744,7 +744,9 @@ pub(in crate::commands::codex_shim) mod tests {
             fs_root: None,
             node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
             node_did: Arc::from("did:test:reasoning"),
             agent_id: Arc::from("reasoning"),
             id_counter: Arc::new(AtomicU64::new(1)),
@@ -1034,7 +1036,7 @@ pub(in crate::commands::codex_shim) mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(&node)
+        gents::store::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
         ShimState {
@@ -1045,7 +1047,9 @@ pub(in crate::commands::codex_shim) mod tests {
             fs_root: None,
             node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
             node_did: Arc::from(crate::caused_sessions::fixtures::FIXTURE_DID),
             agent_id: Arc::from("notification"),
             id_counter: Arc::new(AtomicU64::new(1)),

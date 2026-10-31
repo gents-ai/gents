@@ -131,10 +131,10 @@ fn lean_session_rows(
                     .map(|doc| format!("doc-{doc}")),
                 failure_reason: row
                     .folded_into
-                    .map(|_| gents::lifecycle::FOLDED_REASON.to_owned())
+                    .map(|_| gents::request::lifecycle::FOLDED_REASON.to_owned())
                     .or_else(|| {
                         row.replaced_by
-                            .map(|_| gents::lifecycle::REPLACED_REASON.to_owned())
+                            .map(|_| gents::request::lifecycle::REPLACED_REASON.to_owned())
                     }),
                 input: (row.queued_after.is_some() || row.background_wake).then(|| RequestInput {
                     queue: Some(RequestQueue {

@@ -4,14 +4,14 @@ use tempfile::TempDir;
 
 use super::snapshot::DEFINITION_FILE;
 use super::*;
-use crate::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
-};
-use crate::document_config::{ensure_node, EvalSplit};
+use crate::documents::{ensure_node, EvalSplit};
 use crate::eval::invalidate_run;
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::eval::scoring::PILOT_PURPOSE;
+use crate::store::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
+};
 
 pub(crate) const OWNER: &str = "did:key:eval-owner";
 
@@ -87,7 +87,7 @@ impl Launching {
                     txn.execute(&format!(
                         r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#,
                         name = collection.graphql_type(),
-                        doc_id = crate::graphql::escape_graphql_string(&doc_id),
+                        doc_id = crate::store::graphql::escape_graphql_string(&doc_id),
                     ))
                     .await
                     .map(|_| ())

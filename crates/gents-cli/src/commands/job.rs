@@ -5,11 +5,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::background_tools::ProcessControlScope;
-use gents::config_client::ConfigAccess;
-use gents::plugin_job::control::control;
-use gents::plugin_job::dispatch::split_address;
-use gents::plugin_job::view::{list_jobs, load_job_view, JobFilter, JobKey, StateFilter};
+use gents::store::config_client::ConfigAccess;
+use gents::tools::background::job::control::control;
+use gents::tools::background::job::dispatch::split_address;
+use gents::tools::background::job::view::{
+    list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
+};
+use gents::tools::background::status::ProcessControlScope;
 use gents_protocol::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
     JobReadError, JobState, JobView,
@@ -749,8 +751,8 @@ fn print_table(views: &[JobView], now_ms: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::plugin_job::admit::Refusal;
-    use gents::plugin_job::dispatch::split_address;
+    use gents::tools::background::job::admit::Refusal;
+    use gents::tools::background::job::dispatch::split_address;
     use gents_protocol::job::{
         JobBudget, JobChildRow, JobChildState, JobOutcome, JobPauseReason, JobPhase, JobPhaseState,
         JobPinSummary, JobProgress, JobScope, JobState, JobUsage, JobView,

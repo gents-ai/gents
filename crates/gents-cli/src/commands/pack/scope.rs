@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 pub(crate) async fn plugin_notification_scope(
     home: &std::path::Path,
 ) -> Result<Option<(gents::ConfigAccess, String)>> {
-    if !gents::home::init_config_path(home).is_file() {
+    if !gents::store::local::home::init_config_path(home).is_file() {
         return Ok(None);
     }
     resolve_scope_owner(&ScopeArgs {
@@ -25,7 +25,7 @@ pub(crate) async fn record_plugin_store_change(
     coordinate: &str,
     installed: Option<&gents::pack::PackIdentity>,
 ) -> Result<()> {
-    if !gents::home::init_config_path(home).is_file() {
+    if !gents::store::local::home::init_config_path(home).is_file() {
         return Ok(());
     }
     let (access, owner) = resolve_scope_owner(&ScopeArgs {
@@ -84,7 +84,7 @@ pub(super) async fn resolve_plugin_slot_owner(
 
 pub(crate) async fn resolve_scope_owner(
     scope: &ScopeArgs,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
     let owner = super::super::config::binding::resolve_target_node_did(

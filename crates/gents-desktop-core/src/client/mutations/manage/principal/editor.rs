@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{
+use gents::store::config_client::{
     backend_pool_members,
     patch::{SelfConfigPatch, SelfConfigTarget},
     read_desired_state_record_in_txn, set_backend_rotation_in_txn, BackendRotation, ConfigAccess,
@@ -63,7 +63,7 @@ async fn read_in_txn(
         read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
             .await?
             .context("This configuration no longer exists. Reopen Runtime Settings.")?;
-    let composite = gents::graphql::newest_document_composite_commit_in_txn(
+    let composite = gents::store::graphql::newest_document_composite_commit_in_txn(
         txn,
         &document_id,
         "client.settings.read",
@@ -129,7 +129,7 @@ pub async fn save_backend_authentication_on(
     node_did: &str,
     id: &str,
     expected: &ConfigEditorRevision,
-    auth: &gents::document_config::BackendAuth,
+    auth: &gents::documents::BackendAuth,
 ) -> Result<()> {
     let patch = vec![("auth".to_owned(), Some(serde_json::to_value(auth)?))];
     access.transact_write("client.backend.authentication.save", |txn| {
@@ -227,7 +227,7 @@ pub async fn save_config_editor_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -377,7 +377,7 @@ mod tests {
         let access = fixture().await?;
         let (revision, original) =
             read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
-        let replacement = gents::document_config::BackendAuth::ApiKey {
+        let replacement = gents::documents::BackendAuth::ApiKey {
             key: "replacement-private-key".into(),
         };
         save_backend_authentication_on(
@@ -398,7 +398,7 @@ mod tests {
             "did:test:editor",
             "backend",
             &revision,
-            &gents::document_config::BackendAuth::Unauthenticated
+            &gents::documents::BackendAuth::Unauthenticated
         )
         .await
         .is_err());
@@ -423,7 +423,7 @@ mod tests {
             "provider_kind":"ClaudeCliSubscription","endpoint":"claude-cli://subscription",
             "auth":{"kind":"node_oauth"}
         }))?;
-        gents::config_client::write_inference_backend_document(access, &backend).await?;
+        gents::store::config_client::write_inference_backend_document(access, &backend).await?;
         Ok(())
     }
 
@@ -445,7 +445,7 @@ mod tests {
         .await?;
         assert_eq!(
             pool.backend.auth,
-            gents::document_config::BackendAuth::NodeOAuthPool {
+            gents::documents::BackendAuth::NodeOAuthPool {
                 allow_overage: true
             }
         );
@@ -475,7 +475,7 @@ mod tests {
         .await?;
         assert_eq!(
             single.backend.auth,
-            gents::document_config::BackendAuth::NodeOAuth { account_ref: None }
+            gents::documents::BackendAuth::NodeOAuth { account_ref: None }
         );
         assert!(single.members.is_empty());
         Ok(())
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(after, revision);
         assert!(matches!(
             stored.auth,
-            gents::document_config::BackendAuth::ApiKey { .. }
+            gents::documents::BackendAuth::ApiKey { .. }
         ));
         let missing =
             set_backend_rotation_on(&access, did, "absent", None, BackendRotation::Single)

@@ -15,7 +15,7 @@ use super::*;
 use crate::client::peer_directory::RemovalCause;
 use defra_p2p_adapter::P2pDocumentRequest;
 use defra_p2p_adapter::TransportPeerId;
-use gents::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input;
+use gents::runtime::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input;
 use gents_protocol::enrollment::derive_enrollment_id;
 use gents_protocol::enrollment::{
     AuthorizationRevisionKind, AuthorizationRevisionRecord, EnrollmentDecisionRecord,
@@ -30,8 +30,8 @@ use std::collections::BTreeSet;
 #[serde(deny_unknown_fields)]
 struct PendingRequestCase {
     name: String,
-    requested: gents::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
-    current: gents::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
+    requested: gents::runtime::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
+    current: gents::runtime::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
     has_decision: bool,
     current_approval: bool,
     route_applied: bool,
@@ -53,7 +53,7 @@ fn generated_pending_request_satisfaction_matches_lean() {
     assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(
-            gents::agent::p2p_reconcile::enrollment::pending_request_satisfied(
+            gents::runtime::agent::p2p_reconcile::enrollment::pending_request_satisfied(
                 &case.requested,
                 &case.current,
                 case.has_decision,
@@ -138,7 +138,7 @@ async fn managed_enrollment_discovers_restarted_endpoint_without_changing_author
         )
         .unwrap();
         std::fs::write(
-            home.join(gents::home::RUNTIME_STATE_FILE_NAME),
+            home.join(gents::store::local::home::RUNTIME_STATE_FILE_NAME),
             json!({
                 "node_name": "managed", "node_did": live_owner,
                 "graphql": graphql, "p2p_transport": "iroh", "p2p_peer_id": live_peer,
@@ -1113,7 +1113,7 @@ fn signed_enrollment_authority_at(
 }
 
 async fn commit_document(core: &ClientCore, stage: &'static str, mutation: &str) {
-    gents::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
+    gents::store::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
         .await
         .expect("commit enrollment authority document");
 }
@@ -1982,7 +1982,7 @@ async fn pending_request_requires_the_exact_current_applied_route() {
 async fn enrollment_challenge_waits_for_prior_route_teardown() {
     use crate::client::paths::DesktopPaths;
     use futures::FutureExt;
-    use gents::agent::p2p_reconcile::read_client_replicated_schema;
+    use gents::runtime::agent::p2p_reconcile::read_client_replicated_schema;
     use gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD;
     use std::sync::atomic::Ordering::SeqCst;
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::goal::{load_canonical_goal, set_goal, GoalStatus, UPDATE_GOAL_TOOL_NAME};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
 use serde::Deserialize;
 

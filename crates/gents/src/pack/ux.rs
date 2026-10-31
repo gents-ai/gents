@@ -49,7 +49,7 @@ pub struct PackUxPlugin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_enabled: Option<bool>,
     /// The datastore tools its pages may run, by surface: the host refuses
-    /// any (surface, tool) pair not named here (`crate::ux_data`).
+    /// any (surface, tool) pair not named here (`crate::observe::ux_data`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data: Vec<UxDataSurface>,
 }

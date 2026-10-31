@@ -91,7 +91,7 @@ async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
     let response = node.execute(&format!(
         "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id node_did session_id content input retry_key admission_signer_did}}}}"
     )).await;
-    gents::graphql::ensure_no_errors(&response, "goal submission").unwrap();
+    gents::store::graphql::ensure_no_errors(&response, "goal submission").unwrap();
     let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
     assert_eq!(row["content"], "Explain the architecture");
     assert_eq!(row["node_did"], node_did);
@@ -105,7 +105,7 @@ async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
     let response = node
         .execute("{AgentRequest{request_id} Goal{goal_id} GoalCreationClaim{creation_key}}")
         .await;
-    gents::graphql::ensure_no_errors(&response, "atomic rejection").unwrap();
+    gents::store::graphql::ensure_no_errors(&response, "atomic rejection").unwrap();
     let data = response.data.as_ref().unwrap();
     for collection in ["AgentRequest", "Goal", "GoalCreationClaim"] {
         assert_eq!(

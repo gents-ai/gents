@@ -334,7 +334,7 @@ fn restart_command_validates_reviewed_authority_through_tauri_ipc() {
             snapshot_grants: SnapshotGrants::core_only(),
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
         },
         None,
     )

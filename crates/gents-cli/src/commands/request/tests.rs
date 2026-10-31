@@ -25,7 +25,7 @@ fn output_envelope(output: CliOutputObservation) -> RequestOutputEnvelope {
     }
 }
 
-fn show_snapshot(blocked: Option<gents::blocked_turn::BlockedTurn>) -> RequestShowSnapshot {
+fn show_snapshot(blocked: Option<gents::goal::blocked_turn::BlockedTurn>) -> RequestShowSnapshot {
     let row = json!({
         "request_id": "request", "lifecycle_state": "failed",
         "failure_reason": "provider usage limit reached (reset time not reported)",
@@ -45,10 +45,10 @@ fn show_snapshot(blocked: Option<gents::blocked_turn::BlockedTurn>) -> RequestSh
 
 fn usage_limit(
     resets_at: Option<chrono::DateTime<chrono::Utc>>,
-) -> gents::blocked_turn::BlockedTurn {
-    gents::blocked_turn::BlockedTurn {
-        reason: gents::blocked_turn::BlockedReason::UsageLimit,
-        account: Some(gents::blocked_turn::BlockedAccount {
+) -> gents::goal::blocked_turn::BlockedTurn {
+    gents::goal::blocked_turn::BlockedTurn {
+        reason: gents::goal::blocked_turn::BlockedReason::UsageLimit,
+        account: Some(gents::goal::blocked_turn::BlockedAccount {
             label: "label-b".into(),
             provider: "claude-subscription".into(),
         }),

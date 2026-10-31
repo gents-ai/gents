@@ -61,7 +61,7 @@ pub async fn verify(
         .as_str()
         .context("missing retained caller identity in dropped reply")?;
     let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id session_id content admission_signature lifecycle_state}} }}",
-    gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session));
+    gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(session));
     let rows = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let rows = access.execute(&query).await?;
@@ -152,7 +152,7 @@ pub async fn verify(
             && provenance.edit_client_did.as_deref() == Some(client_did),
         "the child changed its exact retained edit binding"
     );
-    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id content lifecycle_state}} AgentMessage(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{_docID sequence message_key}} }}", gents::graphql::escape_graphql_string(node_did),gents::graphql::escape_graphql_string(&child_id),gents::graphql::escape_graphql_string(node_did),gents::graphql::escape_graphql_string(&child_id));
+    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id content lifecycle_state}} AgentMessage(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{_docID sequence message_key}} }}", gents::store::graphql::escape_graphql_string(node_did),gents::store::graphql::escape_graphql_string(&child_id),gents::store::graphql::escape_graphql_string(node_did),gents::store::graphql::escape_graphql_string(&child_id));
     let fork_rows = access.execute(&query).await?;
     let requests = fork_rows["data"]["AgentRequest"]
         .as_array()

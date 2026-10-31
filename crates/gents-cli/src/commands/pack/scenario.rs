@@ -13,8 +13,8 @@ use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
 use crate::graphql_access::post_graphql;
 use background::await_background_completion;
 use fan_in::verify_fan_in;
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use load::{
     load_manifest, load_manifest_with, read_distribution_manifest, resolve_scenario_dir,
@@ -358,7 +358,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         for collection in manifest.expect.collection_counts.keys() {
             counts.insert(collection.clone(), count_rows(&graphql, collection).await);
         }
-        let signer_identity = gents::identity::commit_signer_identity_for_did(&node_did)?;
+        let signer_identity = gents::store::identity::commit_signer_identity_for_did(&node_did)?;
         let provenance = if manifest.expect.signed_provenance {
             let mut evidence = Vec::with_capacity(stages.len());
             for stage in &stages {

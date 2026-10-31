@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
-use gents::lifecycle::TriggerLineage;
+use gents::request::lifecycle::TriggerLineage;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -180,7 +180,8 @@ pub async fn submit_task_request(
         Some(&fire.request_id),
     )
     .await?;
-    let admitted = gents::lifecycle::write_task_delivery(access, fire, false, &create).await?;
+    let admitted =
+        gents::request::lifecycle::write_task_delivery(access, fire, false, &create).await?;
     Ok(SubmittedRequest {
         request_id: admitted.request.request_id,
         session_id: admitted.request.session_id,
@@ -335,7 +336,7 @@ async fn fetch_request_view(
             }}
         }}"#
     );
-    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_request")
+    let resp = gents::store::graphql::graphql_with_transaction_retry(node, &query, "fetch_request")
         .await
         .with_context(|| format!("fetch_request({request_id})"))?;
     let row = resp

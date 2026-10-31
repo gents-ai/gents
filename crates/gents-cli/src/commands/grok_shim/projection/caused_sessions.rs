@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents::session::origin::load_session;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::session_origin::load_session;
 use gents_protocol::row::AgentRequestRow;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -386,11 +386,11 @@ async fn cancel(
     context_window: u64,
 ) -> Result<Value> {
     if let Some(refusal) =
-        gents::session_message::interrupt_refusal(node, caller, &session.scope).await?
+        gents::session::message::interrupt_refusal(node, caller, &session.scope).await?
     {
         anyhow::bail!(refusal);
     }
-    if gents::session_message::interrupt_session(node, &session.scope)
+    if gents::session::message::interrupt_session(node, &session.scope)
         .await?
         .is_some()
     {
@@ -423,14 +423,10 @@ async fn snapshot(
         .unwrap_or(0);
     let status = SubagentFinishStatus::of(latest)
         .map(SubagentFinishStatus::wire_name)
-        .unwrap_or_else(
-            || match latest.lifecycle_state {
-                Some(RequestLifecycleState::Pending | RequestLifecycleState::Claimed) => {
-                    "initializing"
-                }
-                _ => "running",
-            },
-        );
+        .unwrap_or_else(|| match latest.lifecycle_state {
+            Some(RequestLifecycleState::Pending | RequestLifecycleState::Claimed) => "initializing",
+            _ => "running",
+        });
     let duration = if latest.is_terminal() || started == 0 {
         progress.duration_ms
     } else {
@@ -491,7 +487,9 @@ async fn final_output(node: &Arc<EmbeddedNode>, request: &AgentRequestRow) -> Re
         .as_deref()
         .context("terminal caused request omitted physical identity")?;
     match gents::load_caused_request_terminal(node, request_doc_id).await? {
-        Some(gents::tool_call_lifecycle::CausedRequestTerminal::Completed { output }) => Ok(output),
+        Some(gents::tools::call::lifecycle::CausedRequestTerminal::Completed { output }) => {
+            Ok(output)
+        }
         Some(_) => anyhow::bail!("caused request did not complete"),
         None => anyhow::bail!("completed caused request has no replicated terminal output yet"),
     }
@@ -765,7 +763,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
         let did = crate::caused_sessions::fixtures::FIXTURE_DID;
@@ -797,7 +795,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
         node
@@ -810,7 +808,7 @@ mod tests {
             ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")

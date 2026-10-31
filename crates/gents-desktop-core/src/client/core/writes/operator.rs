@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 
 use super::super::bootstrap::normalize_required;
 use super::super::p2p_ops;
@@ -136,7 +136,7 @@ impl ClientCore {
     pub fn operator_graphql(
         &self,
         node_did: &str,
-    ) -> Option<gents::config_client::GraphqlEndpoint> {
+    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
         self.sync_state
             .records()
             .iter()
@@ -147,7 +147,7 @@ impl ClientCore {
     pub fn operator_observation_graphql(
         &self,
         node_did: &str,
-    ) -> Option<gents::config_client::GraphqlEndpoint> {
+    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
         self.sync_state
             .records()
             .iter()
@@ -158,7 +158,7 @@ impl ClientCore {
     pub async fn operator_observation_endpoint(
         &self,
         node_did: &str,
-    ) -> Option<gents::config_client::GraphqlEndpoint> {
+    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
         let record = self
             .sync_state
             .records()
@@ -174,7 +174,7 @@ impl ClientCore {
     pub fn operator_signer(
         &self,
         node_did: &str,
-    ) -> Result<std::sync::Arc<dyn gents::identity::NodeIdentity>> {
+    ) -> Result<std::sync::Arc<dyn gents::store::identity::NodeIdentity>> {
         let record = self
             .sync_state
             .records()

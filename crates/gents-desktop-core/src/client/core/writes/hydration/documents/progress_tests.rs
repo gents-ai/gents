@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 
 use super::*;
 
@@ -36,10 +36,10 @@ async fn local_hydration_counts_exact_origin_documents_without_reading_the_origi
         .into_iter()
         .enumerate()
         {
-            let label = gents::graphql::escape_graphql_string(label);
-            let requester = gents::graphql::escape_graphql_string(requester);
-            let session = gents::graphql::escape_graphql_string(session);
-            let owner = gents::graphql::escape_graphql_string(owner);
+            let label = gents::store::graphql::escape_graphql_string(label);
+            let requester = gents::store::graphql::escape_graphql_string(requester);
+            let session = gents::store::graphql::escape_graphql_string(session);
+            let owner = gents::store::graphql::escape_graphql_string(owner);
             let identity = match collection {
                 SessionHydrationCollection::AgentMessage => {
                     format!("message_key: \"{label}\", sequence: {ordinal},")
@@ -64,7 +64,7 @@ async fn local_hydration_counts_exact_origin_documents_without_reading_the_origi
             .unwrap();
             let key = SessionHydrationDocumentKey {
                 collection,
-                doc_id: gents::graphql::created_doc_id(&response, collection_name).unwrap(),
+                doc_id: gents::store::graphql::created_doc_id(&response, collection_name).unwrap(),
             };
             match label.as_str() {
                 "root" => {
@@ -85,7 +85,7 @@ async fn local_hydration_counts_exact_origin_documents_without_reading_the_origi
         .await
         .unwrap();
     assert_eq!(local, roots);
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         &node,
         &local_hydration_query("reader", "child", "owner", Some(&manifest)),
         "test hydration manifest coverage",
@@ -99,7 +99,7 @@ async fn local_hydration_counts_exact_origin_documents_without_reading_the_origi
         "a fork's signed origin keys are already local"
     );
     let served = roots.union(&origins).cloned().collect::<BTreeSet<_>>();
-    use gents::agent::p2p_reconcile::session_hydration::{
+    use gents::runtime::agent::p2p_reconcile::session_hydration::{
         project_durable_hydration_progress, ClientHydrationPhase, ClientHydrationRequestState,
     };
     let complete = project_durable_hydration_progress(

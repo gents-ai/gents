@@ -7,7 +7,7 @@ use crate::eval::runner::embedded::observe::{
 };
 use crate::eval::runner::executor::StageEvidence;
 use crate::eval::{Anchor, TrialUsage};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub(super) struct SessionRequest {
     pub(super) request_id: String,

@@ -299,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn goal_observation_is_scoped_read_only_and_retries_failed_delivery() {
         use super::super::projection::BoundModelContext;
-        use gents::graphql::ensure_no_errors;
+        use gents::store::graphql::ensure_no_errors;
         use std::sync::Arc;
         let directory = tempfile::tempdir().unwrap();
         let node = Arc::new(
@@ -310,7 +310,9 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(&node).await.unwrap();
+        gents::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let projections = ProjectionEngine::new(
             node.clone(),
             BoundModelContext::new("model".into(), "Model".into(), 1000),
@@ -416,7 +418,7 @@ mod tests {
         assert_eq!(next["params"]["update"]["_meta"]["gents/goalId"], "owned");
         drop(lines);
 
-        let access = gents::config_client::ConfigAccess::local(node.clone());
+        let access = gents::store::config_client::ConfigAccess::local(node.clone());
         access.write(
             "grok.goal.fixture.complete",
             r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"complete",tokens_used:12}) {_docID}}"#,
@@ -425,7 +427,7 @@ mod tests {
             "grok.goal.fixture.request",
             r#"mutation {create_AgentRequest(input:{purpose: "normal", request_id:"usage-request",node_did:"principal",session_id:"session"}) {_docID}}"#,
         ).await.unwrap();
-        let request_doc = gents::graphql::escape_graphql_string(
+        let request_doc = gents::store::graphql::escape_graphql_string(
             &gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest").unwrap(),
         );
         access

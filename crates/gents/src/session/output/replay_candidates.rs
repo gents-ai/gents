@@ -28,7 +28,7 @@ use super::{
 pub(crate) async fn load_canonical_assistant_candidates(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::provider_context_reduction::SourceBoundary,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
 }
@@ -37,7 +37,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     node: &EmbeddedNode,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::provider_context_reduction::SourceBoundary,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     let (request_commits, high_water) =
@@ -60,7 +60,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         ),
         (scope.request_id.to_owned(), request_commits),
     )]);
-    let mut capture_cache = crate::rendered_request::CaptureReadCache::default();
+    let mut capture_cache = crate::inference::rendered_request::CaptureReadCache::default();
 
     let session_filter =
         session_scope_filter(scope.node_did, scope.session_id, scope.requester_did);

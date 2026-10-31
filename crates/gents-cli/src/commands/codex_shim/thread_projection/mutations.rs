@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents_codex_protocol as codex;
 
 use crate::commands::codex_shim::ShimState;

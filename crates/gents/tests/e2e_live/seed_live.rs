@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{AgentContext, CompactionConfig, InferenceSampling};
-use gents::graphql::escape_graphql_string;
+use gents::documents::{AgentContext, CompactionConfig, InferenceSampling};
+use gents::store::graphql::escape_graphql_string;
 use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
 use serde::Deserialize;
 
@@ -114,11 +114,11 @@ async fn live_seeds_reach_the_provider() {
         );
         for row in inference_rows.into_iter().chain(compaction_rows) {
             assert_eq!(row.source, "openai_chat_completions");
-            let body = gents::rendered_request::decode_capture_json_embedded(
+            let body = gents::inference::rendered_request::decode_capture_json_embedded(
                 &db.node,
                 row.capture_version,
                 &row.request_json,
-                gents::rendered_request::CapturePayloadKind::RequestBody,
+                gents::inference::rendered_request::CapturePayloadKind::RequestBody,
             )
             .await
             .expect("decode captured provider request");
@@ -139,7 +139,7 @@ async fn configure_seed_and_compaction(
     agent_id: &str,
     profile_id: &str,
 ) {
-    use gents::config_client::{
+    use gents::store::config_client::{
         apply_desired_state_plan, read_desired_state_record_in_txn as read,
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -153,7 +153,7 @@ async fn configure_seed_and_compaction(
             let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
-            let mut behavior: gents::document_config::Agent = serde_json::from_value(behavior)?;
+            let mut behavior: gents::documents::Agent = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id
                 .clone()

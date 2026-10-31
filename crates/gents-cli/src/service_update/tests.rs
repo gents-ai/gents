@@ -250,9 +250,9 @@ fn fixture_plan(home: &Path) -> Plan {
     }
 }
 fn initialize_fixture_identity(plan: &mut Plan) {
-    use gents::identity::NodeIdentity as _;
+    use gents::store::identity::NodeIdentity as _;
     let key = plan.home.join("fixture.key");
-    let identity = gents::identity::KeyIdentity::load_or_create(&key, None).unwrap();
+    let identity = gents::store::identity::KeyIdentity::load_or_create(&key, None).unwrap();
     plan.node_did = identity.did().to_owned();
     crate::home_state::write_init_config(
         &plan.home,
@@ -396,7 +396,7 @@ async fn replacement_cannot_back_up_or_install_over_a_claimed_store() {
     initialize_fixture_identity(&mut plan);
     let directory = operation_dir(&home, plan.id);
     std::fs::create_dir(home.join("data")).unwrap();
-    let _store = gents::home::lock_home_store(&home).unwrap();
+    let _store = gents::store::local::home::lock_home_store(&home).unwrap();
     files::write_json(&directory.join("plan.json"), &plan).unwrap();
     files::write_json(
         &directory.join("receipt.json"),
@@ -432,7 +432,7 @@ fn cold_backup_copies_the_claimed_store_even_when_its_directory_is_a_symlink() {
     std::os::unix::fs::symlink(data.path(), home.path().join("data")).unwrap();
     let plan = fixture_plan(home.path());
     let directory = operation_dir(home.path(), plan.id);
-    let _store = gents::home::lock_home_store(home.path()).unwrap();
+    let _store = gents::store::local::home::lock_home_store(home.path()).unwrap();
     files::cold_backup(&plan, &directory).unwrap();
     assert!(std::fs::symlink_metadata(directory.join("backup/data"))
         .unwrap()
@@ -554,7 +554,7 @@ async fn recovery_refuses_any_candidate_start_attempt_even_without_readiness() {
     let directory = operation_dir(home.path(), plan.id);
     files::write_json(&directory.join("startup-attempted.json"), &true).unwrap();
     let mut reservation = Some(
-        gents::home::reserve_runtime_startup(home.path())
+        gents::store::local::home::reserve_runtime_startup(home.path())
             .await
             .unwrap(),
     );
@@ -586,7 +586,7 @@ async fn exposed_candidate_is_a_rollback_fence_even_without_a_startup_marker() {
     let directory = operation_dir(home.path(), plan.id);
     files::write_json(&directory.join("candidate-exposed.json"), &true).unwrap();
     let mut reservation = Some(
-        gents::home::reserve_runtime_startup(home.path())
+        gents::store::local::home::reserve_runtime_startup(home.path())
             .await
             .unwrap(),
     );

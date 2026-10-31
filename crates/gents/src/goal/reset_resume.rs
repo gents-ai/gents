@@ -1,8 +1,10 @@
 use super::*;
-use crate::blocked_turn::{goal_stopped_in_txn, served_profile};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::NodeIdentity;
-use crate::oauth_credential::resolve_oauth_credential_in_txn;
+use crate::documents::BackendAuth;
+use crate::goal::blocked_turn::{goal_stopped_in_txn, served_profile};
+use crate::inference::auth::credential::resolve_oauth_credential_in_txn;
+use crate::inference::auth::credential::{resolve_oauth_credential_in_txn, AccountPick};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::identity::NodeIdentity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 
 pub async fn resume_at_reset(
@@ -68,7 +70,7 @@ async fn stage_reset_resume(
     let account_serves = backend.enabled
         && match backend.auth.account_pick() {
             Some(pick) => {
-                use crate::backend_provider::BackendProviderOauthExt;
+                use crate::inference::backends::provider::BackendProviderOauthExt;
                 let Some(provider) = backend.provider_kind.oauth_provider() else {
                     return Ok(None);
                 };

@@ -8,8 +8,8 @@ use gents_protocol::file_inventory::{
 };
 use serde::Deserialize;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::{escape_graphql_string, required_rows};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::{escape_graphql_string, required_rows};
 use crate::NodeIdentity;
 
 #[derive(Debug, Clone)]
@@ -131,7 +131,7 @@ pub(super) async fn prepare_page_in_txn(
                     "node_did": demand.admission.request.node_did, "demand": demand, "receipt": candidate }}),
             ).await?;
     Ok(PreparedInventoryPage {
-        document_id: crate::graphql::created_doc_id(&response, "FileInventoryPage")?,
+        document_id: crate::store::graphql::created_doc_id(&response, "FileInventoryPage")?,
         receipt: candidate.clone(),
     })
 }
@@ -218,7 +218,7 @@ impl VerifiedInventoryResponse {
             return Ok(None);
         };
         let scope = &grant.demand.admission.request;
-        if !crate::tool_call_lifecycle::grant_source_file_read(
+        if !crate::tools::call::lifecycle::grant_source_file_read(
             node.clone(),
             gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
             &scope.node_did,

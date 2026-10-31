@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 

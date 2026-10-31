@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
+use gents::{
+    documents::skills::prompt_slash_skill_selection, store::graphql::escape_graphql_string,
+};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use gents_protocol::request_admission::AgentRequestCreate;
@@ -21,7 +23,9 @@ pub(crate) fn ensure_local_request_signer(
     home: Option<&Path>,
     target_node_did: &str,
 ) -> Result<()> {
-    if gents::identity::RegisteredIdentity::from_registered_did(target_node_did, None).is_ok() {
+    if gents::store::identity::RegisteredIdentity::from_registered_did(target_node_did, None)
+        .is_ok()
+    {
         return Ok(());
     }
     let home = crate::resolve_home_dir(home);
@@ -359,7 +363,7 @@ pub(crate) async fn prepare_agent_request_with_input(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did);
     let create = gents::build_signed_request(
         gents::RequestSpec {
-            trigger_lineage: gents::lifecycle::TriggerLineage {
+            trigger_lineage: gents::request::lifecycle::TriggerLineage {
                 source_doc_id: options.caused_by_source_doc_id,
                 ..Default::default()
             },
@@ -374,7 +378,7 @@ pub(crate) async fn prepare_agent_request_with_input(
                 parent_request_doc_id: options.retry_parent_request_doc_id,
                 root_request_id: retry_root_value,
                 retry_count: 0,
-                max_retries: i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES),
+                max_retries: i64::from(gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES),
             }),
             ..gents::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
@@ -385,7 +389,7 @@ pub(crate) async fn prepare_agent_request_with_input(
                     agent_id: agent_id.clone(),
                     session_id: session_id.clone(),
                     content: request_content,
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: created_at.clone(),
                 },
                 admission,
@@ -406,7 +410,7 @@ pub(crate) async fn prepare_cli_goal_input(
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
-    let verifier = gents::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
+    let verifier = gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
     gents::goal::prepare_goal_input(
         access,
         &verifier,
@@ -604,7 +608,7 @@ async fn read_submitted_receipt(
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
     );
     let logical = escape_graphql_string(&create.request_id);
-    let response = gents::config_client::query_graphql_with_options(
+    let response = gents::store::config_client::query_graphql_with_options(
         graphql,
         &format!(
             "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
@@ -644,7 +648,7 @@ async fn resolve_request_agent_id(
     node_did: &str,
     requested: Option<&str>,
 ) -> Result<String> {
-    let escaped_node_did = gents::graphql::escape_graphql_string(node_did);
+    let escaped_node_did = gents::store::graphql::escape_graphql_string(node_did);
     let response = post_graphql(
         graphql,
         &format!(
@@ -775,8 +779,8 @@ fn wait_progress_marker(
 }
 
 fn successor_output_target(row: &AgentRequestRow) -> Result<Option<(String, String)>> {
-    let Some(logical) =
-        gents::lifecycle::folded_into(row).or_else(|| gents::lifecycle::replaced_by(row))
+    let Some(logical) = gents::request::lifecycle::folded_into(row)
+        .or_else(|| gents::request::lifecycle::replaced_by(row))
     else {
         return Ok(None);
     };
@@ -1195,7 +1199,7 @@ mod tests {
         Json, Router,
     };
     use futures_util::stream;
-    use gents::config_client::GraphqlEndpoint;
+    use gents::store::config_client::GraphqlEndpoint;
     use gents_protocol::row::AgentRequestRow;
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
@@ -1278,7 +1282,7 @@ mod tests {
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = gents::config_client::GraphqlEndpoint::anonymous(format!(
+        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
             "http://{}/graphql",
             listener.local_addr()?
         ));
@@ -1379,7 +1383,7 @@ mod tests {
                     agent_id: "agent".into(),
                     session_id: "session".into(),
                     content: "hello".into(),
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: "2026-09-01T00:00:00Z".into(),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
@@ -1419,7 +1423,7 @@ mod tests {
         let (prepared, receipt) = stable_test_prepared_request().await;
         *state.receipt.lock().unwrap() = receipt;
         let submitted = submit_prepared_agent_request_committed(
-            &gents::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
             &prepared,
         )
         .await
@@ -1455,7 +1459,7 @@ mod tests {
         let (prepared, receipt) = stable_test_prepared_request().await;
         *state.receipt.lock().unwrap() = receipt;
         let submitted = submit_prepared_agent_request_committed(
-            &gents::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
             &prepared,
         )
         .await
@@ -1484,7 +1488,7 @@ mod tests {
             .insert(prepared.create.request_id.clone());
         *state.receipt.lock().unwrap() = receipt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = gents::config_client::GraphqlEndpoint::anonymous(format!(
+        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
             "http://{}/",
             listener.local_addr().unwrap()
         ));
@@ -1512,9 +1516,9 @@ mod tests {
     async fn terminal_wait_follows_only_exact_same_scope_successor_output_owner(
     ) -> anyhow::Result<()> {
         for (cross_scope, reason) in [
-            (false, gents::lifecycle::FOLDED_REASON),
-            (true, gents::lifecycle::FOLDED_REASON),
-            (false, gents::lifecycle::REPLACED_REASON),
+            (false, gents::request::lifecycle::FOLDED_REASON),
+            (true, gents::request::lifecycle::FOLDED_REASON),
+            (false, gents::request::lifecycle::REPLACED_REASON),
         ] {
             let queries = Arc::new(Mutex::new(Vec::<String>::new()));
             let target_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1607,13 +1611,13 @@ mod tests {
     fn successor_output_target_rejects_missing_physical_identity_and_self_cycles() {
         let mut row: AgentRequestRow = serde_json::from_value(json!({
             "_docID":"input", "request_id":"input", "lifecycle_state":"superseded",
-            "failure_reason":gents::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
+            "failure_reason":gents::request::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
         }))
         .unwrap();
         assert!(successor_output_target(&row).is_err());
         row.superseded_by_request_doc_id = Some("input".into());
         assert!(successor_output_target(&row).is_err());
-        row.failure_reason = Some(gents::lifecycle::REPLACED_REASON.into());
+        row.failure_reason = Some(gents::request::lifecycle::REPLACED_REASON.into());
         row.superseded_by_request_doc_id = Some("replacement".into());
         assert_eq!(
             successor_output_target(&row).unwrap(),

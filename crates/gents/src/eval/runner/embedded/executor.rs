@@ -29,8 +29,8 @@ use crate::eval::runner::embedded::observe::{
 use crate::eval::runner::executor::{
     Capture, Isolation, StageEvidence, TrialEvidence, TrialExecutor, TrialLocator, TrialSpec,
 };
-use crate::tool_surface::{BashMode, FileToolMode, ToolCeiling, ToolPolicySurface};
-use crate::toolset::CommandExecutionMode;
+use crate::tools::native::CommandExecutionMode;
+use crate::tools::surface::{BashMode, FileToolMode, ToolCeiling, ToolPolicySurface};
 use crate::{DocumentRuntimeOptions, RuntimeSnapshotObserver};
 
 const POLL: Duration = Duration::from_millis(250);
@@ -371,7 +371,7 @@ where
     Open: FnOnce() -> Opening + Send + 'static,
     Opening: std::future::Future<Output = Result<EmbeddedHome>>,
 {
-    crate::storage_backend::drive_unsendable(runtime, open)
+    crate::store::local::storage_backend::drive_unsendable(runtime, open)
         .await
         .context("opening a trial home")?
 }

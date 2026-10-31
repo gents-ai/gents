@@ -29,7 +29,7 @@ use self::http::{http_get_json, p2p_api_base, read_json};
 use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
+const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 /// The recorded runtime endpoint may be stale or unresponsive.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -49,7 +49,7 @@ impl OperatorIdentityInteraction {
     pub(crate) fn endpoint(
         self,
         record: &crate::client::PeerRecord,
-    ) -> Option<gents::config_client::GraphqlEndpoint> {
+    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
         match self {
             Self::Allow => operator_endpoint(record),
             Self::Prevent => cached_operator_endpoint(record),
@@ -132,17 +132,17 @@ struct StoredInitConfig {
 /// writes fail with the node's authorization error.
 pub fn operator_endpoint(
     record: &crate::client::PeerRecord,
-) -> Option<gents::config_client::GraphqlEndpoint> {
+) -> Option<gents::store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
     Some(match load_operator_node_identity(record) {
-        Ok(()) => gents::config_client::GraphqlEndpoint::as_principal(url, &record.node_did),
+        Ok(()) => gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did),
         Err(error) => {
             tracing::warn!(
                 node_did = %record.node_did,
                 error = %format!("{error:#}"),
                 "runtime node identity key unavailable; using anonymous operator access"
             );
-            gents::config_client::GraphqlEndpoint::anonymous(url)
+            gents::store::config_client::GraphqlEndpoint::anonymous(url)
         }
     })
 }
@@ -152,15 +152,15 @@ pub fn operator_endpoint(
 /// otherwise DefraDB receives an anonymous request and enforces its read policy.
 pub fn cached_operator_endpoint(
     record: &crate::client::PeerRecord,
-) -> Option<gents::config_client::GraphqlEndpoint> {
+) -> Option<gents::store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
     Some(
-        if gents::identity::can_mint_defradb_bearer(&record.node_did)
+        if gents::store::identity::can_mint_defradb_bearer(&record.node_did)
             && hosted_runtime_home(record).is_ok()
         {
-            gents::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
+            gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
         } else {
-            gents::config_client::GraphqlEndpoint::anonymous(url)
+            gents::store::config_client::GraphqlEndpoint::anonymous(url)
         },
     )
 }
@@ -169,12 +169,12 @@ pub fn cached_operator_endpoint(
 /// its home's live `runtime.json` names both the record's endpoint and node,
 /// so a bearer is never sent to a remote or re-pointed endpoint.
 fn load_operator_node_identity(record: &crate::client::PeerRecord) -> Result<()> {
-    if gents::identity::can_mint_defradb_bearer(&record.node_did) {
+    if gents::store::identity::can_mint_defradb_bearer(&record.node_did) {
         return hosted_runtime_home(record).map(drop);
     }
     let identity = operator_signer(record)?;
     anyhow::ensure!(
-        gents::identity::can_mint_defradb_bearer(identity.did()),
+        gents::store::identity::can_mint_defradb_bearer(identity.did()),
         "runtime identity {} has no exportable signing key",
         identity.did()
     );
@@ -206,7 +206,7 @@ pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> 
 /// Signs the operator commands the co-hosted runtime's HTTP routes take.
 pub fn operator_signer(
     record: &crate::client::PeerRecord,
-) -> Result<Arc<dyn gents::identity::NodeIdentity>> {
+) -> Result<Arc<dyn gents::store::identity::NodeIdentity>> {
     let identity = load_standard_runtime_identity(hosted_runtime_home(record)?)?;
     anyhow::ensure!(
         identity.did() == record.node_did,
@@ -217,12 +217,12 @@ pub fn operator_signer(
 
 pub(crate) fn load_standard_runtime_identity(
     node_home: &Path,
-) -> Result<Arc<dyn gents::identity::NodeIdentity>> {
-    use gents::identity::{
+) -> Result<Arc<dyn gents::store::identity::NodeIdentity>> {
+    use gents::store::identity::{
         load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity,
     };
     let config = read_json::<StoredInitConfig>(&node_home.join(INIT_CONFIG_FILE_NAME))?;
-    let identity: Arc<dyn gents::identity::NodeIdentity> = if let Some(path) = config
+    let identity: Arc<dyn gents::store::identity::NodeIdentity> = if let Some(path) = config
         .key_path
         .as_deref()
         .map(str::trim)
@@ -294,7 +294,7 @@ struct GraphqlResponse {
 }
 
 pub fn default_node_home() -> Result<PathBuf> {
-    Ok(gents::home::default_home_dir()?)
+    Ok(gents::store::local::home::default_home_dir()?)
 }
 
 pub fn runtime_status_url(server_address: &str) -> Result<String> {
@@ -481,12 +481,12 @@ pub fn dangerously_overwrite_desktop_home(desktop_root: &Path) -> Result<()> {
 
 pub fn reset_desktop_runtime_state(paths: &DesktopPaths) -> Result<bool> {
     let node_data_dir = [paths.node_data_dir().to_path_buf()];
-    let cleared = gents::home::retire_entries(
-        &[gents::home::RetireGroup {
+    let cleared = gents::store::local::home::retire_entries(
+        &[gents::store::local::home::RetireGroup {
             name: "desktop",
             entries: &node_data_dir,
         }],
-        gents::home::RetireDisposition::Delete,
+        gents::store::local::home::RetireDisposition::Delete,
     )
     .with_context(|| {
         format!(

@@ -7,8 +7,8 @@ use crate::commands::grok_shim::test_fixtures::{
     streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
 };
 use crate::commands::grok_shim::turn::wire::PromptBlock;
-use gents::config_client::ConfigAccess;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{ensure_no_errors, escape_graphql_string};
 use tokio::sync::Mutex;
 
 fn bound_model() -> BoundModel {
@@ -61,7 +61,7 @@ async fn service_over(signing_node: bool) -> (tempfile::TempDir, AcpService) {
     if signing_node {
         config.node_did = Arc::from(gents::NodeIdentity::did(&identity));
     }
-    gents::schema::ensure_runtime_schemas(config.node.as_ref())
+    gents::store::schema::ensure_runtime_schemas(config.node.as_ref())
         .await
         .expect("runtime schemas");
     let turns = Arc::new(TurnManager::new(

@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
+use gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 use gents::NodeIdentity as _;
 use gents_protocol::request_admission::AgentRequestCreate;
 use serde::Deserialize;
@@ -403,7 +403,7 @@ async fn seed_session_recovery_pre_state(
         observation: None,
     };
     let input = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session)?)?;
-    gents::config_client::ConfigAccess::write_local(
+    gents::store::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "test.seed_recovery_session",
         &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
@@ -553,7 +553,7 @@ async fn submit_recovery_seed_request(
     };
     create.max_retries = case.max_retries as i64;
     gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-    gents::config_client::ConfigAccess::write_local(
+    gents::store::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "test.seed_recovery_request",
         &create.graphql_mutation().map_err(anyhow::Error::msg)?,
@@ -1285,7 +1285,7 @@ async fn force_request_state_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    Ok(gents::config_client::ConfigAccess::write_local(
+    Ok(gents::store::config_client::ConfigAccess::write_local(
         node,
         "force_request_state_for_test",
         &mutation,
@@ -1502,7 +1502,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
     );
     create.input = original_input.clone();
     gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-    gents::config_client::ConfigAccess::write_local(
+    gents::store::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "test.seed_typed_retry_parent",
         &create.graphql_mutation().map_err(anyhow::Error::msg)?,
@@ -1635,7 +1635,7 @@ async fn force_retry_parent_eligible_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    Ok(gents::config_client::ConfigAccess::write_local(
+    Ok(gents::store::config_client::ConfigAccess::write_local(
         node,
         "force_retry_parent_eligible_for_test",
         &mutation,
@@ -1671,7 +1671,7 @@ async fn seed_duplicate_request_id_for_test(
         "",
     );
     let mutation = format!("mutation {{\n{request_field}\n}}");
-    Ok(gents::config_client::ConfigAccess::write_local(
+    Ok(gents::store::config_client::ConfigAccess::write_local(
         node,
         "seed_duplicate_request_id_for_test",
         &mutation,
@@ -1699,7 +1699,7 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
     let node = escape_graphql_string(core.node_identity().did());
     let session = escape_graphql_string(&pre.session_id);
     let request_id = escape_graphql_string(&format!("foreign-{}", Uuid::new_v4()));
-    gents::config_client::ConfigAccess::write_local(
+    gents::store::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "test.foreign_requester_row",
         &format!(

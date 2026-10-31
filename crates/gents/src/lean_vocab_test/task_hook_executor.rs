@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::document_config::TaskHookPhase;
+use crate::documents::TaskHookPhase;
 use crate::lean_vocab_test::{
     lean_task_hook_run_cases, LeanCommandResult, LeanHookAttempt, LeanHookInvocation,
     LeanTaskHookRunCase, LeanTaskOutcome, LeanTaskPrimaryError,
 };
-use crate::task_hooks::{
+use crate::request::task_hooks::{
     effective_timeout_secs, run_task_hooks, HookAttempt, HookPrimaryError, ManagedTaskHookExec,
     TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
 };
@@ -123,14 +123,14 @@ struct RevokingExec<'a> {
 
 #[async_trait::async_trait]
 impl TaskHookExec for RevokingExec<'_> {
-    async fn attempt(&self, hook: &crate::document_config::TaskHook) -> HookAttempt {
+    async fn attempt(&self, hook: &crate::documents::TaskHook) -> HookAttempt {
         if self.revoked.contains(&hook.hook_id) {
-            crate::config_client::ConfigAccess::write_local(
+            crate::store::config_client::ConfigAccess::write_local(
                 self.node,
                 "test.task_hook_launch_revocation",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "revoked-generation" }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(self.request_doc_id),
+                    crate::store::graphql::escape_graphql_string(self.request_doc_id),
                 ),
             ).await.unwrap();
         }
@@ -187,7 +187,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                 .with_execution_lease(
                     fixture.node.clone(),
                     lifecycle.request().doc_id.clone(),
-                    crate::lifecycle::RequestExecutionLease::new(
+                    crate::request::lifecycle::RequestExecutionLease::new(
                         lifecycle.execution_generation().unwrap().to_owned(),
                     ),
                 ),

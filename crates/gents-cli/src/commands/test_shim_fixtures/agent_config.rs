@@ -14,14 +14,14 @@ pub(crate) async fn configure_runtime_agent(
     model: &str,
     agents_enabled: bool,
 ) {
-    use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents::document_config::{AgentContext, AgentTools, BashTools, HostTools, Tools};
+    use gents::documents::{AgentContext, AgentTools, BashTools, HostTools, Tools};
+    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents::Collection;
 
     seed_test_agent_configuration(node, node_did, agent_id, agent_id, model, true).await;
     gents::ConfigAccess::transact_local_write(node, None, "grok.runtime_fixture", |txn| {
         Box::pin(async move {
-            use gents::config_client::read_desired_state_record_in_txn as read;
+            use gents::store::config_client::read_desired_state_record_in_txn as read;
             let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
                 .expect("fixture agent");
@@ -109,7 +109,7 @@ pub(crate) async fn configure_runtime_agent(
                     })
                     .collect(),
             )?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
+            gents::store::config_client::apply_desired_state_plan(txn, &plan)
                 .await
                 .map(|_| ())
         })
@@ -130,13 +130,13 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
     gents::ensure_node(node, node_did)
         .await
         .expect("seed test principal");
-    gents::config_client::ConfigAccess::transact_local_write(
+    gents::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "grok.test_agent_configuration",
         |txn| {
             Box::pin(async move {
-                use gents::config_client::{
+                use gents::store::config_client::{
                     apply_desired_state_plan, read_desired_state_record_in_txn,
                     DesiredStateApplyDocument, DesiredStateApplyPlan,
                 };

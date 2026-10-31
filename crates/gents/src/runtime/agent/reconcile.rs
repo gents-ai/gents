@@ -1,0 +1,543 @@
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use tokio::sync::{mpsc, watch, Mutex};
+use tokio::task::{JoinError, JoinSet};
+use tracing::Instrument;
+
+use crate::inference::admission::AdmissionRegistry;
+use crate::inference::resolved::ResolvedAgent;
+use crate::request::watcher::AgentRequest;
+use crate::runtime::agent::retry::RetryPolicy;
+use crate::runtime::agent::worker_capacity::WorkerCapacity;
+use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
+use crate::runtime::status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::tools::surface::ToolSurface;
+
+mod diff;
+mod slot;
+
+use diff::diff_counts;
+pub(in crate::runtime::agent) use slot::SlotFailurePolicy;
+use slot::{
+    agent_executor_capacity, spawn_slot_with_capacity, spawn_slots, AgentSlot, AgentSlotState,
+    SlotConfig,
+};
+
+#[derive(Debug)]
+struct ActiveSnapshotReceiverClosed;
+
+impl std::fmt::Display for ActiveSnapshotReceiverClosed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("active runtime snapshot receiver closed")
+    }
+}
+
+impl std::error::Error for ActiveSnapshotReceiverClosed {}
+#[cfg(test)]
+use slot::{retire_slot, spawn_slot};
+
+pub(super) struct GenerationSupervisor<F> {
+    current_snapshot: Arc<ActiveRuntimeSnapshot>,
+    active_slots: RapidHashMap<String, AgentSlot>,
+    admission_registry: AdmissionRegistry,
+    retry_policy: RetryPolicy,
+    runner: F,
+    runtime_status: RuntimeStatusHandle,
+    slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+    retiring_slots: JoinSet<Result<()>>,
+    retired_slot_error: Option<anyhow::Error>,
+}
+
+fn slot_join_result(
+    joined: std::result::Result<Result<()>, JoinError>,
+    context: &str,
+) -> Result<()> {
+    match joined {
+        Ok(result) => result.with_context(|| context.to_owned()),
+        Err(error) => Err(error).with_context(|| context.to_owned()),
+    }
+}
+
+struct StagedSlots {
+    slots: RapidHashMap<String, AgentSlot>,
+    registered: RapidHashSet<(String, u64)>,
+    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+}
+
+impl StagedSlots {
+    fn new(failure_policy: Option<Arc<dyn SlotFailurePolicy>>) -> Self {
+        Self {
+            slots: RapidHashMap::new(),
+            registered: RapidHashSet::new(),
+            failure_policy,
+        }
+    }
+
+    fn record_registration(&mut self, agent_id: String, generation: u64) {
+        self.registered.insert((agent_id, generation));
+    }
+
+    fn insert(&mut self, agent_id: String, slot: AgentSlot) {
+        self.slots.insert(agent_id, slot);
+    }
+
+    fn get(&self, agent_id: &str) -> Option<&AgentSlot> {
+        self.slots.get(agent_id)
+    }
+
+    fn into_slots(self) -> RapidHashMap<String, AgentSlot> {
+        self.slots
+    }
+
+    async fn abort(self) {
+        let mut registered = self.registered;
+        for (agent_id, slot) in self.slots {
+            let generation = slot.generation;
+            let _ = slot.state_tx.send(AgentSlotState::Retiring);
+            drop(slot.dispatcher);
+            if let Err(error) = slot_join_result(
+                slot.handle.await,
+                "staged agent slot failed during rollback",
+            ) {
+                tracing::error!(agent_id, generation, error = %error, "staged agent slot failed during rollback");
+            }
+            if let Some(policy) = &self.failure_policy {
+                policy.on_slot_retired(&agent_id, generation, true).await;
+            }
+            registered.remove(&(agent_id, generation));
+        }
+        if let Some(policy) = &self.failure_policy {
+            for (agent_id, generation) in registered {
+                policy.on_slot_retired(&agent_id, generation, true).await;
+            }
+        }
+    }
+}
+
+impl<F, Fut> GenerationSupervisor<F>
+where
+    F: Fn(
+            Arc<ResolvedAgent>,
+            Arc<ToolSurface>,
+            Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
+            u64,
+            watch::Receiver<bool>,
+        ) -> Fut
+        + Send
+        + Sync
+        + Clone
+        + 'static,
+    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    pub(super) async fn bootstrap(
+        resolved_snapshot: ResolvedRuntimeSnapshot,
+        admission_registry: AdmissionRegistry,
+        retry_policy: RetryPolicy,
+        runner: F,
+        runtime_status: RuntimeStatusHandle,
+        shutdown: watch::Receiver<bool>,
+        slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+    ) -> Result<Self> {
+        resolved_snapshot.validate_node_readiness_source()?;
+        if let Some(policy) = &slot_failure_policy {
+            let mut registered = Vec::new();
+            for agent_id in resolved_snapshot.agents.keys() {
+                if let Err(error) = policy.on_slot_created(agent_id, 1).await {
+                    for registered_agent_id in registered {
+                        policy.on_slot_retired(registered_agent_id, 1, true).await;
+                    }
+                    return Err(error);
+                }
+                registered.push(agent_id);
+            }
+        }
+        admission_registry.reconcile(1, &resolved_snapshot.backend_admission_configs);
+        let active_slots = spawn_slots(
+            &resolved_snapshot,
+            1,
+            retry_policy.clone(),
+            runner.clone(),
+            shutdown,
+            slot_failure_policy.clone(),
+        );
+        let dispatchers = active_slots
+            .iter()
+            .map(|(agent_id, slot)| (agent_id.clone(), slot.dispatcher.clone()))
+            .collect();
+        let executor_capacities = active_slots
+            .iter()
+            .map(|(agent_id, slot)| (agent_id.clone(), slot.executor_capacity))
+            .collect();
+        let executor_queue_capacities = active_slots
+            .iter()
+            .map(|(agent_id, slot)| (agent_id.clone(), slot.queue_capacity))
+            .collect();
+        let current_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
+            1,
+            dispatchers,
+            executor_capacities,
+            executor_queue_capacities,
+        ));
+
+        Ok(Self {
+            current_snapshot,
+            active_slots,
+            admission_registry,
+            retry_policy,
+            runner,
+            runtime_status,
+            slot_failure_policy,
+            retiring_slots: JoinSet::new(),
+            retired_slot_error: None,
+        })
+    }
+
+    pub(super) fn current_snapshot(&self) -> Arc<ActiveRuntimeSnapshot> {
+        self.current_snapshot.clone()
+    }
+
+    pub(super) async fn run(
+        mut self,
+        active_snapshot_tx: watch::Sender<Arc<ActiveRuntimeSnapshot>>,
+        mut proposals_rx: mpsc::Receiver<ResolvedRuntimeSnapshot>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<()> {
+        let mut fatal_error = None;
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                proposal = proposals_rx.recv() => {
+                    let Some(proposal) = proposal else {
+                        break;
+                    };
+                    let current_generation = self.current_snapshot.generation;
+                    let next_generation = current_generation + 1;
+                    let proposed_agent_count = proposal.agents.len();
+                    let proposed_unavailable_agent_count = proposal.unavailable_agents.len();
+                    let proposed_default_agent_id = proposal.default_agent_id.clone();
+
+                    if let Err(error) = self.handle_proposal(proposal, &active_snapshot_tx, shutdown.clone())
+                        .instrument(tracing::info_span!(
+                            "runtime.reconcile",
+                            current_generation,
+                            next_generation,
+                            proposed_agent_count,
+                            proposed_unavailable_agent_count,
+                            proposed_default_agent_id = %proposed_default_agent_id,
+                        ))
+                        .await
+                    {
+                        fatal_error = Some(error);
+                        break;
+                    }
+                }
+            }
+        }
+
+        let shutdown_result = self.shutdown_slots().await;
+        match (fatal_error, shutdown_result) {
+            (Some(error), Err(shutdown_error)) => Err(error.context(format!(
+                "agent slot shutdown also failed: {shutdown_error:#}"
+            ))),
+            (Some(error), Ok(())) => Err(error),
+            (None, result) => result,
+        }
+    }
+
+    async fn handle_proposal(
+        &mut self,
+        proposal: ResolvedRuntimeSnapshot,
+        active_snapshot_tx: &watch::Sender<Arc<ActiveRuntimeSnapshot>>,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<()> {
+        self.runtime_status
+            .set_reconcile_phase(ReconcilePhase::Diffing)
+            .await;
+        if proposal.configuration_fingerprint() == self.current_snapshot.configuration_fingerprint()
+        {
+            tracing::debug!(
+                generation = self.current_snapshot.generation,
+                "runtime reconcile noop: resolved snapshot matches active generation"
+            );
+            self.runtime_status
+                .publish_noop(self.current_snapshot.as_ref())
+                .await;
+            return Ok(());
+        }
+
+        let diff = diff_counts(&self.current_snapshot, &proposal);
+        let next_generation = self.current_snapshot.generation + 1;
+        self.runtime_status
+            .set_reconcile_phase(ReconcilePhase::Applying)
+            .await;
+        match self
+            .apply_snapshot(proposal, next_generation, active_snapshot_tx, shutdown)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    generation = next_generation,
+                    added_agents = diff.added,
+                    removed_agents = diff.removed,
+                    updated_agents = diff.updated,
+                    default_changed = diff.default_changed,
+                    unavailable_changed = diff.unavailable_changed,
+                    "runtime reconcile applied"
+                );
+                if diff.unavailable_changed {
+                    for (agent_id, reason) in &self.current_snapshot.unavailable_agents {
+                        tracing::warn!(
+                            agent_id = %agent_id,
+                            public_reason = ?reason.public_reason,
+                            diagnostic = %reason.diagnostic,
+                            "agent unavailable after runtime reconcile"
+                        );
+                    }
+                }
+                self.runtime_status
+                    .publish_applied(self.current_snapshot.as_ref())
+                    .await;
+            }
+            Err(error) => {
+                let receiver_closed = error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<ActiveSnapshotReceiverClosed>()
+                        .is_some()
+                });
+                tracing::error!(
+                    generation = next_generation,
+                    added_agents = diff.added,
+                    removed_agents = diff.removed,
+                    updated_agents = diff.updated,
+                    default_changed = diff.default_changed,
+                    unavailable_changed = diff.unavailable_changed,
+                    error = %error,
+                    "runtime reconcile apply failed; keeping previous active generation"
+                );
+                self.runtime_status
+                    .publish_error(&format!("{error:#}"))
+                    .await;
+                if receiver_closed {
+                    return Err(error).context(
+                        "runtime reconcile cannot continue without active snapshot owner",
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn apply_snapshot(
+        &mut self,
+        resolved_snapshot: ResolvedRuntimeSnapshot,
+        generation: u64,
+        active_snapshot_tx: &watch::Sender<Arc<ActiveRuntimeSnapshot>>,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<()> {
+        resolved_snapshot.validate_node_readiness_source()?;
+
+        let mut recreated_agent_ids = Vec::new();
+        for (agent_id, agent) in &resolved_snapshot.agents {
+            let tool_surface = resolved_snapshot
+                .tool_surfaces
+                .get(agent_id)
+                .expect("validated runnable/tool-surface keyset parity");
+            let executor_capacity =
+                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
+            if self
+                .active_slots
+                .get(agent_id)
+                .is_none_or(|slot| !slot.matches(agent, tool_surface, executor_capacity))
+            {
+                recreated_agent_ids.push(agent_id.clone());
+            }
+        }
+
+        let mut staged = StagedSlots::new(self.slot_failure_policy.clone());
+        if let Some(policy) = &self.slot_failure_policy {
+            for agent_id in &recreated_agent_ids {
+                if let Err(error) = policy.on_slot_created(agent_id, generation).await {
+                    staged.abort().await;
+                    return Err(error).with_context(|| {
+                        format!("register staged agent slot {agent_id} generation {generation}")
+                    });
+                }
+                staged.record_registration(agent_id.clone(), generation);
+            }
+        }
+
+        for agent_id in &recreated_agent_ids {
+            let agent = resolved_snapshot
+                .agents
+                .get(agent_id)
+                .expect("recreation plan references a runnable agent");
+            let tool_surface = resolved_snapshot
+                .tool_surfaces
+                .get(agent_id)
+                .cloned()
+                .expect("validated runnable/tool-surface keyset parity");
+            let executor_capacity =
+                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
+            staged.insert(
+                agent_id.clone(),
+                spawn_slot_with_capacity(
+                    SlotConfig {
+                        agent_config: agent.clone(),
+                        tool_surface,
+                        generation,
+                        retry_policy: self.retry_policy.clone(),
+                        failure_policy: self.slot_failure_policy.clone(),
+                    },
+                    executor_capacity,
+                    self.runner.clone(),
+                    shutdown.clone(),
+                ),
+            );
+        }
+
+        let runnable_agent_ids = resolved_snapshot.agents.keys().cloned().collect::<Vec<_>>();
+        let mut dispatchers = RapidHashMap::new();
+        let mut executor_capacities = RapidHashMap::new();
+        let mut executor_queue_capacities = RapidHashMap::new();
+        for agent_id in &runnable_agent_ids {
+            let slot = staged
+                .get(agent_id)
+                .or_else(|| self.active_slots.get(agent_id))
+                .expect("validated recreation plan owns every runnable slot");
+            dispatchers.insert(agent_id.clone(), slot.dispatcher.clone());
+            executor_capacities.insert(agent_id.clone(), slot.executor_capacity);
+            executor_queue_capacities.insert(agent_id.clone(), slot.queue_capacity);
+        }
+        let next_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
+            generation,
+            dispatchers,
+            executor_capacities,
+            executor_queue_capacities,
+        ));
+        if active_snapshot_tx.is_closed() {
+            drop(next_snapshot);
+            staged.abort().await;
+            return Err(ActiveSnapshotReceiverClosed.into());
+        }
+        // Publish the new source before changing the active dispatcher set: the
+        // router stops dequeuing until the snapshot watch catches up, closing
+        // the old/new slot handoff gap.
+        if let Err(error) = self
+            .runtime_status
+            .readiness()
+            .publish_snapshot(next_snapshot.as_ref())
+            .await
+        {
+            drop(next_snapshot);
+            staged.abort().await;
+            return Err(error).context("publish node readiness before active generation");
+        }
+
+        // Admission runs while the router is fenced by source skew; if the sole
+        // watch owner disappears, restore the prior admission registry and
+        // terminate reconcile so the runtime lifecycle closes admission.
+        self.admission_registry
+            .reconcile(generation, &next_snapshot.backend_admission_configs);
+        if active_snapshot_tx.send(next_snapshot.clone()).is_err() {
+            self.admission_registry.reconcile(
+                self.current_snapshot.generation,
+                &self.current_snapshot.backend_admission_configs,
+            );
+            drop(next_snapshot);
+            staged.abort().await;
+            return Err(ActiveSnapshotReceiverClosed.into());
+        }
+
+        let mut next_slots = RapidHashMap::new();
+        let mut retired_slots = Vec::new();
+        let mut retired_agents: Vec<(String, u64, bool)> = Vec::new();
+        let mut staged_slots = staged.into_slots();
+        for agent_id in &runnable_agent_ids {
+            if let Some(slot) = staged_slots.remove(agent_id) {
+                if let Some(existing) = self.active_slots.remove(agent_id) {
+                    let old_generation = existing.generation;
+                    retired_slots.push(existing);
+                    retired_agents.push((agent_id.clone(), old_generation, true));
+                }
+                next_slots.insert(agent_id.clone(), slot);
+            } else {
+                let existing = self
+                    .active_slots
+                    .remove(agent_id)
+                    .expect("reused slot disappeared before transaction commit");
+                next_slots.insert(agent_id.clone(), existing);
+            }
+        }
+        debug_assert!(staged_slots.is_empty());
+        for (agent_id, slot) in self.active_slots.drain() {
+            retired_agents.push((agent_id, slot.generation, false));
+            retired_slots.push(slot);
+        }
+
+        self.current_snapshot = next_snapshot.clone();
+        self.active_slots = next_slots;
+        for slot in retired_slots {
+            let _ = slot.state_tx.send(AgentSlotState::Retiring);
+            drop(slot.dispatcher);
+            self.retiring_slots.spawn(async move {
+                slot_join_result(slot.handle.await, "retired agent slot failed")
+            });
+        }
+        while let Some(joined) = self.retiring_slots.try_join_next() {
+            if let Err(error) = slot_join_result(joined, "retired agent slot owner join failed") {
+                tracing::error!(error = %error, "retired agent slot owner failed");
+                if self.retired_slot_error.is_none() {
+                    self.retired_slot_error = Some(error);
+                }
+            }
+        }
+        if let Some(policy) = self.slot_failure_policy.clone() {
+            for (agent_id, old_generation, recreated) in retired_agents {
+                policy
+                    .on_slot_retired(&agent_id, old_generation, recreated)
+                    .await;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) async fn shutdown_slots(mut self) -> Result<()> {
+        let failure_policy = self.slot_failure_policy.clone();
+        let mut first_error = self.retired_slot_error.take();
+        for (agent_id, slot) in self.active_slots {
+            let generation = slot.generation;
+            let _ = slot.state_tx.send(AgentSlotState::Retiring);
+            drop(slot.dispatcher);
+            if let Err(error) =
+                slot_join_result(slot.handle.await, "agent slot failed during shutdown")
+            {
+                tracing::error!(agent_id, generation, error = %error, "agent slot failed during shutdown");
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+            if let Some(policy) = &failure_policy {
+                policy.on_slot_retired(&agent_id, generation, false).await;
+            }
+        }
+        while let Some(joined) = self.retiring_slots.join_next().await {
+            if let Err(error) =
+                slot_join_result(joined, "retired agent slot owner failed during shutdown")
+            {
+                tracing::error!(error = %error, "retired agent slot owner failed during shutdown");
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+#[cfg(test)]
+mod tests;

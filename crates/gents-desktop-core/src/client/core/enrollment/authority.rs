@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use gents::graphql::{graphql_with_transaction_retry, rows};
+use gents::store::graphql::{graphql_with_transaction_retry, rows};
 use serde_json::Value;
 
 use super::super::super::principal_identity::PrincipalIdentity;

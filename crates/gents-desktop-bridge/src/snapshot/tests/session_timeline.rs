@@ -101,7 +101,10 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
     let pending = snapshot.pending_turn.expect("request-owned steering input");
     assert_eq!(pending.request_doc_id.as_deref(), Some("steering-doc-1"));
     assert_eq!(pending.content, "queued steering text");
-    assert_eq!(pending.lifecycle_state, Some(RequestLifecycleState::Interrupted));
+    assert_eq!(
+        pending.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
     assert!(snapshot.messages.is_empty());
 }
 
@@ -502,7 +505,7 @@ fn folded_user_input_stays_visible_when_a_runtime_request_consumes_it() {
             .unwrap(),
         );
         input_request.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        input_request.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        input_request.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
         input_request.superseded_by_request = Some("req-1".into());
         input_request.superseded_by_request_doc_id = Some("req-1".into());
         rows.requests[0].input = Some(

@@ -130,7 +130,7 @@ pub async fn promote(
 /// runs and the tools it was promoted to. Runs that failed, were cancelled or
 /// timed out are not promotable (`promote::gate`) and are left out.
 pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
-    use gents::plugin_job::view::{list_jobs, JobFilter, StateFilter};
+    use gents::tools::background::job::view::{list_jobs, JobFilter, StateFilter};
     use gents_protocol::job::{JobState, JobView};
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let views = list_jobs(
@@ -144,11 +144,11 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
     )
     .await
     .map_err(crate::commands::job::read_error)?;
-    let promotions = gents::plugin_job::promote::list_promotions(&home)?;
+    let promotions = gents::tools::background::job::promote::list_promotions(&home)?;
     let mut scripts: std::collections::BTreeMap<&str, Vec<&JobView>> = Default::default();
     for view in views
         .iter()
-        .filter(|view| gents::plugin_job::promote::gate(view).is_ok())
+        .filter(|view| gents::tools::background::job::promote::gate(view).is_ok())
     {
         scripts.entry(&view.pin.script_id).or_default().push(view);
     }
@@ -158,7 +158,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             .iter()
             .max_by_key(|view| view.created_at)
             .expect("a group has a run");
-        let agent_id = gents::session_origin::load_session(
+        let agent_id = gents::session::origin::load_session(
             &access,
             &latest.session_id,
             latest.scope.requester_did.as_deref(),
@@ -198,12 +198,12 @@ pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> 
     let actor = crate::home_state::resolve_node_did(Some(&home), None)?;
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let view = crate::commands::job::resolve_job(&access, &actor, &selector, None).await?;
-    let run = gents::plugin_job::promote::load_dynamic_run(
+    let run = gents::tools::background::job::promote::load_dynamic_run(
         &access,
-        gents::plugin_job::view::JobKey::RowDocId(view.row_doc_id),
+        gents::tools::background::job::view::JobKey::RowDocId(view.row_doc_id),
     )
     .await?;
-    let promotions = gents::plugin_job::promote::list_promotions(&home)?;
+    let promotions = gents::tools::background::job::promote::list_promotions(&home)?;
     Ok(serde_json::json!({
         "promoted_as": promoted_as(&promotions, &run.view.pin.script_id),
         "view": run.view,
@@ -212,7 +212,7 @@ pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> 
 }
 
 fn promoted_as(
-    promotions: &[gents::plugin_job::promote::PromotionRecord],
+    promotions: &[gents::tools::background::job::promote::PromotionRecord],
     script_id: &str,
 ) -> Vec<String> {
     promotions
@@ -261,7 +261,9 @@ pub async fn wire_sources(home: PathBuf) -> Result<Value> {
         let targets = gents::pack::installed_pack_documents(&access, &owner, &pack.coordinate)
             .await?
             .into_iter()
-            .filter(|(collection, _)| *collection == gents::collection::Collection::AgentTarget)
+            .filter(|(collection, _)| {
+                *collection == gents::store::collection::Collection::AgentTarget
+            })
             .map(|(_, id)| id)
             .collect::<Vec<_>>();
         if !targets.is_empty() {
@@ -348,21 +350,21 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
 /* ---- UX plugins: what the desktop's doors read ---- */
 
 /// Every UX plugin on disk under `home` (dev folder and installed packs).
-pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents::ux_plugin::UxListing>> {
-    gents::ux_plugin::list(home)
+pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents::plugin::ux::UxListing>> {
+    gents::plugin::ux::list(home)
 }
 
 /// The module for the UX plugin `id`, produced from its file or by running
 /// the pack's own `.afb` producer under the installed plugin's bounds.
-pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::ux_plugin::UxModule> {
-    let listing = gents::ux_plugin::find(&home, &id)?;
+pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::plugin::ux::UxModule> {
+    let listing = gents::plugin::ux::find(&home, &id)?;
     let home_for_run = home.clone();
-    gents::ux_plugin::resolve_module(&home, &listing, |namespace, plugin| async move {
+    gents::plugin::ux::resolve_module(&home, &listing, |namespace, plugin| async move {
         crate::commands::plugin::call_installed(
             &home_for_run,
             &namespace,
             &plugin,
-            gents::ux_plugin::producer_input(),
+            gents::plugin::ux::producer_input(),
         )
         .await
     })
@@ -376,7 +378,7 @@ pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::ux_plugin::Ux
 /// asked, so this binds a call to a pack, not to a caller; the webview
 /// keeps a plugin to its own listing by offering it no other verb.
 pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Result<String> {
-    let listing = gents::ux_plugin::find(home, ux)?;
+    let listing = gents::plugin::ux::find(home, ux)?;
     let coordinate = listing.pack.ok_or_else(|| {
         anyhow::anyhow!(
             "ux plugin {ux:?} ships in no pack; ctx.plugin reaches a pack's own .afb plugins only"
@@ -393,7 +395,7 @@ pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Resul
 
 pub fn plugin_call_uses_data(home: &std::path::Path, ux: &str, name: &str) -> Result<bool> {
     let coordinate = plugin_call_target(home, ux, name)?;
-    let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
+    let (namespace, _) = gents::pack::registry::split_pack_coordinate(&coordinate);
     Ok(gents::plugin::store::read_record(home, namespace, name)?
         .data_grant()
         .is_some())
@@ -425,7 +427,7 @@ pub async fn plugin_call(
     operator: Option<(gents::ConfigAccess, String)>,
 ) -> Result<Value> {
     let coordinate = plugin_call_target(&home, &ux, &name)?;
-    let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
+    let (namespace, _) = gents::pack::registry::split_pack_coordinate(&coordinate);
     tracing::info!(ux = %ux, pack = %coordinate, plugin = %name, "ux plugin call");
     gents::plugin::approval::scope_interactive(
         true,
@@ -440,13 +442,13 @@ pub async fn plugin_call(
 
 /// Runs one datastore tool the UX plugin listed as `request.ux` declares
 /// (`ux[].data`) on the agent `request.node_did`, through `access`: the
-/// operator's access to that agent's node (see `gents::ux_data`).
+/// operator's access to that agent's node (see `gents::observe::ux_data`).
 pub async fn ux_data_call(
     home: PathBuf,
     access: ConfigAccess,
-    request: gents::ux_data::UxDataCall,
+    request: gents::observe::ux_data::UxDataCall,
 ) -> Result<Value> {
-    gents::ux_data::call(&home, &access, request).await
+    gents::observe::ux_data::call(&home, &access, request).await
 }
 
 /// The surfaces and tools the UX plugin listed as `ux` may call on the
@@ -457,7 +459,7 @@ pub async fn ux_data_surfaces(
     ux: String,
     node_did: String,
 ) -> Result<Value> {
-    gents::ux_data::surfaces(&home, &access, &ux, &node_did).await
+    gents::observe::ux_data::surfaces(&home, &access, &ux, &node_did).await
 }
 
 #[cfg(test)]
@@ -500,10 +502,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let dev = home
             .path()
-            .join(gents::home::UX_PLUGINS_DIR_NAME)
+            .join(gents::store::local::home::UX_PLUGINS_DIR_NAME)
             .join("loose");
         std::fs::create_dir_all(&dev).unwrap();
-        std::fs::write(dev.join(gents::ux_plugin::DEV_ENTRY), "export default {}").unwrap();
+        std::fs::write(dev.join(gents::plugin::ux::DEV_ENTRY), "export default {}").unwrap();
         let assets = "packs/.materialized/examples/board_pack/deadbeef";
         std::fs::create_dir_all(home.path().join(assets).join("ux/board")).unwrap();
         std::fs::write(

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub mod archive;
 pub mod authoring;
 pub mod home_install;
 mod inference;
@@ -17,6 +18,9 @@ mod plugin_validation;
 mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;
+pub mod registry;
+pub mod resolve;
+pub mod store;
 mod ux;
 pub use home_install::{
     forget_home_install, list_home_installs, list_home_installs_with_skips,
@@ -54,7 +58,6 @@ pub use ux::{
     UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN, UX_PLUGIN_AREAS, UX_PLUGIN_PREFIX,
 };
 
-#[path = "pack_asset_path.rs"]
 mod asset_path;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,14 +76,14 @@ pub struct PackMetadata {
     pub authors: Vec<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub tags: Vec<String>,
     pub assets: Vec<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub dependencies: Vec<String>,
@@ -117,7 +120,7 @@ pub fn inference_slot_reference(name: &str) -> String {
 }
 
 fn default_namespace() -> String {
-    crate::pack_archive::DEFAULT_NAMESPACE.to_owned()
+    crate::pack::archive::DEFAULT_NAMESPACE.to_owned()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -133,13 +136,13 @@ pub struct PackManifest {
     pub config: Option<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub schemas: Vec<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub external_dependencies: Vec<PackageExternalDependency>,
@@ -160,7 +163,7 @@ impl PackManifest {
             };
             anyhow::bail!(
                 "graph packs are retired; run `gents pack remove {}/{}` and install the 2.x version",
-                text("namespace", crate::pack_archive::DEFAULT_NAMESPACE),
+                text("namespace", crate::pack::archive::DEFAULT_NAMESPACE),
                 text("name", "<name>")
             );
         }

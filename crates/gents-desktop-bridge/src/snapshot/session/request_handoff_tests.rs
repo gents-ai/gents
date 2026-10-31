@@ -251,7 +251,7 @@ fn fresh_multi_steer_handoff_retains_each_capture_and_attachment_in_requester_sc
         if folded {
             for request in &mut requests[1..4] {
                 request.lifecycle_state = Some(RequestLifecycleState::Superseded);
-                request.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+                request.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
                 request.superseded_by_request = Some("head".into());
                 request.superseded_by_request_doc_id = Some("doc-head".into());
             }
@@ -284,7 +284,7 @@ fn multiple_folded_inputs_materialize_once_and_stay_on_their_original_page() {
     let mut requests = requests();
     for request in &mut requests[1..] {
         request.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        request.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        request.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
         request.superseded_by_request = Some("head".into());
         request.superseded_by_request_doc_id = Some("doc-head".into());
     }

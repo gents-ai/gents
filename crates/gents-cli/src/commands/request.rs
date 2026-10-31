@@ -73,7 +73,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         .transpose()
         .context("--input must be canonical RequestInput JSON")?
         .unwrap_or_default();
-    let input = gents::lifecycle::prepare_user_message_input(
+    let input = gents::request::lifecycle::prepare_user_message_input(
         &ConfigAccess::Graphql(graphql.clone()),
         &node_did,
         &session_id,

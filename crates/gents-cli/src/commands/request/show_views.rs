@@ -16,7 +16,7 @@ pub(super) struct RequestShowSnapshot {
     pub(super) native_executors_available: bool,
     pub(super) native_executors: Vec<NativeExecutorView>,
     pub(super) child_requests: Vec<ChildRequestView>,
-    pub(super) blocked: Option<gents::blocked_turn::BlockedTurn>,
+    pub(super) blocked: Option<gents::goal::blocked_turn::BlockedTurn>,
 }
 
 #[derive(Debug, Clone, Serialize)]

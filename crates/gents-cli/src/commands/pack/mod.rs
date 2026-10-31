@@ -168,12 +168,12 @@ pub(crate) mod test_support {
 }
 
 pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
-    gents::pack_registry::split_pack_coordinate(name)
+    gents::pack::registry::split_pack_coordinate(name)
 }
 
 async fn list(args: PackListArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
-    let store = gents::pack_store::PackStore::new(&home);
+    let store = gents::pack::store::PackStore::new(&home);
     let (records, skipped) = gents::pack::list_home_installs_with_skips(&home)?;
     let installed: std::collections::BTreeSet<String> = records
         .into_iter()

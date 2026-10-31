@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use gents::graphql::graphql_with_transaction_retry;
+use gents::store::graphql::graphql_with_transaction_retry;
 use serde_json::Value;
 use tokio::sync::Mutex;
 

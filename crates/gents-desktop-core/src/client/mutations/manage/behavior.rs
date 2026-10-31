@@ -1,10 +1,10 @@
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
-use gents::collection::Collection;
+use gents::store::collection::Collection;
 #[cfg(test)]
-use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::AgentDocument;
 #[cfg(test)]
 use std::sync::Arc;
@@ -139,7 +139,8 @@ mod tests {
                 "node_did":owner, "backend_id":"backend", "name":"Backend",
                 "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
             }))?;
-            gents::config_client::write_inference_backend_document(&access, &backend).await?;
+            gents::store::config_client::write_inference_backend_document(&access, &backend)
+                .await?;
             let profile = serde_json::from_value(json!({
                 "node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
             }))?;
@@ -242,7 +243,7 @@ mod tests {
                     &node,
                     "did:test:alpha",
                     &[(
-                        gents::config_client::patch::SelfConfigTarget::Agent,
+                        gents::store::config_client::patch::SelfConfigTarget::Agent,
                         "review".into(),
                         vec![("enabled".into(), Some(json!(false)))],
                     )],

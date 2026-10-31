@@ -1,0 +1,635 @@
+use super::support::*;
+use super::*;
+use crate::lean_vocab_test::lean_runtime_reconcile_case;
+use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
+use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
+use rapidhash::{HashMapExt, RapidHashMap};
+
+struct CountingWatcher {
+    rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl crate::request::watcher::Watcher for CountingWatcher {
+    async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.rx.recv().await
+    }
+}
+
+struct RejectRouterGenerationWriter;
+
+#[async_trait::async_trait]
+impl NodeReadinessWriter for RejectRouterGenerationWriter {
+    async fn upsert(
+        &self,
+        _node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
+        _updated_at: &str,
+    ) -> anyhow::Result<()> {
+        if snapshot.router_generation > 0 {
+            return Err(FatalNodeReadinessWrite.into());
+        }
+        Ok(())
+    }
+}
+
+fn routed_snapshot(
+    generation: u64,
+    dispatcher: mpsc::Sender<AgentRequest>,
+) -> Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot> {
+    Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+        generation,
+        node: None,
+        local_did: String::new(),
+        default_agent_id: "general".to_string(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: rapidhash::RapidHashSet::default(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::from_iter([("general".to_string(), dispatcher)]),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
+    })
+}
+
+#[tokio::test]
+async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = "did:test:invalid-origin-route";
+    let response = node
+        .execute(
+            r#"mutation {
+                create_AgentRequest(input: {
+                    request_id: "invalid-origin-route-request"
+                    purpose: "normal"
+                    node_did: "did:test:invalid-origin-route"
+                    agent_id: "general"
+                    session_id: "invalid-origin-route-session"
+                    content: "hostile"
+                    lifecycle_state: "pending"
+                    created_at: "2026-09-03T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create malformed routed request: {:?}",
+        response.errors
+    );
+    let response = node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "invalid-origin-route-request" } }
+                    limit: 1
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "lookup malformed routed request: {:?}",
+        response.errors
+    );
+    let doc_id = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .expect("malformed request doc id")
+        .to_string();
+    let mut malformed = request(Some("general"), "invalid-origin-route-session");
+    malformed.doc_id = doc_id;
+    malformed.request_id = "invalid-origin-route-request".to_string();
+    malformed.node_did = node_did.to_string();
+
+    super::super::router::fail_routed_request(
+        node.clone(),
+        node_did,
+        malformed,
+        "general",
+        "agent unavailable",
+    )
+    .await
+    .expect("invalid origin must be terminalized, not escape the router");
+
+    let response = node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "invalid-origin-route-request" } }
+                    limit: 1
+                ) { lifecycle_state failure_reason }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "reload terminal row: {:?}",
+        response.errors
+    );
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .expect("terminal request row");
+    assert_eq!(
+        row.get("lifecycle_state").and_then(Value::as_str),
+        Some("failed")
+    );
+    assert!(row
+        .get("failure_reason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| reason.contains("execution_origin")));
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = "did:test:full-executor-queue";
+    let (dispatcher, mut executor_rx) = mpsc::channel(1);
+    dispatcher
+        .send(request(Some("general"), "already-queued"))
+        .await
+        .unwrap();
+    let snapshot = routed_snapshot(1, dispatcher);
+    let (_active_tx, active_rx) = watch::channel(snapshot.clone());
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (request_tx, request_rx) = mpsc::channel(1);
+    let (status_owner, status) =
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did);
+    status.initialize_startup("general").await.unwrap();
+    status
+        .readiness()
+        .register_slot("general", 1)
+        .await
+        .unwrap();
+    status
+        .readiness()
+        .publish_snapshot(snapshot.as_ref())
+        .await
+        .unwrap();
+    status
+        .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    let gate = RuntimeAdmissionGate::closed();
+    gate.open().await;
+
+    let mut routed = request(Some("general"), "blocked-dispatch");
+    routed.node_did = node_did.to_string();
+    request_tx.send(Ok(routed)).await.unwrap();
+    let gate_for_router = gate.clone();
+    let router_node = node.clone();
+    let router = tokio::spawn(async move {
+        super::super::router::run_router_with_watcher(RouterInputs {
+            node: router_node,
+            node_did: node_did.to_string(),
+            watcher: ScriptedWatcher { rx: request_rx },
+            active_snapshot_rx: active_rx,
+            shutdown: shutdown_rx,
+            admission_gate: gate_for_router,
+            runtime_status: status,
+            runtime_snapshot_observer: None,
+        })
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
+        .await
+        .expect("router must hold an admission lease before the close race");
+    tokio::time::timeout(Duration::from_secs(1), gate.close())
+        .await
+        .expect("gate close must cancel the blocked executor send");
+    tokio::time::timeout(Duration::from_secs(1), router)
+        .await
+        .expect("router must leave the blocked send after admission closes")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        executor_rx.recv().await.unwrap().session_id,
+        "already-queued"
+    );
+    assert!(
+        executor_rx.try_recv().is_err(),
+        "closed admission leaked work"
+    );
+    status_owner.close().await.unwrap();
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = "did:test:full-queue-generation-handoff";
+    let (old_dispatcher, mut old_rx) = mpsc::channel(1);
+    old_dispatcher
+        .send(request(Some("general"), "already-queued"))
+        .await
+        .unwrap();
+    let (new_dispatcher, mut new_rx) = mpsc::channel(1);
+    let initial_snapshot = routed_snapshot(1, old_dispatcher);
+    let updated_snapshot = routed_snapshot(2, new_dispatcher);
+    let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (request_tx, request_rx) = mpsc::channel(1);
+    let (status_owner, status) =
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did);
+    status.initialize_startup("general").await.unwrap();
+    status
+        .readiness()
+        .register_slot("general", 1)
+        .await
+        .unwrap();
+    status
+        .readiness()
+        .publish_snapshot(initial_snapshot.as_ref())
+        .await
+        .unwrap();
+    status
+        .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    let gate = RuntimeAdmissionGate::closed();
+    gate.open().await;
+
+    let mut routed = request(Some("general"), "blocked-dispatch");
+    routed.node_did = node_did.to_string();
+    request_tx.send(Ok(routed)).await.unwrap();
+    let gate_for_router = gate.clone();
+    let router_node = node.clone();
+    let status_for_router = status.clone();
+    let router = tokio::spawn(async move {
+        super::super::router::run_router_with_watcher(RouterInputs {
+            node: router_node,
+            node_did: node_did.to_string(),
+            watcher: ScriptedWatcher { rx: request_rx },
+            active_snapshot_rx: active_rx,
+            shutdown: shutdown_rx,
+            admission_gate: gate_for_router,
+            runtime_status: status_for_router,
+            runtime_snapshot_observer: None,
+        })
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
+        .await
+        .expect("router must reach the full queue");
+    status
+        .readiness()
+        .publish_snapshot(updated_snapshot.as_ref())
+        .await
+        .unwrap();
+    active_tx.send(updated_snapshot).unwrap();
+    let dispatched = tokio::time::timeout(Duration::from_secs(1), new_rx.recv())
+        .await
+        .expect("router must leave the old full queue")
+        .expect("updated executor must receive the request");
+    assert_eq!(dispatched.session_id, "blocked-dispatch");
+    assert_eq!(old_rx.recv().await.unwrap().session_id, "already-queued");
+    assert!(old_rx.try_recv().is_err());
+
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), router)
+        .await
+        .expect("router must shut down")
+        .unwrap()
+        .unwrap();
+    status_owner.close().await.unwrap();
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn router_generation_write_failure_closes_admission_before_dequeue_or_dispatch() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = "did:test:router-generation-write-failure";
+    let (dispatcher, mut executor_rx) = mpsc::channel(1);
+    let snapshot = routed_snapshot(1, dispatcher);
+    let (_active_tx, active_rx) = watch::channel(snapshot.clone());
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (request_tx, request_rx) = mpsc::channel(1);
+    let (status_owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        node_did,
+        Arc::new(RejectRouterGenerationWriter),
+        Duration::from_millis(1),
+    );
+    status.initialize_startup("general").await.unwrap();
+    status
+        .readiness()
+        .register_slot("general", 1)
+        .await
+        .unwrap();
+    status
+        .readiness()
+        .publish_snapshot(snapshot.as_ref())
+        .await
+        .unwrap();
+    status
+        .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    let gate = RuntimeAdmissionGate::closed();
+    gate.open().await;
+    let mut routed = request(Some("general"), "must-remain-pending");
+    routed.node_did = node_did.to_string();
+    request_tx.send(Ok(routed)).await.unwrap();
+    let watcher_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let error = super::super::router::run_router_with_watcher(RouterInputs {
+        node: node.clone(),
+        node_did: node_did.to_string(),
+        watcher: CountingWatcher {
+            rx: request_rx,
+            calls: watcher_calls.clone(),
+        },
+        active_snapshot_rx: active_rx,
+        shutdown: shutdown_rx,
+        admission_gate: gate.clone(),
+        runtime_status: status,
+        runtime_snapshot_observer: None,
+    })
+    .await
+    .expect_err("router generation persistence failure must stop the router");
+    assert!(
+        format!("{error:#}").contains("injected fatal agent readiness write"),
+        "unexpected router error: {error:#}"
+    );
+    assert!(!gate.is_open().await);
+    assert_eq!(
+        watcher_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "router dequeued a request before its generation was durably acknowledged"
+    );
+    assert!(executor_rx.try_recv().is_err(), "request reached executor");
+    status_owner.close().await.unwrap();
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn router_holds_request_during_generation_handoff_and_dispatches_after_alignment() {
+    let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
+    assert!(accept.legal);
+
+    let node_did = "did:test:router-latest-snapshot";
+    let initial_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+        generation: 1,
+        node: None,
+        local_did: String::new(),
+        default_agent_id: "general".to_string(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: rapidhash::RapidHashSet::default(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
+    });
+    let updated_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+        generation: 2,
+        node: None,
+        local_did: String::new(),
+        default_agent_id: "code".to_string(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: rapidhash::RapidHashSet::default(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
+    });
+    let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
+    let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let (watcher_tx, watcher_rx) = mpsc::channel(1);
+    let mut watcher = ScriptedWatcher { rx: watcher_rx };
+    let mut active_snapshot = active_rx.borrow().clone();
+
+    let mut routed_request = request(Some("code"), "session-router");
+    routed_request.doc_id = "doc-router".to_string();
+    routed_request.request_id = "req-router".to_string();
+    routed_request.node_did = node_did.to_string();
+    watcher_tx.send(Ok(routed_request)).await.unwrap();
+    let admission_gate = RuntimeAdmissionGate::closed();
+    admission_gate.open().await;
+    let mut admission_rx = admission_gate.subscribe();
+    let (_readiness_tx, mut readiness_rx) = watch::channel(
+        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(2, []),
+    );
+    let mut pending_request = None;
+    let (request, routed_snapshot, routed_observation) = {
+        let wait = wait_for_next_request_with_latest_snapshot(
+            node_did,
+            &mut watcher,
+            RouterWaitState {
+                active_snapshot: &mut active_snapshot,
+                active_snapshot_rx: &mut active_rx,
+                admission_gate: &admission_gate,
+                admission_changed: &mut admission_rx,
+                readiness_changed: &mut readiness_rx,
+                pending_request: &mut pending_request,
+            },
+            &mut shutdown_rx,
+            None,
+            None,
+        );
+        tokio::pin!(wait);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut wait)
+                .await
+                .is_err(),
+            "router returned a request while the source was ahead of the active generation"
+        );
+        active_tx.send(updated_snapshot).unwrap();
+        wait.await
+            .expect("router wait should succeed")
+            .expect("request should be returned")
+    };
+
+    assert_eq!(request.request_id, "req-router");
+    assert_eq!(routed_observation.source_generation(), 2);
+    assert_eq!(routed_snapshot.generation, 2);
+    assert_eq!(routed_snapshot.default_agent_id, "code");
+    assert_eq!(
+        active_snapshot.generation,
+        accept.post_router_generation as u64
+    );
+    assert_eq!(active_snapshot.default_agent_id, "code");
+}
+
+#[tokio::test]
+async fn router_publishes_observed_generation_without_waiting_for_request() {
+    let router = lean_runtime_reconcile_case("router_observe_published_generation");
+    assert!(router.legal);
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = "did:test:router-observed-generation";
+    let initial_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+        generation: 1,
+        node: None,
+        local_did: String::new(),
+        default_agent_id: "general".to_string(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::from_iter([(
+            "general".to_string(),
+            crate::runtime::snapshot::UnavailableAgent::new(
+                gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                "test fixture has no executor",
+            ),
+        )]),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: rapidhash::RapidHashSet::default(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
+    });
+    let updated_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+        generation: 2,
+        node: None,
+        local_did: String::new(),
+        default_agent_id: "general".to_string(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::from_iter([(
+            "general".to_string(),
+            crate::runtime::snapshot::UnavailableAgent::new(
+                gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                "test fixture has no executor",
+            ),
+        )]),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: rapidhash::RapidHashSet::default(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
+    });
+    let (active_tx, mut active_rx) = watch::channel(initial_snapshot.clone());
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let (runtime_status_owner, runtime_status) =
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.to_string());
+    runtime_status.initialize_startup("general").await.unwrap();
+    runtime_status
+        .publish_startup_snapshot(initial_snapshot.as_ref())
+        .await
+        .unwrap();
+
+    let (_request_tx, request_rx) = mpsc::channel(1);
+    let mut watcher = ScriptedWatcher { rx: request_rx };
+    let mut active_snapshot = active_rx.borrow().clone();
+    let runtime_status_for_router = runtime_status.clone();
+    let mut readiness_rx = runtime_status.readiness().subscribe_observation();
+    let admission_gate = RuntimeAdmissionGate::closed();
+    admission_gate.open().await;
+    let mut admission_rx = admission_gate.subscribe();
+    let mut pending_request = None;
+    let router_task = tokio::spawn(async move {
+        wait_for_next_request_with_latest_snapshot(
+            node_did,
+            &mut watcher,
+            RouterWaitState {
+                active_snapshot: &mut active_snapshot,
+                active_snapshot_rx: &mut active_rx,
+                admission_gate: &admission_gate,
+                admission_changed: &mut admission_rx,
+                readiness_changed: &mut readiness_rx,
+                pending_request: &mut pending_request,
+            },
+            &mut shutdown_rx,
+            Some(&runtime_status_for_router),
+            None,
+        )
+        .await
+    });
+
+    tokio::task::yield_now().await;
+    runtime_status
+        .readiness()
+        .publish_snapshot(updated_snapshot.as_ref())
+        .await
+        .unwrap();
+    active_tx.send(updated_snapshot).unwrap();
+    tokio::task::yield_now().await;
+
+    let row = fetch_runtime_status(node.as_ref(), node_did).await;
+    assert_eq!(row.last_reconcile_result, "startup");
+
+    let query = format!(
+        r#"{{
+            NodeReadiness(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
+                snapshot_json
+            }}
+        }}"#,
+        node_did = escape_graphql_string(node_did),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "NodeReadiness router query failed: {:?}",
+            response.errors
+        );
+        let router_generation = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("NodeReadiness"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("snapshot_json"))
+            .and_then(Value::as_str)
+            .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
+            .map(|snapshot| snapshot.router_generation)
+            .unwrap_or_default();
+        if router_generation == router.post_router_generation as u64 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "router generation did not advance to {}; last value={router_generation}",
+            router.post_router_generation
+        );
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let _ = shutdown_tx.send(true);
+    assert!(router_task.await.unwrap().unwrap().is_none());
+    runtime_status_owner.close().await.unwrap();
+}

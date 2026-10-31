@@ -15,7 +15,7 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
         grok_home: None,
         plugin_home: std::path::PathBuf::new(),
     };
-    gents::schema::ensure_runtime_schemas(config.node.as_ref())
+    gents::store::schema::ensure_runtime_schemas(config.node.as_ref())
         .await
         .expect("runtime schemas");
     crate::commands::grok_shim::seed_test_agent_configuration(
@@ -50,7 +50,7 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
 #[tokio::test]
 async fn delegate_streams_updates_live_before_the_response() {
     let (_staging, config) = config().await;
-    gents::schema::ensure_runtime_schemas(config.node.as_ref())
+    gents::store::schema::ensure_runtime_schemas(config.node.as_ref())
         .await
         .expect("runtime schemas");
     let graphql = spawn_mock_graphql(config.node.clone()).await;
@@ -95,7 +95,8 @@ async fn delegate_streams_updates_live_before_the_response() {
                 assert_eq!(rows.len(), 1, "live request identity must be exact");
                 let request: gents_protocol::row::AgentRequestRow =
                     serde_json::from_value(row.clone()).unwrap();
-                let escaped_request = gents::graphql::escape_graphql_string(&request.request_id);
+                let escaped_request =
+                    gents::store::graphql::escape_graphql_string(&request.request_id);
                 let message_key =
                     gents::session::sequence_message_key(&node_did, "s-live", Some(&node_did), 1);
                 let message_doc_id = seed_canonical_assistant_message(
@@ -123,7 +124,8 @@ async fn delegate_streams_updates_live_before_the_response() {
                         }}"#
                 );
                 let response = node_for_seed.execute(&mutation).await;
-                gents::graphql::ensure_no_errors(&response, "terminalize").expect("terminalize");
+                gents::store::graphql::ensure_no_errors(&response, "terminalize")
+                    .expect("terminalize");
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;

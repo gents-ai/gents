@@ -393,7 +393,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::Duration;
-use gents::plugin_job::view::{JobFilter, StateFilter};
+use gents::tools::background::job::view::{JobFilter, StateFilter};
 use gents_protocol::job::JobReadError;
 
 use super::super::observation_cursor::{ABANDONED_REVISION, MAX_RETRY_DELAY_SECS};
@@ -419,7 +419,9 @@ pub(super) async fn harness() -> (
             .await
             .unwrap(),
     );
-    gents::schema::ensure_runtime_schemas(&node).await.unwrap();
+    gents::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let projections = ProjectionEngine::new(
         node,
         BoundModelContext::new("model".into(), "Model".into(), 1000),

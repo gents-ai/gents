@@ -123,7 +123,7 @@ def insertNote (existing : Option Fingerprint) (new : Fingerprint)
 
 /-- The pack's install-time validation requires the declared collections to be
 a subset of the type names in the pack's own `schemas/*.graphql`. The runtime
-predicate `writable_output_collection` (`callback/plugin.rs`) refuses runtime
+predicate `writable_output_collection` (`triggers/callback/plugin.rs`) refuses runtime
 and protected collections as a second check; alone it is not "own pack". -/
 theorem writes_stay_in_own_sdl (op : ToolPolicy.ApplicationWrite.Operation) (o : Observation)
     (h : admitted op o = true) : o.inOwnSdl = true := by

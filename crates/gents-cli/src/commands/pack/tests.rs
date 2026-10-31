@@ -70,7 +70,7 @@ fn a_document_pack_materializes_a_valid_configuration() {
         &|_| None,
     )
     .unwrap();
-    gents::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
 }
 
 #[tokio::test]
@@ -288,7 +288,7 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
                 "{error:#}"
             );
         }
-        let after = gents::config_client::ConfigAccess::local(retained_node.clone())
+        let after = gents::store::config_client::ConfigAccess::local(retained_node.clone())
             .execute(query)
             .await;
         assert!(

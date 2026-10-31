@@ -226,7 +226,7 @@ pub async fn fork_session_before_message(
 #[cfg(test)]
 mod edit_fork_tests {
     use super::*;
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
 
     #[test]
     fn fork_wire_requires_the_retained_client_and_destination() {
@@ -333,13 +333,13 @@ pub async fn edit_pending_queue(
         .edit_pending_queue(
             &request.node_did,
             &request.session_id,
-            gents::lifecycle::PendingQueueEdit {
+            gents::request::lifecycle::PendingQueueEdit {
                 expected_request_doc_ids: request.expected_request_doc_ids,
                 selected_request_doc_ids: request.selected_request_doc_ids,
                 messages: request
                     .messages
                     .into_iter()
-                    .map(|message| gents::lifecycle::PendingMessageEdit {
+                    .map(|message| gents::request::lifecycle::PendingMessageEdit {
                         authored_input: message.authored_input,
                         request_doc_id: message.request_doc_id,
                         content: message.content,

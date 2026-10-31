@@ -1,7 +1,7 @@
 import type { ComposerPart } from "@gents/ui/conversation";
 
 /* Gents takes a message's skills from its opening lines and strips those
-   lines from what the agent reads (crates/gents/src/skills.rs,
+   lines from what the agent reads (crates/gents/src/documents/skills.rs,
    prompt_slash_skill_selection). A plain `/name` line is refused for names
    gents reserves for clients, such as review or plan, and a refused first
    line ends the list, so a skill is named as `/skill <id>`, which gents

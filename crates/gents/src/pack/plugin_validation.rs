@@ -227,13 +227,13 @@ impl PackPlugin {
                 );
             }
             for field in data.stamped.keys() {
-                crate::graphql::validate_graphql_name(field).with_context(|| {
+                crate::store::graphql::validate_graphql_name(field).with_context(|| {
                     format!(
                         "plugin {name:?} data.stamped key {field:?} must be a GraphQL field name"
                     )
                 })?;
                 anyhow::ensure!(
-                    !crate::toolset::is_secret_env_name(field),
+                    !crate::tools::native::is_secret_env_name(field),
                     "plugin {name:?} data.stamped field {field:?} looks like a secret name; \
                      rename the field"
                 );

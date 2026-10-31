@@ -1,12 +1,12 @@
 use serde_json::Value;
 
 use crate::defra_node::EmbeddedNode;
-use crate::document_config::TriggerObservation;
+use crate::documents::TriggerObservation;
 use crate::eval::runner::embedded::observe::{
     classify_request_outcome, RequestEvidence, TerminalObservation,
 };
 use crate::eval::{OutcomeKind, ProviderReason};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// External premise: an eval trial reads a request's persisted
 /// `failure_reason`, the only record of why inference failed; the durable
@@ -102,7 +102,7 @@ pub(super) async fn trigger_failure(
 ) -> Option<OutcomeKind> {
     let node_did = escape_graphql_string(node_did);
     let since = escape_graphql_string(since);
-    let unacknowledged = crate::trigger_engine::UNACKNOWLEDGED_STATUS;
+    let unacknowledged = crate::triggers::engine::UNACKNOWLEDGED_STATUS;
     let source_filter = source_doc_id.map_or_else(String::new, |doc_id| {
         format!(
             r#", last_fired_source_doc_id: {{ _eq: "{}" }}"#,

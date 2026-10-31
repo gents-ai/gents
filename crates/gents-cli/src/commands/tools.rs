@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
+use gents::tools::surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
 use gents::{AgentToolSurfaceConfig, ToolCeiling};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -114,7 +114,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             } else {
                 AgentToolSurfaceConfig::from_tools_documents(
                     &agent.agent_id,
-                    &gents::document_config::Tools::default(),
+                    &gents::documents::Tools::default(),
                     &[],
                     &[],
                     tool_ceiling,
@@ -220,10 +220,10 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
 pub(crate) fn agent_tools_document<'a>(
     bundle: &'a crate::shared::ConfigExportBundle,
     node_did: &str,
-    agent: &gents::document_config::Agent,
+    agent: &gents::documents::Agent,
 ) -> Result<(
-    Option<&'a gents::document_config::AgentContext>,
-    Option<&'a gents::document_config::Tools>,
+    Option<&'a gents::documents::AgentContext>,
+    Option<&'a gents::documents::Tools>,
 )> {
     let context = agent
         .context_id

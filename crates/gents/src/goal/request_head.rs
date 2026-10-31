@@ -1,8 +1,8 @@
 use super::*;
-use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
-use crate::request_admission::{
+use crate::request::admission::{
     verify_request_receipt_signature, verify_runtime_local_control_receipt,
 };
+use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 
@@ -84,7 +84,7 @@ pub(super) fn verify_goal_continuation_receipt(
         parent_row,
         child,
     )?;
-    let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
+    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
     let agent_id = parent.agent_id.clone();
     let mut expected = prepare_goal_continuation(
         &parent,
@@ -122,7 +122,7 @@ pub(super) fn verify_goal_continuation_receipt(
 pub(crate) fn request_selection_fields() -> String {
     format!(
         "{} failure_reason superseded_by_request superseded_by_request_doc_id",
-        crate::request_admission::SIGNED_REQUEST_FIELDS
+        crate::request::admission::SIGNED_REQUEST_FIELDS
     )
 }
 
@@ -185,8 +185,8 @@ where
             && allowed(row)
     };
     rows.iter().filter(|row| in_scope(row)).find(|parent| {
-        if crate::lifecycle::folded_into(parent).is_some()
-            || crate::lifecycle::retired_by_author(parent)
+        if crate::request::lifecycle::folded_into(parent).is_some()
+            || crate::request::lifecycle::retired_by_author(parent)
         {
             return false;
         }
@@ -394,7 +394,7 @@ fn authenticated_physical_entry<'a>(
                     .input
                     .as_ref()
                     .is_none_or(|input| input.goal_assignment.is_none())
-                && crate::lifecycle::queue::row_is_automated_wakeup(row);
+                && crate::request::lifecycle::queue::row_is_automated_wakeup(row);
             if !follows_wake {
                 break row;
             }
@@ -488,7 +488,7 @@ pub(crate) fn assignment_allows(assigned: Option<&str>, observed: Option<&str>) 
 }
 
 pub(super) async fn retire_stale_assignment_continuations_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     goal: &GoalDocument,
     only_doc: Option<&str>,
     now: &str,
@@ -500,9 +500,9 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
     let session = escape_graphql_string(&goal.session_id);
     let response = txn.execute_local_response(&format!(
         r#"{{AgentRequest(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{{}}}}}"#,
-        crate::request_admission::SIGNED_REQUEST_FIELDS
+        crate::request::admission::SIGNED_REQUEST_FIELDS
     )).await?;
-    let requests: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let requests: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     let pending = requests
         .iter()
         .filter(|row| {
@@ -553,7 +553,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         }
         allowed = false;
         let reason = "superseded by a newer Task Goal assignment";
-        let mutation = crate::lifecycle::queue::supersede_pending_mutation(
+        let mutation = crate::request::lifecycle::queue::supersede_pending_mutation(
             doc,
             &goal.node_did,
             &entry.request_id,
@@ -565,9 +565,9 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
             .data
             .as_ref()
             .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(crate::graphql::response_has_documents)
+            .is_some_and(crate::store::graphql::response_has_documents)
         {
-            crate::trigger_engine::durable::publish_request_outcome(
+            crate::triggers::engine::durable::publish_request_outcome(
                 txn,
                 &goal.node_did,
                 &row.request_id,
@@ -582,7 +582,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
 }
 
 pub(crate) async fn assignment_request_id_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     goal: &GoalDocument,
 ) -> Result<Option<String>> {
     let Some(root) = goal.assignment_root_request_doc_id.as_deref() else {
@@ -592,7 +592,7 @@ pub(crate) async fn assignment_request_id_in_txn(
         r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{request_id}}}}"#,
         escape_graphql_string(root), escape_graphql_string(&goal.node_did), escape_graphql_string(&goal.session_id)
     )).await?;
-    let requests: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let requests: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         requests.len() == 1,
         "Goal assignment has no unique request in its owner/session"
@@ -601,7 +601,7 @@ pub(crate) async fn assignment_request_id_in_txn(
 }
 
 pub(super) async fn load_session_requests(
-    txn: &impl crate::config_client::ConfigRead,
+    txn: &impl crate::store::config_client::ConfigRead,
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {

@@ -1,8 +1,10 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::{graphql::escape_graphql_string, tool_call_lifecycle::CancelCause, ConfigAccess};
+use gents::{
+    store::graphql::escape_graphql_string, tools::call::lifecycle::CancelCause, ConfigAccess,
+};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -31,7 +33,7 @@ pub(super) async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> 
             .node_did
             .as_deref()
             .context("request has no node identity")?;
-        gents::interrupt::interrupt_request_by_doc_id_with_access(
+        gents::request::interrupt::interrupt_request_by_doc_id_with_access(
             &ConfigAccess::Graphql(graphql.clone()),
             physical,
             node,

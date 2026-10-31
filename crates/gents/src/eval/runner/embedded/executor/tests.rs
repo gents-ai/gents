@@ -3,8 +3,8 @@ use super::install::{install, read_pack};
 use super::*;
 use crate::eval::runner::executor::InferenceBinding;
 use crate::eval::OutcomeKind;
-use crate::graphql::escape_graphql_string;
 use crate::pack::digest_declared_assets;
+use crate::store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 pub(super) fn assert_failure_class(
@@ -210,7 +210,7 @@ async fn trial_usage_includes_child_requests_and_preserves_unknown_tokens() {
         .unwrap();
     for (id, input, output) in [("stage-call", 11, 7), ("automation-call", 101, 13)] {
         let id = escape_graphql_string(id);
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             &home.node,
             "eval.test.usage",
             &format!(r#"mutation {{ create_InferenceCall(input: {{ call_id: "{id}", request_id: "{id}", call_seq: 0, call_state: "completed", prompt_tokens: {input}, completion_tokens: {output} }}) {{ _docID }} }}"#),
@@ -219,7 +219,7 @@ async fn trial_usage_includes_child_requests_and_preserves_unknown_tokens() {
     let total = home_usage(&home.node).await;
     assert_eq!(total.input_tokens, Some(112));
     assert_eq!(total.output_tokens, Some(20));
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         &home.node,
         "eval.test.usage_missing",
         r#"mutation { create_InferenceCall(input: { call_id: "unreported", request_id: "child", call_seq: 1, call_state: "failed", prompt_tokens: null, completion_tokens: 3 }) { _docID } }"#,

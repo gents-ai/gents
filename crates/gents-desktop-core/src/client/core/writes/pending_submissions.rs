@@ -90,9 +90,9 @@ impl ClientCore {
                         self.options
                             .operator_identity_interaction
                             .endpoint(&peer)
-                            .map(gents::config_client::ConfigAccess::Graphql)
+                            .map(gents::store::config_client::ConfigAccess::Graphql)
                             .unwrap_or_else(|| {
-                                gents::config_client::ConfigAccess::local(self.node_arc())
+                                gents::store::config_client::ConfigAccess::local(self.node_arc())
                             }),
                     )
                 }

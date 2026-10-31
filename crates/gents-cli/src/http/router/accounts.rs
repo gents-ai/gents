@@ -84,9 +84,9 @@ pub(super) async fn enrollment_decision_handler(
             axum::Json(json!({
                 "error": error.to_string(),
                 "code": gents_protocol::error_chain::find_source::<
-                    gents::agent::p2p_reconcile::EnrollmentDecisionRefusal,
+                    gents::runtime::agent::p2p_reconcile::EnrollmentDecisionRefusal,
                 >(error.as_ref())
-                .map(gents::agent::p2p_reconcile::EnrollmentDecisionRefusal::code),
+                .map(gents::runtime::agent::p2p_reconcile::EnrollmentDecisionRefusal::code),
             })),
         )
             .into_response(),
