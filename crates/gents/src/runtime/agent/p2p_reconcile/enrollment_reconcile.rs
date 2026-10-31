@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{SecondsFormat, Utc};
+use chrono::Utc;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot, watch};
