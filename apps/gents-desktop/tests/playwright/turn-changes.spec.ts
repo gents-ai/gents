@@ -197,7 +197,18 @@ test("a file marked viewed folds away with a check, stays folded, and opens agai
   await expect(header).toHaveAttribute("aria-expanded", "false");
   await expect(section.getByRole("img", { name: "Viewed" })).toBeVisible();
 
-  /* a later visit opens the turn's changes with it still folded */
+  /* a later visit opens the turn's changes with it still folded; the
+     session is left first, so its diffs' workers end before the reload
+     rather than having their script load cancelled by it, which logs */
+  /* on a phone the panel is a sheet over the window bar */
+  const sheet = page.getByRole("dialog");
+  if (await sheet.isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+  }
+  await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("sessions-screen")).toBeVisible();
+  await expect(page.locator("diffs-container")).toHaveCount(0);
   await page.reload();
   await page
     .getByTestId("sessions-screen")
