@@ -145,13 +145,18 @@ function MountedAgentPicker({
       >
         <PopoverTrigger
           render={
-            <Button variant="ghost" size="sm" className="gap-2 px-1.5 font-normal" />
+            /* the same size as the folder chip beside it under the composer */
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 px-1.5 text-xs font-normal"
+            />
           }
           aria-label="Agent"
         >
-          <AgentInitials name={chosen.displayName} className="size-6 text-[10px]" />
+          <AgentInitials name={chosen.displayName} className="size-5 text-[9px]" />
           <span>{chosen.displayName}</span>
-          <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
+          <ChevronDown className="size-3 text-muted-foreground" />
         </PopoverTrigger>
         <PopoverContent
           ref={popover.popupRef}
