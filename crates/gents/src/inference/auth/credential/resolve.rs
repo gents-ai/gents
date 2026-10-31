@@ -9,6 +9,19 @@ pub enum AccountPick<'a> {
     Reference(Option<&'a str>),
 }
 
+impl crate::documents::BackendAuth {
+    /// How a node OAuth backend resolves one account for readiness, discovery
+    /// and resume: its named account, or for a pool the earliest-connected
+    /// enabled account, so a pool resolves while any of its accounts does.
+    pub fn account_pick(&self) -> Option<AccountPick<'_>> {
+        match self {
+            Self::NodeOAuth { account_ref } => Some(AccountPick::Reference(account_ref.as_deref())),
+            Self::NodeOAuthPool { .. } => Some(AccountPick::ProviderDefault),
+            _ => None,
+        }
+    }
+}
+
 pub(super) fn resolver_order(a: &OAuthCredential, b: &OAuthCredential) -> std::cmp::Ordering {
     (a.connected_at, &a.credential_id).cmp(&(b.connected_at, &b.credential_id))
 }

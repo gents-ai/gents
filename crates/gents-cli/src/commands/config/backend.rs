@@ -3,9 +3,10 @@ use crate::shared::ResolvedBackendConfig;
 use crate::{resolve_node_did, BackendResolutionMode};
 use anyhow::{Context, Result};
 use gents::documents::{BackendAuth, InferenceBackend};
+use gents::inference::backends::rotation::{set_backend_rotation, BackendRotation};
 use gents::store::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, set_backend_rotation,
-    BackendRotation, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::{discover_backend_models, BackendProviderKind, Collection};
 use serde_json::json;

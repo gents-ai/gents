@@ -286,7 +286,7 @@ pub struct BackendSaveRequest {
 pub struct BackendRotationSetRequest {
     pub node_did: String,
     pub backend_id: String,
-    pub rotation: gents::config_client::BackendRotation,
+    pub rotation: gents::inference::backends::rotation::BackendRotation,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
