@@ -1263,19 +1263,19 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "tool_cases"
       "ToolExecutionPreflight"
-      "meta_tools::call::tests::generated_tool_preflight_cases_match_health_and_schema_gates"
+      "tools::mcp::meta::call::tests::generated_tool_preflight_cases_match_health_and_schema_gates"
       "Generated inputs exercise the production health and schema gates. Full call_tool dispatch and typed health-denial propagation still need generated owner observations.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "tool_cases"
       "ToolExecutionRetry"
-      "mcp_pool::tests::list_tools_transport_failure_retries_generated_safe_read_case"
+      "tools::mcp::pool::tests::list_tools_transport_failure_retries_generated_safe_read_case"
       "Drives the real safe-read retry after a transport failure. The remaining generated failure/idempotency matrix needs production owner consumers.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "tool_cases"
       "ToolExecutionRetry"
-      "mcp_pool::tests::call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata"
+      "tools::mcp::pool::tests::call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata"
       "Drives a real failed call without idempotency metadata and observes no retry or eviction. Explicit idempotency metadata and native-command cases are not exercised by this path.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -2590,7 +2590,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "mcp_health_cases"
       "MCPHealthCases"
-      "health_checker::tests::generated_mcp_health_cases_match_health_checker_transitions")
+      "tools::mcp::health::tests::generated_mcp_health_cases_match_health_checker_transitions")
       "mcp-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "mcp_health_cases"

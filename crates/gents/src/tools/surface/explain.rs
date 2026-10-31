@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::meta_tools::META_TOOL_NAMES;
 use crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME;
+use crate::tools::mcp::meta::META_TOOL_NAMES;
 use crate::tools::native::{
     agent_tool_names, background_tool_names, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
@@ -254,7 +254,7 @@ fn explain_meta(
     if surface.include_meta_tools {
         builder.include_many(
             "meta_mcp",
-            crate::meta_tools::presented_tool_names(
+            crate::tools::mcp::meta::presented_tool_names(
                 surface.remote_tools.as_ref().unwrap_or(&Default::default()),
                 &surface.allowed_mcp_service_ids,
             ),
@@ -269,7 +269,7 @@ fn explain_meta(
     }
 
     let configured = config.remote_tools().map(|remote| {
-        crate::meta_tools::presented_tool_names(remote, config.allowed_mcp_service_ids())
+        crate::tools::mcp::meta::presented_tool_names(remote, config.allowed_mcp_service_ids())
     });
     for name in configured.unwrap_or_else(|| {
         META_TOOL_NAMES

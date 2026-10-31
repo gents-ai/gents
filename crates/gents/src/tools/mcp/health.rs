@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use gents_protocol::tool_service_health::ToolServiceHealthProjection;
 
-use crate::mcp_pool::{resolve_mcp_url, McpPool};
 use crate::store::graphql::escape_graphql_string;
+use crate::tools::mcp::pool::{resolve_mcp_url, McpPool};
 
 /// Node-local service observation settings; these do not change an agent's
 /// remote-tool call deadlines.
@@ -272,16 +272,31 @@ impl Default for ServiceHealthMap {
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpHealthCheckService {
     pub service_id: String,
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::mcp::registry::null_as_empty_string"
+    )]
     pub hostname: String,
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::mcp::registry::null_as_empty_string"
+    )]
     pub tailscale_ip: String,
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::mcp::registry::null_as_empty_string"
+    )]
     pub lan_ip: String,
     pub mcp_port: Option<u16>,
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::mcp::registry::null_as_empty_string"
+    )]
     pub mcp_path: String,
-    #[serde(default, deserialize_with = "crate::registry::null_as_default")]
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::mcp::registry::null_as_default"
+    )]
     pub send_node_did: bool,
     pub updated_at: Option<String>,
 }
@@ -397,7 +412,7 @@ async fn run_health_check_with_cancel(
         .as_ref()
         .map(|context| context.node_did)
         .ok_or_else(|| anyhow::anyhow!("registry health checks require a node scope"))?;
-    let services = crate::registry::configured_mcp_services(node, owner)
+    let services = crate::tools::mcp::registry::configured_mcp_services(node, owner)
         .await?
         .into_iter()
         .filter(|service| service.enabled)
@@ -1118,7 +1133,7 @@ mod tests {
         ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
     };
     use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
-    use crate::mcp_pool::McpPool;
+    use crate::tools::mcp::pool::McpPool;
 
     #[tokio::test]
     async fn health_persistence_skips_unchanged_rows_and_only_commits_changed_fields() {

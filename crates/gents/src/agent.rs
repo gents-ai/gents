@@ -7,18 +7,18 @@ use anyhow::Context as _;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
-use crate::health_checker::HealthCheckerOptions;
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::store::schema::migration;
 use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use crate::tools::mcp::health::HealthCheckerOptions;
+use crate::tools::mcp::pool::McpPool;
 use crate::tools::surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };

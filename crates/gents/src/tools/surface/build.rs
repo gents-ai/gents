@@ -376,19 +376,21 @@ pub(super) async fn enabled_mcp_service_ids(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<String>> {
-    Ok(crate::registry::configured_mcp_services(node, node_did)
-        .await?
-        .into_iter()
-        .filter(|service| service.enabled)
-        .map(|service| service.service_id)
-        .collect())
+    Ok(
+        crate::tools::mcp::registry::configured_mcp_services(node, node_did)
+            .await?
+            .into_iter()
+            .filter(|service| service.enabled)
+            .map(|service| service.service_id)
+            .collect(),
+    )
 }
 
 pub(crate) async fn measured_available_mcp_service_ids(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<Vec<String>> {
-    let services = crate::registry::configured_mcp_services(node, node_did).await?;
+    let services = crate::tools::mcp::registry::configured_mcp_services(node, node_did).await?;
     if services.is_empty() {
         return Ok(Vec::new());
     }

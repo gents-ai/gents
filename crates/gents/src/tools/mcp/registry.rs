@@ -105,7 +105,7 @@ pub fn resolve_mcp_service(
         entry.service_id
     );
     Ok(ResolvedMcpService {
-        endpoint: crate::mcp_pool::resolve_mcp_url(
+        endpoint: crate::tools::mcp::pool::resolve_mcp_url(
             host,
             tailscale,
             lan,

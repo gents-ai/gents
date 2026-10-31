@@ -28,7 +28,7 @@ fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
         assert!(!explanation
             .tool_names
             .iter()
-            .any(|name| crate::meta_tools::META_TOOL_NAMES.contains(&name.as_str())));
+            .any(|name| crate::tools::mcp::meta::META_TOOL_NAMES.contains(&name.as_str())));
         let warning = explanation
             .warnings
             .iter()
@@ -2705,7 +2705,7 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     .unwrap();
     let explanation =
         config.explain_with_runtime(true, "did:test:test", &rapidhash::RapidHashSet::default());
-    let name = crate::meta_tools::flat_tool_name("selected", "read");
+    let name = crate::tools::mcp::meta::flat_tool_name("selected", "read");
     assert_eq!(
         explanation.tool_names,
         vec![
@@ -2716,7 +2716,7 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     assert_eq!(explanation.included["meta_mcp"], vec![name]);
     assert!(!explanation
         .tool_names
-        .contains(&crate::meta_tools::flat_tool_name("denied", "write")));
+        .contains(&crate::tools::mcp::meta::flat_tool_name("denied", "write")));
     assert!(!explanation.tool_names.contains(&"call_tool".to_string()));
 }
 

@@ -18,7 +18,6 @@ pub mod failure_text;
 pub mod file_inventory;
 pub mod file_lock;
 pub mod goal;
-pub mod health_checker;
 pub mod inference;
 pub mod inference_observation;
 #[cfg(test)]
@@ -277,13 +276,10 @@ pub(crate) mod test_support {
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
 pub mod log_rate;
-pub mod mcp_pool;
-pub mod meta_tools;
 pub mod oneshot;
 pub mod periodic_recovery;
 pub mod prompt;
 pub mod provider_context_reduction;
-pub mod registry;
 pub mod request;
 #[doc(hidden)]
 pub use request::admission::final_claim_admission_disposition;
@@ -341,10 +337,6 @@ pub use external_adapter_capture::{
     ExternalAdapterMapping, ExternalAdapterSource,
 };
 pub use gents_protocol::client_protocol;
-pub use health_checker::{
-    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
-    HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
-};
 pub use inference::admission::call_state_holds_backend_slot;
 pub use inference::admission::BackendAdmissionConfig;
 pub use inference::admission::{
@@ -368,8 +360,6 @@ pub use inference::resolved::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-pub use mcp_pool::McpPool;
-pub use meta_tools::build_meta_tools;
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use openai_wire::OpenAiWireApi;
 pub use p2p_observability::{
@@ -441,6 +431,12 @@ pub use tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
 pub use tools::exec::status::{active_native_executors, NativeExecutorStatus};
+pub use tools::mcp::health::{
+    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
+    HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
+};
+pub use tools::mcp::meta::build_meta_tools;
+pub use tools::mcp::pool::McpPool;
 pub use tools::native::{
     build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,

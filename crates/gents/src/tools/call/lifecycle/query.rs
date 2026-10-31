@@ -574,7 +574,7 @@ mod tests {
         let deadline = request
             .claimed_deadline_at()
             .expect("claimed request deadline");
-        let selected = crate::meta_tools::selected_tool_identity(
+        let selected = crate::tools::mcp::meta::selected_tool_identity(
             "call_tool",
             &serde_json::to_string(&arguments).expect("arguments text"),
         )

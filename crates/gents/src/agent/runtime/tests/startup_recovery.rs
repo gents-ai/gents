@@ -1347,7 +1347,7 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
     let tool_runtime = crate::tools::surface::ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
-        crate::health_checker::ServiceHealthMap::new(),
+        crate::tools::mcp::health::ServiceHealthMap::new(),
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
         node_did.clone(),

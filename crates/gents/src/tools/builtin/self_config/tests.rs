@@ -1667,7 +1667,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
             .await
             .unwrap();
     assert!(!backend_before.contains("FAKE_DISCOVERY_SECRET_123"));
-    let services_before = crate::registry::configured_mcp_services(&node, &owner)
+    let services_before = crate::tools::mcp::registry::configured_mcp_services(&node, &owner)
         .await
         .unwrap();
 
@@ -1741,7 +1741,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         "discovery-backed setup must not modify operator-owned inference credentials"
     );
     assert_eq!(
-        crate::registry::configured_mcp_services(&node, &owner)
+        crate::tools::mcp::registry::configured_mcp_services(&node, &owner)
             .await
             .unwrap()
             .len(),

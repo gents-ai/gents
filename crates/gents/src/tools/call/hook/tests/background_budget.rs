@@ -255,7 +255,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
             "background_timeout_secs": 120, "wait_timeout_secs": 1}]}
     }))
     .unwrap();
-    let remote_name = crate::meta_tools::flat_tool_name("search", "query");
+    let remote_name = crate::tools::mcp::meta::flat_tool_name("search", "query");
     let config = crate::tools::surface::BackgroundToolConfig {
         allowlist: vec!["bash".into(), remote_name.clone()],
         timeouts: crate::tools::surface::ToolTimeouts::from_document(&tools).background,

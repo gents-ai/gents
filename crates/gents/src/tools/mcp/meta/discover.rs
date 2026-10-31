@@ -2,7 +2,7 @@ use crate::inference::llm::tool::Tool;
 use crate::inference::llm::tool::ToolDefinition;
 use serde::Deserialize;
 
-use crate::health_checker::HealthStatus;
+use crate::tools::mcp::health::HealthStatus;
 
 use super::shared::{format_health_status, MetaToolContext, MetaToolError};
 
@@ -54,13 +54,16 @@ impl Tool for DiscoverToolsTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let services = crate::registry::configured_mcp_services(&self.ctx.node, &self.ctx.node_did)
-            .await?
-            .into_iter()
-            .filter(|service| {
-                service.enabled && self.ctx.service_selection(&service.service_id).is_some()
-            })
-            .collect::<Vec<_>>();
+        let services = crate::tools::mcp::registry::configured_mcp_services(
+            &self.ctx.node,
+            &self.ctx.node_did,
+        )
+        .await?
+        .into_iter()
+        .filter(|service| {
+            service.enabled && self.ctx.service_selection(&service.service_id).is_some()
+        })
+        .collect::<Vec<_>>();
         if services.is_empty() {
             return Ok(if self.ctx.allowed_mcp_service_ids.is_empty() {
                 "No MCP services are allowed for this agent.".to_string()
@@ -154,8 +157,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::health_checker::ServiceHealthMap;
-    use crate::mcp_pool::McpPool;
+    use crate::tools::mcp::health::ServiceHealthMap;
+    use crate::tools::mcp::pool::McpPool;
 
     #[tokio::test]
     async fn discover_filters_out_disallowed_registry_services() {
@@ -215,8 +218,8 @@ mod tests {
     use chrono::Utc;
     use rmcp::model::{ListToolsResult, Tool as McpTool};
 
-    use crate::health_checker::{HealthStatus, ServiceHealth};
     use crate::lean_vocab_test::lean_tool_preflight_cases;
+    use crate::tools::mcp::health::{HealthStatus, ServiceHealth};
 
     async fn seed_registry_service(
         node: &defra_node::EmbeddedNode,

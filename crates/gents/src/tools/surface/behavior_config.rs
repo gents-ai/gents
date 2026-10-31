@@ -297,7 +297,7 @@ impl AgentToolSurfaceConfig {
                                 }
                                 crate::documents::RemoteToolStyle::Flat => {
                                     service.background_tool_names.iter().any(|tool| {
-                                        crate::meta_tools::flat_tool_name(
+                                        crate::tools::mcp::meta::flat_tool_name(
                                             &service.mcp_service_id,
                                             tool,
                                         ) == *name

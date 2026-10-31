@@ -415,7 +415,7 @@ fn reserved_names_cover_native_and_meta_tools() {
     assert!(is_reserved_builtin_tool_name("bash_unrestricted"));
     assert!(is_reserved_builtin_tool_name("lsp"));
 
-    for meta in crate::meta_tools::META_TOOL_NAMES {
+    for meta in crate::tools::mcp::meta::META_TOOL_NAMES {
         assert!(
             is_reserved_builtin_tool_name(meta),
             "meta tool {meta:?} must be reserved"

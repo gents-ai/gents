@@ -11,12 +11,12 @@ use defra_node::EmbeddedNode;
 use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use crate::meta_tools::selected_remote_identity;
 use crate::session;
 use crate::tools::background::status::LiveToolOutputRegistry;
 use crate::tools::call::lifecycle::{
     AwaitMode, CancelCause, InterruptDisposition, ToolCallLifecycle,
 };
+use crate::tools::mcp::meta::selected_remote_identity;
 use crate::truncation::TruncationLimits;
 
 pub(crate) mod persistence;

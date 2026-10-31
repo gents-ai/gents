@@ -162,11 +162,11 @@ impl PolicyDeniedOwner {
                     "tool_name": "unselected-tool",
                     "arguments": {}
                 }),
-                tools: vec![Box::new(crate::meta_tools::CallToolTool::new(
-                    crate::meta_tools::MetaToolContext {
+                tools: vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
+                    crate::tools::mcp::meta::MetaToolContext {
                         node: node.clone(),
-                        mcp_pool: crate::mcp_pool::McpPool::new().for_agent("did:test:test"),
-                        health: crate::health_checker::ServiceHealthMap::new(),
+                        mcp_pool: crate::tools::mcp::pool::McpPool::new().for_agent("did:test:test"),
+                        health: crate::tools::mcp::health::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
                         node_did: "did:test:test".into(),

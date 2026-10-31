@@ -77,12 +77,12 @@ fn catalog() -> rmcp::model::ListToolsResult {
 
 fn remote_context(
     node: Arc<defra_node::EmbeddedNode>,
-    pool: crate::mcp_pool::McpPool,
+    pool: crate::tools::mcp::pool::McpPool,
 ) -> MetaToolContext {
     MetaToolContext {
         node,
         mcp_pool: pool.for_agent("did:test:owner"),
-        health: crate::health_checker::ServiceHealthMap::new(),
+        health: crate::tools::mcp::health::ServiceHealthMap::new(),
         local_hostname: "local".into(),
         local_subnet: None,
         node_did: "did:test:owner".into(),
@@ -96,7 +96,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
     let node = remote_node().await;
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
-    let pool = crate::mcp_pool::McpPool::new_with_tool_handlers(
+    let pool = crate::tools::mcp::pool::McpPool::new_with_tool_handlers(
         |_, endpoint| async move {
             assert_eq!(endpoint, "http://remote:8080");
             Ok(catalog())
@@ -215,7 +215,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
 #[tokio::test]
 async fn disabled_and_duplicate_registry_identity_fail_before_dispatch() {
     let node = remote_node().await;
-    let context = remote_context(node.clone(), crate::mcp_pool::McpPool::new());
+    let context = remote_context(node.clone(), crate::tools::mcp::pool::McpPool::new());
     let result = node.execute(r#"mutation { update_ToolServiceRegistry(filter: { node_did: {_eq: "did:test:owner"}}, input: {enabled: false}) {_docID} }"#).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     assert!(super::shared::lookup_service(&context, "shared")
@@ -233,7 +233,7 @@ async fn configured_discovery_timeout_cannot_fall_through_to_mutating_dispatch()
     let node = remote_node().await;
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
-    let pool = crate::mcp_pool::McpPool::new_with_tool_handlers(
+    let pool = crate::tools::mcp::pool::McpPool::new_with_tool_handlers(
         |_, _| async {
             std::future::pending::<()>().await;
             Ok(catalog())
@@ -266,7 +266,7 @@ async fn configured_discovery_timeout_cannot_fall_through_to_mutating_dispatch()
 async fn stale_limit_intersects_normal_call_timeout() {
     let node = remote_node().await;
     for (normal, stale, expected) in [(3, 10, 3), (10, 2, 2)] {
-        let pool = crate::mcp_pool::McpPool::new_with_tool_handlers(
+        let pool = crate::tools::mcp::pool::McpPool::new_with_tool_handlers(
             |_, _| async { Ok(catalog()) },
             |_| async {
                 std::future::pending::<()>().await;
@@ -280,8 +280,8 @@ async fn stale_limit_intersects_normal_call_timeout() {
             .health
             .set_for_test(
                 "shared",
-                crate::health_checker::ServiceHealth {
-                    status: crate::health_checker::HealthStatus::Stale,
+                crate::tools::mcp::health::ServiceHealth {
+                    status: crate::tools::mcp::health::HealthStatus::Stale,
                     last_seen: chrono::Utc::now(),
                     last_error: None,
                 },

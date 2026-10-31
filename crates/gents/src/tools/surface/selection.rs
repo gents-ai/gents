@@ -278,7 +278,7 @@ impl ResolvedToolSelection {
                         service
                             .background_tool_names
                             .iter()
-                            .map(|name| crate::meta_tools::flat_tool_name(service_id, name)),
+                            .map(|name| crate::tools::mcp::meta::flat_tool_name(service_id, name)),
                     ),
                 }
             }

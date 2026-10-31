@@ -11,7 +11,6 @@ pub(crate) type AgentFactory =
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::agent::completion_retry::CompletionRetryProfileFields;
-use crate::health_checker::HealthCheckerOptions;
 use crate::inference::admission::BackendAdmissionConfig;
 #[cfg(test)]
 use crate::inference::backends::provider::BackendProviderKind;
@@ -23,10 +22,11 @@ use crate::inference::resolved::{
     DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
     DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use crate::tools::mcp::health::HealthCheckerOptions;
+use crate::tools::mcp::pool::McpPool;
 use crate::tools::surface::{
     AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode, ResolvedToolSelection,
     ToolCeiling,

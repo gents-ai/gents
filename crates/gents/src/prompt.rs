@@ -193,7 +193,7 @@ pub(crate) fn build_preamble_with_targets(
     }
 
     if include_meta_tool_guidance
-        && crate::meta_tools::META_TOOL_NAMES
+        && crate::tools::mcp::meta::META_TOOL_NAMES
             .iter()
             .all(|name| tool_names.contains(name))
     {

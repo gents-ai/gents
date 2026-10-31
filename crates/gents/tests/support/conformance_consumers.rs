@@ -2156,17 +2156,17 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "session_snapshot_consumes_generated_live_overlay_cases",
         },
         ConformanceConsumer::RustTest {
-            id: "mcp_pool::tests::list_tools_transport_failure_retries_generated_safe_read_case",
+            id: "tools::mcp::pool::tests::list_tools_transport_failure_retries_generated_safe_read_case",
             package: "gents",
-            source_path: "crates/gents/src/mcp_pool/tests.rs",
-            module_path: "mcp_pool::tests",
+            source_path: "crates/gents/src/tools/mcp/pool/tests.rs",
+            module_path: "tools::mcp::pool::tests",
             function: "list_tools_transport_failure_retries_generated_safe_read_case",
         },
         ConformanceConsumer::RustTest {
-            id: "mcp_pool::tests::call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata",
+            id: "tools::mcp::pool::tests::call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata",
             package: "gents",
-            source_path: "crates/gents/src/mcp_pool/tests.rs",
-            module_path: "mcp_pool::tests",
+            source_path: "crates/gents/src/tools/mcp/pool/tests.rs",
+            module_path: "tools::mcp::pool::tests",
             function: "call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata",
         },
         ConformanceConsumer::RustTest {
@@ -2660,10 +2660,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_repair_cases_drive_tool_argument_repair",
         },
         ConformanceConsumer::RustTest {
-            id: "meta_tools::call::tests::generated_tool_preflight_cases_match_health_and_schema_gates",
+            id: "tools::mcp::meta::call::tests::generated_tool_preflight_cases_match_health_and_schema_gates",
             package: "gents",
-            source_path: "crates/gents/src/meta_tools/call.rs",
-            module_path: "meta_tools::call::tests",
+            source_path: "crates/gents/src/tools/mcp/meta/call.rs",
+            module_path: "tools::mcp::meta::call::tests",
             function: "generated_tool_preflight_cases_match_health_and_schema_gates",
         },
         ConformanceConsumer::RustTest {
@@ -2807,10 +2807,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "tool_call_state_machine_contract_is_complete",
         },
         ConformanceConsumer::RustTest {
-            id: "health_checker::tests::generated_mcp_health_cases_match_health_checker_transitions",
+            id: "tools::mcp::health::tests::generated_mcp_health_cases_match_health_checker_transitions",
             package: "gents",
-            source_path: "crates/gents/src/health_checker.rs",
-            module_path: "health_checker::tests",
+            source_path: "crates/gents/src/tools/mcp/health.rs",
+            module_path: "tools::mcp::health::tests",
             function: "generated_mcp_health_cases_match_health_checker_transitions",
         },
         ConformanceConsumer::RustTest {

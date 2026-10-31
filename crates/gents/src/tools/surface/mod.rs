@@ -44,11 +44,11 @@ use crate::inference::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 
 use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
-use crate::meta_tools::build_meta_tools;
 use crate::tools::builtin::defra_query::{
     build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
 };
 use crate::tools::builtin::defra_write::BoundedWriteTool;
+use crate::tools::mcp::meta::build_meta_tools;
 use crate::tools::native::{
     agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
     build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
@@ -251,7 +251,7 @@ impl ToolSurface {
             names.push("provider_limits".into());
         }
         if self.include_meta_tools {
-            names.extend(crate::meta_tools::presented_tool_names(
+            names.extend(crate::tools::mcp::meta::presented_tool_names(
                 self.remote_tools.as_ref().unwrap_or(&Default::default()),
                 &self.allowed_mcp_service_ids,
             ));

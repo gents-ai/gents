@@ -135,7 +135,7 @@ impl DefraSessionHook {
             .await;
         }
         let selected_tool_identity = self.remote_tools.as_ref().and_then(|remote| {
-            crate::meta_tools::selected_remote_identity(target_name, &target_args, remote)
+            crate::tools::mcp::meta::selected_remote_identity(target_name, &target_args, remote)
         });
         let lifetime = self
             .background_tool_registry

@@ -3700,7 +3700,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
         .await;
         let name = match style {
             RemoteToolStyle::Flat => {
-                crate::meta_tools::flat_tool_name("selected-service", "inspect")
+                crate::tools::mcp::meta::flat_tool_name("selected-service", "inspect")
             }
             RemoteToolStyle::Discovery => "call_tool".into(),
         };

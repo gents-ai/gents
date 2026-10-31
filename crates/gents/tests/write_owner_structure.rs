@@ -1215,7 +1215,7 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
 #[rustfmt::skip]
 const STD_HASH_ALLOWLIST: &[&str] = &[
     "crates/gents-lenses/fixture_add_label/src/lib.rs",
-    "crates/gents/src/mcp_pool.rs",
+    "crates/gents/src/tools/mcp/pool.rs",
     "crates/gents/src/provider_input/tests.rs",
 ];
 
@@ -1992,7 +1992,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // persisted AgentRequest failure_reason
     ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
-    ("crates/gents/src/health_checker.rs", 10),
+    ("crates/gents/src/tools/mcp/health.rs", 10),
     // display only: appends a next-call hint when absent
     ("crates/gents/src/tools/builtin/p2p.rs", 1),
     // DefraDB SDL parser messages (help page choice)
@@ -2386,7 +2386,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("documents", "pack", 3),
     ("documents", "plugin", 4),
     ("documents", "session", 3),
-    ("documents", "tools", 25),
+    ("documents", "tools", 26),
     ("documents", "triggers", 5),
     ("goal", "request", 33),
     ("goal", "session", 13),
