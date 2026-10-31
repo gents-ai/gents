@@ -41,25 +41,6 @@ pub(super) async fn pending_requests(
     Ok(requests)
 }
 
-#[cfg(test)]
-pub(super) async fn reconcile_inventory_requests(
-    store: &GraphqlHydrationStore,
-    delivery: &dyn HydrationDelivery,
-) -> Result<()> {
-    let pending = pending_requests(store).await?;
-    let mut first_error = None;
-    for value in pending {
-        let result = serve_inventory(store, delivery, &value).await;
-        if let Err(error) = result {
-            tracing::warn!(%error, "file inventory request failed; continuing sweep");
-            if first_error.is_none() {
-                first_error = Some(error);
-            }
-        }
-    }
-    first_error.map_or(Ok(()), Err)
-}
-
 async fn refuse(
     store: &GraphqlHydrationStore,
     demand: &FileInventoryPageDemand,

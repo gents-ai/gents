@@ -50,14 +50,6 @@ pub(super) async fn pending_requests(store: &GraphqlHydrationStore) -> Result<Ve
 }
 
 #[cfg(test)]
-pub(super) async fn reconcile_file_images(
-    store: &GraphqlHydrationStore,
-    delivery: &dyn HydrationDelivery,
-) -> Result<()> {
-    reconcile_images(store, delivery).await
-}
-
-#[cfg(test)]
 async fn reconcile_images(
     store: &dyn ImageRequestStore,
     delivery: &dyn HydrationDelivery,
