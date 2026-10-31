@@ -389,6 +389,11 @@ pub(crate) async fn control(
             ))
         }
     };
+    if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
+        && matches!(command.operation, RuntimeOperation::Observe)
+    {
+        return Ok(None);
+    }
     if matches!(
         response.status(),
         reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::NOT_IMPLEMENTED
