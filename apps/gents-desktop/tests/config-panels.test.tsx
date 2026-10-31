@@ -1560,6 +1560,70 @@ describe("configuration panels", () => {
     );
   });
 
+  it("keeps the node's avatar when its settings are saved", async () => {
+    const { api, app } = harness();
+    renderIn(
+      app,
+      <AgentPanel
+        deployment={{
+          ...deployment,
+          nodeConfig: { node_did: deployment.nodeDid, avatar: "12" },
+        }}
+      />,
+    );
+    const user = await replace("Display name", "Renamed node");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveNodeConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({ avatar: "12" }),
+      }),
+    );
+  });
+
+  it("rolls the node's portrait into the form, to save with it or set aside", async () => {
+    vi.stubGlobal(
+      "Image",
+      class {
+        src = "";
+        decode = () => Promise.resolve();
+      },
+    );
+    const { api, app } = harness();
+    renderIn(
+      app,
+      <AgentPanel
+        deployment={{
+          ...deployment,
+          nodeConfig: { node_did: deployment.nodeDid, avatar: "12" },
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    const portrait = screen.getByRole("button", { name: "Roll a new avatar" });
+    const rolled = async () => {
+      await user.click(portrait);
+      return waitFor(() => {
+        const reel = portrait.querySelectorAll("img");
+        expect(reel.length).toBeGreaterThan(2);
+        return reel[reel.length - 1].getAttribute("src")!.replace(/\D/g, "");
+      });
+    };
+
+    await rolled();
+    expect(api.saveNodeConfig).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveNodeConfig).not.toHaveBeenCalled();
+
+    const kept = await rolled();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveNodeConfig).toHaveBeenCalledTimes(1);
+    expect(api.saveNodeConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ document: expect.objectContaining({ avatar: kept }) }),
+    );
+    vi.unstubAllGlobals();
+  });
+
   it("preserves and edits the node request-hop limit", async () => {
     const { api, app } = harness();
     renderIn(

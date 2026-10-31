@@ -39,7 +39,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
-import { NodeAvatar } from "./AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
@@ -421,7 +421,7 @@ const AgentRow = memo(function AgentRow({
               active && "ring-2 ring-ink ring-offset-2 ring-offset-raised",
             )}
           >
-            <NodeAvatar name={name} className="size-8" />
+            <NodeAvatar name={name} {...nodeAvatarOf(d)} className="size-8" />
           </span>
         </NodeHoverCard>
         <span

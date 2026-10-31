@@ -213,7 +213,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::NODE_NAME,
         gents_protocol::schemas::NODE,
-        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby"
+        "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_NAME,

@@ -9,4 +9,5 @@ type Node @branchable {
     tags: [String]
     # Null or absent disables the causal-hop admission cap.
     max_request_hop: Int
+    avatar: String
 }
