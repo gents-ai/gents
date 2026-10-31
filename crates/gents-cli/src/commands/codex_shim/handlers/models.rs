@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::documents::{BackendAuth, BackendModelCatalog};
+use gents::documents::BackendModelCatalog;
 use gents::inference::backends::registry::{
     list_enabled_backends_for_agent, lookup_backend_observation, lookup_backend_observation_in_txn,
 };
