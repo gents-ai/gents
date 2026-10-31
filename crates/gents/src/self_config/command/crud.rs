@@ -159,6 +159,15 @@ impl ConfigCommandTool {
             allow_drop.is_empty() || target == SelfConfigTarget::Tools,
             "allow-drop applies only to tools"
         );
+        let (shared_ack, rest) = extract_shared(&rest)?;
+        anyhow::ensure!(
+            !shared_ack
+                || matches!(
+                    target,
+                    SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
+                ),
+            "shared applies only to a Context or Tools"
+        );
         let mut patch = if create && rest.is_empty() {
             Vec::new()
         } else if target == SelfConfigTarget::DatastoreToolSurface {
@@ -191,7 +200,7 @@ impl ConfigCommandTool {
         );
         let mut bound = false;
         if contextual && !create {
-            if let Some(agent) = self.document_agent(target, &id).await? {
+            if let Some(agent) = self.document_agent(target, &id, shared_ack).await? {
                 core = self.target_core(Some(&agent), resource).await?;
                 bound = true;
             }
@@ -219,6 +228,7 @@ impl ConfigCommandTool {
             _ => ApplyRequest::new(target, patch),
         };
         if contextual {
+            request.shared_ack = shared_ack;
             if bound {
                 request = protect_working_agent(request);
             }
@@ -237,7 +247,7 @@ impl ConfigCommandTool {
                                 .get("node_did")
                                 .and_then(Value::as_str)
                                 .context("missing owner")?;
-                            anyhow::ensure!(document_agent_in_txn(txn, target, owner, &id).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current agent");
+                            anyhow::ensure!(document_agent_in_txn(txn, target, owner, &id, true).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current agent");
                         }
                     }
                     validation.await
@@ -354,13 +364,22 @@ impl ConfigCommandTool {
         })
     }
 
-    async fn document_agent(&self, target: SelfConfigTarget, id: &str) -> Result<Option<String>> {
+    async fn document_agent(
+        &self,
+        target: SelfConfigTarget,
+        id: &str,
+        acknowledged: bool,
+    ) -> Result<Option<String>> {
         let owner = &self.node_did;
         crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.document_agent",
-            |txn| Box::pin(async move { document_agent_in_txn(txn, target, owner, id).await }),
+            |txn| {
+                Box::pin(async move {
+                    document_agent_in_txn(txn, target, owner, id, acknowledged).await
+                })
+            },
         )
         .await
     }
@@ -436,56 +455,19 @@ pub(super) struct BatchFailure {
     pub unattempted: usize,
 }
 
-async fn document_referrers(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    target: SelfConfigTarget,
-    owner: &str,
-    id: &str,
-) -> Result<Vec<Value>> {
-    let (collection, field, key) = if target == SelfConfigTarget::AgentContext {
-        ("Agent", "context_id", "agent_id")
-    } else {
-        ("AgentContext", "tools_id", "context_id")
-    };
-    let query = format!("{{ {collection}(filter: {{node_did: {{_eq: \"{}\"}}, {field}: {{_eq: \"{}\"}}}}) {{{key}}} }}", escape_graphql_string(owner), escape_graphql_string(id));
-    let response = txn.execute(&query).await?;
-    response["data"][collection]
-        .as_array()
-        .cloned()
-        .context("reference query missing rows")
-}
-
+/// The single agent that selects this Context or Tools, or `None` when
+/// nothing does. A shared document is refused unless `acknowledged`, and the
+/// refusal names every agent it would reach.
 async fn document_agent_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
     owner: &str,
     id: &str,
+    acknowledged: bool,
 ) -> Result<Option<String>> {
-    let rows = document_referrers(txn, target, owner, id).await?;
-    anyhow::ensure!(rows.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration");
-    let Some(row) = rows.first() else {
-        return Ok(None);
-    };
-    if target == SelfConfigTarget::AgentContext {
-        return Ok(Some(
-            row["agent_id"]
-                .as_str()
-                .context("referring agent ID missing")?
-                .to_owned(),
-        ));
+    let agents = ops::shared_referrers(txn, target, owner, id).await?;
+    if agents.len() > 1 && !acknowledged {
+        return Err(ops::shared_refusal(&agents));
     }
-    let context = row["context_id"]
-        .as_str()
-        .context("referring context ID missing")?;
-    let agents = document_referrers(txn, SelfConfigTarget::AgentContext, owner, context).await?;
-    anyhow::ensure!(agents.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration");
-    agents
-        .first()
-        .map(|row| {
-            row["agent_id"]
-                .as_str()
-                .map(str::to_owned)
-                .context("referring agent ID missing")
-        })
-        .transpose()
+    Ok(agents.into_iter().next())
 }

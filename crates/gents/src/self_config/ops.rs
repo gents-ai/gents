@@ -17,6 +17,7 @@ use crate::config_client::{
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::{BackendAuth, IntegrationTools, SelfConfigTools, Tools};
+use crate::graphql::escape_graphql_string;
 use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
@@ -75,6 +76,10 @@ pub struct PatchOutcome {
     pub changed: Vec<FieldDelta>,
     pub effect: &'static str,
     pub doc_id: Option<String>,
+    /// Present when the edited Context or Tools is shared: every agent the
+    /// write reaches, and the sha256 of the document that was published.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared: Option<Value>,
 }
 
 pub(super) fn target_destination(document: &Map<String, Value>, owner: &str) -> Value {
@@ -359,6 +364,8 @@ impl SelfConfigCore {
         }
 
         let changed = safe_diff(request.target, &stored_doc, &merged);
+        let shared =
+            shared_receipt(txn, request.target, &self.node_did, &unique_value, &merged).await?;
         let plan = replacement_plan(request.target, &merged)?;
         apply_desired_state_plan(txn, &plan).await?;
         let doc_id = read_owned_doc(txn, request.target, &self.node_did, &unique_value)
@@ -375,6 +382,7 @@ impl SelfConfigCore {
             created: creating,
             committed: false,
             changed,
+            shared,
             effect: if request.target == SelfConfigTarget::DatastoreToolSurface {
                 "Install its collection schemas before selecting this surface. Read tools get, then add its ID to set.datastore.datastore_tool_surface_ids, preserving existing selections. Tools apply after reconciliation to later requests."
             } else if creating && request.target == SelfConfigTarget::InferenceProfile {
@@ -573,6 +581,8 @@ impl SelfConfigCore {
                 .await?;
         }
         validate_desired_state_plan(txn, &replacement_plan(request.target, &merged)?).await?;
+        let shared =
+            shared_receipt(txn, request.target, &self.node_did, &unique_value, &merged).await?;
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
             agent_id: self.agent_id.clone(),
@@ -582,6 +592,7 @@ impl SelfConfigCore {
             doc_id: None,
             created: creating,
             committed: false,
+            shared,
             effect: "preview: nothing was written; send the same create/update call without preview to apply",
         })
     }
@@ -624,6 +635,9 @@ pub(crate) struct ApplyRequest<'a> {
     pub(crate) allow_create: bool,
     pub(crate) require_create: bool,
     pub(crate) guard_selected_chain: bool,
+    /// `options.shared = "acknowledge"`: edit a Context or Tools that more
+    /// than one agent selects, instead of refusing it.
+    pub(crate) shared_ack: bool,
     pub(crate) resolve_unique: ResolveUniqueFn<'a>,
     pub(crate) on_create: OnCreateFn<'a>,
     pub(crate) normalize: NormalizeFn<'a>,
@@ -671,6 +685,7 @@ impl<'a> ApplyRequest<'a> {
             allow_create: false,
             require_create: false,
             guard_selected_chain: true,
+            shared_ack: false,
             resolve_unique: Box::new(|_| bail!("resolve_unique not set (internal bug)")),
             on_create: Box::new(|_, _| Ok(())),
             normalize: Box::new(|_, _, _, _| Box::pin(async { Ok(()) })),
@@ -1149,6 +1164,105 @@ pub(crate) async fn read_owned_doc(
         })
         .transpose()
 }
+/// The agents that select this Context, by `agent_id`, sorted and deduplicated.
+async fn context_agents(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    context_id: &str,
+) -> Result<Vec<String>> {
+    let query = format!(
+        "{{ Agent(filter: {{node_did: {{_eq: \"{}\"}}, context_id: {{_eq: \"{}\"}}}}) {{agent_id}} }}",
+        escape_graphql_string(owner),
+        escape_graphql_string(context_id)
+    );
+    let response = txn.execute(&query).await?;
+    let rows = response["data"]["Agent"]
+        .as_array()
+        .cloned()
+        .context("Agent reference query missing rows")?;
+    let mut agents = Vec::new();
+    for row in &rows {
+        agents.push(
+            row["agent_id"]
+                .as_str()
+                .context("referring agent ID missing")?
+                .to_owned(),
+        );
+    }
+    agents.sort();
+    agents.dedup();
+    Ok(agents)
+}
+
+/// Every agent that selects this Context or Tools, by `agent_id`, sorted and
+/// deduplicated. Empty for targets that are not shared by reference.
+///
+/// A Context is shared when more than one Agent selects it; Tools are shared
+/// when more than one Agent reaches them, directly or through a Context.
+pub(crate) async fn shared_referrers(
+    txn: &ConfigApplyTxn<'_>,
+    target: SelfConfigTarget,
+    owner: &str,
+    id: &str,
+) -> Result<Vec<String>> {
+    match target {
+        SelfConfigTarget::AgentContext => context_agents(txn, owner, id).await,
+        SelfConfigTarget::Tools => {
+            let query = format!(
+                "{{ AgentContext(filter: {{node_did: {{_eq: \"{}\"}}, tools_id: {{_eq: \"{}\"}}}}) {{context_id}} }}",
+                escape_graphql_string(owner),
+                escape_graphql_string(id)
+            );
+            let response = txn.execute(&query).await?;
+            let rows = response["data"]["AgentContext"]
+                .as_array()
+                .cloned()
+                .context("AgentContext reference query missing rows")?;
+            let mut agents = Vec::new();
+            for row in &rows {
+                let context_id = row["context_id"]
+                    .as_str()
+                    .context("referring context ID missing")?;
+                agents.extend(context_agents(txn, owner, context_id).await?);
+            }
+            agents.sort();
+            agents.dedup();
+            Ok(agents)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// The refusal for a shared Context or Tools, naming the option that accepts it.
+pub(crate) fn shared_refusal(agents: &[String]) -> anyhow::Error {
+    anyhow!(
+        "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration, or pass options.shared = \"acknowledge\" to edit it for every agent that selects it (agents: {})",
+        agents.join(", ")
+    )
+}
+
+/// The receipt for a shared edit: every agent the write reaches and the
+/// sha256 of the document that was published. Absent when the document is not
+/// shared, so an ordinary edit's receipt is unchanged.
+async fn shared_receipt(
+    txn: &ConfigApplyTxn<'_>,
+    target: SelfConfigTarget,
+    owner: &str,
+    id: &str,
+    merged: &Map<String, Value>,
+) -> Result<Option<Value>> {
+    let agents = shared_referrers(txn, target, owner, id).await?;
+    if agents.len() <= 1 {
+        return Ok(None);
+    }
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(&Value::Object(merged.clone()))?;
+    Ok(Some(json!({
+        "agents": agents,
+        "sha256": format!("{:x}", Sha256::digest(&bytes)),
+    })))
+}
+
 fn replacement_plan(
     target: SelfConfigTarget,
     merged: &Map<String, Value>,
