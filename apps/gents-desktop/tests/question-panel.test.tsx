@@ -1,6 +1,7 @@
 import { acceptedChatReply } from "./chat-delivery-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { QuestionPanel } from "../src/ui/screens/session/QuestionPanel";
@@ -188,6 +189,42 @@ describe("the question panel", () => {
         },
       }),
     );
+  });
+
+  it("leaves Enter on a focused button to that button", async () => {
+    const user = userEvent.setup();
+    const { send, onTypeInstead } = renderPanel([
+      ask("q8", { multi_select: true }),
+      ask("q9", { version: 2, optional: true }, { questionHash: "hash-q9" }),
+    ]);
+    const local = screen.getByRole("checkbox", { name: /Local model/ });
+    local.focus();
+    await user.keyboard("{Enter}");
+    expect(local).toHaveAttribute("aria-checked", "true");
+    expect(send).not.toHaveBeenCalled();
+    screen.getByRole("button", { name: "Next question" }).focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("2 of 2")).toBeVisible();
+    expect(send).not.toHaveBeenCalled();
+    screen.getByRole("button", { name: "Skip" }).focus();
+    await user.keyboard("{Enter}");
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        causedBySourceDocId: "q9",
+        answer: expect.objectContaining({ skip: true }),
+      }),
+    );
+    expect(onTypeInstead).not.toHaveBeenCalled();
+  });
+
+  it("leaves the keys to a field the person is writing in when it opens", () => {
+    const other = document.createElement("textarea");
+    document.body.append(other);
+    other.focus();
+    const { send } = renderPanel([ask("q10", {})]);
+    expect(other).toHaveFocus();
+    other.remove();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("offers no Skip for a required question, only Send once something is written", () => {

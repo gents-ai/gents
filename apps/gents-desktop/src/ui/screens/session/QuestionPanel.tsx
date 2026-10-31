@@ -15,6 +15,12 @@ import { useFleet } from "../../hooks/useFleet";
 import { agentName } from "../behavior";
 import { parseQuestion } from "../MailboxQuestion";
 
+/* a field the panel's composer hides as it opens is not one being written in */
+const writingElsewhere = (element: Element | null) =>
+  !!element?.matches(
+    "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+  ) && !element.closest("[hidden]");
+
 /* each question's answer in progress, kept while the person writes a message
    instead or looks at another question, for as long as the app runs */
 type Draft = { selected: string[]; other: string };
@@ -74,8 +80,11 @@ function QuestionForm({
   const textOnly = question.options.length === 0;
   useEffect(() => {
     mounted.current = true;
-    if (textOnly) field.current?.focus();
-    else root.current?.focus();
+    /* keys typed into another field must not become picks here */
+    if (!writingElsewhere(document.activeElement)) {
+      if (textOnly) field.current?.focus();
+      else root.current?.focus();
+    }
     return () => {
       mounted.current = false;
     };
@@ -148,7 +157,12 @@ function QuestionForm({
     if (event.key === "Escape") {
       event.preventDefault();
       onTypeInstead();
-    } else if (event.key === "Enter" && !event.shiftKey) {
+    } else if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      /* a focused button's Enter is its own click */
+      (typing || event.target === root.current)
+    ) {
       event.preventDefault();
       submit();
     } else if (!typing && /^[1-9]$/.test(event.key)) {
