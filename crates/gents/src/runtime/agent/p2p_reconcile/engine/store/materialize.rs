@@ -16,6 +16,9 @@ use super::super::EnrollmentEndpointEntry;
 /// this same transaction. Desired documents are witnesses, never authority.
 /// Native remote merges retain unique-key twins; only their smallest docID
 /// owns the index. Address that witness directly and preserve the parked rows.
+/// Cached sequences and digests cannot order or veto signed authority: separate
+/// enrollment requests may both start at sequence 1, and the projection alone
+/// decides which request is current. A cache match only avoids a redundant write.
 pub async fn materialize_enrollment_desired_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -52,21 +55,6 @@ pub async fn materialize_enrollment_desired_in_txn(
             "desired route {} has another materialization owner",
             entry.desired_id
         );
-        let sequence = row
-            .enrollment_authorization_sequence
-            .context("desired route has no authorization generation")?;
-        anyhow::ensure!(
-            sequence > 0 && sequence as u64 <= entry.authorization_sequence,
-            "desired route has a newer or invalid authorization generation"
-        );
-        if sequence as u64 == entry.authorization_sequence {
-            anyhow::ensure!(
-                row.enrollment_request_digest.as_deref() == Some(entry.request_digest.as_str())
-                    && row.enrollment_authorization_expires_at.as_deref()
-                        == Some(entry.authorization_expires_at.as_str()),
-                "desired route conflicts with the verified authorization generation"
-            );
-        }
     }
     if let Some(row) = matches.first() {
         let current_collections = row
@@ -77,6 +65,9 @@ pub async fn materialize_enrollment_desired_in_txn(
             .cloned()
             .collect::<BTreeSet<_>>();
         if row.enrollment_authorization_sequence == Some(entry.authorization_sequence as i64)
+            && row.enrollment_request_digest.as_deref() == Some(entry.request_digest.as_str())
+            && row.enrollment_authorization_expires_at.as_deref()
+                == Some(entry.authorization_expires_at.as_str())
             && row.template.as_deref() == Some(CLIENT_TEMPLATE)
             && current_collections == *collections
             && row
