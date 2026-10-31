@@ -104,3 +104,34 @@ test("in a message of several lines, ↑ climbs its lines before the message bef
   await expect(history(page)).toHaveText("History 2/3");
   await expect(commandChips(page)).toHaveText("/host-diagnostics");
 });
+
+test("a message brought back with a session chip becomes the draft once changed", async ({
+  page,
+}) => {
+  await gotoHarness(page);
+  await openChat(page);
+  await field(page).click();
+  await page.keyboard.type("see @intro");
+  await expect(
+    page.locator('[data-slot="composer-menu"]').getByRole("option").first(),
+  ).toContainText("introduction-and-greetings");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("first");
+  await page.keyboard.press("Enter");
+  const transcript = page.getByTestId("transcript-panel");
+  await expect(transcript).toContainText("see introduction-and-greetings first");
+  await expect(field(page)).toHaveText("");
+  await field(page).click();
+  await page.keyboard.press("ArrowUp");
+  await expect(history(page)).toHaveText("History 1/1");
+  await expect(field(page).locator('[data-slot="session-chip"]')).toHaveText(
+    "introduction-and-greetings",
+  );
+  await page.keyboard.type(" more");
+  await expect(history(page)).toHaveCount(0);
+  /* the edit is the draft: neither ↑ nor Escape puts the message back */
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Escape");
+  await expect(history(page)).toHaveCount(0);
+  await expect(field(page)).toContainText("see introduction-and-greetings first more");
+});
