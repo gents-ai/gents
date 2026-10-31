@@ -9,8 +9,8 @@ vi.mock("@/lib/router", () => ({
 
 import { ListDetail } from "../src/ui/screens/agent/ListDetail";
 
-describe("pack origin configuration filters", () => {
-  it("facets pack rows without hiding user rows from All", async () => {
+describe("pack entries in configuration lists", () => {
+  it("keeps the person's own entries in view and a pack's under its header", async () => {
     const user = userEvent.setup();
     render(
       <ListDetail
@@ -41,20 +41,9 @@ describe("pack origin configuration filters", () => {
     expect(screen.getByText("Review scanner")).toBeTruthy();
     /* the pack's header names it, so its rows don't repeat it */
     expect(screen.queryByText(/pack code_review/)).toBeNull();
-
-    await user.click(screen.getByTestId("skills-origin-filter"));
-    await user.click(await screen.findByRole("option", { name: "Pack code_review" }));
-    expect(screen.getByText("Review scanner")).toBeTruthy();
-    expect(screen.queryByText("User coder")).toBeNull();
-
-    await user.click(screen.getByTestId("skills-origin-filter"));
-    await user.click(await screen.findByRole("option", { name: "Not from a pack" }));
-    expect(screen.queryByText("Review scanner")).toBeNull();
-    expect(screen.getByText("User coder")).toBeTruthy();
   });
 
-  it("composes text and provenance filters on long lists", async () => {
-    const user = userEvent.setup();
+  it("searches entries by their words and by their pack's name", () => {
     render(
       <ListDetail
         base={{ name: "agent", nodeDid: "did:key:test", section: "skills" }}
@@ -91,10 +80,12 @@ describe("pack origin configuration filters", () => {
     expect(screen.getByText("Review summary")).toBeTruthy();
     expect(screen.queryByText("User skill 0")).toBeNull();
 
-    await user.click(screen.getByTestId("skills-origin-filter"));
-    await user.click(await screen.findByRole("option", { name: "Pack code_review" }));
-    expect(screen.getByText("Review scanner")).toBeTruthy();
-    expect(screen.queryByText("Review summary")).toBeNull();
+    /* a pack's name finds its group */
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter the list" }), {
+      target: { value: "reporting" },
+    });
+    expect(screen.getByText("Review summary")).toBeTruthy();
+    expect(screen.queryByText("Review scanner")).toBeNull();
     expect(screen.getByText("1 of 9")).toBeTruthy();
   });
 

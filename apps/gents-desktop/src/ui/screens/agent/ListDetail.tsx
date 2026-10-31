@@ -11,13 +11,6 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@gents/ui/components/select";
-import {
   AlertDialog,
   AlertDialogCancel,
   AlertDialogContent,
@@ -240,7 +233,6 @@ export function usePackGroups(section: string) {
 }
 
 const PACK_ORIGIN_PREFIX = "gents:pack:";
-const NOT_FROM_PACK_FILTER = "__not_from_pack__";
 export function packOrigin(tags: string[] | null | undefined): string | null {
   const origins = (tags ?? [])
     .filter((tag) => tag.startsWith(PACK_ORIGIN_PREFIX))
@@ -277,7 +269,6 @@ export function ListDetail({
   const creatingRef = useRef(false);
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
-  const [originFilter, setOriginFilter] = useState("all");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [allNested, setAllNested] = useState<Set<string>>(() => new Set());
   const packGroups = usePackGroups(base.section);
@@ -293,12 +284,6 @@ export function ListDetail({
       ).sort(),
     [rows],
   );
-  const effectiveOrigin =
-    originFilter === "all" ||
-    originFilter === NOT_FROM_PACK_FILTER ||
-    origins.includes(originFilter)
-      ? originFilter
-      : "all";
   const create = async () => {
     if (!onCreate || creatingRef.current) return;
     creatingRef.current = true;
@@ -330,22 +315,19 @@ export function ListDetail({
   }
   const filterable = rows.length > FILTER_AFTER;
   const q = query.trim().toLowerCase();
-  const shown = rows.filter((r) => {
-    const origin = packOrigin(r.tags);
-    const matchesOrigin =
-      effectiveOrigin === "all" ||
-      (effectiveOrigin === NOT_FROM_PACK_FILTER
-        ? origin === null
-        : origin === effectiveOrigin);
-    const matchesQuery =
+  /* a search matches an entry's own words or the name of the pack it came
+     from, so typing a pack's name brings up its group */
+  const shown = rows.filter(
+    (r) =>
       !filterable ||
       !q ||
-      [r.title, r.titleNote, r.meta, r.badge].some((t) => t?.toLowerCase().includes(q));
-    return matchesOrigin && matchesQuery;
-  });
+      [r.title, r.titleNote, r.meta, r.badge, packOrigin(r.tags)].some((t) =>
+        t?.toLowerCase().includes(q),
+      ),
+  );
   /* a pack's entries start folded under the person's own, so packs don't
      flood the list; with none of their own showing, the groups are the
-     list, or the filter picked a pack, so they start open */
+     list, so they start open */
   const groupsOpenByDefault = !shown.some((r) => packOrigin(r.tags) === null);
   const groupOpen = (pack: string) => packGroups.isOpen(pack, groupsOpenByDefault);
   const toggleGroup = (pack: string) => packGroups.toggle(pack, groupsOpenByDefault);
@@ -388,7 +370,7 @@ export function ListDetail({
   );
   return (
     <div>
-      {(onCreate || createMenu || filterable || origins.length > 0) && (
+      {(onCreate || createMenu || filterable) && (
         <div className="mb-6 flex flex-wrap items-center gap-3">
           {filterable && (
             <Input
@@ -399,34 +381,6 @@ export function ListDetail({
               onChange={(e) => setQuery(e.target.value)}
               className="w-72 max-md:w-full"
             />
-          )}
-          {origins.length > 0 && (
-            <Select
-              items={[
-                { value: "all", label: "All origins" },
-                ...origins.map((o) => ({ value: o, label: `Pack ${o}` })),
-                { value: NOT_FROM_PACK_FILTER, label: "Not from a pack" },
-              ]}
-              value={effectiveOrigin}
-              onValueChange={(v) => setOriginFilter(v ?? "all")}
-            >
-              <SelectTrigger
-                aria-label="Origin"
-                data-testid={`${base.section}-origin-filter`}
-                className="w-48 max-md:w-full"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All origins</SelectItem>
-                {origins.map((o) => (
-                  <SelectItem key={o} value={o}>
-                    Pack {o}
-                  </SelectItem>
-                ))}
-                <SelectItem value={NOT_FROM_PACK_FILTER}>Not from a pack</SelectItem>
-              </SelectContent>
-            </Select>
           )}
           {createMenu && <div className="ml-auto">{createMenu}</div>}
           {onCreate && (
@@ -486,7 +440,7 @@ export function ListDetail({
         )}
         {rows.length > 0 && shown.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {q ? `Nothing matches “${query.trim()}”.` : "Nothing from that origin."}
+            {q ? `Nothing matches “${query.trim()}”.` : "Nothing matches."}
           </li>
         )}
       </ul>
