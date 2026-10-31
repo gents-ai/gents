@@ -89,7 +89,14 @@ pub(crate) async fn load_runtime_status_output(
         .and_then(|rows| rows.first())
         .cloned()
         .unwrap_or(Value::Null);
-    let liveness_value = crate::commands::status::load_liveness_value(graphql, node_did).await;
+    let runtime_status = fetch_runtime_status(graphql, RUNTIME_STATUS_TIMEOUT)
+        .await
+        .ok();
+    let liveness_value = liveness_value(runtime_status.as_ref(), graphql, node_did).await;
+    let backend_probes = runtime_status
+        .as_ref()
+        .map(|status| json!(runtime_backend_probes(status, node_did)))
+        .unwrap_or(Value::Null);
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
     let p2p_status = crate::commands::p2p::load_live_http_p2p_status(home, graphql).await;
@@ -112,6 +119,7 @@ pub(crate) async fn load_runtime_status_output(
         "runtime_state": runtime_state,
         "runtime": runtime_row,
         "liveness": liveness_value,
+        "backend_probes": backend_probes,
         "p2p": p2p_status,
         "background_completion": background_completion,
         "node_readiness": node_readiness,
@@ -178,9 +186,22 @@ pub(crate) async fn load_runtime_status_output(
     Ok(output)
 }
 
+const RUNTIME_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub(crate) async fn load_liveness_value(graphql: &GraphqlEndpoint, node_did: &str) -> Value {
-    if let Some(liveness) = load_live_http_liveness_value(graphql).await {
-        return liveness;
+    let runtime_status = fetch_runtime_status(graphql, RUNTIME_STATUS_TIMEOUT)
+        .await
+        .ok();
+    liveness_value(runtime_status.as_ref(), graphql, node_did).await
+}
+
+async fn liveness_value(
+    runtime_status: Option<&Value>,
+    graphql: &GraphqlEndpoint,
+    node_did: &str,
+) -> Value {
+    if let Some(liveness) = runtime_status.and_then(|status| status.get("liveness")) {
+        return liveness.clone();
     }
     match crate::http::prometheus::load_metrics_query_data(graphql, node_did).await {
         Ok(data) => serde_json::to_value(&data.liveness).unwrap_or(Value::Null),
@@ -188,12 +209,32 @@ pub(crate) async fn load_liveness_value(graphql: &GraphqlEndpoint, node_did: &st
     }
 }
 
-async fn load_live_http_liveness_value(graphql: &GraphqlEndpoint) -> Option<Value> {
-    fetch_runtime_status(graphql, std::time::Duration::from_secs(2))
-        .await
-        .ok()?
-        .get("liveness")
-        .cloned()
+/// The runtime's measured backend probes keyed by backend ID, only when the
+/// runtime serving `graphql` is `node_did`'s: probes carry no owner scope.
+pub(crate) async fn load_runtime_backend_probes(
+    graphql: &GraphqlEndpoint,
+    node_did: &str,
+) -> BTreeMap<String, Value> {
+    match fetch_runtime_status(graphql, RUNTIME_STATUS_TIMEOUT).await {
+        Ok(status) => runtime_backend_probes(&status, node_did),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+fn runtime_backend_probes(status: &Value, node_did: &str) -> BTreeMap<String, Value> {
+    if status.get("node_did").and_then(Value::as_str) != Some(node_did) {
+        return BTreeMap::new();
+    }
+    status
+        .get(crate::http::router::BACKEND_PROBES_STATUS_FIELD)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|probe| {
+            let backend_id = probe.get("backend_id")?.as_str()?;
+            Some((backend_id.to_string(), probe.clone()))
+        })
+        .collect()
 }
 
 pub(crate) async fn fetch_runtime_status(
@@ -254,4 +295,24 @@ pub(crate) async fn load_node_readiness(
         .next()
         .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_backend_probes_belong_to_the_status_node() {
+        let status = json!({
+            "node_did": "did:key:owner",
+            "backend_probes": [
+                {"backend_id": "claude", "state": "degraded", "last_error": "404"},
+                {"state": "healthy"},
+            ],
+        });
+        let probes = runtime_backend_probes(&status, "did:key:owner");
+        assert_eq!(probes.len(), 1);
+        assert_eq!(probes["claude"]["last_error"], "404");
+        assert!(runtime_backend_probes(&status, "did:key:other").is_empty());
+    }
 }

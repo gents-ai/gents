@@ -110,6 +110,18 @@ pub struct BackendHealthSnapshot {
 }
 
 impl BackendHealthSnapshot {
+    /// The operator-facing view of this node's latest measurement. The shared
+    /// document never carries it, so this is where a failed probe's reason is read.
+    pub fn probe_report(&self) -> serde_json::Value {
+        serde_json::json!({
+            "backend_id": self.backend_id,
+            "state": self.state.as_str(),
+            "failure_count": self.failure_count,
+            "last_probe_at": self.last_probe_at.to_rfc3339(),
+            "last_error": self.last_error,
+        })
+    }
+
     pub(crate) fn state_for(&self, backend: &InferenceBackend) -> Option<BackendHealthState> {
         let fingerprint = probe_configuration_fingerprint(backend);
         self.configuration_fingerprint
@@ -233,6 +245,17 @@ fn snapshot_from_entry(backend_id: &str, entry: &BackendHealthEntry) -> BackendH
         last_probe_at: entry.last_probe_at,
         last_error: entry.last_error.clone(),
         configuration_fingerprint: entry.configuration_fingerprint.clone(),
+    }
+}
+
+/// Probe errors are rendered from provider and credential error chains; the
+/// bound keeps a misbehaving endpoint from filling memory, status or logs.
+const MAX_PROBE_ERROR_CHARS: usize = 512;
+
+fn bounded_probe_error(error: String) -> String {
+    match error.char_indices().nth(MAX_PROBE_ERROR_CHARS) {
+        Some((end, _)) => format!("{}...", &error[..end]),
+        None => error,
     }
 }
 
@@ -608,6 +631,7 @@ async fn record_probe_event(
         options,
         ..
     } = env;
+    let error_text = error_text.map(bounded_probe_error);
     let fingerprint = probe_configuration_fingerprint(backend);
     let (previous, observed_state) = health_map
         .get_model(
@@ -1762,6 +1786,92 @@ mod tests {
         let snap = health_map.get("claude").await.expect("entry");
         assert_eq!(snap.state, BackendHealthState::Healthy);
         assert!(snap.last_error.is_none());
+    }
+
+    async fn toggled_models_server(
+        available: Arc<std::sync::atomic::AtomicBool>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route(
+            "/v1/models",
+            get(move || {
+                let available = available.clone();
+                async move {
+                    if available.load(Ordering::SeqCst) {
+                        Ok(Json(serde_json::json!({"data": [{"id": "test-model"}]})))
+                    } else {
+                        Err(axum::http::StatusCode::NOT_FOUND)
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (endpoint, server)
+    }
+
+    #[tokio::test]
+    async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
+        let node = test_node().await;
+        let mut claude = claude_backend();
+        seed_credential(
+            &node,
+            &claude.node_did,
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            Utc::now() + chrono::Duration::hours(8),
+        )
+        .await;
+        let available = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (endpoint, server) = toggled_models_server(available.clone()).await;
+        claude.endpoint = endpoint.clone();
+        upsert_backend_configuration(&node, &claude).await;
+        let health = BackendHealthMap::new();
+        let mut schedule = ProbeSchedule::default();
+
+        let before = Utc::now();
+        let outcome = scheduled_cycle(&node, &health, &mut schedule, true).await;
+        assert!(outcome.promotable.is_empty());
+        let failed = health
+            .get("claude")
+            .await
+            .expect("failed probe is observed");
+        assert_modeled_probe(None, &failed, "probeFail");
+        assert!(failed.last_probe_at >= before);
+        let report = failed.probe_report();
+        assert_eq!(report["state"], "degraded");
+        let reason = report["last_error"].as_str().expect("failure reason");
+        assert!(reason.contains("404"), "{reason}");
+        assert!(reason.contains(&format!("{endpoint}/models")), "{reason}");
+        assert!(!reason.contains("access-TEST"), "{reason}");
+        assert!(reason.chars().count() <= MAX_PROBE_ERROR_CHARS + 3);
+
+        available.store(true, Ordering::SeqCst);
+        let outcome = scheduled_cycle(&node, &health, &mut schedule, true).await;
+        assert_eq!(outcome.promotable, vec!["claude".to_string()]);
+        let recovered = health.get("claude").await.unwrap();
+        assert_modeled_probe(Some(&failed), &recovered, "probeSuccess");
+        assert!(recovered.last_error.is_none());
+        let observation = crate::backend_registry::lookup_backend_observation(
+            &node,
+            &claude.node_did,
+            &claude.backend_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
+        assert!(observation.last_probe.is_some());
+        server.abort();
+        node.shutdown().await;
+    }
+
+    #[test]
+    fn probe_errors_are_bounded_on_a_char_boundary() {
+        let long = "é".repeat(MAX_PROBE_ERROR_CHARS * 2);
+        let bounded = bounded_probe_error(long);
+        assert_eq!(bounded.chars().count(), MAX_PROBE_ERROR_CHARS + 3);
+        assert!(bounded.ends_with("..."));
+        assert_eq!(bounded_probe_error("short".into()), "short");
     }
 
     #[tokio::test]

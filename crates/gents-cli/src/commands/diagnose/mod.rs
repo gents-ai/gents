@@ -125,9 +125,21 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
     let accounts = gents::oauth_credential::list_accounts(&access, &node_did).await;
+    let runtime_probes = match &access {
+        gents::config_client::ConfigAccess::Graphql(endpoint) => {
+            crate::commands::status::load_runtime_backend_probes(endpoint, &node_did).await
+        }
+        _ => Default::default(),
+    };
     let backend_reports = match bundle.as_ref() {
         Some(bundle) => {
-            diagnose_backends(&access, bundle, accounts.as_deref().unwrap_or_default()).await
+            diagnose_backends(
+                &access,
+                bundle,
+                accounts.as_deref().unwrap_or_default(),
+                &runtime_probes,
+            )
+            .await
         }
         None => Vec::new(),
     };

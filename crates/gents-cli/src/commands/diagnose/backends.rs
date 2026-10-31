@@ -12,6 +12,7 @@ pub(super) async fn diagnose_backends(
     access: &ConfigAccess,
     bundle: &ConfigExportBundle,
     accounts: &[gents::oauth_credential::AccountSummary],
+    runtime_probes: &BTreeMap<String, Value>,
 ) -> Vec<Value> {
     let mut models = BTreeMap::<&str, BTreeSet<&str>>::new();
     for profile in &bundle.config.inference_profiles {
@@ -26,6 +27,7 @@ pub(super) async fn diagnose_backends(
             .remove(backend.backend_id.as_str())
             .unwrap_or_default();
         let result = backend_check(access, backend, &required).await;
+        let runtime_probe = runtime_probes.get(backend.backend_id.as_str());
         let mut report = json!({
             "backend_id": backend.backend_id,
             "provider_kind": backend.provider_kind.as_str(),
@@ -43,8 +45,12 @@ pub(super) async fn diagnose_backends(
                 .unwrap()
                 .extend(details.as_object().unwrap().clone()),
             Err(error) => {
-                report["error"] = Value::String(error.to_string());
+                report["error"] =
+                    Value::String(with_runtime_probe_reason(error.to_string(), runtime_probe));
             }
+        }
+        if let Some(probe) = runtime_probe {
+            report["runtime_probe"] = probe.clone();
         }
         let observation =
             crate::shared::load_backend_observation(access, &backend.node_did, &backend.backend_id)
@@ -127,6 +133,21 @@ async fn backend_check(
         missing.join(", ")
     );
     Ok(json!({"probe_status": observation.probe_status, "discovered_models": names, "error": null}))
+}
+
+fn with_runtime_probe_reason(message: String, runtime_probe: Option<&Value>) -> String {
+    let Some(probe) = runtime_probe else {
+        return message;
+    };
+    let Some(reason) = probe.get("last_error").and_then(Value::as_str) else {
+        return message;
+    };
+    let field = |name: &str| probe.get(name).and_then(Value::as_str).unwrap_or("unknown");
+    format!(
+        "{message}; last runtime probe ({} at {}): {reason}",
+        field("state"),
+        field("last_probe_at"),
+    )
 }
 
 fn account_field(
@@ -269,6 +290,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unprobed_oauth_backend_reports_the_runtime_probe_reason() {
+        let owner = "did:key:owner";
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let backend = json!({
+            "node_did": owner, "backend_id": "claude-max", "name": "Claude",
+            "provider_kind": "ClaudeCliSubscription", "endpoint": "https://api.anthropic.com",
+            "auth": BackendAuth::NodeOAuth { account_ref: None }, "enabled": true,
+        });
+        let input = gents_protocol::graphql::graphql_input_literal(&backend).unwrap();
+        let access = ConfigAccess::local(node.clone());
+        access
+            .write(
+                "test.diagnose.oauth_unprobed",
+                &format!("mutation {{ create_InferenceBackend(input: {input}) {{_docID}} }}"),
+            )
+            .await
+            .unwrap();
+        let bundle: ConfigExportBundle = serde_json::from_value(json!({
+            "format": "test", "node_did": owner, "exported_at": "2026-01-01T00:00:00Z",
+            "access_mode": "local", "node": {"node_did": owner},
+            "inference_backends": [backend],
+        }))
+        .unwrap();
+        let reason =
+            "Claude CLI subscription model discovery failed at https://api.anthropic.com/models: 404 ";
+        let probe = json!({
+            "backend_id": "claude-max", "state": "degraded", "failure_count": 1,
+            "last_probe_at": "2026-10-29T00:00:00+00:00", "last_error": reason,
+        });
+        let probes = BTreeMap::from([("claude-max".to_string(), probe.clone())]);
+        let reports = diagnose_backends(&access, &bundle, &[], &probes).await;
+        assert_eq!(reports[0]["ok"], false);
+        assert_eq!(reports[0]["runtime_probe"], probe);
+        let error = reports[0]["error"].as_str().unwrap();
+        assert!(error.contains("no healthy probe observation"), "{error}");
+        assert!(
+            error.contains("last runtime probe (degraded at 2026-10-29T00:00:00+00:00)"),
+            "{error}"
+        );
+        assert!(error.contains(reason), "{error}");
+
+        let reports = diagnose_backends(&access, &bundle, &[], &BTreeMap::new()).await;
+        assert!(reports[0].get("runtime_probe").is_none());
+        assert_eq!(
+            reports[0]["error"],
+            "backend is disabled or has no healthy probe observation"
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn diagnose_reports_an_xai_effort_that_will_not_be_sent() {
         let owner = "did:key:owner";
         let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
@@ -283,7 +361,7 @@ mod tests {
             "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
         }))
         .unwrap();
-        let reports = diagnose_backends(&access, &bundle, &[]).await;
+        let reports = diagnose_backends(&access, &bundle, &[], &BTreeMap::new()).await;
         let warnings = reports[0]["warnings"].as_array().expect("warnings");
         assert_eq!(warnings.len(), 1, "{reports:#?}");
         assert!(

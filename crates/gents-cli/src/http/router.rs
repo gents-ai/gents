@@ -668,9 +668,32 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
 
     if let Some(map) = body.as_object_mut() {
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
+        if let Some(health) = &state.backend_health {
+            map.insert(
+                BACKEND_PROBES_STATUS_FIELD.to_string(),
+                backend_probe_reports(&health.snapshot().await),
+            );
+        }
     }
     append_status_contracts(&state, &mut body).await;
     (StatusCode::OK, axum::Json(body)).into_response()
+}
+
+/// This node's measured backend probes; the replicated `InferenceBackend`
+/// document never carries them (#640), so a failed probe's reason is read here.
+pub(crate) const BACKEND_PROBES_STATUS_FIELD: &str = "backend_probes";
+
+fn backend_probe_reports(
+    snapshot: &rapidhash::RapidHashMap<String, gents::BackendHealthSnapshot>,
+) -> Value {
+    let mut reports = snapshot.values().collect::<Vec<_>>();
+    reports.sort_by(|a, b| a.backend_id.cmp(&b.backend_id));
+    Value::Array(
+        reports
+            .into_iter()
+            .map(|probe| probe.probe_report())
+            .collect(),
+    )
 }
 
 async fn status_route(
