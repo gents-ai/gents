@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime};
 
-use gents::agent::p2p_reconcile::session_hydration::{
+use gents::runtime::agent::p2p_reconcile::session_hydration::{
     ClientHydrationPhase, ClientHydrationProgress,
 };
 use gents_desktop_core::client::{
@@ -38,7 +38,10 @@ fn ownership_refusal_is_unreadable_not_a_retryable_failure() {
     };
     let view = to_hydration_view(
         &failed,
-        Some(gents::agent::p2p_reconcile::session_hydration::SESSION_OWNERSHIP_MISMATCH.into()),
+        Some(
+            gents::runtime::agent::p2p_reconcile::session_hydration::SESSION_OWNERSHIP_MISMATCH
+                .into(),
+        ),
     );
     assert_eq!(view.phase, "unreadable");
     assert!(view

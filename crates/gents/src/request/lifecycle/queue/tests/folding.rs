@@ -539,7 +539,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         .await
         .unwrap();
         let (_authority_owner, authority) =
-            crate::agent::p2p_reconcile::enrollment_authority_channel();
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
             db.node.clone(),
             db.identity.clone(),
@@ -934,7 +934,8 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             };
             bound.insert(entry.request_id, doc);
         }
-        let (_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+        let (_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
             db.node.clone(),
             db.identity.clone(),

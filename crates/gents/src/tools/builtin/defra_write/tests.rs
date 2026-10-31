@@ -643,7 +643,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         .unwrap();
         assert!(!response.has_errors(), "{schema}: {:?}", response.errors);
         let output = &response.data.as_ref().unwrap()[&collection][0]["count"];
-        let maximum = crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        let maximum = crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let expected = case["probe_expected"].as_u64().map(|n| n as usize);
         assert_eq!(
             crate::store::graphql::canonical_positive_count(&input, maximum),

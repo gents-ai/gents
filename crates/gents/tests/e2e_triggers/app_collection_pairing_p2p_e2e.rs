@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::defra_node::EmbeddedNode;
+use gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
@@ -1380,7 +1380,7 @@ async fn install_control_only_authenticated_hydration_route(
     node_did: &str,
     generation: &HydrationRouteGeneration,
 ) {
-    use gents::agent::p2p_reconcile::{
+    use gents::runtime::agent::p2p_reconcile::{
         resolve_template, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
         CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
     };
@@ -1505,14 +1505,17 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
     )
     .await;
 
-    let (authority_owner, authority) = gents::agent::p2p_reconcile::enrollment_authority_channel();
+    let (authority_owner, authority) =
+        gents::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let enrollment_cancel = tokio_util::sync::CancellationToken::new();
-    let enrollment_handle = tokio::spawn(gents::agent::p2p_reconcile::run_enrollment_reconciler(
-        server.node.clone(),
-        server_identity.clone(),
-        authority_owner,
-        enrollment_cancel.clone(),
-    ));
+    let enrollment_handle = tokio::spawn(
+        gents::runtime::agent::p2p_reconcile::run_enrollment_reconciler(
+            server.node.clone(),
+            server_identity.clone(),
+            authority_owner,
+            enrollment_cancel.clone(),
+        ),
+    );
     let generation =
         wait_for_enrollment_desired(server.node.as_ref(), &client_peer, Duration::from_secs(30))
             .await;
@@ -1546,7 +1549,7 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
 
     let hydration_cancel = tokio_util::sync::CancellationToken::new();
     let hydration_handle = tokio::spawn(
-        gents::agent::p2p_reconcile::run_session_hydration_reconciler(
+        gents::runtime::agent::p2p_reconcile::run_session_hydration_reconciler(
             server.node.clone(),
             authority,
             server_identity,

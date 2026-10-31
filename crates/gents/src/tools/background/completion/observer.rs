@@ -139,7 +139,7 @@ impl BackgroundCompletionObserver {
                 tracing::warn!(%error, "mailbox close sweep failed; will retry");
             }
         }
-        for run in crate::periodic_recovery::run_periodic_recovery_sweeps(
+        for run in crate::runtime::periodic_recovery::run_periodic_recovery_sweeps(
             &self.node,
             &self.local_did,
             &self.background_executions,

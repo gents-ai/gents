@@ -82,14 +82,14 @@ impl ExecutionGeneration {
 #[derive(Debug, Clone)]
 pub(crate) struct RequestExecutionLease {
     pub(crate) generation: ExecutionGeneration,
-    runtime: crate::drop_cleanup::DropCleanup,
+    runtime: crate::runtime::drop_cleanup::DropCleanup,
 }
 
 impl RequestExecutionLease {
     pub(crate) fn new(generation: String) -> Self {
         Self {
             generation: ExecutionGeneration(generation),
-            runtime: crate::drop_cleanup::DropCleanup::current(),
+            runtime: crate::runtime::drop_cleanup::DropCleanup::current(),
         }
     }
 }

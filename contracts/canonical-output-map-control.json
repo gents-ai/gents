@@ -22,7 +22,7 @@
     "fixture_status": "summary_only",
     "native_owner_paths": [
       "crates/gents/src/retry.rs",
-      "crates/gents/src/agent/completion_retry.rs"
+      "crates/gents/src/runtime/agent/completion_retry.rs"
     ],
     "consumer_paths": ["crates/gents/src/retry/tests.rs"],
     "native_status": "pending",
@@ -54,7 +54,7 @@
     "generated_groups": ["completion_retry_cases"],
     "fixture_status": "summary_only",
     "native_owner_paths": [
-      "crates/gents/src/agent/completion_retry.rs",
+      "crates/gents/src/runtime/agent/completion_retry.rs",
       "crates/gents/src/request/streaming.rs"
     ],
     "consumer_paths": ["crates/gents/src/retry/tests.rs"],
@@ -86,7 +86,7 @@
     "generated_groups": [],
     "fixture_status": "not_exported",
     "native_owner_paths": [
-      "crates/gents/src/agent/completion_retry.rs",
+      "crates/gents/src/runtime/agent/completion_retry.rs",
       "crates/gents/src/request/streaming.rs"
     ],
     "consumer_paths": ["crates/gents/src/retry/tests.rs"],
@@ -327,12 +327,12 @@
       "crates/gents/src/request/lifecycle/queue/folding.rs",
       "crates/gents/src/request/streaming/canonical.rs",
       "crates/gents-loop/src/loop_stream.rs",
-      "crates/gents/src/agent/daemon/inference.rs"
+      "crates/gents/src/runtime/agent/daemon/inference.rs"
     ],
     "consumer_paths": [
       "crates/gents/src/lean_vocab_test/support.rs",
       "crates/gents/src/request/lifecycle/queue/tests/folding.rs",
-      "crates/gents/src/agent/loop_stream/tests/request_assembly.rs"
+      "crates/gents/src/runtime/agent/loop_stream/tests/request_assembly.rs"
     ],
     "native_status": "pending",
     "required_cases": [

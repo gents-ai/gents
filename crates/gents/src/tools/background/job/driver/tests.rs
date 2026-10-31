@@ -1434,7 +1434,7 @@ async fn live_child(step: &Stepper, node_did: &str) -> String {
 
 #[tokio::test]
 async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
-    use crate::runtime_service::{RetirementError, RuntimeServiceAdmission};
+    use crate::runtime::service::{RetirementError, RuntimeServiceAdmission};
     use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
 
     let step = stepper(json!({"effects": {}})).await;

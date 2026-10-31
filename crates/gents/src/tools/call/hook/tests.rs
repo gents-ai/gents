@@ -1176,8 +1176,8 @@ async fn publish_claimed_authored_input(
     context: Option<Message>,
     prompt: Message,
 ) {
-    use crate::agent::loop_stream::LoopStreamItem;
-    use crate::agent::stream_processor::StreamProcessor;
+    use crate::runtime::agent::loop_stream::LoopStreamItem;
+    use crate::runtime::agent::stream_processor::StreamProcessor;
 
     let mut fixtures = hook_execution_fixtures().lock().await;
     let fixture = fixtures
@@ -2469,9 +2469,14 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         ToolCallHookAction::Continue
     ));
 
-    let dispatched =
-        crate::agent::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None, None)
-            .await;
+    let dispatched = crate::runtime::agent::loop_stream::dispatch_tool(
+        &[],
+        "ghost_tool",
+        "{}".to_string(),
+        None,
+        None,
+    )
+    .await;
 
     let _ = hook
         .on_tool_result("ghost_tool", None, "internal-unknown", "{}", &dispatched)
@@ -3734,7 +3739,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
 
 #[tokio::test]
 async fn background_ownership_blocks_retirement_and_stopping_refuses_new_reservations() {
-    use crate::runtime_service::RetirementError;
+    use crate::runtime::service::RetirementError;
     use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
 
     let registry = BackgroundExecutionRegistry::default();
@@ -3768,7 +3773,7 @@ async fn background_ownership_blocks_retirement_and_stopping_refuses_new_reserva
 
 #[tokio::test]
 async fn replacing_a_registry_entry_does_not_release_the_original_workers_retirement_guard() {
-    use crate::runtime_service::RetirementError;
+    use crate::runtime::service::RetirementError;
     use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
 
     let registry = BackgroundExecutionRegistry::default();
@@ -4043,9 +4048,9 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let identity_dir = tempfile::tempdir().unwrap();
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    use crate::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
     use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
+    use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
 
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
@@ -4343,7 +4348,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         ToolCallHookAction::Continue
     ));
 
-    let dispatched = crate::agent::loop_stream::dispatch_tool(
+    let dispatched = crate::runtime::agent::loop_stream::dispatch_tool(
         &crate::tools::native::ToolSet::builder()
             .read_root(std::env::temp_dir())
             .bash_read_only()

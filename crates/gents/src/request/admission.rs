@@ -15,8 +15,8 @@ use gents_protocol::request_admission::{
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
-use crate::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
 use crate::request::watcher::AgentRequest;
+use crate::runtime::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::NodeIdentity;
 
@@ -1233,7 +1233,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::AgentRequestAdmissionVerifier;
-    use crate::agent::p2p_reconcile::enrollment_authority_channel;
+    use crate::runtime::agent::p2p_reconcile::enrollment_authority_channel;
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use crate::store::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};

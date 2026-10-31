@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use events::EventName;
 use gents::defra_node::EmbeddedNode;
-use gents::startup_readiness::StartupReadinessOptions;
+use gents::runtime::startup_readiness::StartupReadinessOptions;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
     ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ProcessLifecycleState,
@@ -72,7 +72,9 @@ impl RecordingBuildFailureObserver {
     }
 }
 
-impl gents::startup_readiness::StartupBuildFailureObserver for RecordingBuildFailureObserver {
+impl gents::runtime::startup_readiness::StartupBuildFailureObserver
+    for RecordingBuildFailureObserver
+{
     fn on_build_failure(&self, agent_id: &str, failure_number: u32, budget: u32, error: &str) {
         let count = {
             let mut failures = self

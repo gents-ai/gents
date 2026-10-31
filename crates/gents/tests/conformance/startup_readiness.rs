@@ -1,6 +1,6 @@
 use super::*;
 
-use gents::startup_readiness::{BuildOutcome, BuildStanding, StartupReadinessOptions};
+use gents::runtime::startup_readiness::{BuildOutcome, BuildStanding, StartupReadinessOptions};
 
 pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
     assert!(StartupReadinessOptions::default().build_failure_budget > 0);

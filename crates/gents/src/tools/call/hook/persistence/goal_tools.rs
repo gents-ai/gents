@@ -394,7 +394,7 @@ impl DefraSessionHook {
                     if !unmet.is_empty() {
                         let result = super::helpers::json_string(json!({
                             "accepted": false,
-                            "error": crate::agent::output_obligation::continuation_message(&unmet),
+                            "error": crate::runtime::agent::output_obligation::continuation_message(&unmet),
                         }));
                         return self
                             .complete_control_tool_call(

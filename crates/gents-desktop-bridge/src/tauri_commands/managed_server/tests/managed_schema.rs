@@ -82,7 +82,7 @@ async fn skewed_managed_runtime(
         .expect("client core"),
     );
     let mut next_release =
-        gents::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
+        gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
             .await
             .expect("local collection versions");
     next_release

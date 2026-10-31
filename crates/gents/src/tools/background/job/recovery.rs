@@ -602,7 +602,7 @@ mod tests {
         let driver = driver_of(&step);
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 0);
         let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default();
-        crate::periodic_recovery::run_periodic_recovery_sweeps(
+        crate::runtime::periodic_recovery::run_periodic_recovery_sweeps(
             &step.job.node,
             node_did(),
             &registry,

@@ -6,7 +6,7 @@ use gents_protocol::file_inventory::{
 use rapidhash::{HashSetExt, RapidHashSet};
 use serde::{Deserialize, Serialize};
 
-pub use crate::agent::p2p_reconcile::session_hydration_reconcile::{
+pub use crate::runtime::agent::p2p_reconcile::session_hydration_reconcile::{
     FileInventoryPageError, FileInventorySnapshot,
 };
 use crate::NodeIdentity;
@@ -252,8 +252,9 @@ pub async fn sign_refusal(
 pub(crate) struct InventoryDeliveryObservation {
     pub before: bool,
     pub after: bool,
-    pub delivery: crate::agent::p2p_reconcile::session_hydration::HydrationDeliveryResult,
-    pub write: crate::agent::p2p_reconcile::session_hydration::HydrationTerminalWriteResult,
+    pub delivery: crate::runtime::agent::p2p_reconcile::session_hydration::HydrationDeliveryResult,
+    pub write:
+        crate::runtime::agent::p2p_reconcile::session_hydration::HydrationTerminalWriteResult,
 }
 
 pub(crate) async fn settle_reply(
@@ -262,7 +263,7 @@ pub(crate) async fn settle_reply(
     candidate: &gents_protocol::file_inventory::FileInventoryReply,
     observation: InventoryDeliveryObservation,
 ) -> Result<Option<gents_protocol::file_inventory::FileInventoryReply>> {
-    use crate::agent::p2p_reconcile::session_hydration::{
+    use crate::runtime::agent::p2p_reconcile::session_hydration::{
         HydrationDeliveryResult, HydrationTerminalWriteResult,
     };
     use gents_protocol::file_inventory::{FileInventoryRefusalReason, FileInventoryReply};

@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 
 use super::Answer;
-use crate::drop_cleanup::DropCleanup;
+use crate::runtime::drop_cleanup::DropCleanup;
 
 /// The simulated external operator stays ready while a guest occupies its test
 /// task. Its answer wait starts when polled, after guest preparation. Cleanup

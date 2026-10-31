@@ -684,7 +684,7 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::request::lifecycle:
 }
 
 impl StreamWriter for DefraStreamWriter {
-    type Error = crate::agent::stream_processor::RuntimeSeamError;
+    type Error = crate::runtime::agent::stream_processor::RuntimeSeamError;
 
     async fn mark_pending_output(
         &self,

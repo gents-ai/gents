@@ -1,0 +1,956 @@
+use super::*;
+use tokio::sync::Notify;
+
+#[derive(Default)]
+pub(super) struct StreamEntryGate {
+    pub(super) entered: Notify,
+    pub(super) release: Notify,
+}
+
+pub(super) enum ScriptedCall {
+    Turn(Vec<RawStreamingChoice<()>>),
+    FailStream(CompletionError),
+    TurnWithMidStreamError(Vec<RawStreamingChoice<()>>, CompletionError),
+}
+
+#[derive(Clone)]
+pub(super) struct ScriptedModel {
+    pub(super) calls: Arc<Mutex<VecDeque<ScriptedCall>>>,
+    seen_histories: Arc<Mutex<Vec<Vec<Message>>>>,
+    seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
+    seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
+    seen_requests: Arc<Mutex<Vec<CompletionRequest>>>,
+    stall_after_chunks: bool,
+    capture_requests: bool,
+    stream_entry_gate: Option<Arc<StreamEntryGate>>,
+    provider_observer: Option<Arc<dyn Fn(bool) + Send + Sync>>,
+}
+
+impl ScriptedModel {
+    pub(super) fn new(chunks: Vec<RawStreamingChoice<()>>) -> Self {
+        Self::new_turns(vec![chunks])
+    }
+
+    pub(super) fn new_turns(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
+        Self::new_calls(turns.into_iter().map(ScriptedCall::Turn).collect())
+    }
+
+    pub(super) fn new_calls(calls: Vec<ScriptedCall>) -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(calls.into())),
+            seen_histories: Arc::new(Mutex::new(Vec::new())),
+            seen_tools: Arc::new(Mutex::new(Vec::new())),
+            seen_max_tokens: Arc::new(Mutex::new(Vec::new())),
+            seen_requests: Arc::new(Mutex::new(Vec::new())),
+            stall_after_chunks: false,
+            capture_requests: true,
+            stream_entry_gate: None,
+            provider_observer: None,
+        }
+    }
+
+    pub(super) fn with_provider_observer(
+        mut self,
+        observer: Arc<dyn Fn(bool) + Send + Sync>,
+    ) -> Self {
+        self.provider_observer = Some(observer);
+        self
+    }
+
+    pub(super) fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
+        self.stream_entry_gate = Some(gate);
+        self
+    }
+
+    pub(super) fn without_capture(mut self) -> Self {
+        self.capture_requests = false;
+        self
+    }
+
+    pub(super) fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
+        let mut model = Self::new_calls(vec![ScriptedCall::Turn(chunks)]);
+        model.stall_after_chunks = true;
+        model
+    }
+
+    pub(super) async fn seen_histories(&self) -> Vec<Vec<Message>> {
+        self.seen_histories.lock().await.clone()
+    }
+
+    pub(super) async fn seen_tools(&self) -> Vec<Vec<String>> {
+        self.seen_tools.lock().await.clone()
+    }
+
+    pub(super) async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
+        self.seen_max_tokens.lock().await.clone()
+    }
+
+    pub(super) async fn seen_requests(&self) -> Vec<CompletionRequest> {
+        self.seen_requests.lock().await.clone()
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for ScriptedModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::new_turns(Vec::new())
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "completion is unused in loop_stream tests".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        if let Some(observer) = &self.provider_observer {
+            observer(true);
+        }
+        if let Some(gate) = &self.stream_entry_gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        if self.capture_requests {
+            crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
+        }
+        self.seen_requests.lock().await.push(request.clone());
+        self.seen_histories.lock().await.push(
+            request
+                .chat_history
+                .iter()
+                .map(crate::inference::llm::rig_compat::from_rig_message)
+                .collect(),
+        );
+        self.seen_tools
+            .lock()
+            .await
+            .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
+        self.seen_max_tokens.lock().await.push(request.max_tokens);
+        let call = self
+            .calls
+            .lock()
+            .await
+            .pop_front()
+            .unwrap_or_else(|| ScriptedCall::Turn(vec![RawStreamingChoice::FinalResponse(())]));
+        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = match call {
+            ScriptedCall::Turn(chunks) => chunks.into_iter().map(Ok).collect(),
+            ScriptedCall::FailStream(error) => return Err(error),
+            ScriptedCall::TurnWithMidStreamError(chunks, error) => {
+                let mut items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
+                    chunks.into_iter().map(Ok).collect();
+                items.push(Err(error));
+                items
+            }
+        };
+        let inner: rig::streaming::StreamingResult<()> = if self.stall_after_chunks {
+            Box::pin(stream::iter(items).chain(stream::pending()))
+        } else {
+            Box::pin(stream::iter(items))
+        };
+        let observer = self.provider_observer.clone();
+        let inner = inner.map(move |item| {
+            if let Some(observer) = &observer {
+                observer(false);
+            }
+            item
+        });
+        Ok(StreamingCompletionResponse::stream(Box::pin(inner)))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct UsageResponse {
+    pub(super) usage: Option<Usage>,
+}
+
+impl GetTokenUsage for UsageResponse {
+    fn token_usage(&self) -> Option<Usage> {
+        self.usage
+    }
+}
+
+pub(super) fn usage_response(
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+) -> UsageResponse {
+    UsageResponse {
+        usage: Some(Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+        }),
+    }
+}
+
+type UsageTurns = VecDeque<Vec<RawStreamingChoice<UsageResponse>>>;
+type SeenDispatch = (u64, Option<u64>);
+
+#[derive(Clone)]
+pub(super) struct UsageScriptedModel {
+    turns: Arc<Mutex<UsageTurns>>,
+    seen_dispatches: Arc<Mutex<Vec<SeenDispatch>>>,
+}
+
+impl UsageScriptedModel {
+    pub(super) fn new(turns: Vec<Vec<RawStreamingChoice<UsageResponse>>>) -> Self {
+        Self {
+            turns: Arc::new(Mutex::new(turns.into())),
+            seen_dispatches: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub(super) async fn seen_dispatches(&self) -> Vec<(u64, Option<u64>)> {
+        self.seen_dispatches.lock().await.clone()
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for UsageScriptedModel {
+    type Response = ();
+    type StreamingResponse = UsageResponse;
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::new(Vec::new())
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "completion is unused in loop_stream tests".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
+        self.seen_dispatches.lock().await.push((
+            u64::try_from(
+                completion_request_input_components(
+                    &request,
+                    &crate::turn::provider_input::ProviderInputCounter::new(
+                        crate::BackendProviderKind::OpenAiCompatible,
+                        crate::OpenAiWireApi::ChatCompletions,
+                        "test-model",
+                    ),
+                )
+                .map(|projection| projection.estimated_input_tokens)
+                .unwrap_or(usize::MAX),
+            )
+            .unwrap_or(u64::MAX),
+            request.max_tokens,
+        ));
+        let turn = self.turns.lock().await.pop_front().unwrap_or_else(|| {
+            vec![RawStreamingChoice::FinalResponse(UsageResponse {
+                usage: None,
+            })]
+        });
+        let inner: rig::streaming::StreamingResult<UsageResponse> =
+            Box::pin(stream::iter(turn.into_iter().map(Ok)));
+        Ok(StreamingCompletionResponse::stream(inner))
+    }
+}
+
+pub(super) struct EchoTool {
+    pub(super) name: String,
+    pub(super) output: String,
+}
+
+impl ToolDyn for EchoTool {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.clone(),
+                description: "echo".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { Ok(self.output.clone()) })
+    }
+}
+
+pub(super) struct CountingTool {
+    pub(super) name: String,
+    pub(super) output: String,
+    pub(super) calls: Arc<AtomicUsize>,
+}
+
+impl ToolDyn for CountingTool {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.clone(),
+                description: "counting".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        let calls = self.calls.clone();
+        let output = self.output.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(output)
+        })
+    }
+}
+
+pub(super) struct FixedTool {
+    pub(super) name: String,
+    pub(super) output: String,
+}
+
+impl ToolDyn for FixedTool {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.clone(),
+                description: "fixed".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { Ok(self.output.clone()) })
+    }
+}
+
+pub(super) struct RecordingDefinitionTool {
+    pub(super) seen_prompt: Arc<Mutex<Option<String>>>,
+}
+
+impl ToolDyn for RecordingDefinitionTool {
+    fn name(&self) -> String {
+        "record".to_string()
+    }
+
+    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        let seen = self.seen_prompt.clone();
+        Box::pin(async move {
+            *seen.lock().await = Some(prompt);
+            ToolDefinition {
+                name: "record".to_string(),
+                description: "record".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { Ok("ok".to_string()) })
+    }
+}
+
+pub(super) fn echo_tool() -> Box<dyn ToolDyn> {
+    Box::new(EchoTool {
+        name: "echo".to_string(),
+        output: "ECHOED".to_string(),
+    })
+}
+
+pub(super) fn echo_tool_turn() -> Vec<RawStreamingChoice<()>> {
+    vec![
+        RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+            "call-1".to_string(),
+            "echo".to_string(),
+            serde_json::json!({}),
+        )),
+        RawStreamingChoice::FinalResponse(()),
+    ]
+}
+
+pub(super) fn usage_echo_tool_turn(
+    response: UsageResponse,
+) -> Vec<RawStreamingChoice<UsageResponse>> {
+    vec![
+        RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+            "call-1".to_string(),
+            "echo".to_string(),
+            serde_json::json!({}),
+        )),
+        RawStreamingChoice::FinalResponse(response),
+    ]
+}
+
+pub(super) fn tool_result_text(content: &ToolResultContent) -> &str {
+    match content {
+        ToolResultContent::Text(text) => text.text.as_str(),
+        ToolResultContent::Image(_) => "",
+    }
+}
+
+pub(super) fn config(max_turns: usize) -> LoopConfig {
+    LoopConfig {
+        replay: LoopReplayInput::default(),
+        provider_input_counter: std::sync::Arc::new(
+            crate::turn::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
+        preamble: None,
+        context_message: None,
+        temperature: None,
+        max_tokens: None,
+        aggregate_token_budget: None,
+        additional_params: None,
+        structured_output: None,
+        tool_choice: None,
+        on_rendered_request: None,
+        turn_compactor: None,
+        active_reduction_keys: Vec::new(),
+        reduction_chain_keys: Vec::new(),
+        initial_turn_index: 0,
+        resume_from_history: false,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
+        context_calibration: Default::default(),
+        retry_policy:
+            crate::runtime::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        provider_idle_timeout: None,
+        deadline: None,
+        max_turns,
+        output_obligation_gate: None,
+        folded_prompts: Vec::new(),
+        authored_input: None,
+    }
+}
+
+pub(super) fn owned_config(max_turns: usize) -> LoopConfig {
+    let mut config = config(max_turns);
+    config.on_rendered_request = Some(
+        crate::inference::rendered_request::scope::ambient_arming_sink(
+            crate::inference::rendered_request::scope::CaptureScopeKind::Inference,
+        ),
+    );
+    config
+}
+
+#[derive(Debug)]
+pub(super) struct AttemptEvent {
+    pub(super) turn: usize,
+    pub(super) attempt: u32,
+    pub(super) will_retry: bool,
+    pub(super) backoff: Duration,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct CollectedScriptedStream {
+    pub(super) attempts: Vec<AttemptEvent>,
+    pub(super) text_chunks: Vec<String>,
+    pub(super) tool_results: Vec<String>,
+    pub(super) retractions: Vec<(usize, u32)>,
+    pub(super) final_text: Option<String>,
+    pub(super) error: Option<String>,
+}
+
+pub(super) async fn collect_scripted_stream<S>(stream: S) -> CollectedScriptedStream
+where
+    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
+{
+    futures::pin_mut!(stream);
+    let mut collected = CollectedScriptedStream::default();
+
+    loop {
+        match tokio::time::timeout(Duration::from_millis(1), stream.next()).await {
+            Ok(Some(Ok(LoopStreamItem::AttemptFailed {
+                turn,
+                attempt,
+                error: _,
+                will_retry,
+                backoff,
+            }))) => collected.attempts.push(AttemptEvent {
+                turn,
+                attempt,
+                will_retry,
+                backoff,
+            }),
+            Ok(Some(Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }))) => {
+                collected.retractions.push((turn, attempt));
+            }
+            Ok(Some(Ok(LoopStreamItem::Text(text)))) => {
+                collected.text_chunks.push(text);
+            }
+            Ok(Some(Ok(LoopStreamItem::ToolResult { tool_result, .. }))) => {
+                collected
+                    .tool_results
+                    .push(tool_result_text(&tool_result.content[0]).to_string());
+            }
+            Ok(Some(Ok(LoopStreamItem::Final { text }))) => {
+                collected.final_text = Some(text);
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(error))) => {
+                collected.error = Some(error.to_string());
+                break;
+            }
+            Ok(None) => break,
+            Err(_) => {
+                tokio::time::advance(Duration::from_secs(300)).await;
+            }
+        }
+    }
+
+    collected
+}
+
+pub(super) async fn collect_owned_scripted_stream<S>(
+    stream: S,
+    hook: &DefraSessionHook,
+    writer: &crate::request::streaming::DefraStreamWriter,
+    lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    profile: gents_loop::provider_input::ProviderInputProfile,
+) -> CollectedScriptedStream
+where
+    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
+{
+    collect_owned_scripted_stream_with_capture_scope(stream, hook, writer, lifecycle, profile, None)
+        .await
+}
+
+pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S>(
+    stream: S,
+    hook: &DefraSessionHook,
+    writer: &crate::request::streaming::DefraStreamWriter,
+    lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    profile: gents_loop::provider_input::ProviderInputProfile,
+    capture_scope: Option<Arc<crate::inference::rendered_request::scope::RequestCaptureScope>>,
+) -> CollectedScriptedStream
+where
+    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
+{
+    let scope = capture_scope.unwrap_or_else(|| {
+        let context = crate::inference::rendered_request::context_for_claimed_request(
+            lifecycle.request(),
+            "",
+            "test-model".into(),
+            None,
+        );
+        crate::inference::rendered_request::scope::test_scope(
+            context,
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+        )
+    });
+    let deadline = lifecycle.claimed_deadline_at();
+    let request = lifecycle.request();
+    let session_id = request.session_id.clone();
+    let requester_did = request.requester_did.clone();
+    let node_did = request.node_did.clone();
+    let agent_id = request.agent_id.clone();
+    let request_id = request.request_id.clone();
+    let inherited =
+        crate::tools::call::lifecycle::runtime::current_tool_runtime_context().is_some();
+    let collection = crate::inference::rendered_request::scope::scope_request(scope, async move {
+        futures::pin_mut!(stream);
+        let doc_id = lifecycle.request().doc_id.clone();
+        let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
+            hook, writer, lifecycle, &doc_id, profile,
+        );
+        let mut collected = CollectedScriptedStream::default();
+        while let Some(item) = stream.next().await {
+            match &item {
+                Ok(LoopStreamItem::AttemptFailed {
+                    turn,
+                    attempt,
+                    will_retry,
+                    backoff,
+                    ..
+                }) => collected.attempts.push(AttemptEvent {
+                    turn: *turn,
+                    attempt: *attempt,
+                    will_retry: *will_retry,
+                    backoff: *backoff,
+                }),
+                Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }) => {
+                    collected.retractions.push((*turn, *attempt));
+                }
+                Ok(LoopStreamItem::Text(text)) => collected.text_chunks.push(text.clone()),
+                Ok(LoopStreamItem::ToolResult { tool_result, .. }) => collected
+                    .tool_results
+                    .push(tool_result_text(&tool_result.content[0]).to_string()),
+                Ok(LoopStreamItem::Final { text }) => {
+                    collected.final_text = Some(text.clone());
+                }
+                Err(error) => collected.error = Some(error.to_string()),
+                _ => {}
+            }
+            if let Err(error) = processor.process_item(item).await {
+                collected.error = Some(error.to_string());
+                break;
+            }
+        }
+        collected
+    });
+    if inherited {
+        collection.await
+    } else {
+        crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
+            requester_did,
+            Some(node_did),
+            Some(agent_id),
+            Some(request_id),
+            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_session(
+                deadline,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                Some(session_id),
+                collection,
+            ),
+        )
+        .await
+    }
+}
+
+pub(super) async fn owned_test_hook() -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
+) {
+    owned_test_hook_with_policy(FailurePolicy::default()).await
+}
+
+pub(super) async fn owned_test_hook_with_policy(
+    policy: FailurePolicy,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
+) {
+    let (node, hook, writer, lifecycle, _) =
+        owned_test_hook_with_identity_policy(None, policy, None).await;
+    (node, hook, writer, lifecycle)
+}
+
+pub(super) async fn owned_test_hook_with_identity(
+    identity: Arc<dyn crate::NodeIdentity>,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
+) {
+    let (node, hook, writer, lifecycle, _) =
+        owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), None).await;
+    (node, hook, writer, lifecycle)
+}
+
+pub(super) async fn owned_test_hook_with_folded_case(
+    case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
+    rapidhash::RapidHashMap<u64, String>,
+) {
+    let key_dir = tempfile::tempdir().unwrap();
+    let identity = Arc::new(
+        crate::store::identity::KeyIdentity::load_or_create(
+            key_dir.path().join("folded.key"),
+            None,
+        )
+        .unwrap(),
+    );
+    owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), Some(case)).await
+}
+
+async fn owned_test_hook_with_identity_policy(
+    identity: Option<Arc<dyn crate::NodeIdentity>>,
+    policy: FailurePolicy,
+    folded_case: Option<&crate::lean_vocab_test::LeanFoldTurnInputCase>,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
+    rapidhash::RapidHashMap<u64, String>,
+) {
+    let node_did = identity
+        .as_ref()
+        .map_or("did:test:test", |identity| identity.did());
+    let requester_did = identity.as_ref().map(|_| node_did);
+    let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
+    let builder = match identity.as_ref() {
+        Some(identity) => {
+            defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+        }
+        None => crate::test_support::node_builder(),
+    };
+    let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    crate::session::ensure_session_with_agent_id_and_requester_did(
+        &node,
+        &session_id,
+        node_did,
+        "general",
+        requester_did,
+    )
+    .await
+    .unwrap();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = if let Some(identity) = identity.as_ref() {
+        crate::request::lifecycle::build_signed_request(
+            crate::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::request::lifecycle::RequestIdentity {
+                    requester_did: requester_did.map(str::to_owned),
+                    request_id: request_id.clone(),
+                    node_did: node_did.to_owned(),
+                    agent_id: "general".to_owned(),
+                    session_id: session_id.clone(),
+                    content: "owned loop test".to_owned(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: now,
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    node_did,
+                ),
+            ),
+            crate::request::lifecycle::RequestSigner::Identity(identity.as_ref()),
+        )
+        .await
+        .unwrap()
+        .graphql_mutation()
+        .unwrap()
+    } else {
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(&session_id),
+            crate::store::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(&now),
+        )
+    };
+    crate::store::config_client::ConfigAccess::write_local(
+        &node,
+        "agent.owned_loop_test_request",
+        &mutation,
+    )
+    .await
+    .unwrap();
+    let mut folded_docs = rapidhash::RapidHashMap::default();
+    if let Some(case) = folded_case {
+        let signer = identity
+            .as_ref()
+            .expect("folded fixture requires signed identity");
+        let mut predecessor = request_id.clone();
+        for folded in &case.folded {
+            let id = format!("{request_id}-folded-{}", folded.request_id);
+            let mut spec = crate::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::request::lifecycle::RequestIdentity {
+                    requester_did: Some(node_did.to_owned()),
+                    request_id: id.clone(),
+                    node_did: node_did.to_owned(),
+                    agent_id: "general".into(),
+                    session_id: session_id.clone(),
+                    content: folded.content.clone(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    node_did,
+                ),
+            );
+            spec.input.queue = Some(gents_protocol::request_input::RequestQueue {
+                source: gents_protocol::request_input::QueueSource::User,
+                policy: gents_protocol::request_input::QueuePolicy::Append,
+                delivery: gents_protocol::request_input::QueueDelivery::Queue,
+                position: None,
+                key: None,
+                queued_after_request_id: Some(predecessor),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            });
+            let create = crate::request::lifecycle::build_signed_request(
+                spec,
+                crate::request::lifecycle::RequestSigner::Identity(signer.as_ref()),
+            )
+            .await
+            .unwrap();
+            let result = crate::store::config_client::ConfigAccess::local(node.clone())
+                .write("test.folded_request", &create.graphql_mutation().unwrap())
+                .await
+                .unwrap();
+            let doc =
+                gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
+            let loaded = crate::store::config_client::ConfigAccess::local(node.clone())
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&doc),
+                    crate::request::admission::SIGNED_REQUEST_FIELDS,
+                ))
+                .await
+                .unwrap();
+            let signed_row =
+                serde_json::from_value(loaded["data"]["AgentRequest"][0].clone()).unwrap();
+            crate::request::admission::verify_request_receipt_signature(&signed_row).unwrap();
+            folded_docs.insert(folded.request_id, doc);
+            predecessor = id;
+        }
+    }
+    let loaded = crate::store::graphql::graphql_with_transaction_retry(
+        &node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            crate::store::graphql::escape_graphql_string(&request_id),
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ),
+        "load owned loop test request",
+    )
+    .await
+    .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::store::graphql::first_row(&loaded, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let hook = DefraSessionHook::resume_with_identity_policy(
+        node.clone(),
+        &session_id,
+        node_did,
+        requester_did,
+        policy,
+    )
+    .await
+    .unwrap();
+    hook.set_active_request_lineage(Some(request_id), requester_did.map(str::to_owned))
+        .await
+        .unwrap();
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
+        node.clone(),
+        "general",
+        node_did,
+        row.try_into().unwrap(),
+        60,
+    );
+    if let Some(case) = folded_case {
+        let admitted = case
+            .folded
+            .iter()
+            .map(|folded| folded_docs[&folded.request_id].clone())
+            .collect();
+        lifecycle.set_fold_admitted(admitted);
+    }
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        crate::request::lifecycle::ClaimOutcome::Claimed
+    );
+    let writer =
+        crate::request::streaming::DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    (node, hook, writer, lifecycle, folded_docs)
+}
+
+pub(super) fn transient_provider_error(label: &str) -> CompletionError {
+    CompletionError::ProviderError(format!("status code 503: {label}"))
+}
+
+pub(super) fn permanent_provider_error() -> CompletionError {
+    CompletionError::ProviderError("status code 400: duplicate field max_tokens".to_string())
+}
+
+pub(super) fn parse_400_text(tag: &str) -> String {
+    format!("BadRequestError: Expecting value [{tag}]: line 1 column 28 (char 27)")
+}
+
+pub(super) fn parse_400_error(tag: &str) -> CompletionError {
+    CompletionError::ProviderError(parse_400_text(tag))
+}
+
+pub(super) fn assert_duration_in_range(delay: Duration, low_ms: u64, high_ms: u64) {
+    let actual_ms = delay.as_millis() as u64;
+    assert!(
+        actual_ms >= low_ms && actual_ms <= high_ms,
+        "expected duration in [{low_ms}, {high_ms}]ms, got {actual_ms}ms"
+    );
+}
+
+pub(super) fn history_has_control_char_tool_arg(history: &[Message]) -> bool {
+    history.iter().any(|message| match message {
+        Message::Assistant { content, .. } => content.iter().any(|item| match item {
+            AssistantContent::ToolCall(tool_call) => {
+                json_value_has_control_char(&tool_call.function.arguments)
+            }
+            _ => false,
+        }),
+        _ => false,
+    })
+}
+
+pub(super) fn history_has_tool_call(history: &[Message], tool_name: &str) -> bool {
+    history.iter().any(|message| match message {
+        Message::Assistant { content, .. } => content.iter().any(|item| {
+            matches!(
+                item,
+                AssistantContent::ToolCall(tool_call)
+                    if tool_call.function.name == tool_name
+            )
+        }),
+        _ => false,
+    })
+}
+
+pub(super) fn history_has_tool_result_text(history: &[Message], expected: &str) -> bool {
+    history.iter().any(|message| match message {
+        Message::User { content } => content.iter().any(|item| {
+            matches!(
+                item,
+                UserContent::ToolResult(result)
+                    if tool_result_text(first_content(&result.content)) == expected
+            )
+        }),
+        _ => false,
+    })
+}
+
+pub(super) fn json_value_has_control_char(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.chars().any(char::is_control),
+        serde_json::Value::Array(values) => values.iter().any(json_value_has_control_char),
+        serde_json::Value::Object(map) => map.values().any(json_value_has_control_char),
+        _ => false,
+    }
+}

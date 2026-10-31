@@ -5,10 +5,8 @@ extern crate self as gents;
 #[path = "../tests/support/mod.rs"]
 pub(crate) mod support;
 
-pub mod agent;
 pub mod codex_shim_binding;
 pub mod documents;
-pub mod drop_cleanup;
 pub mod error;
 pub mod eval;
 pub mod failure_text;
@@ -18,11 +16,8 @@ pub mod goal;
 pub mod inference;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
-pub mod native_logging;
-mod node_readiness_publisher;
 pub mod observe;
 pub mod openai_wire;
-pub mod p2p_observability;
 pub mod pack;
 pub mod plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;
@@ -33,8 +28,7 @@ pub mod provider_budget {
 #[path = "lean_vocab_test/canonical_execution/native_adapter.rs"]
 mod canonical_execution_native_adapter;
 pub(crate) mod provider_usage;
-pub mod startup_readiness;
-pub mod startup_recovery;
+pub mod runtime;
 pub mod store;
 
 #[cfg(test)]
@@ -63,7 +57,7 @@ pub(crate) mod test_support {
 
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
         crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
-        crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
+        crate::runtime::status::RECONCILE_PHASE_EVENT_TARGET,
         crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
     ];
 
@@ -270,8 +264,6 @@ pub(crate) mod test_support {
          <function=describe_tool>\", \"raw_schema\": false, \
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
-pub mod oneshot;
-pub mod periodic_recovery;
 pub mod request;
 #[doc(hidden)]
 pub use request::admission::final_claim_admission_disposition;
@@ -280,19 +272,12 @@ pub use request::admission::{
     verify_request_receipt_signature, SIGNED_REQUEST_FIELDS,
 };
 pub mod retry;
-pub mod runtime_service;
-pub(crate) mod runtime_snapshot;
-pub(crate) mod runtime_status;
 pub mod session;
 pub mod tools;
 pub mod triggers;
 pub mod truncation;
 pub mod turn;
 
-pub use agent::{
-    AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
-    ProcessLifecycleState, RuntimeSnapshotObserver,
-};
 pub use defra_node;
 pub use documents::template::{
     check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
@@ -355,18 +340,7 @@ pub use observe::run_timeline::{
     TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,
     TimelineSessionRow, TimelineToolCallRow,
 };
-pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use openai_wire::OpenAiWireApi;
-pub use p2p_observability::{
-    JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
-    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPushBacklogSnapshot,
-    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
-    P2pSyncStatusSnapshot,
-};
-pub use periodic_recovery::{
-    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
-    PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
-};
 pub use request::interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
     interrupt_request_by_doc_id,
@@ -383,7 +357,22 @@ pub use request::lifecycle::{
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use request::watcher::{AgentRequest, DefraWatcher, Watcher};
-pub use runtime_snapshot::{
+pub use runtime::agent::{
+    AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
+    ProcessLifecycleState, RuntimeSnapshotObserver,
+};
+pub use runtime::oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
+pub use runtime::p2p::observability::{
+    JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
+    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPushBacklogSnapshot,
+    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
+    P2pSyncStatusSnapshot,
+};
+pub use runtime::periodic_recovery::{
+    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
+    PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
+};
+pub use runtime::snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
     ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,
     MAX_EVENT_TRIGGER_GROUP_DOCS,
@@ -447,11 +436,11 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 #[doc(hidden)]
 pub mod __test_internals {
-    pub use crate::agent::principal_assembly::AgentBuildError;
     pub use crate::request::lifecycle::activate_workspace_bound_request;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::request::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::request::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
+    pub use crate::runtime::agent::principal_assembly::AgentBuildError;
     pub use crate::store::config_client::TXN_TRACING_TARGET;
 }
 

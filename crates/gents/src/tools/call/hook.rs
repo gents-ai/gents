@@ -147,7 +147,7 @@ struct BackgroundExecution {
     handoff_pending: Arc<std::sync::atomic::AtomicBool>,
     requested_stop: Arc<std::sync::Mutex<Option<RetainedStopReceipt>>>,
     confirmed_stop: Arc<std::sync::Mutex<Option<RetainedStopReceipt>>>,
-    _service_work: Arc<crate::runtime_service::RuntimeServiceWork>,
+    _service_work: Arc<crate::runtime::service::RuntimeServiceWork>,
 }
 
 #[derive(Clone, Default)]
@@ -188,7 +188,7 @@ pub struct BackgroundExecutionRegistry {
         std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::tools::exec::FailedJobOwner>)>>,
     >,
     task_hook_records: crate::request::task_hooks::TaskHookRecordStore,
-    service_admission: crate::runtime_service::RuntimeServiceAdmission,
+    service_admission: crate::runtime::service::RuntimeServiceAdmission,
     #[cfg(test)]
     stop_release_observer: Option<Arc<tokio::sync::Notify>>,
 }
@@ -202,7 +202,7 @@ impl BackgroundExecutionRegistry {
         self
     }
 
-    pub(crate) fn service_admission(&self) -> &crate::runtime_service::RuntimeServiceAdmission {
+    pub(crate) fn service_admission(&self) -> &crate::runtime::service::RuntimeServiceAdmission {
         &self.service_admission
     }
 
@@ -1119,7 +1119,7 @@ pub(crate) struct BackgroundExecutionReservation {
     registry: BackgroundExecutionRegistry,
     tool_call_doc_id: String,
     armed: bool,
-    _service_work: Arc<crate::runtime_service::RuntimeServiceWork>,
+    _service_work: Arc<crate::runtime::service::RuntimeServiceWork>,
 }
 
 impl BackgroundExecutionReservation {
@@ -1254,7 +1254,7 @@ pub struct DefraSessionHook {
     job_tools: RapidHashMap<String, crate::tools::background::job::JobBinding>,
     /// The runtime's job driver, whose handles step 0 of a job tool runs on.
     pub(crate) job_driver: Option<Arc<crate::tools::background::job::driver::JobDriver>>,
-    output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
+    output_obligation_gate: Option<crate::runtime::agent::output_obligation::OutputObligationGate>,
     steering_input_source: Option<Arc<SteeringInputSource>>,
     inference_observation:
         Option<std::sync::Weak<crate::observe::inference_observation::InferenceObservationGuard>>,
@@ -1542,7 +1542,7 @@ impl DefraSessionHook {
 
     pub(crate) fn with_output_obligation_gate(
         mut self,
-        gate: Option<crate::agent::output_obligation::OutputObligationGate>,
+        gate: Option<crate::runtime::agent::output_obligation::OutputObligationGate>,
     ) -> Self {
         self.output_obligation_gate = gate;
         self
@@ -1999,7 +1999,7 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::request::streaming::A
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
-    type Error = crate::agent::stream_processor::RuntimeSeamError;
+    type Error = crate::runtime::agent::stream_processor::RuntimeSeamError;
     fn observe_provider(&self, observation: gents_loop::session_hook::ProviderObservation) {
         if let Some(owner) = self
             .inference_observation

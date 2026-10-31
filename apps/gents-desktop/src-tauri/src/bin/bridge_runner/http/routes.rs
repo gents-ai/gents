@@ -152,9 +152,10 @@ pub(super) async fn handle_request(
                 "client".to_string(),
             );
             let enrollment = issuer.mint().await?;
-            let schema =
-                gents::agent::p2p_reconcile::read_client_replicated_schema(server.node_arc())
-                    .await?;
+            let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(
+                server.node_arc(),
+            )
+            .await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({
                     "enrollment": enrollment,

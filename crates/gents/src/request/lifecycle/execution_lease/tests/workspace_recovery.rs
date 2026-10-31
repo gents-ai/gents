@@ -196,7 +196,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         }],
     )
     .unwrap();
-    crate::node_readiness_publisher::upsert_node_readiness(
+    crate::runtime::node_readiness_publisher::upsert_node_readiness(
         &node,
         did,
         &readiness,

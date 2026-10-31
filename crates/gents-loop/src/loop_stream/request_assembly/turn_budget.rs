@@ -120,7 +120,7 @@ where
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?
             .estimated_input_tokens;
     tracing::warn!(
-        target: "gents::agent::loop_stream",
+        target: "gents::runtime::agent::loop_stream",
         turn = turn_index,
         provider_limit,
         observed_input_tokens,
@@ -275,7 +275,7 @@ where
     // the unreduced transcript, which this request no longer extends.
     let after_context_tokens = config.context_calibration.calibrated(after_tokens);
     tracing::info!(
-        target: "gents::agent::loop_stream",
+        target: "gents::runtime::agent::loop_stream",
         turn = turn_index,
         before_tokens,
         after_tokens,

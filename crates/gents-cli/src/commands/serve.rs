@@ -471,7 +471,7 @@ async fn serve_with_startup(
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
-    gents::runtime_service::executable_build_id().await?;
+    gents::runtime::service::executable_build_id().await?;
     let mut store_lifetime = None;
     let outcome = serve_foreground(args, runtime, startup, &mut store_lifetime).await;
     drop(store_lifetime);
@@ -816,7 +816,7 @@ async fn serve_foreground(
             return Err(gents::store::local::storage_backend::classify_store_error(error, &data_dir).into());
         }
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
-        let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+        let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await
             .context("reading client route collection versions after migrations")?;
         replicated_schema.set(schema).ok();
@@ -1240,7 +1240,7 @@ async fn serve_foreground(
                     home: home_dir.to_string_lossy().into_owned(),
                     node_did: identity.did().to_owned(),
                     graphql: graphql_url.clone(),
-                    build: gents::runtime_service::executable_build_id().await?,
+                    build: gents::runtime::service::executable_build_id().await?,
                 };
                 if let Err(error) = super::prepare_runtime::emit(report).await {
                     tracing::warn!(%error, "runtime preparation channel closed after readiness; native work remains owned");

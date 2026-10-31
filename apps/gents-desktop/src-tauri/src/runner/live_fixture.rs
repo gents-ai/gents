@@ -429,7 +429,7 @@ impl LiveBridgeFixture {
                 .display()
                 .to_string(),
             node_data_dir: self.desktop_paths.node_data_dir().display().to_string(),
-            diagnostics_hint: gents::native_logging::diagnostics_hint().to_string(),
+            diagnostics_hint: gents::runtime::native_logging::diagnostics_hint().to_string(),
             node_home_exists: self.node_home.exists(),
             desktop_home_exists: self.desktop_paths.root().exists(),
             peer_directory_exists: self.desktop_paths.peer_directory_path().exists(),

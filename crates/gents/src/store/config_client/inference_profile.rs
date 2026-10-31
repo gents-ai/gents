@@ -357,7 +357,7 @@ mod tests {
             unreachable!()
         };
         let node = local.node();
-        crate::agent::document_view::load_document_runtime_view(node, did).await?;
+        crate::runtime::agent::document_view::load_document_runtime_view(node, did).await?;
         assert_eq!(profiles().await, before, "view load");
         Ok(())
     }

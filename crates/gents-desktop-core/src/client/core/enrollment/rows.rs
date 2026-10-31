@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::agent::p2p_reconcile::enrollment::{
+use gents::runtime::agent::p2p_reconcile::enrollment::{
     AuthorizationRevision as PureRevision, AuthorizationRevisionKind as PureRevisionKind,
     EnrollmentDecision as PureDecision, EnrollmentDecisionKind as PureDecisionKind,
     EnrollmentOffer as PureOffer, EnrollmentRequest as PureRequest,

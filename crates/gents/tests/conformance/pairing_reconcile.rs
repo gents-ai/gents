@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::{
     compute_owned_pairing_diff, equality_filter, merge_layered_desired, DiffOp, FilterPredicate,
     PairingActual, PairingApplied, PairingDesired, MAX_CONCURRENT_PEER_PREPARATIONS,
 };

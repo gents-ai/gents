@@ -16,7 +16,7 @@ fn refuse_retired_reserved_cause(
     if let Some(id) = create
         .caused_by_trigger_id
         .as_deref()
-        .filter(|id| crate::agent::document_view::is_retired_reserved_id(id))
+        .filter(|id| crate::runtime::agent::document_view::is_retired_reserved_id(id))
     {
         anyhow::bail!("trigger {id} belongs to a retired graph revision; it no longer runs");
     }

@@ -1,8 +1,8 @@
-use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
 use gents::request::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
+use gents::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_admission::{

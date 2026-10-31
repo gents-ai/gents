@@ -180,7 +180,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     let agent = integration_test_agent("general");
     let node_did = agent.node_did().to_string();
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".to_string()),
         expected_count: Some(2),
         ..resolved_event_trigger_with_concurrency(
@@ -197,7 +197,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
             event_triggers: RapidHashMap::from_iter([("group-trigger".to_string(), trigger)]),
             ..Default::default()
         })
@@ -270,7 +270,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
             event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
@@ -313,7 +313,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
 async fn dispatch_serial_per_group_separates_correlation_and_membership_generation() {
     let task = resolved_task("run {{ group.correlation_value }}");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".to_string()),
         expected_count: Some(2),
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
@@ -328,7 +328,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
             event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })

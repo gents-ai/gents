@@ -407,7 +407,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
 }
 
 fn admission_verifier(db: &TestDb) -> crate::request::admission::AgentRequestAdmissionVerifier {
-    let (_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     crate::request::admission::AgentRequestAdmissionVerifier::new(
         db.node.clone(),
         db.identity.clone(),

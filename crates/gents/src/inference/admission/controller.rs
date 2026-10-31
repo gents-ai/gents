@@ -12,7 +12,7 @@ use super::persistence::{
     persist_call_started, persist_existing_call_running, persist_existing_call_terminal,
     persist_terminal_call,
 };
-use crate::drop_cleanup::DropCleanup;
+use crate::runtime::drop_cleanup::DropCleanup;
 
 pub(super) struct CapacityPool {
     ledger: Mutex<CapacityLedger>,

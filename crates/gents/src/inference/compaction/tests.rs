@@ -146,9 +146,9 @@ fn generated_reduction_engine_cases_drive_shared_decision_outcome() {
     }
 }
 
-fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
-    crate::agent::loop_stream::LoopConfig {
-        replay: crate::agent::loop_stream::LoopReplayInput::default(),
+fn gate_test_loop_config() -> crate::runtime::agent::loop_stream::LoopConfig {
+    crate::runtime::agent::loop_stream::LoopConfig {
+        replay: crate::runtime::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -173,7 +173,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
-        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
+        retry_policy: crate::runtime::agent::completion_retry::CompletionRetryPolicy::no_retry(),
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
@@ -636,7 +636,7 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
         recall_config.temperature = Some(0.0);
         recall_config.max_tokens = Some(512);
         recall_config.additional_params = Some(serde_json::json!({"seed": 7421}));
-        let recalled: LiveCompactionRecall = crate::agent::loop_stream::run_loop_to_typed(
+        let recalled: LiveCompactionRecall = crate::runtime::agent::loop_stream::run_loop_to_typed(
             model,
             Message::user(
                 "Return the active case ID, pagination cursor contract, browser clamp, and \
@@ -1570,9 +1570,9 @@ async fn protected_zero_prefix_rejects_before_summary_provider_call() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
-    crate::agent::loop_stream::LoopConfig {
-        replay: crate::agent::loop_stream::LoopReplayInput::default(),
+fn scheduled_origin_config() -> crate::runtime::agent::loop_stream::LoopConfig {
+    crate::runtime::agent::loop_stream::LoopConfig {
+        replay: crate::runtime::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -1597,7 +1597,8 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
-        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        retry_policy:
+            crate::runtime::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
@@ -2756,8 +2757,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         })
         .to_string(),
     );
-    let config = crate::agent::loop_stream::LoopConfig {
-        replay: crate::agent::loop_stream::LoopReplayInput::default(),
+    let config = crate::runtime::agent::loop_stream::LoopConfig {
+        replay: crate::runtime::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -2782,7 +2783,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
-        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        retry_policy:
+            crate::runtime::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
@@ -3022,7 +3024,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             &resumed_history
                 .iter()
                 .cloned()
-                .map(crate::agent::loop_stream::TaggedMessage::unassociated)
+                .map(crate::runtime::agent::loop_stream::TaggedMessage::unassociated)
                 .collect::<Vec<_>>(),
             &summaries,
         )
@@ -3409,12 +3411,11 @@ async fn selected_summary_provider_cannot_replace_exhausted_parent_budget() {
     let requests = model.requests.clone();
     let mut selected = gate_test_loop_config();
     selected.context_window = 6_000;
-    selected.aggregate_token_budget = Some(crate::agent::loop_stream::AggregateTokenBudget::new(
-        100_000,
-    ));
+    selected.aggregate_token_budget =
+        Some(crate::runtime::agent::loop_stream::AggregateTokenBudget::new(100_000));
     let engine = ProviderReductionEngine::new(Arc::new(model), selected)
         .with_source_input_counter(gate_test_loop_config().provider_input_counter);
-    let parent = crate::agent::loop_stream::AggregateTokenBudget::with_prior_usage(10, 10);
+    let parent = crate::runtime::agent::loop_stream::AggregateTokenBudget::with_prior_usage(10, 10);
     let result = engine
         .reduce(
             summary_worthy_messages(),
@@ -3699,7 +3700,7 @@ async fn summary_overflow_ends_once_no_smaller_chunk_exists() {
         .all(|pair| pair[1].chat_history.len() < pair[0].chat_history.len()));
 }
 
-fn claude_summary_config() -> crate::agent::loop_stream::LoopConfig {
+fn claude_summary_config() -> crate::runtime::agent::loop_stream::LoopConfig {
     let mut config = scheduled_origin_config();
     config.provider_input_counter =
         Arc::new(crate::turn::provider_input::ProviderInputCounter::new(

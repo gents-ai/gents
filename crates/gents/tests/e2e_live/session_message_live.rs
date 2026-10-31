@@ -5,10 +5,6 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents::agent::p2p_reconcile::resolve_template;
-use gents::agent::p2p_reconcile::templates::{
-    AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
-};
 use gents::defra_node::EmbeddedNode;
 use gents::documents::{
     Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, InferenceSampling,
@@ -16,6 +12,10 @@ use gents::documents::{
 };
 use gents::goal::{set_goal, GoalStatus};
 use gents::observe::run_timeline_fetch::load_run_timeline_rows;
+use gents::runtime::agent::p2p_reconcile::resolve_template;
+use gents::runtime::agent::p2p_reconcile::templates::{
+    AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
+};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::native::{

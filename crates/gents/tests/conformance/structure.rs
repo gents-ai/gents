@@ -86,7 +86,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             ),
         ),
         ("PluginJob", Module("conformance/plugin_job.rs")),
-        ("Process", WorkspaceTest("crates/gents/src/runtime_status/tests.rs")),
+        ("Process", WorkspaceTest("crates/gents/src/runtime/status/tests.rs")),
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
         ("QueuedSteering", Module("conformance/live_overlay.rs")),
         ("Recovery", Module("conformance/recovery_sweeps.rs")),

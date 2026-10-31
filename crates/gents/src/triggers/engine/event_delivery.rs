@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use super::event_source::SourceSchemaCache;
 use crate::documents::{CallbackBinding, EventGroupCount, EventSource};
-use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
+use crate::runtime::snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
@@ -489,11 +489,11 @@ pub(crate) fn group_candidate_eligible(
 ) -> bool {
     well_formed
         && actual_count > 0
-        && actual_count <= crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
+        && actual_count <= crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
         && match expected_count {
             Some(expected) => {
                 expected > 0
-                    && expected <= crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
+                    && expected <= crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
                     && actual_count <= expected
                     && (actual_count == expected || (timed_out && minimum_count <= actual_count))
             }
@@ -555,12 +555,12 @@ mod tests {
             }
             .group_key("batch-a")
         );
-        let trigger = crate::runtime_snapshot::ResolvedEventTrigger {
+        let trigger = crate::runtime::snapshot::ResolvedEventTrigger {
             session_id_template: None,
             trigger_doc_id: "physical".into(),
             trigger_id: binding.binding_id.clone(),
             task_id: "task".into(),
-            task: crate::runtime_snapshot::ResolvedTask {
+            task: crate::runtime::snapshot::ResolvedTask {
                 emit_outcome: false,
                 task_id: "task".into(),
                 name: None,
@@ -576,7 +576,7 @@ mod tests {
             filter: None,
             enabled: true,
             concurrency: crate::documents::ConcurrencyMode::Parallel,
-            fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+            fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
             correlation_field: source.correlation_field.clone(),
             expected_count: None,
             expected_count_field: Some("expected".into()),

@@ -241,7 +241,7 @@ where
             )
             .await?;
             tracing::info!(
-                target: "gents::agent::loop_stream",
+                target: "gents::runtime::agent::loop_stream",
                 request_doc_id = replay.request_doc_id.as_deref().unwrap_or_default(),
                 turn = turn_index,
                 history_count = history.len(),

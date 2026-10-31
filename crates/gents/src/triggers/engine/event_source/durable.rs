@@ -237,7 +237,7 @@ impl EventSource {
             .filter(|t| {
                 t.enabled
                     && t.event_kind == "created"
-                    && t.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerDocument
+                    && t.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerDocument
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -277,7 +277,7 @@ impl EventSource {
     async fn next_trigger_arrival(
         &mut self,
         snapshot: &ActiveRuntimeSnapshot,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Option<FireIntent>> {
         let owner = Self::delivery(snapshot, trigger)?.owner().to_owned();
         let consumer = EventConsumer::Trigger {
@@ -392,7 +392,7 @@ impl EventSource {
     async fn advance_arrival(
         &self,
         owner: &str,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         position: &str,
     ) -> anyhow::Result<()> {
         ConfigAccess::transact_local_write(&self.node, None, "trigger.exclude_arrival", |txn| {

@@ -20,7 +20,7 @@ use crate::lean_vocab_test::{
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
     LeanVocabulary,
 };
-use crate::runtime_snapshot::{
+use crate::runtime::snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
     ResolvedSchedule, ResolvedTask, ScheduleCadence,
 };
@@ -422,7 +422,7 @@ fn snapshot_with_schedules(
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
         schedules,
         ..Default::default()
     })
@@ -490,7 +490,7 @@ fn resolved_event_trigger_with_concurrency(
         filter: None,
         enabled: true,
         concurrency,
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -546,7 +546,7 @@ fn snapshot_from_trigger_contract(
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
         schedules: active_schedules,
         event_triggers: active_event_triggers,
         ..Default::default()
@@ -602,7 +602,8 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
         provider_idle_timeout: Duration::from_secs(
             crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
-        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
+        completion_retry:
+            crate::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: SamplingConfig::default(),
     })
 }
@@ -620,7 +621,7 @@ fn snapshot_with_agent_and_schedules(
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
         schedules,
         ..Default::default()
     })

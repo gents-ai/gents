@@ -349,7 +349,7 @@ fn resolved_event_trigger(
         filter: None,
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -376,7 +376,7 @@ fn resolved_event_trigger_with_filter(
         filter: Some(filter.to_string()),
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -404,7 +404,7 @@ fn snapshot_with_event_triggers(
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
         event_triggers: triggers,
         ..Default::default()
     })
@@ -725,7 +725,7 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
         ..resolved_task("{{ group.correlation_value }} {{ group.count }}")
     };
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count_field: Some("expected_total".into()),
         filter: Some(r#"{ kind: { _eq: "include" } }"#.into()),
@@ -783,7 +783,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
     let task = resolved_task("{{ group.correlation_value }} {{ group.complete }}");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         group_timeout_secs: Some(60),
@@ -1137,7 +1137,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     }
 
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(1),
         ..resolved_event_trigger(
@@ -1191,7 +1191,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
 fn group_state_identity_changes_only_with_membership_definition() {
     let task = resolved_task("first prompt");
     let mut trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
@@ -1230,7 +1230,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
 
     let task = resolved_task("first prompt");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         ..resolved_event_trigger("fingerprint-trigger", "RecoveryFingerprintMember", task)

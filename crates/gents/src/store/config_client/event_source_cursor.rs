@@ -1,5 +1,5 @@
 use super::ConfigApplyTxn;
-use crate::agent::document_view::is_retired_reserved_id;
+use crate::runtime::agent::document_view::is_retired_reserved_id;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use gents_protocol::event_delivery::EventConsumer;

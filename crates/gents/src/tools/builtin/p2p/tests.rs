@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::p2p_reconcile::{
+use crate::runtime::agent::p2p_reconcile::{
     reconcile_peer_tick, EnrollmentEndpointEntry, GraphqlPairingStateStore, PairingStateStore,
 };
 use crate::support::enrollment::{

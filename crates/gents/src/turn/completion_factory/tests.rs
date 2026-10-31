@@ -2,9 +2,9 @@ use super::*;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::inference::resolved::SamplingConfig;
 use crate::request::watcher::AgentRequest;
+use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
 

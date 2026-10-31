@@ -157,10 +157,10 @@ pub(super) async fn load_hydration_server_state(
     node_did: &str,
     node_identity: &crate::client::principal_identity::PrincipalIdentity,
 ) -> Result<(
-    gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
+    gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
     Option<String>,
 )> {
-    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
+    use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
     let expected_request_key = format!("{peer_id}:{session_id}");
     let request_key = gents::store::graphql::escape_graphql_string(&expected_request_key);
     let query = format!(

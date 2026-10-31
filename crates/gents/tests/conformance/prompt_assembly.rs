@@ -1723,11 +1723,11 @@ fn provider_invocations_are_confined_to_the_owned_loop_seam() {
 fn owned_loop_entry_points_are_registered() {
     let expected = BTreeSet::from([
         "crates/gents-loop/src/loop_stream/one_shot.rs".to_string(),
-        "crates/gents/src/agent/daemon/inference.rs".to_string(),
-        "crates/gents/src/agent/daemon/title.rs".to_string(),
-        "crates/gents/src/agent/daemon/title/review.rs".to_string(),
+        "crates/gents/src/runtime/agent/daemon/inference.rs".to_string(),
+        "crates/gents/src/runtime/agent/daemon/title.rs".to_string(),
+        "crates/gents/src/runtime/agent/daemon/title/review.rs".to_string(),
         "crates/gents-loop/src/compaction_rolling.rs".to_string(),
-        "crates/gents/src/oneshot.rs".to_string(),
+        "crates/gents/src/runtime/oneshot.rs".to_string(),
     ]);
     let found = files_containing(&[
         "run_loop_stream(",

@@ -124,7 +124,8 @@ pub fn test_agent_for_node(
         provider_idle_timeout: Duration::from_secs(
             gents::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
-        completion_retry: gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+        completion_retry:
+            gents::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: gents::inference::resolved::SamplingConfig::default(),
     }
 }

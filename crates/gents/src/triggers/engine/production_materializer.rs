@@ -13,7 +13,7 @@ use crate::request::lifecycle::{
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage, WorkspaceLineage,
 };
-use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
+use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::triggers::engine::{MaterializerHandle, TriggerKind};
 

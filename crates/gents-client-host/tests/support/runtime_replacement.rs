@@ -342,7 +342,7 @@ impl Fixture<'_> {
                     .error_for_status()?
                     .json()
                     .await?;
-                gents::runtime_service::verify_control_receipt(&command, &receipt)?;
+                gents::runtime::service::verify_control_receipt(&command, &receipt)?;
                 match receipt.disposition {
                     RuntimeControlDisposition::Retiring => return Ok::<_, anyhow::Error>(()),
                     RuntimeControlDisposition::Busy => {

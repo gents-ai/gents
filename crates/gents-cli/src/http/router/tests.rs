@@ -258,7 +258,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     let starting: RuntimeControlReceipt = response.json().await.unwrap();
-    gents::runtime_service::verify_control_receipt(&observe, &starting).unwrap();
+    gents::runtime::service::verify_control_receipt(&observe, &starting).unwrap();
     assert_eq!(starting.disposition, RuntimeControlDisposition::Starting);
     lifecycle.mark_ready();
     let observe = command(RuntimeOperation::Observe);
@@ -271,17 +271,17 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .json()
         .await
         .unwrap();
-    gents::runtime_service::verify_control_receipt(&observe, &receipt).unwrap();
+    gents::runtime::service::verify_control_receipt(&observe, &receipt).unwrap();
     assert_eq!(receipt.disposition, RuntimeControlDisposition::Observed);
     let mut modified = receipt.clone();
     modified.capabilities.insert("request_input".into(), 999);
-    assert!(gents::runtime_service::verify_control_receipt(&observe, &modified).is_err());
+    assert!(gents::runtime::service::verify_control_receipt(&observe, &modified).is_err());
     let other_challenge = command(RuntimeOperation::Observe);
-    assert!(gents::runtime_service::verify_control_receipt(&other_challenge, &receipt).is_err());
+    assert!(gents::runtime::service::verify_control_receipt(&other_challenge, &receipt).is_err());
     let retire = command(RuntimeOperation::Retire {
         expected_build: receipt.build.clone(),
     });
-    assert!(gents::runtime_service::verify_control_receipt(&retire, &receipt).is_err());
+    assert!(gents::runtime::service::verify_control_receipt(&retire, &receipt).is_err());
     let response = client.post(&url).json(&retire).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let response = client
@@ -324,7 +324,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .json()
         .await
         .unwrap();
-    gents::runtime_service::verify_control_receipt(&changed, &refused).unwrap();
+    gents::runtime::service::verify_control_receipt(&changed, &refused).unwrap();
     assert_eq!(refused.disposition, RuntimeControlDisposition::BuildChanged);
     assert!(!admission.is_retiring().unwrap());
 
@@ -338,7 +338,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let accepted: RuntimeControlReceipt = response.json().await.unwrap();
-    gents::runtime_service::verify_control_receipt(&retire, &accepted).unwrap();
+    gents::runtime::service::verify_control_receipt(&retire, &accepted).unwrap();
     assert_eq!(accepted.disposition, RuntimeControlDisposition::Retiring);
     assert_eq!(
         accepted.lifecycle,
@@ -355,7 +355,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .json()
         .await
         .unwrap();
-    gents::runtime_service::verify_control_receipt(&retire, &repeated).unwrap();
+    gents::runtime::service::verify_control_receipt(&retire, &repeated).unwrap();
     assert_eq!(repeated.disposition, RuntimeControlDisposition::Stopping);
     drop(server);
 }

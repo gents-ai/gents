@@ -448,7 +448,7 @@ async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
 }
 
 async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result<()> {
-    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
+    use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
     loop {
         core.ensure_session_hydration_started(session, agent)
             .await?;
@@ -847,7 +847,7 @@ async fn assert_local_pagination(
     agent: &str,
 ) -> Result<()> {
     timeout(TURN_BUDGET, async {
-        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
+        use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
         loop {
             match core.session_hydration_progress(session, agent).await?.phase {
                 ClientHydrationPhase::Complete => return Ok::<_, anyhow::Error>(()),

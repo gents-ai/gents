@@ -1,6 +1,6 @@
 use super::*;
-use crate::agent::p2p_reconcile::session_goal_control::process_command;
 use crate::goal::operator_resume::support::{execute, Fixture, SESSION};
+use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
 use gents_protocol::goal_control::{
     GoalRevision, SessionGoalControlReceipt, SESSION_GOAL_CONTROL_VERSION,
 };

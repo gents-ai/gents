@@ -1510,7 +1510,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     crate::request::admission::AgentRequestAdmissionVerifier::new(
                         node.clone(),
                         identity.clone(),
-                        crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+                        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
                     )
                     .verify_fresh_at(&queued, "general", now)
                     .await

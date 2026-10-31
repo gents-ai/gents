@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::templates::single_string_eq;
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::templates::single_string_eq;
+use gents::runtime::agent::p2p_reconcile::{
     resolve_template, scope_filter, EmbeddedRemoteP2pAdmin, RemoteP2pAdmin,
 };
 use serde_json::Value;

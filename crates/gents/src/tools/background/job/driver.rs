@@ -135,7 +135,7 @@ struct RowFailures {
 /// one re-run, and at most four steps at once.
 pub struct JobDriver {
     runtime: JobRuntime,
-    service_admission: crate::runtime_service::RuntimeServiceAdmission,
+    service_admission: crate::runtime::service::RuntimeServiceAdmission,
     this: Weak<JobDriver>,
     in_flight: Mutex<RapidHashMap<String, Dirty>>,
     permits: Semaphore,
@@ -152,7 +152,7 @@ impl JobDriver {
 
     pub(crate) fn with_service_admission(
         runtime: JobRuntime,
-        service_admission: crate::runtime_service::RuntimeServiceAdmission,
+        service_admission: crate::runtime::service::RuntimeServiceAdmission,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             runtime,
@@ -271,7 +271,7 @@ impl JobDriver {
     }
 
     /// Steps the row until no wake or retry is left.
-    async fn drive(&self, row_doc_id: &str, _work: crate::runtime_service::RuntimeServiceWork) {
+    async fn drive(&self, row_doc_id: &str, _work: crate::runtime::service::RuntimeServiceWork) {
         loop {
             let (again, _) = self.step_once(row_doc_id).await;
             let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");

@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::UpdateSubscriptionSource;
 
@@ -110,7 +110,7 @@ pub struct EventSource {
     parked_arrivals: RapidHashMap<String, durable::ParkedArrival>,
     last_refusal_scan: Option<Instant>,
     durable_after_trigger: Option<String>,
-    runtime_observer: Option<Arc<dyn crate::agent::RuntimeSnapshotObserver>>,
+    runtime_observer: Option<Arc<dyn crate::runtime::agent::RuntimeSnapshotObserver>>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
@@ -397,7 +397,7 @@ impl EventSource {
 
     pub(crate) fn with_runtime_observer(
         mut self,
-        observer: Option<Arc<dyn crate::agent::RuntimeSnapshotObserver>>,
+        observer: Option<Arc<dyn crate::runtime::agent::RuntimeSnapshotObserver>>,
     ) -> Self {
         self.runtime_observer = observer;
         self
@@ -482,7 +482,7 @@ impl EventSource {
 
         for trigger in snapshot.active_event_triggers().values() {
             if trigger.event_kind != "created"
-                || trigger.fire_mode != crate::runtime_snapshot::EventTriggerFireMode::PerDocument
+                || trigger.fire_mode != crate::runtime::snapshot::EventTriggerFireMode::PerDocument
             {
                 continue;
             }
@@ -523,7 +523,7 @@ impl EventSource {
             .active_event_triggers()
             .values()
             .filter(|trigger| {
-                trigger.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerGroup
+                trigger.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerGroup
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -902,7 +902,7 @@ impl EventSource {
     async fn probe_filter(
         &self,
         source_doc_id: &str,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<bool> {
         Ok(event_delivery::probe_document(
             &self.node,
@@ -971,7 +971,7 @@ impl EventSource {
 
     fn trigger_context_for_doc(
         snapshot: &ActiveRuntimeSnapshot,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         doc: &serde_json::Value,
     ) -> anyhow::Result<Option<String>> {
         let fields = snapshot
@@ -1010,7 +1010,7 @@ impl EventSource {
 
     fn delivery<'a>(
         snapshot: &'a ActiveRuntimeSnapshot,
-        trigger: &'a crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &'a crate::runtime::snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Delivery<'a>> {
         let agent = snapshot
             .agent(&trigger.task.agent_id)
@@ -1024,7 +1024,7 @@ impl EventSource {
     #[cfg(test)]
     pub(super) fn group_state_keys(
         owner: &str,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         correlation: &str,
     ) -> (String, String) {
         let delivery = Delivery::Trigger {
@@ -1097,7 +1097,7 @@ impl EventSource {
     async fn reconcile_group(
         &self,
         snapshot: &ActiveRuntimeSnapshot,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         correlation: &str,
         reactivate: bool,
     ) -> Option<FireIntent> {
@@ -1252,7 +1252,7 @@ impl EventSource {
     async fn marked_group_correlations(
         &self,
         snapshot: &ActiveRuntimeSnapshot,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         correlations: &[String],
     ) -> RapidHashSet<String> {
         if correlations.is_empty() {
@@ -1401,7 +1401,7 @@ impl EventSource {
     async fn recover_trigger_group_page(
         &self,
         snapshot: &ActiveRuntimeSnapshot,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         cursor: Option<&str>,
         seen_correlations: &mut RapidHashSet<String>,
     ) -> (Vec<FireIntent>, Option<String>, bool) {
@@ -1523,7 +1523,7 @@ impl EventSource {
             .active_event_triggers()
             .values()
             .filter(|trigger| {
-                trigger.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerGroup
+                trigger.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerGroup
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -1615,7 +1615,7 @@ impl EventSource {
     /// `on_result` writer of its own, so its park would otherwise leave no
     /// durable reason and a seed wait would spend its whole deadline on it.
     fn spawn_unacknowledged_field_write(
-        runtime: &crate::drop_cleanup::DropCleanup,
+        runtime: &crate::runtime::drop_cleanup::DropCleanup,
         node: Arc<EmbeddedNode>,
         node_did: String,
         trigger_id: String,
@@ -1673,7 +1673,7 @@ impl EventSource {
         source_doc_id: &str,
         kind: &str,
     ) -> DeliveryBuild {
-        let mut candidates: Vec<crate::runtime_snapshot::ResolvedEventTrigger> = snapshot
+        let mut candidates: Vec<crate::runtime::snapshot::ResolvedEventTrigger> = snapshot
             .active_event_triggers()
             .values()
             .filter(|t| t.source_collection == collection_name && t.event_kind == kind)
@@ -1696,7 +1696,7 @@ impl EventSource {
         snapshot: &ActiveRuntimeSnapshot,
         collection_name: &str,
         source_doc_id: &str,
-        candidates: Vec<crate::runtime_snapshot::ResolvedEventTrigger>,
+        candidates: Vec<crate::runtime::snapshot::ResolvedEventTrigger>,
         use_seen: bool,
     ) -> DeliveryBuild {
         let mut build = DeliveryBuild {
@@ -1755,7 +1755,7 @@ impl EventSource {
             };
             let mut doc_vars = doc_vars;
             if trigger.task.emit_outcome
-                && trigger.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerDocument
+                && trigger.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerDocument
                 && matches!(
                     trigger.source_collection.as_str(),
                     "CallbackResult" | "WorkspaceReceipt"
@@ -1830,7 +1830,7 @@ impl EventSource {
                 },
             };
 
-            if trigger.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerGroup {
+            if trigger.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerGroup {
                 let correlation =
                     correlation.expect("resolved per_group trigger has correlation_field");
                 if let Some(intent) = self
@@ -1973,7 +1973,7 @@ pub(super) struct UnacknowledgedGuard {
     node_did: String,
     trigger_id: String,
     source_doc_id: String,
-    runtime: crate::drop_cleanup::DropCleanup,
+    runtime: crate::runtime::drop_cleanup::DropCleanup,
     armed: std::cell::Cell<bool>,
 }
 
@@ -1989,7 +1989,7 @@ impl UnacknowledgedGuard {
             node_did,
             trigger_id,
             source_doc_id,
-            runtime: crate::drop_cleanup::DropCleanup::current(),
+            runtime: crate::runtime::drop_cleanup::DropCleanup::current(),
             armed: std::cell::Cell::new(true),
         }
     }

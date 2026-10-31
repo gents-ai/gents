@@ -114,7 +114,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
-        crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
     let pending_wakes = |node: Arc<crate::defra_node::EmbeddedNode>, session: String| async move {
         let response = node
@@ -140,7 +140,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
                 .unwrap()
                 .unwrap();
             let behavior = request.agent_id.clone();
-            let admitted = crate::agent::daemon::verify_request_at_claim_boundary(
+            let admitted = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
                 verifier,
                 node.clone(),
                 &behavior,
@@ -296,9 +296,9 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
-        crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
-    let verified = crate::agent::daemon::verify_request_at_claim_boundary(
+    let verified = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
         &verifier,
         node.clone(),
         &wake.agent_id,

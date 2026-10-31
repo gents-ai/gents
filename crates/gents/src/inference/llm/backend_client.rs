@@ -345,8 +345,8 @@ mod usage_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::PendingAgent;
     use crate::inference::auth::credential::BearerSource;
+    use crate::runtime::agent::PendingAgent;
     use crate::store::identity::KeyIdentity;
 
     async fn test_node() -> Arc<EmbeddedNode> {

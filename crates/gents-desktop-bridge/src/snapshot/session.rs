@@ -235,7 +235,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     context_store: Option<&ClientStore>,
     prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
     hydration_observation: Option<(
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         Option<String>,
     )>,
     context_totals_exact: bool,

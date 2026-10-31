@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Result};
-use gents::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
+use gents::runtime::agent::p2p_reconcile::{
     compute_owned_pairing_diff, to_replication_filters, update_applied_after_success, DiffOp,
     PairingActual as RuntimePairingActual,
 };

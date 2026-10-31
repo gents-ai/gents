@@ -377,7 +377,7 @@ struct PanicMaterializer;
 impl MaterializerHandle for PanicMaterializer {
     fn materialize(
         &self,
-        _task: &crate::runtime_snapshot::ResolvedTask,
+        _task: &crate::runtime::snapshot::ResolvedTask,
         _trigger_id: Option<&str>,
         _trigger_kind: TriggerKind,
         _trigger_doc_id: Option<&str>,
@@ -413,7 +413,7 @@ impl MaterializerHandle for PanicMaterializer {
 
     fn recover_goal_task_fire(
         &self,
-        _task: &crate::runtime_snapshot::ResolvedTask,
+        _task: &crate::runtime::snapshot::ResolvedTask,
         _durable_fire_key: &str,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
         Box::pin(async { Ok(None) })

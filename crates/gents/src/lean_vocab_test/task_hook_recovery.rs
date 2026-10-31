@@ -288,7 +288,7 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
         }
         let restarted = BackgroundExecutionRegistry::default()
             .with_task_hook_records(dir.path().join("task-hooks"));
-        let outcome = crate::startup_recovery::run_startup_recovery_with_executions(
+        let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
             &fixture.node,
             fixture.did(),
             &restarted,
@@ -324,7 +324,7 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
             case.name
         );
 
-        let again = crate::startup_recovery::run_startup_recovery_with_executions(
+        let again = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
             &fixture.node,
             fixture.did(),
             &restarted,
@@ -446,7 +446,7 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
     assert_eq!(survivor.identity.observe(), ProcessObservation::Running);
 
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    let outcome = crate::startup_recovery::run_startup_recovery_with_executions(
+    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
         &fixture.node,
         fixture.did(),
         &restarted,
@@ -491,7 +491,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     .await;
 
     let running = BackgroundExecutionRegistry::default().with_task_hook_records(records.clone());
-    let outcome = crate::startup_recovery::run_startup_recovery_with_executions(
+    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
         &fixture.node,
         fixture.did(),
         &running,
@@ -524,7 +524,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     );
 
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    crate::startup_recovery::run_startup_recovery_with_executions(
+    crate::runtime::startup_recovery::run_startup_recovery_with_executions(
         &fixture.node,
         fixture.did(),
         &restarted,

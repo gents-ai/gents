@@ -387,7 +387,7 @@ impl EventSource {
     }
 
     pub fn validate_group(&self) -> anyhow::Result<()> {
-        use crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        use crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
             .correlation_field
             .as_deref()

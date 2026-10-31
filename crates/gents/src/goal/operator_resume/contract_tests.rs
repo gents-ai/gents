@@ -137,7 +137,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .unwrap();
                         let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
                         let (_authority_owner, authority) =
-                            crate::agent::p2p_reconcile::enrollment_authority_channel();
+                            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
                         let verifier =
                             crate::request::admission::AgentRequestAdmissionVerifier::new(
                                 f.node.clone(),

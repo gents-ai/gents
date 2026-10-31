@@ -143,7 +143,7 @@ impl RequestLifecycle {
                 .iter()
                 .map(|(doc_id, _, requester_did, _, _)| (doc_id.clone(), requester_did.clone()))
                 .collect::<Vec<_>>();
-            crate::agent::p2p_reconcile::EmbeddedRemoteP2pAdmin::new(std::sync::Arc::clone(node))
+            crate::runtime::agent::p2p_reconcile::EmbeddedRemoteP2pAdmin::new(std::sync::Arc::clone(node))
                 .requester_acknowledged("AgentRequest", &documents)
                 .await
                 .unwrap_or_else(|error| {

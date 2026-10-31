@@ -144,7 +144,7 @@ pub fn clamp_request_output_budget(
     );
     if effective_max < configured_max {
         tracing::debug!(
-            target: "gents::agent::loop_stream",
+            target: "gents::runtime::agent::loop_stream",
             input_tokens,
             context_window = config.context_window,
             configured_max_output_tokens = configured_max,

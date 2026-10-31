@@ -12,7 +12,7 @@ use crate::documents::{
     load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
     TRIGGER_CURSOR_BATCH_SIZE,
 };
-use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 pub(crate) struct ScheduleSource {
@@ -83,7 +83,7 @@ impl TriggerSource for ScheduleSource {
                             Ok(Some(s)) => s,
                             Ok(None) => {
                                 let seeded_dt =
-                                    match crate::runtime_snapshot::seed_schedule_next_run_at(
+                                    match crate::runtime::snapshot::seed_schedule_next_run_at(
                                         &resolved.cadence,
                                         now,
                                     ) {
@@ -158,7 +158,7 @@ impl TriggerSource for ScheduleSource {
                         });
 
                         let advanced_next_run_at =
-                            match crate::runtime_snapshot::advance_schedule_next_run_at(
+                            match crate::runtime::snapshot::advance_schedule_next_run_at(
                                 &resolved.cadence,
                                 parsed,
                                 now,

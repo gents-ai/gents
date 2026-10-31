@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gents::agent::p2p_reconcile::session_hydration::{
+use gents::runtime::agent::p2p_reconcile::session_hydration::{
     ClientHydrationPhase, ClientHydrationProgress, SESSION_OWNERSHIP_MISMATCH,
 };
 use gents_desktop_core::client::{

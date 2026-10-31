@@ -143,8 +143,8 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
 
 #[tokio::test]
 async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_output() {
-    use crate::agent::loop_stream::LoopStreamItem;
-    use crate::agent::stream_processor::StreamProcessor;
+    use crate::runtime::agent::loop_stream::LoopStreamItem;
+    use crate::runtime::agent::stream_processor::StreamProcessor;
     use gents_protocol::message::Message;
     let (node, path, mut lifecycle, writer) = fixture("owned-input").await;
     let request_doc_id = lifecycle.request().doc_id.clone();

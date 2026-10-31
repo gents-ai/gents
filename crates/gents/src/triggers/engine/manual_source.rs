@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
-use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode};
+use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode};
 
 const MANUAL_CHANNEL_CAPACITY: usize = 32;
 
