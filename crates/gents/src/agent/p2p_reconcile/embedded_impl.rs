@@ -352,13 +352,9 @@ pub(super) async fn push_documents_to_peer(
 
     let p2p = crate::identity::node_p2p(node)
         .context("embedded node has no P2P transport for hydration delivery")?;
-    timeout(
-        DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
-        p2p.push_documents_to_peer(peer_id, documents),
-    )
-    .await
-    .with_context(|| format!("push hydration documents to peer {peer_id} timed out"))?
-    .with_context(|| format!("push hydration documents to peer {peer_id}"))
+    p2p.push_documents_to_peer(peer_id, documents)
+        .await
+        .with_context(|| format!("push hydration documents to peer {peer_id}"))
 }
 
 fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {
@@ -1463,6 +1459,87 @@ pub(super) mod tests {
             "filtered tool-call replay should not leak non-matching rows"
         );
 
+        sender.shutdown().await;
+        receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn selected_delivery_outlives_the_former_bulk_deadline() {
+        let sender_test = runtime_test_node().await;
+        let receiver_test = runtime_test_node().await;
+        let sender = &sender_test.node;
+        let receiver = &receiver_test.node;
+        for node in [sender, receiver] {
+            node.add_collection("type PacedDeliveryProbe { value: Int }")
+                .await
+                .unwrap();
+        }
+        let inputs = (0..1200)
+            .map(|value| format!("{{value: {value}}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let result = crate::config_client::ConfigAccess::write_local(
+            sender,
+            "test.paced_delivery.seed",
+            &format!("mutation {{ create_PacedDeliveryProbe(input: [{inputs}]) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+        let documents = crate::graphql::mutation_documents(&result, "create_PacedDeliveryProbe")
+            .unwrap()
+            .expect("seeded selected documents")
+            .iter()
+            .map(|row| P2pDocumentRequest {
+                collection: "PacedDeliveryProbe".into(),
+                doc_id: row["_docID"].as_str().unwrap().into(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(documents.len(), 1200);
+        let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
+        let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
+        let sender_addresses = wait_for_peer_info(&sender_admin).await;
+        let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
+        sender_admin.connect(&receiver_addresses).await.unwrap();
+        wait_for_active_peer(&sender_admin).await;
+        wait_for_active_peer(&receiver_admin).await;
+        receiver_admin
+            .add_replicator(
+                &sender_addresses,
+                &["PacedDeliveryProbe".into()],
+                &PairingFilters::default(),
+            )
+            .await
+            .unwrap();
+        let peer = receiver.p2p().unwrap().local_peer_id().await.unwrap();
+        let started = tokio::time::Instant::now();
+        push_documents_to_peer(sender, &peer, documents)
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() > Duration::from_secs(10),
+            "default native pacing must exercise the former deadline"
+        );
+        // Native ACKs admit heads; local merge completion is a separate observation.
+        let access = crate::config_client::ConfigAccess::local(receiver.clone());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let received = access
+                    .execute("{ PacedDeliveryProbe(limit: 1201) { _docID } }")
+                    .await
+                    .unwrap();
+                if received["data"]["PacedDeliveryProbe"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+                    == 1200
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("all acknowledged heads must merge locally");
         sender.shutdown().await;
         receiver.shutdown().await;
     }

@@ -133,10 +133,11 @@ async fn serve_inventory(
     };
     let before = store.inventory_current(demand, &fence).await?;
     let delivered = if before {
-        deliver_with_bounded_retry(
+        deliver_once(
             delivery,
             &demand.admission.request,
             DeliveryTarget::FileInventory(&prepared.document_id),
+            &fence,
         )
         .await
     } else {

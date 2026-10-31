@@ -62,9 +62,6 @@ impl DeliveryTarget<'_> {
     }
 }
 
-const HYDRATION_DELIVERY_MAX_ATTEMPTS: usize = 3;
-const HYDRATION_DELIVERY_RETRY_BASE: std::time::Duration = std::time::Duration::from_millis(250);
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct HydrationTickOutcome {
     pub served: BTreeSet<String>,
@@ -77,6 +74,7 @@ trait HydrationDelivery: Send + Sync {
         &self,
         peer_id: &str,
         documents: DeliveryTarget<'_>,
+        fence: &EnrollmentAuthorizationFence,
     ) -> Result<()>;
 }
 
@@ -275,9 +273,13 @@ async fn serve_admitted_request(
         outcome.rejected.insert(request.request_key);
         return Ok(());
     }
-    let delivery_result =
-        deliver_with_bounded_retry(delivery, &request, DeliveryTarget::Transcript(&documents))
-            .await;
+    let delivery_result = deliver_once(
+        delivery,
+        &request,
+        DeliveryTarget::Transcript(&documents),
+        &authorization,
+    )
+    .await;
     if delivery_result == HydrationDeliveryResult::Indeterminate {
         let modeled = apply_hydration_delivery(
             HydrationVerdict::Admit(documents),
@@ -322,32 +324,23 @@ async fn serve_admitted_request(
     }
 }
 
-async fn deliver_with_bounded_retry(
+async fn deliver_once(
     delivery: &dyn HydrationDelivery,
     request: &HydrationRequest,
     documents: DeliveryTarget<'_>,
+    fence: &EnrollmentAuthorizationFence,
 ) -> HydrationDeliveryResult {
-    for attempt in 1..=HYDRATION_DELIVERY_MAX_ATTEMPTS {
-        match delivery
-            .push_documents_to_peer(&request.peer_id, documents)
-            .await
-        {
-            Ok(()) => return HydrationDeliveryResult::Confirmed,
-            Err(error) => {
-                tracing::warn!(
-                    request_key = %request.request_key,
-                    attempt,
-                    max_attempts = HYDRATION_DELIVERY_MAX_ATTEMPTS,
-                    %error,
-                    "session hydration document delivery attempt failed"
-                );
-                if attempt < HYDRATION_DELIVERY_MAX_ATTEMPTS {
-                    tokio::time::sleep(HYDRATION_DELIVERY_RETRY_BASE * attempt as u32).await;
-                }
-            }
+    match delivery
+        .push_documents_to_peer(&request.peer_id, documents, fence)
+        .await
+    {
+        Ok(()) => HydrationDeliveryResult::Confirmed,
+        Err(error) => {
+            tracing::warn!(request_key = %request.request_key, %error,
+                "native hydration delivery incomplete; request remains pending");
+            HydrationDeliveryResult::Indeterminate
         }
     }
-    HydrationDeliveryResult::Indeterminate
 }
 
 pub async fn run_session_hydration_reconciler(
@@ -361,8 +354,10 @@ pub async fn run_session_hydration_reconciler(
         enrollment,
         identity,
     };
-    let delivery: Arc<dyn HydrationDelivery> =
-        Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
+    let delivery: Arc<dyn HydrationDelivery> = Arc::new(EmbeddedHydrationDelivery {
+        node: node.clone(),
+        enrollment: store.enrollment.clone(),
+    });
     let mut subscription = crate::subscribe_collections(
         &node,
         [
@@ -507,6 +502,7 @@ pub async fn sign_file_inventory_page(
 
 struct EmbeddedHydrationDelivery {
     node: Arc<EmbeddedNode>,
+    enrollment: EnrollmentAuthorityHandle,
 }
 
 #[async_trait]
@@ -515,6 +511,7 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
         &self,
         peer_id: &str,
         target: DeliveryTarget<'_>,
+        fence: &EnrollmentAuthorizationFence,
     ) -> Result<()> {
         let documents = match target {
             DeliveryTarget::Transcript(documents) => documents
@@ -546,37 +543,14 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
                 .collect()
             }
         };
-        super::embedded_impl::push_documents_to_peer(&self.node, peer_id, documents).await?;
-        let explicit: Vec<(&str, Vec<String>)> = match target {
-            DeliveryTarget::FileImage(document, contents) => {
-                let mut explicit = vec![(
-                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-                    vec![document.to_owned()],
-                )];
-                if !contents.is_empty() {
-                    explicit.push((
-                        gents_protocol::schemas::TOOL_FILE_CONTENT_NAME,
-                        contents.to_vec(),
-                    ));
-                }
-                explicit
+        tokio::select! {
+            biased;
+            lost = self.enrollment.authorization_lost(fence) => {
+                lost?;
+                anyhow::bail!("enrollment authorization changed during hydration delivery")
             }
-            DeliveryTarget::FileInventory(document) => vec![(
-                gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
-                vec![document.to_owned()],
-            )],
-            DeliveryTarget::Transcript(_) => Vec::new(),
-        };
-        for (collection, documents) in explicit {
-            let acknowledged = super::embedded_impl::EmbeddedRemoteP2pAdmin::new(self.node.clone())
-                .document_heads_acknowledged(peer_id, collection, &documents)
-                .await?;
-            anyhow::ensure!(
-                acknowledged.len() == documents.len() && acknowledged.iter().all(|ack| *ack),
-                "selected file image has not been acknowledged by the peer"
-            );
+            result = super::embedded_impl::push_documents_to_peer(&self.node, peer_id, documents) => result,
         }
-        Ok(())
     }
 }
 
@@ -1159,6 +1133,7 @@ mod tests {
             &self,
             peer_id: &str,
             documents: DeliveryTarget<'_>,
+            _fence: &EnrollmentAuthorizationFence,
         ) -> Result<()> {
             self.pushed
                 .lock()
@@ -1174,6 +1149,7 @@ mod tests {
             &self,
             peer_id: &str,
             documents: DeliveryTarget<'_>,
+            _fence: &EnrollmentAuthorizationFence,
         ) -> Result<()> {
             if self
                 .attempts
@@ -1196,6 +1172,7 @@ mod tests {
             &self,
             peer_id: &str,
             documents: DeliveryTarget<'_>,
+            _fence: &EnrollmentAuthorizationFence,
         ) -> Result<()> {
             self.attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1213,6 +1190,7 @@ mod tests {
             &self,
             _peer_id: &str,
             _documents: DeliveryTarget<'_>,
+            _fence: &EnrollmentAuthorizationFence,
         ) -> Result<()> {
             self.started.notify_one();
             std::future::pending().await
@@ -1302,7 +1280,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn transient_delivery_failure_retries_within_the_same_sweep() {
+    async fn transient_delivery_failure_remains_pending_until_next_sweep() {
         let store = admitted_store();
         let delivery = FailOnceDelivery {
             attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -1311,7 +1289,16 @@ mod tests {
 
         let outcome = reconcile_hydration_tick(&store, &delivery)
             .await
-            .expect("same sweep retries the transient delivery failure");
+            .expect("the native delivery attempt remains pending");
+        assert!(outcome.served.is_empty());
+        assert_eq!(
+            delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(delivery.pushed.lock().expect("pushed lock").is_empty());
+        let outcome = reconcile_hydration_tick(&store, &delivery)
+            .await
+            .expect("a later sweep observes native delivery completion");
         assert_eq!(outcome.served, BTreeSet::from(["peer-1:session-1".into()]));
         assert!(outcome.rejected.is_empty());
         assert_eq!(
@@ -1339,15 +1326,15 @@ mod tests {
             assert!(store.rejected.lock().expect("rejected lock").is_empty());
             assert_eq!(
                 delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
-                sweep * HYDRATION_DELIVERY_MAX_ATTEMPTS
+                sweep
             );
         }
         assert_eq!(
             delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
-            2 * HYDRATION_DELIVERY_MAX_ATTEMPTS
+            2
         );
         let attempts = delivery.pushed.lock().expect("pushed lock");
-        assert_eq!(attempts.len(), 2 * HYDRATION_DELIVERY_MAX_ATTEMPTS);
+        assert_eq!(attempts.len(), 2);
         assert!(attempts
             .windows(2)
             .all(|attempts| attempts[0] == attempts[1]));

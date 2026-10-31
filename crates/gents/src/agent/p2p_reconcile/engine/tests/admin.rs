@@ -17,7 +17,6 @@ struct MockAdmin {
     blocked_connect_release: Option<Arc<tokio::sync::Notify>>,
     replicator_installed: Option<Arc<tokio::sync::Notify>>,
     fail_add_replicator_attempts: Mutex<usize>,
-
 }
 
 #[async_trait]
@@ -212,5 +211,4 @@ impl RemoteP2pAdmin for MockAdmin {
     ) -> RemoteP2pAdminResult<()> {
         Ok(())
     }
-
 }

@@ -68,7 +68,12 @@ struct Delivery {
 
 #[async_trait]
 impl HydrationDelivery for Delivery {
-    async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
+    async fn push_documents_to_peer(
+        &self,
+        peer: &str,
+        target: DeliveryTarget<'_>,
+        _fence: &EnrollmentAuthorizationFence,
+    ) -> Result<()> {
         let DeliveryTarget::FileImage(document, _) = target else {
             panic!("unexpected transcript delivery")
         };
@@ -204,10 +209,7 @@ async fn indeterminate_image_transport_leaves_the_receipt_pending() {
     );
     delivery.fail = true;
     reconcile_images(&store, &delivery).await.unwrap();
-    assert_eq!(
-        delivery.attempts.load(Ordering::SeqCst),
-        HYDRATION_DELIVERY_MAX_ATTEMPTS
-    );
+    assert_eq!(delivery.attempts.load(Ordering::SeqCst), 1);
     assert_eq!(store.checks.load(Ordering::SeqCst), 1);
     assert!(store.committed.lock().unwrap().is_empty());
 }
