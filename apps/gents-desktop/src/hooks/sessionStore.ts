@@ -147,6 +147,7 @@ export function holdsRequest(
     latest === sent.requestId ||
     state.facts.userRequestIds.has(sent.requestId) ||
     session.queuedTurns.some((turn) => turn.requestId === sent.requestId) ||
+    (session.pendingQueue ?? []).some((entry) => entry.requestId === sent.requestId) ||
     session.foldedInputs.some((folded) => folded.requestId === sent.requestId) ||
     (latest !== null && latest !== sent.latestWhenSent)
   );

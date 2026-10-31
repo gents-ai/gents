@@ -116,6 +116,7 @@ type ProjectionInput = {
     | "latestRequestId"
     | "pendingTurn"
     | "queuedTurns"
+    | "pendingQueue"
     | "foldedInputs"
   > | null;
   selectedSessionSummary: SessionSummary | null;
@@ -360,9 +361,13 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     ? rawObservedTurnState
     : null;
 
-  const queuedRequestIds = new Set(
-    (input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
-  );
+  /* the queue the tray edits can hold a sent request that queuedTurns does
+     not list; a request seen in neither stays awaited until the snapshot
+     names it, which a replaced or removed request never is */
+  const queuedRequestIds = new Set([
+    ...(input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
+    ...(input.session?.pendingQueue ?? []).map((entry) => entry.requestId),
+  ]);
   const foldedRequestIds = new Set(
     (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
   );
