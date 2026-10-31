@@ -34,7 +34,7 @@ import { toastFailure } from "@/lib/failure";
 import { sessionMarkdown } from "@/lib/session-markdown";
 import { seenMarkOf, useIsNew } from "@/lib/seen";
 import { preferences, usePinnedSessions } from "@/preferences";
-import { folderOf } from "../../hooks/chatFolders";
+import { sessionFolder } from "../../hooks/chatFolders";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 
 type ItemProps = {
@@ -108,7 +108,13 @@ export function SessionItems({
   const key = sessionKeyOf(session);
   const pinnedKeys = usePinnedSessions();
   const pinned = pinnedKeys.includes(key);
-  const folder = folderOf(stores.chat.getState().folders, session.sessionId);
+  const folder = sessionFolder(
+    stores.chat.getState().folders,
+    stores.fleet.getState(),
+    stores.client.getState().snapshot?.bootstrap?.initNodeDid,
+    session.nodeDid,
+    session.sessionId,
+  );
   const title = session.title ?? "Untitled session";
   const unread = useIsNew(session);
 

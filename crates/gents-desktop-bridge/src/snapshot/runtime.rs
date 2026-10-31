@@ -837,6 +837,7 @@ mod agent_environment_tests {
             tool_call_count: None,
             unreadable_reason: None,
             unsendable_reason: None,
+            cwd: None,
         }
     }
 

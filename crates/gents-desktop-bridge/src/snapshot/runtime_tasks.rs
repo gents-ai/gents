@@ -206,6 +206,9 @@ pub(crate) fn session_summaries(
                 tool_call_count: None,
                 unreadable_reason: None,
                 unsendable_reason: None,
+                cwd: request
+                    .and_then(|request| request.input.as_ref())
+                    .and_then(|input| input.cwd.clone()),
             }
         })
         .collect::<Vec<_>>();
