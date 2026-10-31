@@ -870,13 +870,14 @@ mod tests {
 
     #[test]
     fn the_model_facing_config_tool_has_no_optimization_surface() {
-        for name in crate::self_config::SELF_CONFIG_TOOL_NAMES {
+        for name in crate::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES {
             assert!(
                 !name.contains("optim"),
                 "the self-config tool set names {name}"
             );
         }
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/self_config");
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools/builtin/self_config");
         let mut scanned = 0;
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
@@ -912,7 +913,7 @@ mod tests {
                 }
             }
         }
-        for name in crate::self_config::SELF_CONFIG_TOOL_NAMES {
+        for name in crate::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES {
             for verb in ["cancel", "invalidate", "rm", "gc"] {
                 assert!(
                     !(name.contains("eval") && name.contains(verb)),

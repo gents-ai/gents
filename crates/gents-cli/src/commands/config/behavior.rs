@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::documents::Agent;
-use gents::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
 use gents::store::graphql::escape_graphql_string;
+use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
 use gents::tools::surface::presets;
 use gents::{default_agent_id_for_node, Collection, NodeIdentity};
 use serde_json::{json, Value};

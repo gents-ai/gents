@@ -1,8 +1,8 @@
 use super::*;
-use crate::defra_write::{BoundedWriteParams, BoundedWriteTool};
 use crate::documents::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 use crate::inference::llm::tool::Tool;
 use crate::store::identity::NodeIdentity;
+use crate::tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
 

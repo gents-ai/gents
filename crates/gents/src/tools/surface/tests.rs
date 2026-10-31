@@ -2429,7 +2429,7 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
         .contains(&crate::tools::native::SESSION_HISTORY_TOOL_NAME.to_string()));
     assert!(!explanation
         .tool_names
-        .contains(&crate::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
+        .contains(&crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
     assert!(!explanation
         .warnings
         .iter()
@@ -2470,7 +2470,7 @@ fn category_complete_ceiling_clamps_builtin_reads() {
         .contains(&crate::tools::native::CONTEXT_BUDGET_TOOL_NAME.to_string()));
     assert!(!explanation
         .tool_names
-        .contains(&crate::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
+        .contains(&crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
     assert!(explanation.excluded.get("built_in_read").is_some_and(
         |names| names.contains(&crate::tools::native::CONTEXT_BUDGET_TOOL_NAME.to_string())
     ));
@@ -3083,7 +3083,7 @@ fn meta_only_agent_does_not_grant_p2p_authority() {
         config.resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
     assert!(!surface
         .tool_names()
-        .contains(&crate::p2p_tool::P2P_TOOL_NAME.to_owned()));
+        .contains(&crate::tools::builtin::p2p::P2P_TOOL_NAME.to_owned()));
     assert!(!config.static_policy().p2p_read);
     assert!(!config.static_policy().permits_p2p_mutation());
     assert!(config.static_policy().p2p_collections.is_deny_all());

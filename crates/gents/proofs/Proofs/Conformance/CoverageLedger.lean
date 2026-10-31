@@ -973,12 +973,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "field_read_cases"
       "FieldReadCases"
-      "defra_query::field_page::tests::field_pages_match_lean")
+      "tools::builtin::defra_query::field_page::tests::field_pages_match_lean")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "write_input_cases"
       "WriteInputCases"
-      "defra_write::tests::native_input_admission_matches_lean")
+      "tools::builtin::defra_write::tests::native_input_admission_matches_lean")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "invocation_correlation_cases"
@@ -1052,7 +1052,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "count_carrier_cases"
       "CountCarrierCases"
-      "defra_write::tests::generated_count_carriers_bind_admission_parser_and_storage")
+      "tools::builtin::defra_write::tests::generated_count_carriers_bind_admission_parser_and_storage")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "logical_output_obligation_cases"

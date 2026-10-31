@@ -133,15 +133,18 @@ pub(in crate::eval::runner::embedded) fn documents_capture_query(
     validate_filter_names(filter)?;
     for field in fields {
         anyhow::ensure!(
-            !crate::defra_query::is_restricted_field(collection, field),
+            !crate::tools::builtin::defra_query::is_restricted_field(collection, field),
             "field {field:?} on {collection:?} is restricted and cannot be captured"
         );
     }
     let mut filter_fields = Vec::new();
-    crate::defra_query::query::collect_filter_field_keys(filter, &mut filter_fields);
+    crate::tools::builtin::defra_query::query::collect_filter_field_keys(
+        filter,
+        &mut filter_fields,
+    );
     for field in &filter_fields {
         anyhow::ensure!(
-            !crate::defra_query::is_restricted_field(collection, field),
+            !crate::tools::builtin::defra_query::is_restricted_field(collection, field),
             "field {field:?} on {collection:?} is restricted and cannot be used in a capture filter"
         );
     }

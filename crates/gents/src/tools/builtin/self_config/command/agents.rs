@@ -356,7 +356,7 @@ pub(super) fn default_agent_params(action: &str, agent_id: &str) -> ConfigureAge
     }
 }
 
-pub(in crate::self_config) fn agent_params(
+pub(in crate::tools::builtin::self_config) fn agent_params(
     action: &str,
     operation: Option<String>,
     argv: &[String],

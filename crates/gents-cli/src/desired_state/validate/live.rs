@@ -98,16 +98,17 @@ pub(crate) async fn validate_manifest_against_live(
             }
         }
 
-        let introspect = match gents::defra_query::introspection_query(source_collection) {
-            Ok(introspect) => introspect,
-            Err(err) => {
-                errors.push(format!(
-                    "event source {} has invalid source_collection {:?}: {}",
-                    source_id, source.source_collection, err
-                ));
-                continue;
-            }
-        };
+        let introspect =
+            match gents::tools::builtin::defra_query::introspection_query(source_collection) {
+                Ok(introspect) => introspect,
+                Err(err) => {
+                    errors.push(format!(
+                        "event source {} has invalid source_collection {:?}: {}",
+                        source_id, source.source_collection, err
+                    ));
+                    continue;
+                }
+            };
         let response = match access.execute(&introspect).await {
             Ok(response) => response,
             Err(err) => {
@@ -118,14 +119,16 @@ pub(crate) async fn validate_manifest_against_live(
                 continue;
             }
         };
-        let Some(schema) = gents::defra_query::parse_collection_schema(response.get("data")) else {
+        let Some(schema) =
+            gents::tools::builtin::defra_query::parse_collection_schema(response.get("data"))
+        else {
             errors.push(format!(
                 "event source {} references unknown source_collection {}",
                 source_id, source_collection
             ));
             continue;
         };
-        let declared: BTreeMap<String, gents::defra_query::SchemaField> = schema
+        let declared: BTreeMap<String, gents::tools::builtin::defra_query::SchemaField> = schema
             .fields
             .into_iter()
             .map(|field| (field.name.clone(), field))

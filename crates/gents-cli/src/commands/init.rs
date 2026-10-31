@@ -9,11 +9,11 @@ use gents::documents::{
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
     InferenceExecution, SurfaceToolDecl, Tools,
 };
-use gents::self_config::engineer_self_config;
 use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
+use gents::tools::builtin::self_config::engineer_self_config;
 use gents::{
     default_agent_id_for_node, default_inference_profile_id_for_agent, load_agent, load_node,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity, BashMode,
@@ -973,7 +973,7 @@ async fn initialize_runtime_home(
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
         tags: if args.engineer {
-            vec![gents::self_config::ENGINEER_AGENT_TAG.to_string()]
+            vec![gents::tools::builtin::self_config::ENGINEER_AGENT_TAG.to_string()]
         } else {
             Vec::new()
         },
@@ -1759,7 +1759,7 @@ mod tests {
             .self_config_categories
             .expect("the configurator grant names its categories");
         assert!(categories.iter().any(|category| category == "profile"));
-        let tools = gents::self_config::build_self_config_tools(
+        let tools = gents::tools::builtin::self_config::build_self_config_tools(
             std::sync::Arc::default(),
             node.clone(),
             owner.clone(),
@@ -1774,7 +1774,7 @@ mod tests {
         );
         let config = tools
             .iter()
-            .find(|tool| tool.name() == gents::self_config::CONFIG_TOOL_NAME)
+            .find(|tool| tool.name() == gents::tools::builtin::self_config::CONFIG_TOOL_NAME)
             .expect("the configurator registers its config tool");
         config
             .call(
@@ -1854,7 +1854,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_engineer_gets_the_p2p_tool_and_other_presets_do_not() {
-        let p2p = gents::p2p_tool::P2P_TOOL_NAME;
+        let p2p = gents::tools::builtin::p2p::P2P_TOOL_NAME;
 
         let engineer = explain_initialized_default_agent(true).await;
         assert!(

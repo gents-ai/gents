@@ -209,7 +209,10 @@ fn generated_document_capture_cases_match_lean() {
     assert!(!cases.is_empty());
     for case in cases {
         let mut filter_fields = Vec::new();
-        crate::defra_query::query::collect_filter_field_keys(&case.filter, &mut filter_fields);
+        crate::tools::builtin::defra_query::query::collect_filter_field_keys(
+            &case.filter,
+            &mut filter_fields,
+        );
         assert_eq!(
             filter_fields.into_iter().collect::<BTreeSet<_>>(),
             case.filter_fields.iter().cloned().collect::<BTreeSet<_>>(),

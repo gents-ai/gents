@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use gents::defra_query::{unknown_collection_message, CollectionScope};
 use gents::store::graphql::validate_collection_identifier;
+use gents::tools::builtin::defra_query::{unknown_collection_message, CollectionScope};
 use gents_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
 use serde_json::{json, Value};
 

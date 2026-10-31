@@ -43,12 +43,12 @@ use std::path::PathBuf;
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 
-use crate::defra_query::{
-    build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
-};
-use crate::defra_write::BoundedWriteTool;
 use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
 use crate::meta_tools::build_meta_tools;
+use crate::tools::builtin::defra_query::{
+    build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
+};
+use crate::tools::builtin::defra_write::BoundedWriteTool;
 use crate::tools::native::{
     agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
     build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
@@ -267,10 +267,10 @@ impl ToolSurface {
             names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
         }
         if self.enable_schema_tool {
-            names.push(crate::schema_tool::SCHEMA_TOOL_NAME.to_string());
+            names.push(crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME.to_string());
         }
         if self.enable_p2p_tool {
-            names.push(crate::p2p_tool::P2P_TOOL_NAME.to_string());
+            names.push(crate::tools::builtin::p2p::P2P_TOOL_NAME.to_string());
         }
         if self.enable_session_history_tool {
             names.push(SESSION_HISTORY_TOOL_NAME.to_string());
@@ -291,7 +291,7 @@ impl ToolSurface {
                 names.push(crate::goal::CREATE_GOAL_TOOL_NAME.to_string());
             }
         }
-        names.extend(crate::self_config::self_config_tool_names(
+        names.extend(crate::tools::builtin::self_config::self_config_tool_names(
             &self.self_config,
         ));
         for decl in &self.write_tools {
@@ -373,12 +373,12 @@ impl ToolSurface {
             ));
         }
         if self.enable_schema_tool {
-            tools.push(Box::new(crate::schema_tool::SchemaTool::new(
-                runtime.node.clone(),
-            )));
+            tools.push(Box::new(
+                crate::tools::builtin::schema_help::SchemaTool::new(runtime.node.clone()),
+            ));
         }
         if self.enable_p2p_tool {
-            tools.push(Box::new(crate::p2p_tool::P2pTool::new(
+            tools.push(Box::new(crate::tools::builtin::p2p::P2pTool::new(
                 runtime.node.clone(),
                 runtime.identity.clone(),
                 self.enable_p2p_mutations,
@@ -430,7 +430,7 @@ impl ToolSurface {
         if self.include_goal_tools {
             tools.extend(build_goal_tools(self.include_goal_creation));
         }
-        tools.extend(crate::self_config::build_self_config_tools(
+        tools.extend(crate::tools::builtin::self_config::build_self_config_tools(
             runtime.usage_cache.clone(),
             runtime.node.clone(),
             runtime.node_did.clone(),

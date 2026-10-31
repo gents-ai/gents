@@ -286,12 +286,12 @@ pub(crate) async fn load_or_seed_for_source(
     }
     let key = cursor_key(owner, consumer, collection);
     let schema = txn
-        .execute(&crate::defra_query::schema::introspection_query(
-            collection,
-        )?)
+        .execute(&crate::tools::builtin::defra_query::schema::introspection_query(collection)?)
         .await?;
     let after =
-        if crate::defra_query::schema::parse_collection_schema(schema.get("data")).is_some() {
+        if crate::tools::builtin::defra_query::schema::parse_collection_schema(schema.get("data"))
+            .is_some()
+        {
             let response = txn
                 .execute(&format!(
             "{{ _documentArrivals(collection: \"{}\", after: \"0\", limit: 1) {{ head }} }}",

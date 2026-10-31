@@ -31,7 +31,7 @@ pub(super) fn log_config_call(
         .err()
         .map(|error| truncated(&format!("{error:#}"), 500));
     tracing::info!(
-        target: "gents::self_config",
+        target: "gents::tools::builtin::self_config",
         call = %call,
         outcome,
         error = error.as_deref().unwrap_or(""),
@@ -73,7 +73,7 @@ pub(super) fn log_config_call(
             .collect::<String>()
     });
     tracing::info!(
-        target: "gents::self_config",
+        target: "gents::tools::builtin::self_config",
         collection,
         verb,
         outcome = if result.is_ok() { "committed" } else { "refused" },

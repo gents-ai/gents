@@ -16,8 +16,9 @@ pub fn guard_agent_keeps_reach(
         doc.get("tags")
             .and_then(Value::as_array)
             .is_some_and(|tags| {
-                tags.iter()
-                    .any(|tag| tag.as_str() == Some(crate::self_config::ENGINEER_AGENT_TAG))
+                tags.iter().any(|tag| {
+                    tag.as_str() == Some(crate::tools::builtin::self_config::ENGINEER_AGENT_TAG)
+                })
             })
     };
     anyhow::ensure!(

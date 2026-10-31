@@ -551,7 +551,8 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
                 let call = substitute(&call);
                 let result = if call["tool"] == "schema" {
                     let args = call["args"].clone();
-                    let schema_tool = crate::schema_tool::SchemaTool::new(node.clone());
+                    let schema_tool =
+                        crate::tools::builtin::schema_help::SchemaTool::new(node.clone());
                     let preview = Tool::call(&schema_tool, serde_json::from_value(args).unwrap())
                         .await
                         .unwrap();

@@ -12,6 +12,7 @@ use agent_queries::node_default_agent;
 use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};
 mod command;
 pub(crate) use command::{is_help_call, ConfigCommandParams};
+pub mod configuration_discovery;
 mod execution;
 pub use execution::ConfigExecutionReceipt;
 mod ops;

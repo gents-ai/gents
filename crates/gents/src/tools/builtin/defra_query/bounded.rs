@@ -138,7 +138,8 @@ impl BoundedQueryTool {
                     native.kind.graphql_type_name().trim_end_matches('!'),
                     if field.required { "!" } else { "" }
                 );
-                let mut shape = crate::defra_write::field_parameters(&parameter_type)?;
+                let mut shape =
+                    crate::tools::builtin::defra_write::field_parameters(&parameter_type)?;
                 shape["description"] = json!(format!("Filter {} by exact match.", field.name));
                 Ok((field.name.clone(), shape))
             })

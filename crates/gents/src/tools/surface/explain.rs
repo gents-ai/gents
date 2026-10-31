@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::meta_tools::META_TOOL_NAMES;
+use crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::tools::native::{
     agent_tool_names, background_tool_names, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
@@ -401,14 +401,23 @@ fn explain_builtin_reads(
     }
 
     if surface.enable_schema_tool {
-        builder.include_many("schema", [crate::schema_tool::SCHEMA_TOOL_NAME.to_string()]);
+        builder.include_many(
+            "schema",
+            [crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME.to_string()],
+        );
     } else {
-        builder.exclude("schema", crate::schema_tool::SCHEMA_TOOL_NAME);
+        builder.exclude(
+            "schema",
+            crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME,
+        );
     }
     if surface.enable_p2p_tool {
-        builder.include_many("p2p", [crate::p2p_tool::P2P_TOOL_NAME.to_string()]);
+        builder.include_many(
+            "p2p",
+            [crate::tools::builtin::p2p::P2P_TOOL_NAME.to_string()],
+        );
     } else {
-        builder.exclude("p2p", crate::p2p_tool::P2P_TOOL_NAME);
+        builder.exclude("p2p", crate::tools::builtin::p2p::P2P_TOOL_NAME);
     }
     if surface.enable_session_history_tool {
         builder.include_many("built_in_read", [SESSION_HISTORY_TOOL_NAME.to_string()]);
@@ -433,12 +442,18 @@ fn explain_builtin_reads(
     if surface.self_config.enabled {
         builder.include_many(
             "self_config",
-            crate::self_config::self_config_tool_names(&surface.self_config),
+            crate::tools::builtin::self_config::self_config_tool_names(&surface.self_config),
         );
     } else if config.self_config_requested() {
-        builder.unavailable("self_config", crate::self_config::CONFIG_TOOL_NAME);
+        builder.unavailable(
+            "self_config",
+            crate::tools::builtin::self_config::CONFIG_TOOL_NAME,
+        );
     } else {
-        builder.exclude("self_config", crate::self_config::CONFIG_TOOL_NAME);
+        builder.exclude(
+            "self_config",
+            crate::tools::builtin::self_config::CONFIG_TOOL_NAME,
+        );
     }
 
     if surface.lsp.is_some() {

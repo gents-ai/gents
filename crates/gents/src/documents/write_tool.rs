@@ -1,5 +1,5 @@
-use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::meta_tools::META_TOOL_NAMES;
+use crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::tools::native::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
     CANCEL_PROCESS_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
@@ -436,7 +436,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         crate::plugin::application_write::WRITE_TOOL_NAME,
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
-        crate::schema_tool::SCHEMA_TOOL_NAME,
+        crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME,
         crate::goal::CREATE_GOAL_TOOL_NAME,
         crate::goal::GET_GOAL_TOOL_NAME,
         crate::goal::UPDATE_GOAL_TOOL_NAME,
@@ -448,7 +448,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || META_TOOL_NAMES.contains(&name)
         || AGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)
-        || crate::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
+        || crate::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
 }
 
 /// Collections no datastore tool may read or write: protected eval material

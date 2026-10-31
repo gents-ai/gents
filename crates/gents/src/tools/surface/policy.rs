@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::defra_query::CollectionScope;
 use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl, WriteToolField};
+use crate::tools::builtin::defra_query::CollectionScope;
 use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 
 use super::modes::{BashMode, FileToolMode};
@@ -338,7 +338,7 @@ impl ToolPolicySurface {
             EndpointScope::all()
         } else {
             EndpointScope::<String, ()>::only_units(
-                crate::defra_query::expand_collection_scope_aliases(
+                crate::tools::builtin::defra_query::expand_collection_scope_aliases(
                     selection.defra_query_collections.iter().map(String::as_str),
                 ),
             )

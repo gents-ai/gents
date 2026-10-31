@@ -40,8 +40,11 @@ async fn apply_one(
     }
     let collection = write.collection.as_str();
     // Admission requires a doc_id for update and delete.
-    let filter =
-        || crate::defra_query::render::render_filter(&json!({"_docID": {"_eq": write.doc_id}}));
+    let filter = || {
+        crate::tools::builtin::defra_query::render::render_filter(
+            &json!({"_docID": {"_eq": write.doc_id}}),
+        )
+    };
     let (name, arguments) = match write.op {
         DataOp::Insert => (
             format!("add_{collection}"),
@@ -99,8 +102,11 @@ async fn input(txn: &ConfigApplyTxn<'_>, write: &DataWrite) -> Result<String> {
             .iter()
             .find(|f| &f.name == name)
             .with_context(|| format!("unknown field {name:?} in {collection}"))?;
-        let literal = crate::defra_write::field_literal(field.kind.graphql_type_name(), value)
-            .with_context(|| format!("invalid field `{name}`"))?;
+        let literal = crate::tools::builtin::defra_write::field_literal(
+            field.kind.graphql_type_name(),
+            value,
+        )
+        .with_context(|| format!("invalid field `{name}`"))?;
         parts.push(format!("{name}: {literal}"));
     }
     Ok(parts.join(", "))
@@ -162,7 +168,7 @@ async fn resolve_conflict(
     let response = txn
         .execute(&format!(
             "{{ {collection}(filter: {}) {{ {} }} }}",
-            crate::defra_query::render::render_filter(&Value::Object(filter))?,
+            crate::tools::builtin::defra_query::render::render_filter(&Value::Object(filter))?,
             selection.into_iter().collect::<Vec<_>>().join(" ")
         ))
         .await?;

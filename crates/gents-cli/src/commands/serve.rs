@@ -724,9 +724,11 @@ async fn serve_foreground(
         .enable_mcp
         .then(|| crate::http::mcp_server::McpServiceOptions {
             scope: if args.mcp_query_collections.is_empty() {
-                gents::defra_query::CollectionScope::all()
+                gents::tools::builtin::defra_query::CollectionScope::all()
             } else {
-                gents::defra_query::CollectionScope::restricted(args.mcp_query_collections.clone())
+                gents::tools::builtin::defra_query::CollectionScope::restricted(
+                    args.mcp_query_collections.clone(),
+                )
             },
             write_collections: args.mcp_write_collections.iter().cloned().collect(),
         });

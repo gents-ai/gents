@@ -1406,7 +1406,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     std::fs::create_dir_all(&source).unwrap();
     let marker = root.path().join("SHOULD_NEVER_RUN");
     let fixture =
-        include_str!("../../tests/fixtures/configuration_discovery/codex-user/config.toml")
+        include_str!("../../../../tests/fixtures/configuration_discovery/codex-user/config.toml")
             .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy());
     std::fs::write(source.join("config.toml"), fixture).unwrap();
 
@@ -1518,18 +1518,18 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     assert!(!marker.exists(), "discovery must not execute MCP commands");
     assert!(!output.contains("FAKE_DISCOVERY_SECRET_123"));
     assert!(!output.contains("SHOULD_NEVER_RUN"));
-    let inventory: crate::configuration_discovery::ConfigurationDiscoveryInventory =
+    let inventory: crate::tools::builtin::self_config::configuration_discovery::ConfigurationDiscoveryInventory =
         serde_json::from_str(&output).unwrap();
     assert_eq!(inventory.schema_version, 1);
     assert!(inventory.items.iter().any(|item| {
-        item.category == crate::configuration_discovery::DiscoveryCategory::RemoteTool
+        item.category == crate::tools::builtin::self_config::configuration_discovery::DiscoveryCategory::RemoteTool
             && item.display_label == "shared"
     }));
 }
 
 #[tokio::test]
 async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_settings() {
-    use crate::configuration_discovery::{
+    use crate::tools::builtin::self_config::configuration_discovery::{
         ConfigurationDiscoveryInventory, DiscoveryCategory, DiscoveryItemState,
         DiscoverySourceOutcome, MappingSupportLevel,
     };
@@ -1547,23 +1547,25 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     let marker = root.path().join("SHOULD_NEVER_RUN");
     std::fs::write(
         user_root.join("config.toml"),
-        include_str!("../../tests/fixtures/configuration_discovery/codex-user/config.toml")
+        include_str!("../../../../tests/fixtures/configuration_discovery/codex-user/config.toml")
             .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy()),
     )
     .unwrap();
     std::fs::write(
         user_root.join("AGENTS.md"),
-        include_str!("../../tests/fixtures/configuration_discovery/codex-user/AGENTS.md"),
+        include_str!("../../../../tests/fixtures/configuration_discovery/codex-user/AGENTS.md"),
     )
     .unwrap();
     std::fs::write(
         project_root.join(".codex/config.toml"),
-        include_str!("../../tests/fixtures/configuration_discovery/project/.codex/config.toml"),
+        include_str!(
+            "../../../../tests/fixtures/configuration_discovery/project/.codex/config.toml"
+        ),
     )
     .unwrap();
     std::fs::write(
         project_root.join("AGENTS.md"),
-        include_str!("../../tests/fixtures/configuration_discovery/project/AGENTS.md"),
+        include_str!("../../../../tests/fixtures/configuration_discovery/project/AGENTS.md"),
     )
     .unwrap();
 
@@ -1980,7 +1982,9 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         &core,
         vec![(
             "tags".into(),
-            Some(json!([crate::self_config::ENGINEER_AGENT_TAG])),
+            Some(json!([
+                crate::tools::builtin::self_config::ENGINEER_AGENT_TAG
+            ])),
         )],
     ))
     .await
@@ -2097,7 +2101,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
         failure["recovery"]["next_call"]["argv"],
         json!(["collection", "preview", "update", "Delivery"])
     );
-    let schema = crate::schema_tool::SchemaTool::new(node.clone());
+    let schema = crate::tools::builtin::schema_help::SchemaTool::new(node.clone());
     let preview: Value = serde_json::from_str(
         &Tool::call(
             &schema,
@@ -2639,7 +2643,9 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             &setup,
             vec![(
                 "tags".into(),
-                Some(json!([crate::self_config::ENGINEER_AGENT_TAG])),
+                Some(json!([
+                    crate::tools::builtin::self_config::ENGINEER_AGENT_TAG
+                ])),
             )],
         ))
         .await
@@ -4805,7 +4811,9 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             &setup,
             vec![(
                 "tags".into(),
-                Some(json!([crate::self_config::ENGINEER_AGENT_TAG])),
+                Some(json!([
+                    crate::tools::builtin::self_config::ENGINEER_AGENT_TAG
+                ])),
             )],
         ))
         .await
@@ -5025,7 +5033,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "--set",
             &format!(
                 "tags={}",
-                json!([crate::self_config::ENGINEER_AGENT_TAG, "ui:engineer"])
+                json!([
+                    crate::tools::builtin::self_config::ENGINEER_AGENT_TAG,
+                    "ui:engineer"
+                ])
             ),
         ]),
     )

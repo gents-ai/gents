@@ -233,8 +233,13 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
         .ok_or_else(|| anyhow::anyhow!("plugin input must be an object"))?;
     let mut resolved = Vec::new();
     for field in fields {
-        crate::defra_write::validate_field_input("String", false, true, object.get(&field.name))
-            .map_err(|error| anyhow::anyhow!("plugin input {:?}: {error}", field.name))?;
+        crate::tools::builtin::defra_write::validate_field_input(
+            "String",
+            false,
+            true,
+            object.get(&field.name),
+        )
+        .map_err(|error| anyhow::anyhow!("plugin input {:?}: {error}", field.name))?;
         let fill = field
             .fill
             .as_ref()

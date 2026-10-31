@@ -4,9 +4,9 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-use crate::defra_query::{CollectionScope, DefraQueryParams};
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
 
 mod plugin_writes;
 pub use plugin_writes::apply_plugin_writes_in_txn;
@@ -310,7 +310,8 @@ impl WriteTool {
                 .clone()
         } else {
             if let Some(filter) = filter.as_ref() {
-                crate::defra_query::validate_filter(txn, collection, filter).await?;
+                crate::tools::builtin::defra_query::validate_filter(txn, collection, filter)
+                    .await?;
             }
             let params = DefraQueryParams {
                 collection: collection.into(),
@@ -318,7 +319,7 @@ impl WriteTool {
                 filter: filter.clone(),
                 limit: Some((limit + 1) as u32),
             };
-            let query = crate::defra_query::build_paged_query(
+            let query = crate::tools::builtin::defra_query::build_paged_query(
                 &params,
                 &CollectionScope::restricted(vec![collection.into()]),
                 None,
@@ -432,11 +433,13 @@ impl Tool for WriteTool {
     }
     async fn call(&self, args: WriteParams) -> std::result::Result<String, WriteError> {
         match self.execute(&args).await {
-            Ok(value) => serde_json::to_string(&crate::self_config::Ordered::reading_order(
-                value,
-                &["effect", "next_call", "metadata", "committed"],
-            ))
-            .map_err(|e| WriteError(e.to_string())),
+            Ok(value) => {
+                serde_json::to_string(&crate::tools::builtin::self_config::Ordered::reading_order(
+                    value,
+                    &["effect", "next_call", "metadata", "committed"],
+                ))
+                .map_err(|e| WriteError(e.to_string()))
+            }
             Err(error) => {
                 let next = error
                     .downcast_ref::<WriteRecovery>()

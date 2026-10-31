@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use gents::defra_query::{CollectionScope, QueryParams};
+use gents::tools::builtin::defra_query::{CollectionScope, QueryParams};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
@@ -62,9 +62,9 @@ impl DefraQueryMcp {
             options: args.options,
         };
         let access = gents::store::config_client::ConfigAccess::graphql(self.graphql.clone());
-        let value=gents::defra_query::execute_command(&access,&params,&self.options.scope).await
+        let value=gents::tools::builtin::defra_query::execute_command(&access,&params,&self.options.scope).await
             .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
-        gents::defra_query::render_result(value)
+        gents::tools::builtin::defra_query::render_result(value)
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }
     #[tool(

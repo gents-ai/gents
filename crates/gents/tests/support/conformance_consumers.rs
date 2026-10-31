@@ -812,17 +812,17 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "invocation_correlation_matches_lean",
         },
         ConformanceConsumer::RustTest {
-            id: "defra_query::field_page::tests::field_pages_match_lean",
+            id: "tools::builtin::defra_query::field_page::tests::field_pages_match_lean",
             package: "gents",
-            source_path: "crates/gents/src/defra_query/field_page.rs",
-            module_path: "defra_query::field_page::tests",
+            source_path: "crates/gents/src/tools/builtin/defra_query/field_page.rs",
+            module_path: "tools::builtin::defra_query::field_page::tests",
             function: "field_pages_match_lean",
         },
         ConformanceConsumer::RustTest {
-            id: "defra_write::tests::native_input_admission_matches_lean",
+            id: "tools::builtin::defra_write::tests::native_input_admission_matches_lean",
             package: "gents",
-            source_path: "crates/gents/src/defra_write/tests.rs",
-            module_path: "defra_write::tests",
+            source_path: "crates/gents/src/tools/builtin/defra_write/tests.rs",
+            module_path: "tools::builtin::defra_write::tests",
             function: "native_input_admission_matches_lean",
         },
         ConformanceConsumer::RustTest {
@@ -1141,10 +1141,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "modeled_handoff_positive_sequence_maps_to_native_owners",
         },
         ConformanceConsumer::RustTest {
-            id: "defra_write::tests::generated_count_carriers_bind_admission_parser_and_storage",
+            id: "tools::builtin::defra_write::tests::generated_count_carriers_bind_admission_parser_and_storage",
             package: "gents",
-            source_path: "crates/gents/src/defra_write/tests.rs",
-            module_path: "defra_write::tests",
+            source_path: "crates/gents/src/tools/builtin/defra_write/tests.rs",
+            module_path: "tools::builtin::defra_write::tests",
             function: "generated_count_carriers_bind_admission_parser_and_storage",
         },
         ConformanceConsumer::RustTest {

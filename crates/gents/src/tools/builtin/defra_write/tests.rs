@@ -661,13 +661,15 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         );
         let introspection = crate::store::graphql::graphql_with_transaction_retry(
             &node,
-            &crate::defra_query::introspection_query(&collection).unwrap(),
+            &crate::tools::builtin::defra_query::introspection_query(&collection).unwrap(),
             "introspect count carrier",
         )
         .await
         .unwrap();
-        let decoded =
-            crate::defra_query::parse_collection_schema(introspection.data.as_ref()).unwrap();
+        let decoded = crate::tools::builtin::defra_query::parse_collection_schema(
+            introspection.data.as_ref(),
+        )
+        .unwrap();
         let field = decoded
             .fields
             .iter()

@@ -328,7 +328,7 @@ pub(crate) fn source_fields_from(
         .iter()
         .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(str::to_string))
         .filter(|name| !name.starts_with('_'))
-        .filter(|name| !crate::defra_query::schema::is_aggregate_pseudo_field(name))
+        .filter(|name| !crate::tools::builtin::defra_query::schema::is_aggregate_pseudo_field(name))
         .collect())
 }
 

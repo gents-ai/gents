@@ -578,7 +578,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
     .unwrap()
     .unwrap()
     .with_reviewer(reviewer.callback.clone());
-    let tools = crate::self_config::build_self_config_tools(
+    let tools = crate::tools::builtin::self_config::build_self_config_tools(
         std::sync::Arc::default(),
         fixture.node.clone(),
         fixture.parent.node_did.clone(),
@@ -595,7 +595,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
     );
     let config = tools
         .iter()
-        .find(|tool| tool.name() == crate::self_config::CONFIG_TOOL_NAME)
+        .find(|tool| tool.name() == crate::tools::builtin::self_config::CONFIG_TOOL_NAME)
         .unwrap();
     let tool_context = crate::tools::native::ToolContext::new(key.path.clone(), false).unwrap();
     let marker = key.path.join("marker");

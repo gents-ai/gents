@@ -473,10 +473,12 @@ impl SchemaTool {
                 let encoded = if command.preview {
                     let effect = value.as_object_mut().unwrap().remove("effect").unwrap();
                     let next_call = value.as_object_mut().unwrap().remove("next_call").unwrap();
-                    serde_json::to_string(&crate::self_config::Ordered::reading_order(
-                        json!({"effect":effect,"next_call":next_call,"metadata":value}),
-                        &["effect", "next_call", "metadata"],
-                    ))
+                    serde_json::to_string(
+                        &crate::tools::builtin::self_config::Ordered::reading_order(
+                            json!({"effect":effect,"next_call":next_call,"metadata":value}),
+                            &["effect", "next_call", "metadata"],
+                        ),
+                    )
                 } else {
                     serde_json::to_string(&value)
                 };

@@ -17,15 +17,15 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::defra_query::bounded::BoundedQueryParams;
-use crate::defra_query::BoundedQueryTool;
-use crate::defra_write::{BoundedWriteParams, BoundedWriteTool};
 use crate::documents::{
     list_datastore_tool_surfaces, DatastoreToolSurfaceDocument, SurfaceToolDecl,
 };
 use crate::inference::llm::tool::Tool;
 use crate::plugin::ux::UxListing;
 use crate::store::config_client::ConfigAccess;
+use crate::tools::builtin::defra_query::bounded::BoundedQueryParams;
+use crate::tools::builtin::defra_query::BoundedQueryTool;
+use crate::tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
 
 /// One call from a page, as `desktop_ux_data_call` receives it.
 #[derive(Debug, Clone, Deserialize)]

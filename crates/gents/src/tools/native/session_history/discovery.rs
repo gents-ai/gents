@@ -598,7 +598,7 @@ async fn tool_output(
         );
     };
     let offset = args.offset_bytes.unwrap_or(0);
-    let page = crate::defra_query::utf8_page(
+    let page = crate::tools::builtin::defra_query::utf8_page(
         output,
         offset,
         args.expected_hash.as_deref(),
@@ -606,13 +606,13 @@ async fn tool_output(
     )
     .map_err(|error| {
         let reason = match error {
-            crate::defra_query::Utf8PageError::MissingHash => {
+            crate::tools::builtin::defra_query::Utf8PageError::MissingHash => {
                 "offset_bytes past 0 requires expected_hash"
             }
-            crate::defra_query::Utf8PageError::Changed => {
+            crate::tools::builtin::defra_query::Utf8PageError::Changed => {
                 "output changed since expected_hash; restart at offset 0"
             }
-            crate::defra_query::Utf8PageError::Offset => {
+            crate::tools::builtin::defra_query::Utf8PageError::Offset => {
                 "offset_bytes is not a UTF-8 boundary within the output"
             }
         };

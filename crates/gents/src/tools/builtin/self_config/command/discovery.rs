@@ -1,5 +1,5 @@
 use super::*;
-use crate::configuration_discovery::{
+use crate::tools::builtin::self_config::configuration_discovery::{
     discover_configuration_within, DiscoveryLimits, DiscoveryRequest, DiscoveryScope,
     DiscoverySourceKind, DiscoverySourceRoot, DEFAULT_MAX_DISCOVERY_SOURCES,
 };

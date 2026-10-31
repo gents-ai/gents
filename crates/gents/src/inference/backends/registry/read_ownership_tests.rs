@@ -3,9 +3,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::Notify;
 
 use super::lookup_backend_observation;
-use crate::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
 use crate::inference::llm::tool::Tool;
 use crate::store::identity::NodeIdentity;
+use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
 use crate::{defra_node::EmbeddedNode, store::config_client::ConfigAccess};
 
 #[tokio::test]
