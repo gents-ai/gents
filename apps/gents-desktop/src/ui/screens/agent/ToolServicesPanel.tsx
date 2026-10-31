@@ -230,6 +230,7 @@ export function ToolServicesPanel({
         id: s.service_id,
         title: s.display_name ?? s.service_id,
         meta: s.hostname ?? "",
+        tags: s.tags,
         trailing: (
           <RowMenu
             name={s.display_name ?? s.service_id}
