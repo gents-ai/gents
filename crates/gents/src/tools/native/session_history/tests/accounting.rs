@@ -13,7 +13,7 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     context.accounting.components.documents = 0;
     let body = json!({"messages":[{"role":"system","content":"private system"},{"role":"user","content":"hello"}],"tools":[{"type":"function"}]});
     context.accounting.components.messages =
-        crate::provider_input::estimate_json(&body["messages"]).unwrap();
+        crate::turn::provider_input::estimate_json(&body["messages"]).unwrap();
     let owner = node
         .execute(r#"{AgentRequest(filter:{request_id:{_eq:"request-a-new"}}){_docID}}"#)
         .await;

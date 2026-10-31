@@ -1114,7 +1114,7 @@ fn session_seed_keeps_the_maximum_of_its_newest_observations() {
         Some(26_000),
         "a 1.3x call after a 2.6x one still seeds 2.6x"
     );
-    let window = crate::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW;
+    let window = crate::turn::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW;
     let mut rows = (0..window).map(|_| observed(13_000)).collect::<Vec<_>>();
     rows.push(observed(26_000));
     assert_eq!(
@@ -1139,7 +1139,7 @@ fn only_a_usable_newest_call_anchors_the_session() {
         CalibrationSeed {
             observations: vec![16_711],
             dispatched_ratio: None,
-            anchor: Some(crate::provider_input::budget::ContextAnchor {
+            anchor: Some(crate::turn::provider_input::budget::ContextAnchor {
                 input_tokens: 109_881,
                 output_tokens: 7_000,
                 estimated_input_tokens: 65_755,
@@ -1174,10 +1174,10 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         context_calibration_for_session(&node, &agent, &did, session)
             .await
             .ratio_basis_points(),
-        crate::provider_input::budget::UNIT_INPUT_RATIO_BASIS_POINTS,
+        crate::turn::provider_input::budget::UNIT_INPUT_RATIO_BASIS_POINTS,
         "an unobserved OpenAI-compatible session starts unscaled"
     );
-    let estimator = crate::provider_input::ProviderInputProfile::resolve(
+    let estimator = crate::turn::provider_input::ProviderInputProfile::resolve(
         agent.backend_provider_kind,
         agent.openai_wire_api,
     )
@@ -1264,7 +1264,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         context_calibration_for_session(&node, &agent, &did, session)
             .await
             .anchor(),
-        Some(crate::provider_input::budget::ContextAnchor {
+        Some(crate::turn::provider_input::budget::ContextAnchor {
             input_tokens: 12_500,
             output_tokens: 10,
             estimated_input_tokens: 10_000,

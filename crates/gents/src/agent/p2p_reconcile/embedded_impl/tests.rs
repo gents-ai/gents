@@ -33,13 +33,13 @@ use crate::ensure_runtime_schemas;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-use crate::prompt::LayeredPromptBuilder;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };
 use crate::tools::surface::AgentToolSurfaceConfig;
+use crate::turn::prompt::LayeredPromptBuilder;
 use fixtures::{
     runtime_http_test_node, runtime_test_node_with_identity, wait_for_active_peer,
     wait_for_peer_info, wait_for_value,

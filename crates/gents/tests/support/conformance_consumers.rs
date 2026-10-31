@@ -154,10 +154,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_bounded_sandboxes_deny_credentials_and_default_network",
         },
         ConformanceConsumer::RustTest {
-            id: "provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields",
+            id: "turn::provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields",
             package: "gents-loop",
             source_path: "crates/gents-loop/src/provider_input/tool_call_identity_tests.rs",
-            module_path: "provider_input::tool_call_identity_tests",
+            module_path: "turn::provider_input::tool_call_identity_tests",
             function: "modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields",
         },
         ConformanceConsumer::RustTest {
@@ -686,10 +686,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_edit_fork_bindings_control_destination_reuse",
         },
         ConformanceConsumer::RustTest {
-            id: "completion_factory::tests::generated_service_tier_cases_drive_loop_config",
+            id: "turn::completion_factory::tests::generated_service_tier_cases_drive_loop_config",
             package: "gents",
-            source_path: "crates/gents/src/completion_factory/tests.rs",
-            module_path: "completion_factory::tests",
+            source_path: "crates/gents/src/turn/completion_factory/tests.rs",
+            module_path: "turn::completion_factory::tests",
             function: "generated_service_tier_cases_drive_loop_config",
         },
         ConformanceConsumer::RustTest {
@@ -707,17 +707,17 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_permission_write_cases",
         },
         ConformanceConsumer::RustTest {
-            id: "completion_factory::tests::generated_responses_storage_cases_drive_loop_config",
+            id: "turn::completion_factory::tests::generated_responses_storage_cases_drive_loop_config",
             package: "gents",
-            source_path: "crates/gents/src/completion_factory/tests.rs",
-            module_path: "completion_factory::tests",
+            source_path: "crates/gents/src/turn/completion_factory/tests.rs",
+            module_path: "turn::completion_factory::tests",
             function: "generated_responses_storage_cases_drive_loop_config",
         },
         ConformanceConsumer::RustTest {
-            id: "completion_factory::tests::generated_responses_effort_cases_drive_loop_config",
+            id: "turn::completion_factory::tests::generated_responses_effort_cases_drive_loop_config",
             package: "gents",
-            source_path: "crates/gents/src/completion_factory/tests.rs",
-            module_path: "completion_factory::tests",
+            source_path: "crates/gents/src/turn/completion_factory/tests.rs",
+            module_path: "turn::completion_factory::tests",
             function: "generated_responses_effort_cases_drive_loop_config",
         },
         ConformanceConsumer::RustTest {
@@ -2583,10 +2583,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_rendered_capture_cases_hold_against_the_real_defra_sink",
         },
         ConformanceConsumer::RustTest {
-            id: "completion_factory::tests::rehydrates_aggregate_budget_from_durable_inference_calls",
+            id: "turn::completion_factory::tests::rehydrates_aggregate_budget_from_durable_inference_calls",
             package: "gents",
-            source_path: "crates/gents/src/completion_factory/tests.rs",
-            module_path: "completion_factory::tests",
+            source_path: "crates/gents/src/turn/completion_factory/tests.rs",
+            module_path: "turn::completion_factory::tests",
             function: "rehydrates_aggregate_budget_from_durable_inference_calls",
         },
         ConformanceConsumer::RustTest {
@@ -2597,10 +2597,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_rendered_capture_cases_fence_persist_before_send",
         },
         ConformanceConsumer::RustTest {
-            id: "provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations",
+            id: "turn::provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations",
             package: "gents",
             source_path: "crates/gents/tests/conformance/durable_reduction.rs",
-            module_path: "provider_context_reduction::durable_reduction_conformance",
+            module_path: "turn::provider_context_reduction::durable_reduction_conformance",
             function: "generated_durable_reduction_cases_pin_storage_and_capture_citations",
         },
         ConformanceConsumer::RustTest {
@@ -2744,10 +2744,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "event_delivery_convergence_traces_match_runtime_or_deviation",
         },
         ConformanceConsumer::RustTest {
-            id: "prompt::tests::mcp_discovery_guidance_matches_presented_operations_model",
+            id: "turn::prompt::tests::mcp_discovery_guidance_matches_presented_operations_model",
             package: "gents",
-            source_path: "crates/gents/src/prompt/tests.rs",
-            module_path: "prompt::tests",
+            source_path: "crates/gents/src/turn/prompt/tests.rs",
+            module_path: "turn::prompt::tests",
             function: "mcp_discovery_guidance_matches_presented_operations_model",
         },
         ConformanceConsumer::RustTest {

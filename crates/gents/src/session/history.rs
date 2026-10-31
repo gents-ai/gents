@@ -50,7 +50,7 @@ pub(crate) async fn load_sequenced_history_for_request(
     request: &crate::request::watcher::AgentRequest,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
-    provider_profile: crate::provider_input::ProviderInputProfile,
+    provider_profile: crate::turn::provider_input::ProviderInputProfile,
 ) -> Result<Vec<SequencedMessage>> {
     super::output::sequenced::load_sequenced_messages(
         node,

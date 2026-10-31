@@ -29,7 +29,7 @@ where
             slot_generation,
             request_admission,
         } = init;
-        let mut compaction_config = crate::completion_factory::loop_config(
+        let mut compaction_config = crate::turn::completion_factory::loop_config(
             agent_config.as_ref(),
             preamble.clone(),
             0,
@@ -134,7 +134,7 @@ where
         deadline: Option<chrono::DateTime<chrono::Utc>>,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         sampling_seed: Option<i64>,
-        context_calibration: crate::provider_input::budget::ContextCalibration,
+        context_calibration: crate::turn::provider_input::budget::ContextCalibration,
     ) -> ReductionOptions {
         ReductionOptions {
             deadline,

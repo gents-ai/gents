@@ -83,7 +83,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     config.on_rendered_request = Some(crate::inference::rendered_request::scope::ambient_arming_sink(
         scope_kind,
     ));
-    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+    config.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
         crate::BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::Responses,
         "gpt-test",
@@ -93,7 +93,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         .request_commit_cid()
         .expect("claimed request commit CID")
         .to_owned();
-    config.replay = crate::provider_input::replay::owned_replay_input(
+    config.replay = crate::turn::provider_input::replay::owned_replay_input(
         node.clone(),
         lifecycle.request().clone(),
         request_commit_cid.clone(),

@@ -195,8 +195,8 @@ async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints()
     assert_eq!(unset.max_turns, explicit.max_turns);
 
     assert_ne!(
-        crate::completion_factory::agent_slot_fingerprint(&unset),
-        crate::completion_factory::agent_slot_fingerprint(&explicit),
+        crate::turn::completion_factory::agent_slot_fingerprint(&unset),
+        crate::turn::completion_factory::agent_slot_fingerprint(&explicit),
         "slot selection must rebuild when only max_turns provenance changed"
     );
 
@@ -749,9 +749,9 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     };
     assert_eq!(format!("{agent_config:?}"), format!("{rotated:?}"));
     assert!(!format!("{rotated:?}").contains("fixture-new-key"));
-    let new_connection = crate::completion_factory::agent_connection_fingerprint(&rotated);
+    let new_connection = crate::turn::completion_factory::agent_connection_fingerprint(&rotated);
     assert_ne!(
-        crate::completion_factory::agent_connection_fingerprint(&agent_config),
+        crate::turn::completion_factory::agent_connection_fingerprint(&agent_config),
         new_connection
     );
     let admission = |connection: String| {
@@ -763,9 +763,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         &node,
         "general",
         vec![Arc::new(agent_config.clone())],
-        admission(crate::completion_factory::agent_connection_fingerprint(
-            &agent_config,
-        )),
+        admission(crate::turn::completion_factory::agent_connection_fingerprint(&agent_config)),
     )
     .await;
     let rotated_snapshot = snapshot_for_agents_with_admission(

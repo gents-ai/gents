@@ -568,10 +568,11 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     }
     assert_eq!(stored["prompt_tokens"], 17);
     assert_eq!(stored["completion_tokens"], 9);
-    let budget = crate::completion_factory::aggregate_token_budget_for_request(&node, &request)
-        .await
-        .unwrap()
-        .unwrap();
+    let budget =
+        crate::turn::completion_factory::aggregate_token_budget_for_request(&node, &request)
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(
         budget.snapshot().unwrap().remaining(),
         74,
@@ -589,9 +590,10 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     .await
     .unwrap();
     assert_eq!(stored_call(&node).await, stored);
-    let budget = crate::completion_factory::aggregate_token_budget_for_request(&node, &request)
-        .await
-        .unwrap()
-        .unwrap();
+    let budget =
+        crate::turn::completion_factory::aggregate_token_budget_for_request(&node, &request)
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(budget.snapshot().unwrap().remaining(), 74);
 }

@@ -7,7 +7,6 @@ pub(crate) mod support;
 
 pub mod agent;
 pub mod codex_shim_binding;
-pub(crate) mod completion_factory;
 pub mod documents;
 pub mod drop_cleanup;
 pub mod error;
@@ -26,10 +25,9 @@ pub mod openai_wire;
 pub mod p2p_observability;
 pub mod pack;
 pub mod plugin;
-pub(crate) mod provider_input;
 pub use gents_loop::provider_input::ProviderInputProfile;
 pub mod provider_budget {
-    pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
+    pub use crate::turn::provider_input::budget::{effective_input_budget, threshold_budget};
 }
 #[cfg(test)]
 #[path = "lean_vocab_test/canonical_execution/native_adapter.rs"]
@@ -274,8 +272,6 @@ pub(crate) mod test_support {
 }
 pub mod oneshot;
 pub mod periodic_recovery;
-pub mod prompt;
-pub mod provider_context_reduction;
 pub mod request;
 #[doc(hidden)]
 pub use request::admission::final_claim_admission_disposition;
@@ -291,6 +287,7 @@ pub mod session;
 pub mod tools;
 pub mod triggers;
 pub mod truncation;
+pub mod turn;
 
 pub use agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
@@ -370,7 +367,6 @@ pub use periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
     PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
-pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use request::interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
     interrupt_request_by_doc_id,
@@ -447,6 +443,7 @@ pub use triggers::engine::subscription_source::{
 };
 pub use triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 pub use truncation::{TruncationLimits, TruncationMode};
+pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 #[doc(hidden)]
 pub mod __test_internals {

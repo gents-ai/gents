@@ -17,7 +17,7 @@ use super::canonical_rows::{
 use super::output::replay_candidates::load_canonical_assistant_candidates;
 use super::output::replay_request::ReplayRequestReader;
 use super::output::CanonicalReplayScope;
-use crate::provider_context_reduction::{capture_source_boundary, SourceBoundary};
+use crate::turn::provider_context_reduction::{capture_source_boundary, SourceBoundary};
 
 use gents_loop::claude_messages_body::{
     replay_stage, select_replay, ReplayIssuer, ReplayTag, ReplayWire, TaggedAssistantRow,
@@ -1061,7 +1061,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         if content.iter().filter(|block| matches!(block, AssistantContent::Reasoning(_))).count() == 2
     ));
 
-    let tagged = crate::provider_input::replay::tag_canonical_history(&history);
+    let tagged = crate::turn::provider_input::replay::tag_canonical_history(&history);
     let projected = provider_view_tagged(tagged).unwrap();
     let rows = projected
         .iter()
@@ -1550,13 +1550,13 @@ async fn replay_resolution_observes_capture_arriving_for_existing_header() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.expect("canonical resolver");
     assert!(resolve(vec![tag.clone()]).await.unwrap().is_empty());
@@ -1587,13 +1587,13 @@ async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.expect("canonical resolver");
     let estimate = resolve(vec![tag.clone()]).await.unwrap();
@@ -1651,13 +1651,13 @@ async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.clone().expect("canonical resolver");
     let (estimate, estimate_scans) = crate::session::count_request_output_scans(async {
@@ -1713,13 +1713,13 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.clone().expect("canonical resolver");
     let estimate = {

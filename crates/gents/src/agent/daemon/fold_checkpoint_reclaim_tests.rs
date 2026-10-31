@@ -151,7 +151,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         }
         if persist_checkpoint {
             let commit_cid = first.request_commit_cid().unwrap().to_owned();
-            let boundary = crate::provider_context_reduction::capture_source_boundary(
+            let boundary = crate::turn::provider_context_reduction::capture_source_boundary(
                 node.as_ref(),
                 &session_id,
                 agent_config.node_did(),
@@ -168,14 +168,14 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 crate::inference::llm::message::Message::user(head.content.clone()),
                 crate::inference::llm::message::Message::user(folded.content.clone()),
             ];
-            let row = |_| crate::provider_context_reduction::ReplayRowAssociation {
+            let row = |_| crate::turn::provider_context_reduction::ReplayRowAssociation {
                 source: None,
                 physical_header: None,
                 block_indices: Vec::new(),
             };
-            crate::provider_context_reduction::persist(
+            crate::turn::provider_context_reduction::persist(
                 &node,
-                crate::provider_context_reduction::NewProviderContextReduction {
+                crate::turn::provider_context_reduction::NewProviderContextReduction {
                     node_did: agent_config.node_did(),
                     requester_did: Some(agent_config.node_did()),
                     session_id: &session_id,
@@ -190,7 +190,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                     compacted_prefix: &prefix,
                     retained_suffix: &suffix,
                     checkpoint_messages: &suffix,
-                    replay_associations: &crate::provider_context_reduction::ReplayAssociations {
+                    replay_associations: &crate::turn::provider_context_reduction::ReplayAssociations {
                         required: Vec::new(),
                         prefix_rows: prefix.iter().map(row).collect(),
                         retained_rows: suffix.iter().map(row).collect(),
@@ -207,7 +207,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         reclaimed.deadline = None;
         drop(first);
         assert_eq!(
-            crate::provider_context_reduction::load_unconsumed_for_request(
+            crate::turn::provider_context_reduction::load_unconsumed_for_request(
                 node.as_ref(),
                 &head.doc_id
             )
@@ -311,7 +311,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         assert!(first_at < folded_at, "{case}: queue order");
         if persist_checkpoint {
             assert!(
-                crate::provider_context_reduction::load_unconsumed_for_request(
+                crate::turn::provider_context_reduction::load_unconsumed_for_request(
                     node.as_ref(),
                     &head.doc_id
                 )

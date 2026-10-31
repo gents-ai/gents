@@ -33,7 +33,6 @@ use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
 };
-use crate::prompt::LayeredPromptBuilder;
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::request::watcher::{AgentRequest, DefraWatcher};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
@@ -45,6 +44,7 @@ use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };
 use crate::tools::surface::AgentToolSurfaceConfig;
+use crate::turn::prompt::LayeredPromptBuilder;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ReviewUsage {
@@ -186,7 +186,7 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     assert_eq!(result.as_deref(), Some(reply.as_str()));
     drain_reviews(&tasks, true).await;
     assert_eq!(budget.snapshot().unwrap().used, 8);
-    let recovered = crate::completion_factory::aggregate_token_budget_for_request(
+    let recovered = crate::turn::completion_factory::aggregate_token_budget_for_request(
         &fixture.node,
         &fixture.parent,
     )
@@ -853,7 +853,7 @@ async fn access_review_without_reported_usage_invalidates_the_callers_allowance(
     assert!(format!("{error:#}").contains("aggregate_token_usage_missing"));
     drain_reviews(&tasks, false).await;
     assert!(budget.snapshot().is_err());
-    let recovered = crate::completion_factory::aggregate_token_budget_for_request(
+    let recovered = crate::turn::completion_factory::aggregate_token_budget_for_request(
         &fixture.node,
         &fixture.parent,
     )
@@ -2832,7 +2832,7 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
         agent_config.backend_provider_kind = kind;
         agent_config.openai_wire_api = wire;
         agent_config.sampling.reasoning_effort = effort;
-        let config = crate::completion_factory::loop_config(
+        let config = crate::turn::completion_factory::loop_config(
             &agent_config,
             super::title_generation_preamble(),
             0,
@@ -2848,13 +2848,13 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
     agent_config.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
     agent_config.openai_wire_api = chat;
     agent_config.sampling.reasoning_effort = Some(ReasoningEffort::None);
-    let config = crate::completion_factory::loop_config(
+    let config = crate::turn::completion_factory::loop_config(
         &agent_config,
         super::title_generation_preamble(),
         0,
         crate::inference::rendered_request::CaptureScopeKind::Title,
     );
-    let overridden = crate::completion_factory::merge_optional_params(
+    let overridden = crate::turn::completion_factory::merge_optional_params(
         config.additional_params,
         Some(serde_json::json!({ "chat_template_kwargs": { "enable_thinking": true } })),
     );

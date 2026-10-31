@@ -639,7 +639,7 @@ async fn plugin_image_result_seen_by(
     let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
     let model = ScriptedModel::new_turns(plugin_call_then_text_turns()).without_capture();
     let mut config = config(4);
-    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+    config.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
         provider,
         crate::OpenAiWireApi::ChatCompletions,
         "test-model",

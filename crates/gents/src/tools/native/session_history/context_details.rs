@@ -131,7 +131,7 @@ fn chat_details(body: &Value, message_tokens: u64) -> Result<SessionContextDetai
         .as_array()
         .context("captured chat messages are not an array")?;
     anyhow::ensure!(
-        crate::provider_input::estimate_json(&body["messages"])? as u64 == message_tokens,
+        crate::turn::provider_input::estimate_json(&body["messages"])? as u64 == message_tokens,
         "captured message estimate differs from recorded accounting"
     );
     let mut category_bytes = [0_usize; 5];
@@ -250,7 +250,7 @@ mod tests {
             4000,
         );
         let body = json!({"messages":[{"role":"user","content":notification}]});
-        let total = crate::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
+        let total = crate::turn::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
         let details = chat_details(&body, total).unwrap();
         assert_eq!(details.user_input_tokens, 0);
         assert!(details.tool_result_tokens > 0);
@@ -287,11 +287,11 @@ mod tests {
             {"role":"user", "content":"<context>Request instructions</context>"},
             user,
         ]});
-        let total = crate::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
+        let total = crate::turn::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
         let details = chat_details(&body, total).unwrap();
         assert_eq!(
             details.user_input_tokens,
-            crate::provider_input::estimate_json(&user).unwrap() as u64
+            crate::turn::provider_input::estimate_json(&user).unwrap() as u64
         );
         assert!(details.system_prompt_tokens > details.user_input_tokens);
         assert_eq!(details.system_prompt_tokens + details.message_tokens, total);
@@ -314,7 +314,7 @@ mod tests {
             {"role":"assistant","tool_calls":[{"id":"a"},{"id":"b"}]},
             {"role":"tool","content":"done"}
         ],"tools":[{"type":"function"}]});
-        let total = crate::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
+        let total = crate::turn::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
         let details = chat_details(&body, total).unwrap();
         assert!(details.system_prompt_tokens > 0);
         assert_eq!(details.system_prompt_tokens + details.message_tokens, total);
@@ -353,7 +353,8 @@ mod tests {
                 {"role": "extension", "content": "additional message data"}
             ]}),
         ] {
-            let total = crate::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
+            let total =
+                crate::turn::provider_input::estimate_json(&body["messages"]).unwrap() as u64;
             let details = chat_details(&body, total).unwrap();
             assert_eq!(
                 details.system_prompt_tokens

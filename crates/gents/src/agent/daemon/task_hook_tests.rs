@@ -13,12 +13,12 @@ use super::{AgentDaemon, AgentDaemonInit};
 use crate::agent::runtime::StartupBarrier;
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::ResolvedAgent;
-use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
 use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };
+use crate::turn::prompt::LayeredPromptBuilder;
 use crate::Collection;
 use tracing::instrument::WithSubscriber;
 

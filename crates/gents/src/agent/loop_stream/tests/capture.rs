@@ -702,7 +702,7 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
         }
     }));
     let mut cfg = owned_config(4);
-    cfg.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+    cfg.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
         crate::BackendProviderKind::ChatGptCodex,
         crate::OpenAiWireApi::Responses,
         "gpt-5-codex",
@@ -759,7 +759,7 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
         &hook,
         &writer,
         &mut lifecycle,
-        crate::provider_input::ProviderInputProfile::ChatGptCodexResponses,
+        crate::turn::provider_input::ProviderInputProfile::ChatGptCodexResponses,
     )
     .await;
     assert_eq!(collected.error, None, "{collected:?}");
@@ -806,7 +806,7 @@ async fn other_provider_loop_has_no_codex_affinity() {
         &hook,
         &writer,
         &mut lifecycle,
-        crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        crate::turn::provider_input::ProviderInputProfile::OpenAiChatCompletions,
     )
     .await;
     assert_eq!(collected.error, None, "{collected:?}");

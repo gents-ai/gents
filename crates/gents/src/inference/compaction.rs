@@ -93,6 +93,6 @@ pub(crate) fn backend_scoped_reduction_engine(
 }
 
 #[cfg(test)]
-use crate::provider_input::budget::{
+use crate::turn::provider_input::budget::{
     rolling_summary_input_budget, summary_output_ceiling, threshold_decision, ThresholdDecision,
 };

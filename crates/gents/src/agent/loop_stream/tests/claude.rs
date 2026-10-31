@@ -359,12 +359,12 @@ async fn run_claude_fixture_turns(
     config.on_rendered_request = Some(crate::inference::rendered_request::scope::ambient_arming_sink(
         scope_kind,
     ));
-    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+    config.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
         crate::BackendProviderKind::ClaudeCliSubscription,
         crate::OpenAiWireApi::ChatCompletions,
         "claude-sonnet-5",
     ));
-    config.replay = crate::provider_input::replay::owned_replay_input(
+    config.replay = crate::turn::provider_input::replay::owned_replay_input(
         node.clone(),
         lifecycle.request().clone(),
         lifecycle
@@ -374,7 +374,7 @@ async fn run_claude_fixture_turns(
         scope_kind,
         crate::inference::llm::backend_client::claude_subscription_replay_issuer()
             .expect("Claude Messages route"),
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let request_commit_cid = lifecycle
         .request_commit_cid()
@@ -464,7 +464,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
 
             let mut config = owned_config(2);
             config.provider_input_counter =
-                Arc::new(crate::provider_input::ProviderInputCounter::new(
+                Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
                     crate::BackendProviderKind::AnthropicApiKey,
                     crate::OpenAiWireApi::ChatCompletions,
                     "claude-sonnet-5",
@@ -477,13 +477,13 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 .request_commit_cid()
                 .expect("claimed request commit CID")
                 .to_owned();
-            config.replay = crate::provider_input::replay::owned_replay_input(
+            config.replay = crate::turn::provider_input::replay::owned_replay_input(
                 node.clone(),
                 lifecycle.request().clone(),
                 request_commit_cid.clone(),
                 scope_kind,
                 issuer,
-                crate::provider_input::ProviderInputProfile::ClaudeMessages,
+                crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
             );
             let capture_factory =
                 crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone());

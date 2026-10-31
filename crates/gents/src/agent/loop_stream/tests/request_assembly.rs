@@ -810,7 +810,7 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
 #[tokio::test]
 async fn generated_layer_cases_pin_the_assembled_request_order() {
     use crate::lean_vocab_test::lean_prompt_assembly_layer_cases;
-    use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
+    use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
     let cases = lean_prompt_assembly_layer_cases();
     assert!(
@@ -1010,7 +1010,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         .collect::<Vec<_>>();
     assert_eq!(
         crate::inference::compaction::sanitize_history_for_provider(
-            crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+            crate::turn::provider_input::ProviderInputProfile::OpenAiChatCompletions,
             joined.clone(),
         ),
         joined,

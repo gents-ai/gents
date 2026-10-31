@@ -989,7 +989,7 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents-loop/src/provider_input",
     "crates/gents-loop/src/loop_stream",
     "crates/gents/src/inference/llm/rig_compat.rs",
-    "crates/gents/src/provider_input",
+    "crates/gents/src/turn/provider_input",
     "crates/gents/src/agent/loop_stream",
 ];
 
@@ -1216,7 +1216,7 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
 const STD_HASH_ALLOWLIST: &[&str] = &[
     "crates/gents-lenses/fixture_add_label/src/lib.rs",
     "crates/gents/src/tools/mcp/pool.rs",
-    "crates/gents/src/provider_input/tests.rs",
+    "crates/gents/src/turn/provider_input/tests.rs",
 ];
 
 const STD_HASH_NAMES: &[&str] = &["HashMap", "HashSet", "DefaultHasher"];
@@ -1825,7 +1825,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/plugin/store.rs", 1),
     ("crates/gents/src/tools/background/job/driver.rs", 1),
     ("crates/gents/src/tools/background/job/driver/step.rs", 1),
-    ("crates/gents/src/provider_input/replay.rs", 1),
+    ("crates/gents/src/turn/provider_input/replay.rs", 1),
     ("crates/gents/src/inference/rendered_request/mod.rs", 2),
     ("crates/gents/src/request/admission.rs", 2),
     ("crates/gents/src/tools/builtin/schema_help/mod.rs", 2),
@@ -2396,6 +2396,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("inference", "observe", 3),
     ("inference", "request", 2),
     ("inference", "tools", 1),
+    ("inference", "turn", 1),
     ("pack", "plugin", 31),
     ("pack", "tools", 3),
     ("plugin", "pack", 40),
@@ -2406,10 +2407,12 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("request", "session", 44),
     ("request", "tools", 32),
     ("request", "triggers", 32),
+    ("request", "turn", 1),
     ("session", "goal", 11),
     ("session", "observe", 1),
     ("session", "request", 53),
     ("session", "tools", 35),
+    ("session", "turn", 8),
     ("store", "documents", 46),
     ("store", "inference", 11),
     ("store", "tools", 13),
@@ -2420,6 +2423,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("tools", "plugin", 77),
     ("tools", "request", 79),
     ("tools", "session", 139),
+    ("tools", "turn", 1),
     ("triggers", "goal", 28),
     ("triggers", "plugin", 16),
     ("triggers", "request", 18),

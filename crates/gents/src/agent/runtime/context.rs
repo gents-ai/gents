@@ -8,12 +8,12 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::agent::daemon::{AgentDaemon, AgentDaemonInit};
-use crate::completion_factory::build_admitted_model;
 use crate::inference::admission::AdmissionRegistry;
-use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
 use crate::tools::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::tools::surface::{self, ToolRuntimeContext, ToolSurface};
+use crate::turn::completion_factory::build_admitted_model;
+use crate::turn::prompt::LayeredPromptBuilder;
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
@@ -228,7 +228,7 @@ impl RuntimeContext {
             agent_config.node_identity().clone(),
             self.enrollment_authority.clone(),
         );
-        let summary_compactor = crate::completion_factory::build_compaction_engine(
+        let summary_compactor = crate::turn::completion_factory::build_compaction_engine(
             self.tool_runtime.usage_cache.clone(),
             self.node.clone(),
             &agent_config,

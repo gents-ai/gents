@@ -80,14 +80,14 @@ pub(crate) fn loop_config(
     capture_scope: CaptureScopeKind,
 ) -> LoopConfig {
     let provider_input_counter = std::sync::Arc::new(
-        crate::provider_input::ProviderInputCounter::new(
+        crate::turn::provider_input::ProviderInputCounter::new(
             agent_config.backend_provider_kind,
             agent_config.openai_wire_api,
             agent_config.model_name.clone(),
         )
         .with_service_tier(agent_config.service_tier),
     );
-    let context_calibration = crate::provider_input::budget::ContextCalibration::prior_for(
+    let context_calibration = crate::turn::provider_input::budget::ContextCalibration::prior_for(
         provider_input_counter.profile(),
     );
     LoopConfig {
@@ -324,7 +324,7 @@ struct CalibrationCallRow {
 /// Inference calls scanned for the session's calibration window; most carry
 /// usable usage, so only failed or unaccounted calls are skipped.
 const CALIBRATION_CALL_SCAN: usize =
-    4 * crate::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW;
+    4 * crate::turn::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW;
 
 /// The provider-input calibration a request starts from, from this session's
 /// inference calls with this agent's model and estimator: the ratios of the
@@ -338,8 +338,8 @@ pub(crate) async fn context_calibration_for_session(
     agent_config: &ResolvedAgent,
     node_did: &str,
     session_id: &str,
-) -> crate::provider_input::budget::ContextCalibration {
-    let profile = crate::provider_input::ProviderInputProfile::resolve(
+) -> crate::turn::provider_input::budget::ContextCalibration {
+    let profile = crate::turn::provider_input::ProviderInputProfile::resolve(
         agent_config.backend_provider_kind,
         agent_config.openai_wire_api,
     );
@@ -355,13 +355,14 @@ pub(crate) async fn context_calibration_for_session(
         Ok(rows) => {
             let seed = session_calibration_seed(&rows, profile.estimator_name());
             let prior = seed.dispatched_ratio.unwrap_or_else(|| {
-                crate::provider_input::budget::ContextCalibration::prior_for(profile)
+                crate::turn::provider_input::budget::ContextCalibration::prior_for(profile)
                     .ratio_basis_points()
             });
-            let calibration = crate::provider_input::budget::ContextCalibration::with_observations(
-                prior,
-                seed.observations,
-            );
+            let calibration =
+                crate::turn::provider_input::budget::ContextCalibration::with_observations(
+                    prior,
+                    seed.observations,
+                );
             match seed.anchor {
                 Some(anchor) => calibration.anchored_at(anchor),
                 None => calibration,
@@ -373,7 +374,7 @@ pub(crate) async fn context_calibration_for_session(
                 error = format!("{error:#}"),
                 "loading the session's provider-input calibration failed; using the profile prior"
             );
-            crate::provider_input::budget::ContextCalibration::prior_for(profile)
+            crate::turn::provider_input::budget::ContextCalibration::prior_for(profile)
         }
     }
 }
@@ -444,13 +445,13 @@ struct CalibrationSeed {
     dispatched_ratio: Option<u64>,
     /// The newest informative call, when it has usable usage: an older call
     /// is not a prefix of what followed the newest one.
-    anchor: Option<crate::provider_input::budget::ContextAnchor>,
+    anchor: Option<crate::turn::provider_input::budget::ContextAnchor>,
 }
 
 /// One recorded call of this estimator: its usable usage as a ratio and
 /// anchor, and the ratio it was dispatched with.
 struct RecordedCalibration {
-    observation: Option<(u64, crate::provider_input::budget::ContextAnchor)>,
+    observation: Option<(u64, crate::turn::provider_input::budget::ContextAnchor)>,
     dispatched_ratio: Option<u64>,
 }
 
@@ -481,12 +482,12 @@ fn recorded_calibration(row: &CalibrationCallRow, estimator: &str) -> Option<Rec
         })
         .filter(|observed| *observed >= estimated as u64)
         .and_then(|observed| {
-            let ratio = crate::provider_input::budget::observed_input_ratio_basis_points(
+            let ratio = crate::turn::provider_input::budget::observed_input_ratio_basis_points(
                 observed, estimated,
             )?;
             Some((
                 ratio,
-                crate::provider_input::budget::ContextAnchor {
+                crate::turn::provider_input::budget::ContextAnchor {
                     input_tokens: observed,
                     output_tokens: counter(row.completion_tokens).unwrap_or(0),
                     estimated_input_tokens: estimated,
@@ -509,7 +510,7 @@ fn session_calibration_seed(rows: &[CalibrationCallRow], estimator: &str) -> Cal
     let mut observations = recorded
         .iter()
         .filter_map(|recorded| recorded.observation.map(|(ratio, _)| ratio))
-        .take(crate::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW)
+        .take(crate::turn::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW)
         .collect::<Vec<_>>();
     observations.reverse();
     CalibrationSeed {
@@ -746,11 +747,12 @@ pub(crate) async fn build_compaction_engine(
     )
     .await?;
     let provider_family = client.provider_family().to_owned();
-    let source_counter = std::sync::Arc::new(crate::provider_input::ProviderInputCounter::new(
-        agent_config.backend_provider_kind,
-        agent_config.openai_wire_api,
-        agent_config.model_name.clone(),
-    ));
+    let source_counter =
+        std::sync::Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
+            agent_config.backend_provider_kind,
+            agent_config.openai_wire_api,
+            agent_config.model_name.clone(),
+        ));
     let config = loop_config(&summary, String::new(), 0, CaptureScopeKind::Compaction);
     let backend_id = inference.backend.backend_id.clone();
     let engine = crate::inference::llm::backend_client::with_backend_client!(client, |client| {

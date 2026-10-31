@@ -1746,7 +1746,7 @@ fn owned_loop_entry_points_are_registered() {
 
 #[test]
 fn empty_skill_catalog_contributes_no_reminders() {
-    use gents::prompt::LayeredPromptBuilder;
+    use gents::turn::prompt::LayeredPromptBuilder;
 
     let builder =
         LayeredPromptBuilder::for_agent("literal preamble", "fence", &["bash"], false, &[]);

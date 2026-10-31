@@ -11,11 +11,11 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use super::*;
 use crate::ensure_runtime_schemas;
-use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
-use crate::provider_input::budget::can_dispatch;
-use crate::provider_input::ProviderInputProfile;
 use crate::session;
 use crate::test_support::first_content;
+use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
+use crate::turn::provider_input::budget::can_dispatch;
+use crate::turn::provider_input::ProviderInputProfile;
 
 const GROUPED_PROFILE: ProviderInputProfile = ProviderInputProfile::OpenAiChatCompletions;
 
@@ -150,7 +150,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
         replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
-            crate::provider_input::ProviderInputCounter::new(
+            crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
                 "test-model",
@@ -593,8 +593,10 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
                 "CURSOR-AMBER-17",
             ],
         );
-        let mut second_history = vec![crate::prompt::compaction_summary_message(&[first_summary])
-            .expect("first checkpoint must render into provider history")];
+        let mut second_history = vec![crate::turn::prompt::compaction_summary_message(&[
+            first_summary,
+        ])
+        .expect("first checkpoint must render into provider history")];
         second_history.extend(live_mobile_triage_history(
             "pagination-verification",
             "New evidence: the browser clamp is SCROLL-CLAMP-600 and the rendering budget is \
@@ -623,7 +625,7 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
             ],
         );
 
-        let checkpoint_message = crate::prompt::compaction_summary_message(&[second_summary])
+        let checkpoint_message = crate::turn::prompt::compaction_summary_message(&[second_summary])
             .expect("updated checkpoint must render into provider history");
         let mut recall_config = gate_test_loop_config();
         recall_config.preamble = Some(
@@ -1135,9 +1137,9 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
 
     assert!(
         ReductionAdmission::for_context(
-            crate::provider_input::budget::ContextCalibration::default()
+            crate::turn::provider_input::budget::ContextCalibration::default()
                 .context(test_message_tokens(&messages)),
-            crate::provider_input::budget::effective_input_budget(100_000, 0.75),
+            crate::turn::provider_input::budget::effective_input_budget(100_000, 0.75),
         )
         .is_none(),
         "the history-only guard must be below threshold for this regression"
@@ -1203,8 +1205,8 @@ async fn stripping_alone_can_satisfy_an_admitted_complete_input() {
     assert!(original_tokens > stripped_tokens);
     let context_window = stripped_tokens.saturating_add(100).saturating_mul(2);
     let admission = ReductionAdmission::for_context(
-        crate::provider_input::budget::ContextCalibration::default().context(original_tokens),
-        crate::provider_input::budget::effective_input_budget(context_window, 0.5),
+        crate::turn::provider_input::budget::ContextCalibration::default().context(original_tokens),
+        crate::turn::provider_input::budget::effective_input_budget(context_window, 0.5),
     )
     .expect("the unstripped complete input is over threshold");
     let compactor = ProviderReductionEngine::new(Arc::new(model), config);
@@ -1239,8 +1241,8 @@ async fn an_indivisible_prompt_still_over_threshold_after_stripping_cannot_fit()
         .unwrap();
     let context_window = input_tokens.saturating_mul(2).saturating_sub(2);
     let admission = ReductionAdmission::for_context(
-        crate::provider_input::budget::ContextCalibration::default().context(input_tokens),
-        crate::provider_input::budget::effective_input_budget(context_window, 0.5),
+        crate::turn::provider_input::budget::ContextCalibration::default().context(input_tokens),
+        crate::turn::provider_input::budget::effective_input_budget(context_window, 0.5),
     )
     .expect("the sole prompt is over the threshold budget");
     let compactor = ProviderReductionEngine::new(Arc::new(model), config);
@@ -1524,7 +1526,7 @@ fn summary_worthy_messages() -> Vec<Message> {
 #[test]
 fn protected_split_does_not_treat_retention_target_as_context_ceiling() {
     let messages = summary_worthy_messages();
-    let counter = crate::provider_input::ProviderInputCounter::new(
+    let counter = crate::turn::provider_input::ProviderInputCounter::new(
         crate::BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::ChatCompletions,
         "test-model",
@@ -1572,7 +1574,7 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
         replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
-            crate::provider_input::ProviderInputCounter::new(
+            crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
                 "test-model",
@@ -2757,7 +2759,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let config = crate::agent::loop_stream::LoopConfig {
         replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
-            crate::provider_input::ProviderInputCounter::new(
+            crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
                 "test-model",
@@ -3444,7 +3446,7 @@ fn rolling_prefix_messages() -> Vec<Message> {
 }
 
 async fn rolling_summary_requests(
-    calibration: Option<crate::provider_input::budget::ContextCalibration>,
+    calibration: Option<crate::turn::provider_input::budget::ContextCalibration>,
     source_model: Option<&str>,
 ) -> Vec<CompletionRequest> {
     let model = SentinelCheckpointModel::default();
@@ -3453,7 +3455,7 @@ async fn rolling_summary_requests(
     let mut compactor = ProviderReductionEngine::new(Arc::new(model), config);
     if let Some(source_model) = source_model {
         compactor = compactor.with_source_input_counter(Arc::new(
-            crate::provider_input::ProviderInputCounter::new(
+            crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
                 source_model,
@@ -3484,7 +3486,7 @@ async fn summary_chunks_are_sized_by_the_calibrated_estimate() {
     let ratio = 20_000;
     let counter = gate_test_loop_config().provider_input_counter;
     let calibrated = |request: &CompletionRequest| {
-        crate::provider_input::budget::calibrated_input_tokens(
+        crate::turn::provider_input::budget::calibrated_input_tokens(
             counter
                 .project_request(request)
                 .unwrap()
@@ -3502,7 +3504,7 @@ async fn summary_chunks_are_sized_by_the_calibrated_estimate() {
         "raw-estimate chunks would overflow a provider counting {ratio} basis points"
     );
 
-    let calibration = crate::provider_input::budget::ContextCalibration::with_ratio(ratio);
+    let calibration = crate::turn::provider_input::budget::ContextCalibration::with_ratio(ratio);
     let requests = rolling_summary_requests(Some(calibration), None).await;
     assert!(requests.len() > uncalibrated.len());
     for request in &requests {
@@ -3521,7 +3523,7 @@ async fn summary_chunks_are_sized_by_the_calibrated_estimate() {
     assert_eq!(
         chunked(
             other_model(Some(
-                crate::provider_input::budget::ContextCalibration::with_ratio(ratio)
+                crate::turn::provider_input::budget::ContextCalibration::with_ratio(ratio)
             ))
             .await
         ),
@@ -3699,11 +3701,12 @@ async fn summary_overflow_ends_once_no_smaller_chunk_exists() {
 
 fn claude_summary_config() -> crate::agent::loop_stream::LoopConfig {
     let mut config = scheduled_origin_config();
-    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
-        crate::BackendProviderKind::AnthropicApiKey,
-        crate::OpenAiWireApi::ChatCompletions,
-        "claude-opus-5-5",
-    ));
+    config.provider_input_counter =
+        Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
+            crate::BackendProviderKind::AnthropicApiKey,
+            crate::OpenAiWireApi::ChatCompletions,
+            "claude-opus-5-5",
+        ));
     config
 }
 
@@ -3784,7 +3787,7 @@ fn assert_fallback_keeps_the_system_prefix(
 fn loop_retention_target(ratio: u64, messages: &[Message], provider_budget: usize) -> usize {
     let config = gate_test_loop_config();
     let counter = config.provider_input_counter.clone();
-    let calibration = crate::provider_input::budget::ContextCalibration::with_ratio(ratio);
+    let calibration = crate::turn::provider_input::budget::ContextCalibration::with_ratio(ratio);
     let fixed_raw = 3_000;
     let total_raw = counter.estimate_message_request(messages).unwrap() + fixed_raw;
     let admission =
@@ -3805,10 +3808,10 @@ fn retention_target_is_in_estimator_units_at_the_session_ratio() {
     let (fixed_raw, summary_reserve) = (3_000, 32_000);
     for ratio in [10_000, 18_000] {
         let estimator_budget =
-            crate::provider_input::budget::estimator_input_budget(provider_budget, ratio);
+            crate::turn::provider_input::budget::estimator_input_budget(provider_budget, ratio);
         assert_eq!(
             loop_retention_target(ratio, &messages, provider_budget),
-            crate::provider_input::budget::recovery_band_budget(estimator_budget)
+            crate::turn::provider_input::budget::recovery_band_budget(estimator_budget)
                 - fixed_raw
                 - summary_reserve,
             "ratio {ratio}: the band of the estimator budget less fixed layers and reserve"
@@ -3847,7 +3850,7 @@ fn summary_reserve_is_the_summary_calls_output_cap() {
             )
             .unwrap()
     };
-    let band = crate::provider_input::budget::recovery_band_budget(750_000);
+    let band = crate::turn::provider_input::budget::recovery_band_budget(750_000);
     assert_eq!(target(32_000, 1_000_000), band - 32_000);
     assert_eq!(
         target(100_000, 1_000_000),
@@ -3912,7 +3915,7 @@ async fn reduced_request_lands_within_the_recovery_band() {
             .await
             .unwrap();
         required_reduction(&result);
-        let band = crate::provider_input::budget::recovery_band_budget(budget);
+        let band = crate::turn::provider_input::budget::recovery_band_budget(budget);
         assert!(
             fixed_raw + result.compacted_token_estimate <= band,
             "{name}: reduced request {} + fixed {fixed_raw} exceeds the band {band}",

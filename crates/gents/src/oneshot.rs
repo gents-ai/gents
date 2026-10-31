@@ -9,9 +9,7 @@ use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::output_obligation::OutputObligationCheck;
 
 use crate::agent::stream_processor::{StreamAction, StreamProcessor};
-use crate::completion_factory::loop_config;
 use crate::inference::resolved::ResolvedAgent;
-use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::request::lifecycle::TerminalizeResult;
 use crate::request::lifecycle::{
     ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage,
@@ -19,6 +17,8 @@ use crate::request::lifecycle::{
 use crate::request::streaming::DefraStreamWriter;
 use crate::tools::call::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::tools::surface::{self, ToolRuntimeContext};
+use crate::turn::completion_factory::loop_config;
+use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,7 +232,7 @@ where
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
-    config.replay = crate::provider_input::replay::owned_replay_input(
+    config.replay = crate::turn::provider_input::replay::owned_replay_input(
         node.clone(),
         request.clone(),
         request_commit_cid.clone(),

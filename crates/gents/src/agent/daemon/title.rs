@@ -147,7 +147,7 @@ fn title_max_tokens(
     additional_params: Option<&serde_json::Value>,
     configured: Option<u64>,
 ) -> Option<u64> {
-    if crate::completion_factory::params_disable_reasoning(additional_params) {
+    if crate::turn::completion_factory::params_disable_reasoning(additional_params) {
         Some(TITLE_VISIBLE_MAX_TOKENS)
     } else {
         configured
@@ -392,7 +392,7 @@ where
             .set_auxiliary_output_sink(writer.auxiliary_output_sink(
                 request.clone(),
                 generation,
-                crate::provider_input::ProviderInputProfile::resolve(
+                crate::turn::provider_input::ProviderInputProfile::resolve(
                     self.agent_config.backend_provider_kind,
                     self.agent_config.openai_wire_api,
                 ),
@@ -435,7 +435,7 @@ where
                         &parent.input.captured_context,
                     );
                     let prompt = title_generation_prompt(&source, &recent);
-                    let mut config = crate::completion_factory::loop_config(
+                    let mut config = crate::turn::completion_factory::loop_config(
                         &self.agent_config,
                         title_generation_preamble(),
                         0,
@@ -448,7 +448,7 @@ where
                     config.retry_policy =
                         crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
                     config.aggregate_token_budget =
-                        crate::completion_factory::aggregate_token_budget_for_request(
+                        crate::turn::completion_factory::aggregate_token_budget_for_request(
                             self.node.as_ref(),
                             &request,
                         )

@@ -5,8 +5,8 @@ use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
 use crate::inference::admission::{self, AdmissionCallContext, CallKind};
 use crate::inference::compaction;
 use crate::observe::runtime_trace::RequestTraceAttrs;
-use crate::prompt::PromptBuilder;
 use crate::session;
+use crate::turn::prompt::PromptBuilder;
 use gents_loop::loop_stream::{provider_messages, provider_view_tagged, TaggedMessage};
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
@@ -80,7 +80,7 @@ where
         resume_from_history: bool,
         wake_notifications: &[TaggedMessage],
     ) -> Result<usize> {
-        let config = crate::completion_factory::loop_config_for_request(
+        let config = crate::turn::completion_factory::loop_config_for_request(
             &self.agent_config,
             preamble,
             request,
@@ -158,18 +158,19 @@ where
             let resume_from_history =
                 session::retry_has_published_input(&self.node, &request).await?;
             let aggregate_token_budget =
-                crate::completion_factory::aggregate_token_budget_for_request(
+                crate::turn::completion_factory::aggregate_token_budget_for_request(
                     self.node.as_ref(),
                     &request,
                 )
                 .await?;
-            let context_calibration = crate::completion_factory::context_calibration_for_session(
-                self.node.as_ref(),
-                &self.agent_config,
-                &request.node_did,
-                &request.session_id,
-            )
-            .await;
+            let context_calibration =
+                crate::turn::completion_factory::context_calibration_for_session(
+                    self.node.as_ref(),
+                    &self.agent_config,
+                    &request.node_did,
+                    &request.session_id,
+                )
+                .await;
             Ok::<_, anyhow::Error>((
                 resume_from_history,
                 aggregate_token_budget,
@@ -224,7 +225,7 @@ where
             scope.set_auxiliary_output_sink(stream_writer.auxiliary_output_sink(
                 request.clone(),
                 lifecycle.execution_generation()?.to_owned(),
-                crate::provider_input::ProviderInputProfile::resolve(
+                crate::turn::provider_input::ProviderInputProfile::resolve(
                     self.agent_config.backend_provider_kind,
                     self.agent_config.openai_wire_api,
                 ),
@@ -344,7 +345,7 @@ where
                     let total_compacted_messages = compaction_state.total_messages_compacted;
                     let compaction_generation = compaction_state.generation.clone();
                     let compaction_generation_is_latest = compaction_state.is_latest_generation;
-                    let provider_profile = crate::provider_input::ProviderInputProfile::resolve(
+                    let provider_profile = crate::turn::provider_input::ProviderInputProfile::resolve(
                         self.agent_config.backend_provider_kind,
                         self.agent_config.openai_wire_api,
                     );
@@ -382,12 +383,12 @@ where
                             "files referenced in stripped history"
                         );
                     }
-                    let replay = crate::provider_input::replay::owned_replay_input(
+                    let replay = crate::turn::provider_input::replay::owned_replay_input(
                         self.node.clone(), request.clone(), request_commit_cid.clone(),
                         gents_protocol::rendered_request::CaptureScopeKind::Inference,
                         self.replay_issuer.clone(), provider_profile,
                     );
-                    let tagged = crate::provider_input::replay::tag_canonical_history(
+                    let tagged = crate::turn::provider_input::replay::tag_canonical_history(
                         &sequenced_history,
                     );
                     let provider_history = provider_view_tagged(tagged)?;
@@ -426,11 +427,11 @@ where
                             &wake_notifications,
                         )
                         .await?;
-                    let provider_budget = crate::provider_input::budget::compaction_input_budget(
+                    let provider_budget = crate::turn::provider_input::budget::compaction_input_budget(
                         self.agent_config.context_window,
                         self.agent_config.compaction_threshold(),
-                        crate::provider_input::budget::configured_output_ceiling(
-                            crate::completion_factory::effective_max_tokens(
+                        crate::turn::provider_input::budget::configured_output_ceiling(
+                            crate::turn::completion_factory::effective_max_tokens(
                                 self.agent_config.max_output_tokens,
                                 self.agent_config.sampling.max_tokens,
                             ),
@@ -494,13 +495,13 @@ where
                             anyhow::ensure!(projected_native == exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>(),
                                 "session reduction changed its exact provider source");
                             let (prefix, suffix) = projected.split_at(exact.compacted_prefix.len());
-                            let associations = crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                            let associations = crate::turn::provider_context_reduction::ReplayAssociations::from_tagged_split(
                                 replay.required.clone(), prefix, suffix,
                             );
                             let native = crate::agent::loop_stream::association_reduction(
                                 provider_profile, &projected, exact,
                             )?;
-                            crate::provider_context_reduction::validate_replay_associations(
+                            crate::turn::provider_context_reduction::validate_replay_associations(
                                 &associations, native.exact().compacted_prefix, native.exact().retained_suffix, &request.doc_id,
                             )?;
                             suffix.to_vec()

@@ -1200,7 +1200,7 @@ fn unsupported_replay_request() -> CompletionRequest {
 
 #[test]
 fn unsupported_replay_preflight_is_a_permanent_request_error() {
-    let counter = crate::provider_input::ProviderInputCounter::new(
+    let counter = crate::turn::provider_input::ProviderInputCounter::new(
         crate::BackendProviderKind::ClaudeCliSubscription,
         crate::OpenAiWireApi::ChatCompletions,
         "claude-sonnet-5",

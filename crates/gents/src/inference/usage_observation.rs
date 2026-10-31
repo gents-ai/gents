@@ -55,7 +55,7 @@ impl UsageAccount {
             node_did: agent.node_did().to_string(),
             provider: agent.backend_provider_kind.as_str().to_string(),
             backend_id: agent.backend_id.clone()?,
-            connection: crate::completion_factory::agent_connection_fingerprint(agent),
+            connection: crate::turn::completion_factory::agent_connection_fingerprint(agent),
         })
     }
 

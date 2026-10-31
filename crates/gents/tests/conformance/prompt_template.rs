@@ -1,6 +1,6 @@
 use gents::documents::template::{render_template, task_node_ctx, TemplateError, TemplateScope};
 use gents::documents::Task;
-use gents::prompt::LayeredPromptBuilder;
+use gents::turn::prompt::LayeredPromptBuilder;
 
 fn task_with_template(template: &str) -> Task {
     serde_json::from_value(serde_json::json!({

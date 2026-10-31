@@ -484,11 +484,11 @@ fn claude_images_are_estimated_at_their_token_ceiling() {
     );
 
     let window = with_images;
-    let output = crate::provider_input::budget::configured_output_ceiling(Some(1_024));
-    assert!(crate::provider_input::budget::can_dispatch(
+    let output = crate::turn::provider_input::budget::configured_output_ceiling(Some(1_024));
+    assert!(crate::turn::provider_input::budget::can_dispatch(
         without, window, output
     ));
-    assert!(!crate::provider_input::budget::can_dispatch(
+    assert!(!crate::turn::provider_input::budget::can_dispatch(
         with_images,
         window,
         output

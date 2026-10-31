@@ -452,7 +452,7 @@ pub(crate) async fn persist(
 }
 
 #[cfg(test)]
-#[path = "../tests/conformance/durable_reduction.rs"]
+#[path = "../../tests/conformance/durable_reduction.rs"]
 mod durable_reduction_conformance;
 
 pub(crate) async fn persist_exact(
@@ -995,8 +995,8 @@ fn checkpoint_from_suffix(suffix: &[Message], summary: &str) -> Vec<Message> {
     if !summary.is_empty() {
         checkpoint.insert(
             0,
-            crate::prompt::LayeredPromptBuilder::system_reminder(
-                &crate::prompt::continuation_checkpoint_reminder(summary),
+            crate::turn::prompt::LayeredPromptBuilder::system_reminder(
+                &crate::turn::prompt::continuation_checkpoint_reminder(summary),
             ),
         );
     }
@@ -1620,7 +1620,7 @@ mod tests {
     fn recovery_treats_the_stored_checkpoint_text_as_authoritative() {
         let suffix = vec![Message::user("current")];
         let checkpoint = [
-            vec![crate::prompt::LayeredPromptBuilder::system_reminder(
+            vec![crate::turn::prompt::LayeredPromptBuilder::system_reminder(
                 "wording from an older runtime",
             )],
             suffix.clone(),

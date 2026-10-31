@@ -2335,19 +2335,19 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "prompt_assembly_service_tier_cases"
       "PromptAssemblyServiceTierCases"
-      "completion_factory::tests::generated_service_tier_cases_drive_loop_config"
+      "turn::completion_factory::tests::generated_service_tier_cases_drive_loop_config"
       "Generated decisions cover every provider family with unset, Standard and Fast selections. Native validation rejects unsupported carriers; supported cases compare the actual provider request body. Provider account/model eligibility and delivered speed are external.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_responses_storage_cases"
       "PromptAssemblyResponsesStorageCases"
-      "completion_factory::tests::generated_responses_storage_cases_drive_loop_config"
+      "turn::completion_factory::tests::generated_responses_storage_cases_drive_loop_config"
       "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, so wire params and accounting are checked together. Premise: reasoning unset and a non-empty preamble. The OAuth transports' own HTTP store patch is fenced by its unit tests, not by this case family.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_responses_effort_cases"
       "PromptAssemblyResponsesEffortCases"
-      "completion_factory::tests::generated_responses_effort_cases_drive_loop_config"
+      "turn::completion_factory::tests::generated_responses_effort_cases_drive_loop_config"
       "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, comparing the projected reasoning.effort. Premise: OpenAiCompatible on the Responses wire; kind and wire are not modelled, so these cases cannot catch a wrong kind/wire guard (pinned by inference_setup::tests::sent_reasoning_effort_leaves_other_kinds_and_wires_alone).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (followUpCoverage
@@ -2481,7 +2481,7 @@ def caseCoverage : List CoverageEntry :=
       "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage "prompt_assembly_cases" "ProviderToolIdentityCases"
-      "provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields")
+      "turn::provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
@@ -2515,7 +2515,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "durable_reduction_cases"
       "DurableReductionCases"
-      "provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations"
+      "turn::provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations"
       "Checks durable create/load/conflict and capture citations. The exported send_permitted fence is not exercised: validate actual provider dispatch against durable reduction facts through the owned completion loop.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2531,7 +2531,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "budget_rehydration_cases"
       "BudgetRehydrationCases"
-      "completion_factory::tests::rehydrates_aggregate_budget_from_durable_inference_calls"
+      "turn::completion_factory::tests::rehydrates_aggregate_budget_from_durable_inference_calls"
       "Drives absent, zero and positive pinned limits with inference/compaction rows through the real physical-request query and ledger factory. Full process restart and InferenceCall write ownership remain separate boundaries.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2693,7 +2693,7 @@ def caseCoverage : List CoverageEntry :=
       "triggers" [Surface.runtimeInternal]
 
   , tagged (consumerCoverage "prompt_assembly_cases" "DiscoveryGuidanceCases"
-      "prompt::tests::mcp_discovery_guidance_matches_presented_operations_model")
+      "turn::prompt::tests::mcp_discovery_guidance_matches_presented_operations_model")
       "prompt-assembly" [Surface.agentFacing]
   ]
 
