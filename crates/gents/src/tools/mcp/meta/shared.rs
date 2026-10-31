@@ -4,9 +4,9 @@ use anyhow::anyhow;
 use defra_node::EmbeddedNode;
 use serde::Serialize;
 
-use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
-use crate::mcp_pool::McpPool;
 use crate::tools::call::lifecycle::FailureClass;
+use crate::tools::mcp::health::{HealthStatus, ServiceHealth, ServiceHealthMap};
+use crate::tools::mcp::pool::McpPool;
 
 #[derive(Clone)]
 pub struct MetaToolContext {
@@ -314,7 +314,9 @@ impl StructuredToolError {
     }
 }
 
-pub(super) use crate::registry::{resolve_mcp_service as resolve_service, ResolvedMcpService};
+pub(super) use crate::tools::mcp::registry::{
+    resolve_mcp_service as resolve_service, ResolvedMcpService,
+};
 
 impl ResolvedMcpService {
     pub(super) fn outbound_node_did<'a>(&self, ctx: &'a MetaToolContext) -> Option<&'a str> {
@@ -326,7 +328,7 @@ pub(super) async fn lookup_service(
     ctx: &MetaToolContext,
     service_id: &str,
 ) -> anyhow::Result<ResolvedMcpService> {
-    let entry = crate::registry::configured_mcp_services(&ctx.node, &ctx.node_did)
+    let entry = crate::tools::mcp::registry::configured_mcp_services(&ctx.node, &ctx.node_did)
         .await?
         .into_iter()
         .find(|service| service.service_id == service_id && service.enabled)

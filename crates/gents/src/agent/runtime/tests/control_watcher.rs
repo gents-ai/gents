@@ -106,8 +106,8 @@ fn test_tool_runtime(
 ) -> crate::tools::surface::ToolRuntimeContext {
     crate::tools::surface::ToolRuntimeContext::new_with_node_did(
         node.clone(),
-        crate::mcp_pool::McpPool::default(),
-        crate::health_checker::ServiceHealthMap::default(),
+        crate::tools::mcp::pool::McpPool::default(),
+        crate::tools::mcp::health::ServiceHealthMap::default(),
         "localhost",
         None,
         node_did,

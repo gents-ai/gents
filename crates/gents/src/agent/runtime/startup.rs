@@ -10,10 +10,10 @@ use tokio_util::task::AbortOnDropHandle;
 use super::context::{RuntimeContext, StartupBarrier};
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{Gents, ProcessLifecycleState};
-use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::inference::admission::AdmissionRegistry;
 use crate::inference::backends::registry;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
 use crate::tools::surface::ToolRuntimeContext;
 
 mod lifecycle_coordinator;

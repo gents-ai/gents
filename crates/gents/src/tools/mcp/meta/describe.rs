@@ -739,8 +739,8 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::health_checker::ServiceHealthMap;
-    use crate::mcp_pool::McpPool;
+    use crate::tools::mcp::health::ServiceHealthMap;
+    use crate::tools::mcp::pool::McpPool;
 
     #[tokio::test]
     async fn disallowed_service_returns_before_registry_lookup() {

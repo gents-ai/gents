@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::mcp_pool::McpPool;
+use gents::tools::mcp::pool::McpPool;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;

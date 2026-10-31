@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context as _};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::health_checker::HealthStatus;
+use crate::tools::mcp::health::HealthStatus;
 use crate::truncation::{truncate_text, TruncationLimits, TruncationMode};
 
 use super::shared::{
@@ -377,9 +377,9 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
     use crate::lean_vocab_test::{lean_tool_preflight_cases, LeanToolPreflightCase};
-    use crate::mcp_pool::McpPool;
+    use crate::tools::mcp::health::{HealthStatus, ServiceHealth, ServiceHealthMap};
+    use crate::tools::mcp::pool::McpPool;
 
     fn search_schema() -> Map<String, Value> {
         json!({

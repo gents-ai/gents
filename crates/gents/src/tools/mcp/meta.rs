@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
-use crate::health_checker::ServiceHealthMap;
-use crate::mcp_pool::McpPool;
+use crate::tools::mcp::health::ServiceHealthMap;
+use crate::tools::mcp::pool::McpPool;
 
 mod call;
 mod describe;
