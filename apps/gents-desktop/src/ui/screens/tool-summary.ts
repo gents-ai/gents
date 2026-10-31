@@ -68,9 +68,14 @@ const mailboxFiling = (
   input: string | null,
 ): { kind: string | null; title: string | null } => {
   try {
-    const args = JSON.parse(input ?? "") as { kind?: unknown; title?: unknown };
+    const args = JSON.parse(input ?? "") as {
+      kind?: unknown;
+      title?: unknown;
+      question?: unknown;
+    };
     return {
-      kind: typeof args.kind === "string" ? args.kind : null,
+      /* passing a question files an ask, whatever kind is named */
+      kind: args.question ? "ask" : typeof args.kind === "string" ? args.kind : null,
       title: typeof args.title === "string" ? args.title : null,
     };
   } catch {

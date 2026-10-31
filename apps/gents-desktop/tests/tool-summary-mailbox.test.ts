@@ -23,6 +23,12 @@ describe("the mailbox tool's row", () => {
     });
   });
 
+  it("says the agent asked a question when it passed one without naming the kind", () => {
+    expect(
+      toolSummary(filed({ title: "Button colour", question: { prompt: "Which?" } })),
+    ).toMatchObject({ primary: "Asked you a question" });
+  });
+
   it("says something else was sent to the mailbox", () => {
     expect(
       toolSummary(filed({ kind: "finished", title: "Release done" })),
