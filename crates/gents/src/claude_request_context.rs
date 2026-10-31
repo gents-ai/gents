@@ -33,6 +33,10 @@ pub(crate) struct SessionOrigin {
     pub(crate) main_session_id: String,
     /// The session that opened this one, when that session itself runs as a subagent.
     pub(crate) parent_subagent_session_id: Option<String>,
+    /// The main session's request whose turn opened the chain. Claude Code's subagent prompts
+    /// carry no prompt id of their own and send their parent's (`parentPromptId`), which a
+    /// nested subagent inherits, so every subagent of the chain sends this one.
+    pub(crate) main_prompt_doc_id: Option<String>,
 }
 
 fn cause_of(cause: SessionCreationCause) -> Cause {
@@ -66,10 +70,12 @@ where
             root_client: true,
             main_session_id: scope.session_id.clone(),
             parent_subagent_session_id: None,
+            main_prompt_doc_id: None,
         });
     };
     let cause = cause_of(first.cause);
     let mut parent_subagent_session_id = None;
+    let mut main_prompt_doc_id = None;
     let (mut session_id, mut current) = (scope.session_id.clone(), first);
     for hop in 0..MAX_CHAIN_HOPS {
         let link = match (cause_of(current.cause).subagent(), current.starter) {
@@ -80,15 +86,18 @@ where
                     root_client: false,
                     main_session_id: session_id,
                     parent_subagent_session_id,
+                    main_prompt_doc_id,
                 });
             }
         };
+        main_prompt_doc_id = Some(link.cause_request_doc_id.clone());
         let Some(next) = creation(link.scope.clone()).await? else {
             return Ok(SessionOrigin {
                 cause,
                 root_client: true,
                 main_session_id: link.scope.session_id,
                 parent_subagent_session_id,
+                main_prompt_doc_id,
             });
         };
         if hop == 0 && cause_of(next.cause).subagent() {
@@ -107,6 +116,7 @@ where
         root_client: false,
         main_session_id: session_id,
         parent_subagent_session_id,
+        main_prompt_doc_id,
     })
 }
 
@@ -147,7 +157,12 @@ pub(crate) async fn for_request(
     Ok(Some(ClaudeRequestContext {
         origin,
         session_key: session.main_session_id.clone(),
-        prompt_key: request.doc_id.clone(),
+        prompt_key: session
+            .main_prompt_doc_id
+            .as_ref()
+            .filter(|_| origin.subagent())
+            .unwrap_or(&request.doc_id)
+            .clone(),
         parent_session_id: None,
         agent: origin.subagent().then(|| ClaudeAgentIdentity {
             agent_id: metadata::agent_id(request.session_id.as_bytes()),
@@ -171,6 +186,7 @@ pub(crate) fn for_one_shot(agent: &ResolvedAgent) -> Option<ClaudeRequestContext
                     root_client: true,
                     main_session_id: run.clone(),
                     parent_subagent_session_id: None,
+                    main_prompt_doc_id: None,
                 },
                 false,
                 Kind::OneShot,
@@ -255,12 +271,14 @@ mod tests {
         root_client: bool,
         main: &str,
         parent: Option<&str>,
+        prompt: Option<&str>,
     ) -> SessionOrigin {
         SessionOrigin {
             cause,
             root_client,
             main_session_id: main.into(),
             parent_subagent_session_id: parent.map(Into::into),
+            main_prompt_doc_id: prompt.map(Into::into),
         }
     }
 
@@ -276,13 +294,46 @@ mod tests {
             ("orphan", AgentNew, None),
         ];
         for (session, want) in [
-            ("client", expected(Cause::Client, true, "client", None)),
-            ("a", expected(Cause::AgentNew, true, "client", None)),
-            ("b", expected(Cause::AgentNew, true, "client", Some("a"))),
-            ("job", expected(Cause::PluginJob, true, "client", Some("b"))),
-            ("cron", expected(Cause::TaskTrigger, false, "cron", None)),
-            ("cron-agent", expected(Cause::AgentNew, false, "cron", None)),
-            ("orphan", expected(Cause::AgentNew, false, "orphan", None)),
+            (
+                "client",
+                expected(Cause::Client, true, "client", None, None),
+            ),
+            (
+                "a",
+                expected(Cause::AgentNew, true, "client", None, Some("bae-client")),
+            ),
+            (
+                "b",
+                expected(
+                    Cause::AgentNew,
+                    true,
+                    "client",
+                    Some("a"),
+                    Some("bae-client"),
+                ),
+            ),
+            (
+                "job",
+                expected(
+                    Cause::PluginJob,
+                    true,
+                    "client",
+                    Some("b"),
+                    Some("bae-client"),
+                ),
+            ),
+            (
+                "cron",
+                expected(Cause::TaskTrigger, false, "cron", None, None),
+            ),
+            (
+                "cron-agent",
+                expected(Cause::AgentNew, false, "cron", None, Some("bae-cron")),
+            ),
+            (
+                "orphan",
+                expected(Cause::AgentNew, false, "orphan", None, None),
+            ),
         ] {
             assert_eq!(origin(&rows, session).await, want, "{session}");
         }
@@ -306,12 +357,24 @@ mod tests {
         let deepest = format!("s{MAX_CHAIN_HOPS}");
         assert_eq!(
             origin(&rows, "s0").await,
-            expected(Cause::AgentNew, false, &deepest, Some("s1"))
+            expected(
+                Cause::AgentNew,
+                false,
+                &deepest,
+                Some("s1"),
+                Some(&format!("bae-{deepest}"))
+            )
         );
         let within = format!("s{}", MAX_CHAIN_HOPS - 1);
         assert_eq!(
             origin(&rows[..MAX_CHAIN_HOPS - 1], "s0").await,
-            expected(Cause::AgentNew, true, &within, Some("s1"))
+            expected(
+                Cause::AgentNew,
+                true,
+                &within,
+                Some("s1"),
+                Some(&format!("bae-{within}"))
+            )
         );
     }
 }
