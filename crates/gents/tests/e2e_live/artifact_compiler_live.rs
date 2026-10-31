@@ -6,7 +6,7 @@ use crate::support::{
 };
 use gents::documents::{BashTools, FileTools, HostTools, Tools};
 use gents::{
-    graphql::escape_graphql_string, workspace::*, BashMode, CommandExecutionMode,
+    store::graphql::escape_graphql_string, tools::workspace::*, BashMode, CommandExecutionMode,
     CommandNetworkMode, DocumentRuntimeOptions, FileToolMode, Gents, NodeIdentity, ToolCeiling,
 };
 use serde_json::{json, Value};
