@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -7,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { createContextDetailsCache } from "../src/hooks/sessionContextDetails";
 import { SessionContext } from "../src/ui/screens/SessionContextMeter";
@@ -744,5 +745,81 @@ describe("session context meter (#1618)", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
     await cache({ ...request, nodeDid: "other-node" });
     expect(fetch).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("context detail hover lifetime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const matchMedia = window.matchMedia.bind(window);
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === "(hover: hover)",
+    }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["close", "compaction"] as const)(
+    "does not reopen after %s while a hover preview is pending",
+    (action) => {
+      const onOpenCompaction = vi.fn();
+      render(
+        <SessionContext
+          context={context({
+            compactions: [
+              {
+                compactionKey: "earlier",
+                sequence: 1,
+                messageSequence: 41,
+                messagesCompacted: 12,
+                originalTokens: 90_000,
+                compactedTokens: 3_000,
+                createdAt: null,
+              },
+            ],
+          })}
+          onOpenCompaction={onOpenCompaction}
+        />,
+      );
+      const meter = screen.getByTestId("context-meter");
+      fireEvent.click(meter);
+      fireEvent.mouseEnter(screen.getByTestId("context-details"));
+      fireEvent.click(
+        action === "close"
+          ? screen.getByRole("button", { name: "Close context details" })
+          : screen.getByRole("button", { name: /90k → 3k/ }),
+      );
+      act(() => vi.advanceTimersByTime(200));
+      expect(meter).toHaveAttribute("aria-expanded", "false");
+      expect(onOpenCompaction).toHaveBeenCalledTimes(action === "compaction" ? 1 : 0);
+    },
+  );
+
+  it("releases a pending hover preview when its meter unmounts", () => {
+    const view = render(<SessionContext context={context()} />);
+    fireEvent.mouseMove(screen.getByTestId("context-meter"));
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("previews on hover, stays open across the gap, and closes on leaving", () => {
+    render(<SessionContext context={context()} />);
+    const meter = screen.getByTestId("context-meter");
+    fireEvent.mouseMove(meter);
+    act(() => vi.advanceTimersByTime(150));
+    expect(meter).toHaveAttribute("aria-expanded", "true");
+    fireEvent.mouseLeave(meter);
+    fireEvent.mouseEnter(screen.getByTestId("context-details"));
+    act(() => vi.advanceTimersByTime(200));
+    expect(meter).toHaveAttribute("aria-expanded", "true");
+    fireEvent.mouseLeave(screen.getByTestId("context-details"));
+    act(() => vi.advanceTimersByTime(200));
+    expect(meter).toHaveAttribute("aria-expanded", "false");
   });
 });

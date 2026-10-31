@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type {
   DesktopSessionSnapshot,
@@ -331,7 +331,13 @@ export function SessionContext({
     compaction: DesktopSessionSnapshot["context"]["compactions"][number],
   ) => void;
 }) {
-  const popover = useExclusivePopover();
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+  }, []);
+  const popover = useExclusivePopover(clearHoverTimer);
+  useEffect(() => clearHoverTimer, [clearHoverTimer]);
   const lastRequest = context.lastRequest;
   const callKey = lastRequest
     ? JSON.stringify([
@@ -392,21 +398,29 @@ export function SessionContext({
     sessionCompactionCount == null
       ? "Session compactions unavailable"
       : `${sessionCompactionCount} session ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`;
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* A press pins the details open; only hover previews close on pointer exit */
   const pinned = useRef(false);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
     if (!canHover()) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => popover.onOpenChange(true), 150);
+    clearHoverTimer();
+    if (popover.open) return;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      popover.onOpenChange(true);
+    }, 150);
   };
   const hoverClose = () => {
-    if (!canHover() || pinned.current) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => onOpenChange(false), 200);
+    if (!canHover()) return;
+    clearHoverTimer();
+    if (pinned.current) return;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      onOpenChange(false);
+    }, 200);
   };
   const onOpenChange = (next: boolean) => {
+    clearHoverTimer();
     if (!next) pinned.current = false;
     popover.onOpenChange(next);
   };
@@ -445,7 +459,7 @@ export function SessionContext({
           )
         }
         onClick={() => {
-          if (hoverTimer.current) clearTimeout(hoverTimer.current);
+          clearHoverTimer();
           pinned.current = true;
         }}
         /* a move, not an enter: the meter can render under a resting pointer */
