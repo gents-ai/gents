@@ -170,11 +170,7 @@ for (const rest of ["remembered", "widest"] as const) {
 
 test("the dock's + opens a panel that isn't open yet, and stays in view when tabs overflow", async ({
   page,
-}, testInfo) => {
-  test.skip(
-    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
-    "one layout per engine",
-  );
+}) => {
   await page.setViewportSize({ width: 1500, height: 900 });
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();
@@ -210,4 +206,70 @@ test("the dock's + opens a panel that isn't open yet, and stays in view when tab
   await add.click();
   await page.getByRole("menuitem", { name: "Changes" }).click();
   await expect(add).toHaveCount(0);
+});
+
+test("renaming keeps field focus, then the menu resumes native focus return", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  const more = page.getByRole("button", { name: "More", exact: true }).first();
+  await more.click();
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+  const name = page.getByRole("textbox", { name: /^Rename / }).first();
+  await expect(name).toBeFocused();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(name).toBeFocused();
+  await page.keyboard.press("Escape");
+  await more.click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(more).toBeFocused();
+
+  // A close animation must not steal focus deliberately moved to the composer.
+  await page.addStyleTag({
+    content:
+      '[data-slot="dropdown-menu-content"][data-closed] { animation-duration: 300ms !important; }',
+  });
+  await more.click();
+  await expect(page.getByRole("menu")).toBeFocused();
+  await page.keyboard.press("Escape");
+  const composer = page.getByRole("textbox", { name: "Message" });
+  await composer.focus();
+  await expect(page.locator('[data-slot="dropdown-menu-content"]')).toHaveCount(0);
+  await expect(composer).toBeFocused();
+});
+
+test("the add-panel trigger stays fixed while its dock expands during a press", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
+
+  // Hold the outer edge fixed while the divider advances, as during dock opening.
+  const layout = await page.addStyleTag({
+    content: ".app-titlebar { grid-template-columns: 56px 1044px 400px !important; }",
+  });
+  const add = page.getByRole("button", { name: "Open a panel" });
+  const before = (await add.boundingBox())!;
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  await layout.evaluate((el) => {
+    el.textContent =
+      ".app-titlebar { grid-template-columns: 56px 744px 700px !important; }";
+  });
+  const after = (await add.boundingBox())!;
+  expect(Math.abs(after.x - before.x)).toBeLessThanOrEqual(1);
+  await page.mouse.up();
+  await page.getByRole("menuitem", { name: "Background", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "Background", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
 });
