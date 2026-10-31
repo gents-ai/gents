@@ -247,7 +247,7 @@ impl ConfigCommandTool {
                                 .get("node_did")
                                 .and_then(Value::as_str)
                                 .context("missing owner")?;
-                            anyhow::ensure!(document_agent_in_txn(txn, target, owner, &id, true).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current agent");
+                            anyhow::ensure!(document_agent_in_txn(txn, target, owner, &id, true, None).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current agent");
                         }
                     }
                     validation.await
@@ -371,13 +371,22 @@ impl ConfigCommandTool {
         acknowledged: bool,
     ) -> Result<Option<String>> {
         let owner = &self.node_did;
+        let preferred_agent = self.core.agent_id();
         crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.document_agent",
             |txn| {
                 Box::pin(async move {
-                    document_agent_in_txn(txn, target, owner, id, acknowledged).await
+                    document_agent_in_txn(
+                        txn,
+                        target,
+                        owner,
+                        id,
+                        acknowledged,
+                        Some(&preferred_agent),
+                    )
+                    .await
                 })
             },
         )
@@ -464,10 +473,18 @@ async fn document_agent_in_txn(
     owner: &str,
     id: &str,
     acknowledged: bool,
+    preferred_agent: Option<&str>,
 ) -> Result<Option<String>> {
     let agents = ops::shared_referrers(txn, target, owner, id).await?;
     if agents.len() > 1 && !acknowledged {
         return Err(ops::shared_refusal(&agents));
     }
-    Ok(agents.into_iter().next())
+    Ok(preferred_agent
+        .and_then(|preferred| {
+            agents
+                .iter()
+                .find(|agent| agent.as_str() == preferred)
+                .cloned()
+        })
+        .or_else(|| agents.into_iter().next()))
 }

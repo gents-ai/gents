@@ -1037,7 +1037,7 @@ async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
 #[tokio::test]
 async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
     let (node, owner, tools) = setup("shared-context-ack", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
+    let worker = "aaa-worker".to_string();
     crate::test_support::install_test_agent(&node, &owner, &worker).await;
     let context_id = format!("{worker}:context");
     // Two agents select one Context: the invoking agent and the worker.
@@ -1068,6 +1068,10 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
     )
     .await;
     assert_eq!(receipt["committed"], true);
+    assert_eq!(
+        receipt["agent_id"], "beh-test",
+        "the invoking referrer owns the edit"
+    );
     let agents = receipt["shared"]["agents"]
         .as_array()
         .unwrap_or_else(|| panic!("receipt must list the affected agents: {receipt}"));
@@ -1077,7 +1081,7 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     named.sort();
-    assert_eq!(named, vec!["beh-test".to_string(), worker.clone()]);
+    assert_eq!(named, vec![worker.clone(), "beh-test".to_string()]);
     let digest = receipt["shared"]["sha256"]
         .as_str()
         .unwrap_or_else(|| panic!("receipt must carry the new sha256: {receipt}"));
@@ -1087,7 +1091,7 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
     // The edit landed for both agents, not just the caller.
     let read = ok(
         &tools,
-        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+        json!({"argv":["context","get"],"options":{"agent":worker}}),
     )
     .await;
     assert_eq!(read["document"]["system_prompt"], "Shared prompt.");
