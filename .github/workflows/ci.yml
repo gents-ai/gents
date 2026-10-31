@@ -84,12 +84,12 @@ jobs:
           bash -n scripts/measure-gents-binary.sh
           bash -n scripts/measure-gents-build-attribution.sh
           bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
-          bash -n .github/scripts/setup-macos-clt-toolchain.sh
+          bash -n .github/scripts/setup-macos-clt-toolchain.sh .github/scripts/setup-cmake.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
           shellcheck scripts/measure-gents-build-attribution.sh
           shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
-          shellcheck .github/scripts/setup-macos-clt-toolchain.sh
+          shellcheck .github/scripts/setup-macos-clt-toolchain.sh .github/scripts/setup-cmake.sh
 
       - name: Check the macOS toolchain selection
         run: python3 .github/scripts/test-macos-clt-toolchain.py
@@ -331,7 +331,7 @@ jobs:
         # --no-fail-fast: a node flake in gents-migration must not mask the
         # 140 pure gents-protocol/gents-schemas assertions that run after it.
         run: |
-          cargo test --no-fail-fast --features gents-claude/transport \
+          cargo test --no-fail-fast --features gents-claude/transport,gents-protocol/typescript \
             -p gents-migration \
             -p gents-lens-fixture-add-label \
             -p gents-callback-fixture-create-workspace \
@@ -364,13 +364,13 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         run: |
-          cargo test -p gents --lib runtime_status::tests::
+          cargo test -p gents --lib runtime::status::tests::
           cargo test -p gents --lib tools::native::tests::read_only_bash
           cargo test -p gents --lib tools::exec::
           cargo test -p gents --lib artifact_
           # Live-output byte evidence for background tools must fail the PR
           # that breaks it, not the post-merge main run (#2686).
-          cargo test -p gents --lib hook::tests::r4c_list_background_tools::
+          cargo test -p gents --lib tools::call::hook::tests::r4c_list_background_tools::
           cargo test -p gents --lib triggers::callback::
           cargo test -p gents --test onboarding_evals
           cargo test -p gents --test eval_runner_canary

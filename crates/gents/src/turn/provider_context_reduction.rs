@@ -252,15 +252,15 @@ impl StagedProviderContextReduction {
     pub(crate) fn into_turn_outcome(
         self,
         node: std::sync::Arc<EmbeddedNode>,
-    ) -> Result<crate::agent::loop_stream::TurnCompactionOutcome> {
+    ) -> Result<gents_loop::loop_stream::TurnCompactionOutcome> {
         let messages = self.checkpoint_tagged_messages()?;
         let reduction_key = self.reduction_key().to_string();
-        Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
+        Ok(gents_loop::loop_stream::TurnCompactionOutcome::Reduced {
             messages,
             reduction_key,
-            commit: crate::agent::loop_stream::TurnReductionCommit::new(move || async move {
+            commit: gents_loop::loop_stream::TurnReductionCommit::new(move || async move {
                 self.commit(&node).await.map(drop).map_err(|error| {
-                    crate::agent::loop_stream::TurnCompactionError::Compactor(error.into())
+                    gents_loop::loop_stream::TurnCompactionError::Compactor(error.into())
                 })
             }),
         })
@@ -306,13 +306,13 @@ impl StagedProviderContextReduction {
                 let requester_did = &requester_did;
                 Box::pin(async move {
                     let compacted_prefix_json =
-                        crate::rendered_request::sink::store_shared_json_in_txn(
+                        crate::inference::rendered_request::sink::store_shared_json_in_txn(
                             txn,
                             &intended.compacted_prefix_json,
                         )
                         .await?;
                     let retained_suffix_json =
-                        crate::rendered_request::sink::store_shared_json_in_txn(
+                        crate::inference::rendered_request::sink::store_shared_json_in_txn(
                             txn,
                             &intended.retained_suffix_json,
                         )
@@ -534,7 +534,7 @@ mod durable_reduction_conformance;
 
 pub(crate) fn stage_exact(
     input: NewExactProviderContextReduction<'_>,
-    reduction: crate::compaction::ExactReduction<'_>,
+    reduction: crate::inference::compaction::ExactReduction<'_>,
 ) -> Result<StagedProviderContextReduction> {
     let checkpoint_messages = reduction.checkpoint_messages();
     stage(NewProviderContextReduction {
