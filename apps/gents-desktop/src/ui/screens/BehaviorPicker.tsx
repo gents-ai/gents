@@ -162,7 +162,7 @@ function MountedAgentPicker({
           ref={popover.popupRef}
           aria-label="Choose agent"
           align="start"
-          className="w-[min(40rem,calc(100vw-4rem))] gap-0 p-0"
+          className="w-[min(28rem,calc(100vw-4rem))] gap-0 p-0"
         >
           <div className="flex items-center gap-2 border-b border-border/60 py-1 pr-1 pl-3">
             <Search aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
