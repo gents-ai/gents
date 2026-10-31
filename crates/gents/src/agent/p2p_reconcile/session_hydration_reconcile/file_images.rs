@@ -109,10 +109,11 @@ async fn serve_image(
         before,
     ) {
         Some(document) => {
-            deliver_with_bounded_retry(
+            deliver_once(
                 delivery,
                 &demand.admission,
                 DeliveryTarget::FileImage(document, &contents),
+                &fence,
             )
             .await
         }
