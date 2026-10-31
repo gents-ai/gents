@@ -78,13 +78,13 @@ Do not duplicate changing versions in instructions.
   Agent is its only configuration selection. Title and creation provenance live
   within the session; request state and derived UI observations keep their existing
   owners. Use the canonical protocol session type rather than another writable copy.
-- Client sync has one observation owner: `gents::p2p_observability` adapts
+- Client sync has one observation owner: the p2p observability adapter reads
   DefraDB status, `ClientSyncStateOwner` combines facts, and
   `project_sync_health` derives product state. Keep runtime readiness separate
   and do not add UI-local sync heuristics.
 - Rig is a provider client behind `gents_loop::rig_compat` and
-  `gents_loop::provider_input`, re-exported as `llm::rig_compat` and
-  `provider_input` for callers here. Rig's own types stay inside those two
+  `gents_loop::provider_input`, re-exported by the inference owner
+  (`llm::rig_compat`) and `provider_input` for callers here. Rig's own types stay inside those two
   and the loop that drives them (`gents_loop::loop_stream`); runtime owners
   use their native handles (`ProviderModel`, `ProviderClient`). For now,
   provider transport adapters (the `*_http`, Codex, Claude Messages, xAI and
@@ -120,8 +120,8 @@ decoders and native adapters translate representations, not redefine policy.
 - Escape every interpolated GraphQL string with
   `graphql::escape_graphql_string()`.
 - Never emit `[]` in a DefraDB mutation; use `null` for an empty nillable list.
-- All application DefraDB access goes through the `gents::config_client` and
-  `gents::graphql` owners: single writes via `ConfigAccess::write`/`write_local`,
+- All application DefraDB access goes through the store layer's config_client
+  and graphql owners: single writes via `ConfigAccess::write`/`write_local`,
   multi-statement or DID-scoped work via `ConfigAccess::transact*`, reads via
   `graphql_with_transaction_retry` (embedded) or `ConfigAccess::execute`
   (local/HTTP). Never call `EmbeddedNode::execute*`, `runner()`, or raw DefraDB
@@ -163,7 +163,7 @@ decoders and native adapters translate representations, not redefine policy.
   one documented exception. Code that needs a `tokio::runtime::Handle` takes it
   from its caller; `tokio::spawn` inside a running task is fine. Never call
   `Handle::current`/`try_current`: a guard whose `Drop` owes async cleanup
-  binds its runtime with `gents::drop_cleanup::DropCleanup::current`, and tests
+  binds its runtime with the drop-cleanup owner's `DropCleanup::current`, and tests
   take theirs from their crate's test-support helper.
 - Never block a runtime thread: every wait is an `.await` (`tokio::time::sleep`,
   the owner's notification, never a polling loop) and synchronous work runs on
@@ -173,8 +173,8 @@ decoders and native adapters translate representations, not redefine policy.
   process or test, a dedicated OS thread, a `spawn_blocking` closure) or is a
   test future that deliberately overruns a deadline within one poll.
   `Runtime::block_on` is for process and test entry points and dedicated
-  threads. Drive a non-`Send` embedded-node future through
-  `storage_backend::drive_unsendable`.
+  threads. Drive a non-`Send` embedded-node future through the
+  store layer's storage backend (`drive_unsendable`).
 - Every hash map and set is `rapidhash::RapidHashMap`/`RapidHashSet` (the fast
   hasher, built with `new`, `default` or `with_capacity` via `HashMapExt`/
   `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.

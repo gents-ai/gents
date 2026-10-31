@@ -2357,3 +2357,244 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
         assert_eq!(error_text_sites(&syntax).len(), sites, "{source}");
     }
 }
+
+/// Layers of `crates/gents/src`, bottom to top. A module may name its own
+/// layer and those below it; the peer tier names none of its siblings.
+/// Root-level modules outside these directories are not ranked.
+const LAYERS: &[&[&str]] = &[
+    &["support"],
+    &["store"],
+    &["documents"],
+    &["inference"],
+    &[
+        "request", "session", "goal", "triggers", "tools", "plugin", "pack",
+    ],
+    &["observe"],
+    &["turn"],
+    &["runtime"],
+    &["eval"],
+];
+
+const PEER_TIER: usize = 4;
+
+/// Upward and peer-crossing `crate::` edges as (from, to, references). The
+/// list only shrinks.
+#[rustfmt::skip]
+const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
+    ("documents", "goal", 4),
+    ("documents", "inference", 10),
+    ("documents", "pack", 3),
+    ("documents", "plugin", 4),
+    ("documents", "session", 3),
+    ("documents", "tools", 22),
+    ("documents", "triggers", 5),
+    ("goal", "request", 33),
+    ("goal", "session", 13),
+    ("goal", "tools", 3),
+    ("goal", "triggers", 6),
+    ("inference", "request", 2),
+    ("inference", "tools", 1),
+    ("pack", "plugin", 31),
+    ("pack", "tools", 3),
+    ("plugin", "pack", 40),
+    ("plugin", "session", 1),
+    ("plugin", "tools", 18),
+    ("plugin", "triggers", 2),
+    ("request", "goal", 13),
+    ("request", "session", 44),
+    ("request", "tools", 32),
+    ("request", "triggers", 32),
+    ("session", "goal", 11),
+    ("session", "request", 53),
+    ("session", "tools", 35),
+    ("store", "documents", 46),
+    ("store", "inference", 11),
+    ("store", "tools", 1),
+    ("store", "triggers", 5),
+    ("tools", "goal", 37),
+    ("tools", "pack", 11),
+    ("tools", "plugin", 69),
+    ("tools", "request", 78),
+    ("tools", "session", 128),
+    ("triggers", "goal", 28),
+    ("triggers", "plugin", 16),
+    ("triggers", "request", 18),
+    ("triggers", "session", 3),
+    ("triggers", "tools", 23),
+];
+
+fn layer_rank(top: &str) -> Option<usize> {
+    LAYERS.iter().position(|layer| layer.contains(&top))
+}
+
+fn layer_edge_violates(from: &str, to: &str) -> bool {
+    match (layer_rank(from), layer_rank(to)) {
+        (Some(lower), Some(higher)) if lower < higher => true,
+        (Some(PEER_TIER), Some(PEER_TIER)) => from != to,
+        _ => false,
+    }
+}
+
+fn source_top(relative: &str) -> Option<&str> {
+    let rest = relative.strip_prefix("crates/gents/src/")?;
+    let first = rest.split('/').next()?;
+    Some(first.strip_suffix(".rs").unwrap_or(first))
+}
+
+#[derive(Default)]
+struct CrateTopVisitor {
+    targets: Vec<String>,
+}
+
+impl CrateTopVisitor {
+    fn use_targets(&mut self, tree: &syn::UseTree, under_crate: bool) {
+        match tree {
+            syn::UseTree::Path(path) if under_crate => self.targets.push(path.ident.to_string()),
+            syn::UseTree::Path(path) if path.ident == "crate" => self.use_targets(&path.tree, true),
+            syn::UseTree::Name(name) if under_crate => self.targets.push(name.ident.to_string()),
+            syn::UseTree::Rename(rename) if under_crate => {
+                self.targets.push(rename.ident.to_string())
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.use_targets(item, under_crate);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn macro_targets(&mut self, stream: proc_macro2::TokenStream) {
+        let tokens = stream.into_iter().collect::<Vec<_>>();
+        for (index, token) in tokens.iter().enumerate() {
+            match token {
+                proc_macro2::TokenTree::Group(group) => self.macro_targets(group.stream()),
+                proc_macro2::TokenTree::Ident(ident) if ident == "crate" => {
+                    let colons = tokens.get(index + 1..index + 3).is_some_and(|pair| {
+                        pair.iter().all(|token| {
+                            matches!(token, proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
+                        })
+                    });
+                    if let (true, Some(proc_macro2::TokenTree::Ident(target))) =
+                        (colons, tokens.get(index + 3))
+                    {
+                        self.targets.push(target.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for CrateTopVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.use_targets(&item.tree, false);
+        visit::visit_item_use(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if path.segments.len() > 1 && path.segments[0].ident == "crate" {
+            self.targets.push(path.segments[1].ident.to_string());
+        }
+        visit::visit_path(self, path);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        self.macro_targets(invocation.tokens.clone());
+        visit::visit_macro(self, invocation);
+    }
+}
+
+fn layer_edges(from: &str, syntax: &syn::File) -> BTreeMap<(String, String), usize> {
+    let mut visitor = CrateTopVisitor::default();
+    visitor.visit_file(syntax);
+    let mut edges = BTreeMap::new();
+    for to in visitor.targets {
+        if layer_edge_violates(from, &to) {
+            *edges.entry((from.to_string(), to)).or_default() += 1;
+        }
+    }
+    edges
+}
+
+#[test]
+fn layer_edges_only_shrink() {
+    let root = repo_root();
+    let mut actual = BTreeMap::<(String, String), usize>::new();
+    for (relative, syntax) in parse_production(&root, production_sources(&root)) {
+        let Some(from) = source_top(&relative) else {
+            continue;
+        };
+        for (edge, count) in layer_edges(from, &syntax) {
+            *actual.entry(edge).or_default() += count;
+        }
+    }
+    let allowed = LAYER_EDGE_ALLOWLIST
+        .iter()
+        .map(|(from, to, count)| ((from.to_string(), to.to_string()), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for edge in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let (from, to) = edge;
+        let found = actual.get(edge).copied().unwrap_or_default();
+        match allowed.get(edge).copied() {
+            None => violations.push(format!(
+                "{from} -> {to}: {found} new upward or peer reference(s); move the shared item down to a layer both may name"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{from} -> {to}: {found} references exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{from} -> {to}: {found} references; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|((from, to), count)| format!("    (\"{from}\", \"{to}\", {count}),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "layer edge ratchet failed:\n{}\n\ncurrent edges:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn layer_edges_count_upward_and_peer_references_outside_tests() {
+    let syntax = syn::parse_file(
+        r#"
+        use crate::{inference::Model, store::Key, tools::{a, b}};
+        use crate::session as chat;
+        fn f() -> crate::eval::Score { crate::request::admit(); crate::store::read(); }
+        fn g() { tracing::info!(target: "x", "{}", crate::goal::NAME); }
+        #[cfg(test)]
+        mod tests { use crate::eval::Case; }
+        "#,
+    )
+    .expect("parse snippet");
+    let edges = layer_edges("request", &syntax)
+        .into_iter()
+        .map(|((_, to), count)| (to, count))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        edges,
+        [
+            ("eval".to_string(), 1),
+            ("goal".to_string(), 1),
+            ("session".to_string(), 1),
+            ("tools".to_string(), 1),
+        ]
+    );
+    assert!(!layer_edge_violates("eval", "store"));
+    assert!(!layer_edge_violates("request", "agent"));
+}
