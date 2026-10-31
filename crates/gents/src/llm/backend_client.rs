@@ -58,6 +58,8 @@ pub(crate) enum BackendClient {
             crate::oauth_credential::DbCredentialBearer,
         >,
     ),
+    /// A Messages client with a static credential: the Anthropic API key, or a
+    /// Claude platform backend, whose route names its provider kind.
     AnthropicApiKey(
         crate::claude_subscription::ClaudeSubscriptionClient<
             crate::claude_subscription::ApiKeyBearer,
@@ -77,8 +79,8 @@ impl BackendClient {
             Self::XaiGrokChatCompletions(client) => client.post("/chat/completions")?,
             Self::XaiGrokResponses(client) => client.post("/responses")?,
             Self::ClaudeSubscription(_) => return claude_subscription_replay_issuer(),
-            Self::AnthropicApiKey(_) => {
-                return messages_replay_issuer(BackendProviderKind::AnthropicApiKey)
+            Self::AnthropicApiKey(client) => {
+                return messages_replay_issuer(self.provider_family(), client.route.uri.parse()?)
             }
         }
         .body(())?;
@@ -111,24 +113,31 @@ impl BackendClient {
                 BackendProviderKind::XaiGrokOAuth.as_str()
             }
             Self::ClaudeSubscription(_) => BackendProviderKind::ClaudeCliSubscription.as_str(),
-            Self::AnthropicApiKey(_) => BackendProviderKind::AnthropicApiKey.as_str(),
+            Self::AnthropicApiKey(client) => client
+                .route
+                .platform_kind
+                .unwrap_or(BackendProviderKind::AnthropicApiKey)
+                .as_str(),
         }
     }
 }
 
 pub(crate) fn claude_subscription_replay_issuer(
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
-    messages_replay_issuer(BackendProviderKind::ClaudeCliSubscription)
+    messages_replay_issuer(
+        BackendProviderKind::ClaudeCliSubscription.as_str(),
+        rig::http_client::Uri::from_static(crate::claude_messages::MESSAGES_URI),
+    )
 }
 
 fn messages_replay_issuer(
-    kind: BackendProviderKind,
+    family: &str,
+    destination: rig::http_client::Uri,
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
-    let request = rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI).body(())?;
     Ok(
         gents_loop::rendered_request::transport::replay_issuer_for_destination(
-            kind.as_str(),
-            request.uri(),
+            family,
+            &destination,
         ),
     )
 }
@@ -332,6 +341,34 @@ pub(crate) async fn build_backend_client(
                 ),
             ))
         }
+        BackendProviderKind::ClaudeGateway
+        | BackendProviderKind::ClaudeFoundry
+        | BackendProviderKind::ClaudeAnthropicAws
+        | BackendProviderKind::ClaudeMantle
+        | BackendProviderKind::ClaudeBedrock
+        | BackendProviderKind::ClaudeVertex
+        | BackendProviderKind::ClaudeGoogleCloud => {
+            let route = crate::claude_messages::ClaudeRoute::platform(
+                agent.backend_provider_kind,
+                &agent.backend_endpoint,
+                agent.claude_platform.as_ref(),
+                api_key,
+            )
+            .with_context(|| {
+                format!(
+                    "building the {} completion client for agent {}",
+                    agent.backend_provider_kind, agent.agent_id
+                )
+            })?;
+            Ok(BackendClient::AnthropicApiKey(
+                crate::claude_subscription::ClaudeSubscriptionClient::with_platform(
+                    agent.node_did(),
+                    agent.backend_id.as_deref().unwrap_or(""),
+                    api_key.to_owned(),
+                    route,
+                ),
+            ))
+        }
     }
 }
 
@@ -479,6 +516,87 @@ mod tests {
             .expect("route");
         assert_eq!(issuer.family, "AnthropicApiKey");
         assert_eq!(issuer.endpoint, sign_in.endpoint);
+    }
+
+    #[tokio::test]
+    async fn every_buildable_platform_yields_a_messages_client_on_its_own_route() {
+        let node = test_node().await;
+        for (kind, endpoint, settings) in [
+            (
+                BackendProviderKind::ClaudeGateway,
+                "https://gateway.example",
+                None,
+            ),
+            (
+                BackendProviderKind::ClaudeFoundry,
+                "https://my-resource.services.ai.azure.com/anthropic/",
+                Some(("resource", "my-resource")),
+            ),
+            (
+                BackendProviderKind::ClaudeMantle,
+                "https://bedrock-mantle.us-west-2.api.aws/anthropic",
+                Some(("region", "us-west-2")),
+            ),
+        ] {
+            let mut agent = test_agent(kind, crate::OpenAiWireApi::ChatCompletions);
+            agent.backend_endpoint = endpoint.to_owned();
+            agent.backend_id = Some("platform".into());
+            agent.claude_platform = settings.map(|(field, value)| {
+                serde_json::from_value(serde_json::json!({ field: value })).unwrap()
+            });
+            let client = build_backend_client(
+                std::sync::Arc::default(),
+                node.clone(),
+                &agent,
+                "placeholder-key",
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{kind}: {error:#}"));
+            assert!(
+                matches!(&client, BackendClient::AnthropicApiKey(_)),
+                "{kind}"
+            );
+            assert_eq!(client.provider_family(), kind.as_str());
+            let issuer = client.replay_issuer().expect("built URI").expect("route");
+            assert_eq!(issuer.family, kind.as_str());
+            let first_party = messages_replay_issuer(
+                "AnthropicApiKey",
+                rig::http_client::Uri::from_static(crate::claude_messages::MESSAGES_URI),
+            )
+            .unwrap()
+            .unwrap();
+            assert_ne!(issuer.endpoint, first_party.endpoint, "{kind}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_platform_without_a_send_path_or_with_cloud_credentials_fails_to_build_with_the_reason(
+    ) {
+        let node = test_node().await;
+        let mut bedrock = test_agent(
+            BackendProviderKind::ClaudeBedrock,
+            crate::OpenAiWireApi::ChatCompletions,
+        );
+        bedrock.backend_endpoint = "https://bedrock-runtime.us-west-2.amazonaws.com".into();
+        bedrock.claude_platform =
+            Some(serde_json::from_value(serde_json::json!({"region": "us-west-2"})).unwrap());
+        let error = build_backend_client(
+            std::sync::Arc::default(),
+            node,
+            &bedrock,
+            "placeholder-key",
+            Duration::from_secs(1),
+        )
+        .await
+        .err()
+        .expect("bedrock has no send path yet");
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("Amazon Bedrock backends are not available yet"),
+            "{text}"
+        );
+        assert!(!text.contains("placeholder-key"), "{text}");
     }
 
     async fn seed_oauth_credential(

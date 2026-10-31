@@ -322,6 +322,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) snapshot_demotion_cases: Vec<serde_json::Value>,
     pub(crate) catalog_refresh_cases: Vec<serde_json::Value>,
+    pub(crate) claude_platform_cases: Vec<serde_json::Value>,
     pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) plugin_pin_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_lock_cases: Vec<serde_json::Value>,
@@ -4384,4 +4385,8 @@ pub(crate) fn lean_catalog_refresh_cases() -> &'static [serde_json::Value] {
 
 pub(crate) fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().request_terminal_selection_cases
+}
+
+pub(crate) fn lean_claude_platform_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().claude_platform_cases
 }

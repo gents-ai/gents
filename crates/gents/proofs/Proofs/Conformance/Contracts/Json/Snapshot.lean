@@ -46,6 +46,7 @@ import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.CatalogRefresh
+import Proofs.Conformance.Contracts.Json.ClaudePlatform
 import Proofs.Conformance.Contracts.Json.PackInstallation
 import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
@@ -500,6 +501,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
     ++ "\"catalog_refresh_cases\":"
       ++ CatalogRefresh.casesJson ++ ","
+    ++ "\"claude_platform_cases\":"
+      ++ ClaudePlatform.casesJson ++ ","
     ++ "\"plugin_reference_cases\":"
       ++ PackInstallation.casesJson ++ ","
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","

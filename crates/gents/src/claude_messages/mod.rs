@@ -14,6 +14,7 @@ use thiserror::Error;
 use gents_claude::profile;
 
 mod error;
+mod route;
 mod send;
 mod sse;
 mod transport;
@@ -25,6 +26,7 @@ pub(crate) use error::non_success_message;
 pub(crate) use error::{body_prefix, non_success_error, NON_SUCCESS_BODY_PREFIX_BYTES};
 #[cfg(test)]
 use gents_loop::claude_messages_body::ClaudeAccountContext;
+pub(crate) use route::ClaudeRoute;
 pub(crate) use send::open_messages_at;
 pub use send::stream_messages;
 #[cfg(test)]
@@ -184,6 +186,9 @@ pub(crate) fn sse_fixture_final_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod platform_wire_tests;
 
 #[cfg(test)]
 mod wire_tests;

@@ -43,6 +43,22 @@ pub enum CatalogProvider {
     Gateway,
 }
 
+impl From<crate::betas::Provider> for CatalogProvider {
+    fn from(provider: crate::betas::Provider) -> Self {
+        use crate::betas::Provider;
+        match provider {
+            Provider::FirstParty => Self::FirstParty,
+            Provider::Bedrock => Self::Bedrock,
+            Provider::Vertex => Self::Vertex,
+            Provider::Foundry => Self::Foundry,
+            Provider::AnthropicAws => Self::AnthropicAws,
+            Provider::AnthropicGoogleCloud => Self::AnthropicGoogleCloud,
+            Provider::Mantle => Self::Mantle,
+            Provider::Gateway => Self::Gateway,
+        }
+    }
+}
+
 /// The id a model goes by on each provider (`None`: not offered there).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIds {

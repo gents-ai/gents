@@ -247,7 +247,7 @@ fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendCo
         endpoint: backend.endpoint.clone(),
         api_key: match &backend.auth {
             auth if auth.uses_node_oauth() => None,
-            auth => auth.resolve_api_key()?,
+            auth => auth.probe_key()?,
         },
         api_key_env_var: match &backend.auth {
             BackendAuth::Environment { variable } => Some(variable.clone()),

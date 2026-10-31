@@ -1,6 +1,7 @@
 pub mod account_usage;
 pub mod backend_provider;
 pub mod claude_messages_body;
+pub mod claude_platform;
 pub mod compaction;
 pub mod completion_retry;
 pub mod error;

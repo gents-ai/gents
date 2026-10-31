@@ -493,6 +493,7 @@ mod tests {
             provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: None,
             endpoint: "http://127.0.0.1:11434/v1".to_string(),
+            claude_platform: None,
             auth: BackendAuth::Unauthenticated,
             connect_timeout_secs: None,
             discovery_timeout_secs: None,

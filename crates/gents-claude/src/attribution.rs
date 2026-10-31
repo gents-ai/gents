@@ -55,6 +55,50 @@ pub enum Provider {
     Gateway,
 }
 
+impl From<crate::betas::Provider> for Provider {
+    fn from(provider: crate::betas::Provider) -> Self {
+        use crate::betas::Provider as Betas;
+        match provider {
+            Betas::FirstParty => Self::FirstParty,
+            Betas::Vertex => Self::Vertex,
+            Betas::Bedrock => Self::Bedrock,
+            Betas::AnthropicAws => Self::AnthropicAws,
+            Betas::AnthropicGoogleCloud => Self::AnthropicGoogleCloud,
+            Betas::Foundry => Self::Foundry,
+            Betas::Mantle => Self::Mantle,
+            Betas::Gateway => Self::Gateway,
+        }
+    }
+}
+
+/// The `cc_gateway` mark for a gateway bearer token (`v` in `J6o`): `1` when the
+/// token's `aud` claim names `claude-gateway` (a vouched gateway), else `env`.
+/// A token that is not a decodable JWT is unvouched.
+pub fn gateway_mark(token: &str) -> &'static str {
+    use base64::Engine as _;
+    let vouched = token
+        .split('.')
+        .nth(1)
+        .and_then(|payload| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload.trim_end_matches('='))
+                .ok()
+        })
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|claims| match claims.get("aud") {
+            Some(serde_json::Value::String(aud)) => aud == "claude-gateway",
+            Some(serde_json::Value::Array(auds)) => auds
+                .iter()
+                .any(|aud| aud.as_str() == Some("claude-gateway")),
+            _ => false,
+        });
+    if vouched {
+        "1"
+    } else {
+        "env"
+    }
+}
+
 /// A tagged project id and the settings layer it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {

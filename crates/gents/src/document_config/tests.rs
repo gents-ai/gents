@@ -1212,7 +1212,7 @@ async fn oauth_account_scope_matches_lean() {
 
     let row_json = |owner: &str, account: Option<&str>| serde_json::json!({"owner": owner, "account": account});
     let cases = lean["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 11);
     for case in cases {
         let text = case["auth"].as_str().unwrap();
         let auth: BackendAuth = serde_json::from_str(text).unwrap();

@@ -624,6 +624,7 @@ impl PendingAgent {
             openai_wire_api: backend_fields.openai_wire_api,
             backend_endpoint: backend_fields.backend_endpoint,
             backend_auth: backend_fields.backend_auth,
+            claude_platform: backend_fields.claude_platform,
             model_name: self.model_name,
             service_tier: None,
             resolved_reasoning_efforts: None,
@@ -685,6 +686,7 @@ impl PendingAgent {
                 ),
                 backend_endpoint,
                 backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+                claude_platform: None,
             },
             &ToolCeiling::meta_only(),
         )

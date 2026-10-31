@@ -25,13 +25,13 @@ use gents_loop::claude_messages_body::ClaudeAccountContext;
 
 const SSE_DONE: &str = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
-struct Reply {
-    status: &'static str,
-    headers: &'static [(&'static str, &'static str)],
-    body: &'static str,
+pub(super) struct Reply {
+    pub(super) status: &'static str,
+    pub(super) headers: &'static [(&'static str, &'static str)],
+    pub(super) body: &'static str,
 }
 
-const fn reply(status: &'static str, body: &'static str) -> Reply {
+pub(super) const fn reply(status: &'static str, body: &'static str) -> Reply {
     Reply {
         status,
         headers: &[],
@@ -45,13 +45,13 @@ const UNAUTHORIZED: Reply = reply(
 );
 
 /// Serves `replies` in order, one connection each, and records every raw request.
-struct Server {
-    port: u16,
+pub(super) struct Server {
+    pub(super) port: u16,
     seen: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl Server {
-    async fn start(replies: Vec<Reply>) -> Self {
+    pub(super) async fn start(replies: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let port = listener.local_addr().expect("addr").port();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -83,7 +83,7 @@ impl Server {
         format!("http://127.0.0.1:{}/v1/messages?beta=true", self.port)
     }
 
-    fn requests(&self) -> Vec<Wire> {
+    pub(super) fn requests(&self) -> Vec<Wire> {
         self.seen
             .lock()
             .expect("seen")
@@ -117,11 +117,11 @@ async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
 }
 
 /// One request as it crossed the wire.
-struct Wire {
+pub(super) struct Wire {
     head: Vec<u8>,
-    request_line: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+    pub(super) request_line: String,
+    pub(super) headers: Vec<(String, String)>,
+    pub(super) body: Vec<u8>,
 }
 
 impl Wire {
@@ -144,7 +144,7 @@ impl Wire {
         }
     }
 
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(super) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))

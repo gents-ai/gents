@@ -33,6 +33,7 @@ pub struct ResolvedAgent {
     pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
     pub backend_auth: crate::document_config::BackendAuth,
+    pub claude_platform: Option<crate::document_config::ClaudePlatform>,
     pub model_name: String,
     pub profile_id: Option<String>,
     pub service_tier: Option<ServiceTier>,
@@ -370,6 +371,7 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("openai_wire_api", &self.openai_wire_api)
             .field("backend_endpoint", &self.backend_endpoint)
             .field("backend_auth", &self.backend_auth)
+            .field("claude_platform", &self.claude_platform)
             .field("model_name", &self.model_name)
             .field("service_tier", &self.service_tier)
             .field(
@@ -618,6 +620,7 @@ mod tests {
             openai_wire_api,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+            claude_platform: None,
             model_name: DEFAULT_MODEL_NAME.to_string(),
             service_tier: None,
             resolved_reasoning_efforts: None,

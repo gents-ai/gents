@@ -637,3 +637,193 @@ fn tool_use_input_replays_the_streamed_text_in_insertion_order() {
     let wrong = body_of(history(false), Some(json!({"toolu_1": r#"{"q":1}"#})));
     assert_eq!(wrong, without);
 }
+
+fn platform_account() -> ClaudeAccountContext {
+    ClaudeAccountContext {
+        device_id: "cd".repeat(32),
+        account_uuid: String::new(),
+        subscriber: false,
+        using_overage: false,
+        api_key: false,
+    }
+}
+
+fn platform_plan(model: &str, target: ClaudeTarget) -> ClaudeRequestPlan {
+    plan_claude_request_for(
+        model,
+        &request_of(vec![Message::user("hello")]),
+        &platform_account(),
+        target,
+    )
+    .unwrap()
+}
+
+fn catalog_id(model: &str, provider: gents_claude::catalog::CatalogProvider) -> &'static str {
+    gents_claude::catalog::find(model)
+        .unwrap()
+        .id_for(provider)
+        .unwrap()
+}
+
+#[test]
+fn a_platform_request_is_not_a_subscription_request() {
+    for provider in [
+        betas::Provider::Gateway,
+        betas::Provider::Foundry,
+        betas::Provider::AnthropicAws,
+        betas::Provider::Mantle,
+    ] {
+        let plan = platform_plan("claude-opus-5-5", ClaudeTarget::platform(provider, None));
+        assert!(!plan.betas.contains(&betas::OAUTH), "{provider:?}");
+        assert!(plan.betas.contains(&betas::CLAUDE_CODE), "{provider:?}");
+        let system = header(&plan);
+        assert!(!system.contains("cch="), "{provider:?} {system}");
+        assert!(!system.contains("cc_prompt_id"), "{provider:?} {system}");
+        assert!(!system.contains("cc_prev_req"), "{provider:?} {system}");
+        let user_id = &plan.body.metadata.user_id;
+        assert!(user_id.contains(&"cd".repeat(32)), "{user_id}");
+        assert!(user_id.contains(r#""account_uuid":"""#), "{user_id}");
+    }
+}
+
+#[test]
+fn the_gateway_attribution_carries_the_token_mark_and_the_gateway_betas() {
+    let plan = platform_plan(
+        "claude-opus-5-5",
+        ClaudeTarget::platform(betas::Provider::Gateway, Some("env")),
+    );
+    assert!(
+        header(&plan).ends_with(" cc_gateway=env;"),
+        "{}",
+        header(&plan)
+    );
+    let vouched = platform_plan(
+        "claude-opus-5-5",
+        ClaudeTarget::platform(betas::Provider::Gateway, Some("1")),
+    );
+    assert!(
+        header(&vouched).ends_with(" cc_gateway=1;"),
+        "{}",
+        header(&vouched)
+    );
+    // The gateway takes only the third-party beta subset.
+    assert!(!plan.betas.contains(&betas::EXTENDED_CACHE_TTL));
+    assert!(!plan.betas.contains(&betas::PROMPT_CACHING_SCOPE));
+    assert!(!plan.betas.contains(&betas::CACHE_DIAGNOSIS));
+    assert!(plan.body.diagnostics.is_none());
+}
+
+#[test]
+fn a_gateway_alias_resolves_to_its_gateway_id_and_a_missing_id_falls_back_to_first_party() {
+    use gents_claude::catalog::CatalogProvider as On;
+    let gateway = ClaudeTarget::platform(betas::Provider::Gateway, None);
+    assert_eq!(
+        platform_plan("opus", gateway).body.model,
+        catalog_id("claude-opus-4-7", On::Gateway)
+    );
+    // The catalog has no gateway id for haiku 5.5, so Claude Code sends the first-party id.
+    assert_eq!(
+        platform_plan("claude-haiku-5-5", gateway).body.model,
+        "claude-haiku-5-5"
+    );
+}
+
+#[test]
+fn each_platform_sends_the_model_id_its_catalog_row_names() {
+    use gents_claude::catalog::CatalogProvider as On;
+    let mantle = ClaudeTarget::platform(betas::Provider::Mantle, None);
+    assert_eq!(
+        platform_plan("claude-opus-5-5", mantle).body.model,
+        "anthropic.claude-opus-5-5"
+    );
+    assert_eq!(
+        platform_plan("opus", mantle).body.model,
+        catalog_id("claude-opus-5-5", On::Mantle)
+    );
+    // A name that is already a Mantle id, or not in the catalog, is sent as given.
+    assert_eq!(
+        platform_plan("anthropic.claude-opus-5-5", mantle)
+            .body
+            .model,
+        "anthropic.claude-opus-5-5"
+    );
+    assert_eq!(
+        platform_plan("my-deployment", mantle).body.model,
+        "my-deployment"
+    );
+    let aws = ClaudeTarget::platform(betas::Provider::AnthropicAws, None);
+    assert_eq!(
+        platform_plan("sonnet", aws).body.model,
+        catalog_id("claude-sonnet-4-6", On::AnthropicAws)
+    );
+    // Foundry model strings are deployment names: only an alias is translated.
+    let foundry = ClaudeTarget::platform(betas::Provider::Foundry, None);
+    assert_eq!(
+        platform_plan("opus", foundry).body.model,
+        catalog_id("claude-opus-4-6", On::Foundry)
+    );
+    assert_eq!(
+        platform_plan("claude-opus-5-5", foundry).body.model,
+        "claude-opus-5-5"
+    );
+    assert_eq!(
+        platform_plan("claude-opus-5-5", ClaudeTarget::FIRST_PARTY)
+            .body
+            .model,
+        "claude-opus-5-5"
+    );
+}
+
+#[test]
+fn foundry_and_claude_platform_on_aws_take_their_provider_betas() {
+    let foundry = platform_plan(
+        "claude-opus-5-5",
+        ClaudeTarget::platform(betas::Provider::Foundry, None),
+    );
+    assert!(
+        foundry.betas.contains(&betas::WEB_SEARCH),
+        "{:?}",
+        foundry.betas
+    );
+    let aws = platform_plan(
+        "claude-opus-5-5",
+        ClaudeTarget::platform(betas::Provider::AnthropicAws, None),
+    );
+    assert!(
+        aws.betas.contains(&betas::PROMPT_CACHING_SCOPE),
+        "{:?}",
+        aws.betas
+    );
+    assert!(!aws.betas.contains(&betas::WEB_SEARCH), "{:?}", aws.betas);
+    let mantle = platform_plan(
+        "claude-opus-5-5",
+        ClaudeTarget::platform(betas::Provider::Mantle, None),
+    );
+    assert!(!mantle.betas.contains(&betas::PROMPT_CACHING_SCOPE));
+}
+
+#[test]
+fn a_platform_never_sends_disabled_thinking_or_first_party_diagnostics() {
+    let title = |target| {
+        let context = context(origin(Cause::Client, true, false, Kind::Title));
+        plan_claude_request_for(
+            "claude-sonnet-5",
+            &with_context(request_of(vec![Message::user("name this")]), &context),
+            &platform_account(),
+            target,
+        )
+        .unwrap()
+    };
+    let first_party = title(ClaudeTarget::FIRST_PARTY);
+    assert!(first_party.body.thinking.is_some());
+    for provider in [
+        betas::Provider::Gateway,
+        betas::Provider::Foundry,
+        betas::Provider::AnthropicAws,
+        betas::Provider::Mantle,
+    ] {
+        let plan = title(ClaudeTarget::platform(provider, None));
+        assert!(plan.body.thinking.is_none(), "{provider:?}");
+        assert!(plan.body.diagnostics.is_none(), "{provider:?}");
+    }
+}

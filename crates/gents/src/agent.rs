@@ -588,6 +588,7 @@ pub(crate) fn agent_config_from_documents(
         openai_wire_api: backend.openai_wire_api,
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
+        claude_platform: backend.claude_platform,
         model_name: inference.profile.model_name.clone(),
         service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),

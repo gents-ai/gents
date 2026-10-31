@@ -102,6 +102,7 @@ pub fn test_agent_for_node(
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
+        claude_platform: None,
         backend_auth: gents::document_config::BackendAuth::Unauthenticated,
         model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,

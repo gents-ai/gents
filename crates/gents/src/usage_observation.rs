@@ -536,7 +536,16 @@ pub async fn read_account_usage(
                 ),
                 // A new provider kind must fail to compile here rather than
                 // send its bearer to another provider.
-                Kind::OpenAiCompatible | Kind::OpenRouter | Kind::AnthropicApiKey => {
+                Kind::OpenAiCompatible
+                | Kind::OpenRouter
+                | Kind::AnthropicApiKey
+                | Kind::ClaudeBedrock
+                | Kind::ClaudeVertex
+                | Kind::ClaudeFoundry
+                | Kind::ClaudeAnthropicAws
+                | Kind::ClaudeMantle
+                | Kind::ClaudeGoogleCloud
+                | Kind::ClaudeGateway => {
                     return Ok(UsageRead::NotReported);
                 }
             };

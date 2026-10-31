@@ -11,6 +11,7 @@ use rig::http_client::{self, HeaderValue, HttpClientExt, Request};
 use rig::streaming::RawStreamingChoice;
 
 use super::error::{body_prefix, non_success_error, read_body_prefix};
+use super::route::{ClaudeRoute, Credential};
 use super::sse::{stream_sse_body_observed, MessagesSseState};
 use super::transport::{capturing, ClaudeHttpClient};
 use super::MESSAGES_URI;
@@ -24,7 +25,7 @@ use gents_claude::retry::{
 };
 use gents_claude::wire;
 use gents_loop::claude_messages_body::{
-    plan_claude_request, ClaudeAccountContext, ClaudeRequestPlan,
+    plan_claude_request_for, ClaudeAccountContext, ClaudeRequestPlan,
 };
 
 pub async fn stream_messages<S>(
@@ -41,8 +42,8 @@ pub async fn stream_messages<S>(
 where
     S: BearerSource,
 {
-    stream_messages_at(
-        MESSAGES_URI,
+    stream_messages_routed(
+        &ClaudeRoute::first_party(MESSAGES_URI),
         model,
         request,
         account,
@@ -68,6 +69,7 @@ impl From<CompletionError> for MessagesOpenError {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn stream_messages_at<S>(
     uri: &str,
     model: &str,
@@ -83,7 +85,34 @@ pub(crate) async fn stream_messages_at<S>(
 where
     S: BearerSource,
 {
-    open_messages_at(uri, model, request, account, surface, bearer, usage)
+    stream_messages_routed(
+        &ClaudeRoute::first_party(uri),
+        model,
+        request,
+        account,
+        surface,
+        bearer,
+        usage,
+    )
+    .await
+}
+
+pub(crate) async fn stream_messages_routed<S>(
+    route: &ClaudeRoute,
+    model: &str,
+    request: &CompletionRequest,
+    account: &ClaudeAccountContext,
+    surface: RapidHashSet<String>,
+    bearer: &S,
+    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+) -> Result<
+    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    CompletionError,
+>
+where
+    S: BearerSource,
+{
+    open_messages_at(route, model, request, account, surface, bearer, usage)
         .await
         .map_err(|failure| failure.error)
 }
@@ -98,7 +127,7 @@ fn invalid_input(message: String) -> CompletionError {
 /// The request for one send: the planned headers rendered for `token` with a fresh
 /// `x-client-request-id`, over the same body bytes every send.
 fn render_request(
-    uri: &str,
+    route: &ClaudeRoute,
     plan: &ClaudeRequestPlan,
     account: &ClaudeAccountContext,
     token: &str,
@@ -116,12 +145,14 @@ fn render_request(
         session_id: &plan.session_id,
         os: &os,
         arch: &arch,
-        auth: if account.api_key {
-            Auth::ApiKey(token)
-        } else {
-            Auth::Bearer(token)
+        auth: match route.credential {
+            Credential::Account if account.api_key => Auth::ApiKey(token),
+            Credential::Account | Credential::Bearer => Auth::Bearer(token),
+            Credential::ApiKey => Auth::ApiKey(token),
         },
-        first_party_base_url: true,
+        hint_headers: route.hint_headers,
+        client_request_id_header: route.client_request_id_header,
+        workspace_id: route.workspace_id.as_deref(),
         agent: plan.agent.as_ref().map(|agent| AgentHeaders {
             agent_id: &agent.agent_id,
             parent_agent_id: agent.parent_agent_id.as_deref(),
@@ -135,7 +166,7 @@ fn render_request(
         retry_count: 0,
         timeout_ms: profile::REQUEST_TIMEOUT_MS,
     };
-    let mut builder = Request::builder().method("POST").uri(uri);
+    let mut builder = Request::builder().method("POST").uri(&route.uri);
     for (name, header) in headers::request_headers(&header_context) {
         let mut value = HeaderValue::from_str(&header.value).map_err(|error| {
             CompletionError::ProviderError(format!("Claude Messages header {name}: {error}"))
@@ -190,7 +221,7 @@ impl Replay {
 /// set in Claude Code's insertion order, and the [`ClaudeHttpClient`] that writes them with
 /// Bun's casing, order, defaults and gzip.
 pub(crate) async fn open_messages_at<S>(
-    uri: &str,
+    route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
     account: &ClaudeAccountContext,
@@ -204,7 +235,7 @@ pub(crate) async fn open_messages_at<S>(
 where
     S: BearerSource,
 {
-    let plan = plan_claude_request(model, request, account)
+    let plan = plan_claude_request_for(model, request, account, route.target)
         .map_err(|error| invalid_input(format!("Claude Messages body: {error:#}")))?;
     let body = Bytes::from(
         wire::to_bytes(&plan.body)
@@ -235,7 +266,7 @@ where
     let replayable = !account.api_key && bearer.is_oauth();
     let mut replay = Replay::default();
     let response = loop {
-        let http_request = render_request(uri, &plan, account, &token, &body)?;
+        let http_request = render_request(route, &plan, account, &token, &body)?;
         let client = capturing(fixture.clone(), ClaudeHttpClient::new(usage.clone()));
         replay.sent();
         let failure = match client.send_streaming(http_request).await {

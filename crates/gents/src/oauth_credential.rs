@@ -684,6 +684,7 @@ pub(crate) fn preset_account_backend(
         auth: crate::document_config::BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         },
+        claude_platform: None,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
         max_concurrent: None,
@@ -3544,6 +3545,7 @@ mod lifecycle_tests {
                 provider_kind: spec.provider_kind,
                 openai_wire_api: spec.openai_wire_api,
                 endpoint: spec.endpoint.clone(),
+                claude_platform: None,
                 auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
                 connect_timeout_secs: None,
                 discovery_timeout_secs: None,
@@ -3853,6 +3855,7 @@ mod lifecycle_tests {
                 provider_kind: spec.provider_kind,
                 openai_wire_api: spec.openai_wire_api,
                 endpoint: spec.endpoint,
+                claude_platform: None,
                 auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
                 connect_timeout_secs: None,
                 discovery_timeout_secs: None,

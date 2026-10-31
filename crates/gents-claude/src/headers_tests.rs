@@ -15,7 +15,9 @@ fn base<'a>() -> HeaderContext<'a> {
         os: "Linux",
         arch: "x64",
         auth: Auth::Bearer("sk-ant-oat01-secret"),
-        first_party_base_url: true,
+        hint_headers: true,
+        client_request_id_header: true,
+        workspace_id: None,
         agent: None,
         agent_type: None,
         request_class: RequestClass::Main,
@@ -141,7 +143,8 @@ fn only_credentials_are_sensitive_and_debug_redacts_them() {
 #[test]
 fn custom_base_url_drops_gated_headers() {
     let ctx = HeaderContext {
-        first_party_base_url: false,
+        hint_headers: false,
+        client_request_id_header: false,
         agent: Some(AgentHeaders {
             agent_id: "a",
             parent_agent_id: None,
@@ -165,6 +168,26 @@ fn custom_base_url_drops_gated_headers() {
         assert!(!names.contains(&gated), "{gated}");
     }
     assert_eq!(names.last(), Some(&"anthropic-beta"));
+}
+
+#[test]
+fn workspace_header_follows_the_app_defaults_and_precedes_the_body_headers() {
+    let ctx = HeaderContext {
+        auth: Auth::ApiKey("k"),
+        hint_headers: false,
+        client_request_id_header: true,
+        workspace_id: Some("wrkspc_01"),
+        ..base()
+    };
+    let names: Vec<_> = request_headers(&ctx)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    let at = |name: &str| names.iter().position(|n| *n == name).unwrap();
+    assert!(at("X-Claude-Code-Session-Id") < at("anthropic-workspace-id"));
+    assert!(at("anthropic-workspace-id") < at("content-type"));
+    assert_eq!(names.last(), Some(&"x-client-request-id"));
+    assert!(!names.contains(&"x-claude-code-request-class"));
 }
 
 #[test]

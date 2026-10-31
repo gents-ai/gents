@@ -208,7 +208,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
         gents_protocol::schemas::INFERENCE_BACKEND,
-        "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike"
+        "bafyreibyanrs5nrmpd6dp5pa74agyp5njjfztpctt3ls5qyl5pt2mkojd4"
     ),
     baseline_entry!(
         gents_protocol::schemas::NODE_NAME,

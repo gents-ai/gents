@@ -290,7 +290,17 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
         .collect();
     assert_eq!(
         messages_kinds,
-        vec![Kind::ClaudeCliSubscription, Kind::AnthropicApiKey]
+        vec![
+            Kind::ClaudeCliSubscription,
+            Kind::AnthropicApiKey,
+            Kind::ClaudeBedrock,
+            Kind::ClaudeVertex,
+            Kind::ClaudeFoundry,
+            Kind::ClaudeAnthropicAws,
+            Kind::ClaudeMantle,
+            Kind::ClaudeGoogleCloud,
+            Kind::ClaudeGateway,
+        ]
     );
     assert_eq!(
         gents_loop::provider_input::ProviderInputProfile::resolve(
@@ -401,6 +411,7 @@ mod pool_client {
                 cache: cache.clone(),
                 credential_ids,
             }),
+            route: ClaudeRoute::first_party(crate::claude_messages::MESSAGES_URI),
         };
         let model = client.completion_model("claude-sonnet-5");
         (cache, client, model)
@@ -437,7 +448,7 @@ mod pool_client {
         let (cache, _client, model) = pool_model(&["id-a", "id-b"]).await;
         let rotation = model.rotation.as_ref().expect("rotation");
         let err = open_rotated(
-            &url,
+            &ClaudeRoute::first_party(&url),
             "claude-sonnet-5",
             &session_request("s"),
             RapidHashSet::new(),
@@ -474,7 +485,7 @@ mod pool_client {
             .reject(&"id-b".to_string(), now, 4_102_448_400);
         let rotation = model.rotation.as_ref().expect("rotation");
         let err = open_rotated(
-            "http://127.0.0.1:1",
+            &ClaudeRoute::first_party("http://127.0.0.1:1"),
             "claude-sonnet-5",
             &ping_request(),
             RapidHashSet::new(),

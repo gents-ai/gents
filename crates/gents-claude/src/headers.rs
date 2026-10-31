@@ -123,9 +123,14 @@ pub struct HeaderContext<'a> {
     pub arch: &'a str,
     /// Credential of the request.
     pub auth: Auth<'a>,
-    /// First-party API on its default base URL, which enables the hint headers
-    /// and `x-client-request-id`.
-    pub first_party_base_url: bool,
+    /// Send the `x-claude-code-request-class`, agent-type and prompt-id hint
+    /// headers: the first-party API on its default base URL (`z7n`).
+    pub hint_headers: bool,
+    /// Send `x-client-request-id`: the first-party API on its default base URL,
+    /// or Claude Platform on AWS on its default base URL (`Cl`).
+    pub client_request_id_header: bool,
+    /// `anthropic-workspace-id` of Claude Platform on AWS, a default header of that client.
+    pub workspace_id: Option<&'a str>,
     /// Subagent identity, when the request is made by one.
     pub agent: Option<AgentHeaders<'a>>,
     /// Agent type, for `agent:` query sources.
@@ -310,7 +315,7 @@ pub fn request_headers(ctx: &HeaderContext<'_>) -> Vec<(&'static str, HeaderValu
             push("x-claude-code-parent-agent-id", escape_agent_value(parent));
         }
     }
-    if ctx.first_party_base_url {
+    if ctx.hint_headers {
         push(
             "x-claude-code-request-class",
             ctx.request_class.as_str().into(),
@@ -322,11 +327,14 @@ pub fn request_headers(ctx: &HeaderContext<'_>) -> Vec<(&'static str, HeaderValu
             push("x-claude-code-prompt-id", prompt_id.into());
         }
     }
+    if let Some(workspace_id) = ctx.workspace_id {
+        push("anthropic-workspace-id", workspace_id.into());
+    }
     push("content-type", "application/json".into());
     if !ctx.betas.is_empty() {
         push("anthropic-beta", ctx.betas.join(","));
     }
-    if ctx.first_party_base_url {
+    if ctx.client_request_id_header {
         push("x-client-request-id", ctx.client_request_id.into());
     }
     headers

@@ -50,6 +50,18 @@ const SESSION_STARTER_AFTER_STOP: &str =
     "bafyreiauwwgyvzce24ptednterbddvmruuqwnq7zbd66pedrlxgqblxj7a";
 const SESSION_STARTER_PATCH: &str = r#"[{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"started_by_node_did","Kind":"String","Immutable":true}},{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"started_by_session_id","Kind":"String","Immutable":true}}]"#;
 
+/// `InferenceBackend` before the platform settings: the fresh store (catalog freshness in the
+/// schema) and the store patched from the original RC1 lineage.
+const BACKEND_FRESHNESS_FRESH: &str = "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike";
+const BACKEND_FRESHNESS_PATCHED: &str =
+    "bafyreiabl7unecvetnazzwctm4iihrsb7x3jeo6l3m45u6bbjodj7zxfxi";
+/// The same stores after the `claude_platform` patch.
+const BACKEND_PLATFORM_FROM_FRESH: &str =
+    "bafyreic7xg6tbg3rooyghvyy7tho52yynp7yqsu4tqbvjmsfnyouv2ieme";
+const BACKEND_PLATFORM_FROM_PATCHED: &str =
+    "bafyreickxk6jgbbg74hxamckiaeoh323zwr3bdojam5oze4eywnhrryxre";
+const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/Fields/-","value":{"Name":"claude_platform","Kind":"JSON"}}]"#;
+
 fn session_before_starter(version: &str) -> &str {
     match version {
         SESSION_STARTER_CURRENT => SESSION_PRE_STARTER,
@@ -233,11 +245,14 @@ pub(crate) fn include_existing(
             && current_version == TOOL_LEGACY_BACKGROUND;
         let after_session_archive =
             name == "AgentSession" && current_version == SESSION_ARCHIVE_AFTER_STOP;
+        let after_backend_platform =
+            name == "InferenceBackend" && current_version == BACKEND_PLATFORM_FROM_PATCHED;
         if current_version != root
             && current_version != target
             && !after_job_patch
             && !after_background_patch
             && !after_session_archive
+            && !after_backend_platform
         {
             continue;
         }
@@ -277,6 +292,60 @@ pub(crate) fn include_existing(
     }
     include_session_archive(node, baseline, steps)?;
     include_session_starter(node, baseline, steps)?;
+    include_backend_platform(node, baseline, steps)?;
+    Ok(())
+}
+
+/// Appends `claude_platform` to a backend collection that predates it. The version a patch
+/// lands on depends on the version it patches, so the fresh and the catalog-freshness-patched
+/// stores each have their own destination; the original RC1 lineage reaches the second through
+/// the catalog freshness step above.
+fn include_backend_platform(
+    node: &EmbeddedNode,
+    baseline: &mut [BaselineCollection<'static>],
+    steps: &mut Vec<MigrationStep<'static>>,
+) -> Result<()> {
+    let Some(current) = node
+        .get_collection("InferenceBackend")
+        .map_err(|error| Error::Node(error.into()))?
+    else {
+        return Ok(());
+    };
+    let preceding = steps.iter().rev().find_map(|step| match step {
+        MigrationStep::PatchVersioned {
+            collection: "InferenceBackend",
+            expected_version,
+            ..
+        } => *expected_version,
+        _ => None,
+    });
+    let source = preceding.unwrap_or(current.version_id.as_str());
+    let (source, target) = match source {
+        BACKEND_FRESHNESS_FRESH | BACKEND_PLATFORM_FROM_FRESH => {
+            (BACKEND_FRESHNESS_FRESH, BACKEND_PLATFORM_FROM_FRESH)
+        }
+        BACKEND_FRESHNESS_PATCHED | BACKEND_PLATFORM_FROM_PATCHED => {
+            (BACKEND_FRESHNESS_PATCHED, BACKEND_PLATFORM_FROM_PATCHED)
+        }
+        _ => return Ok(()),
+    };
+    if preceding.is_none() {
+        if let Some(entry) = baseline
+            .iter_mut()
+            .find(|entry| entry.name == "InferenceBackend")
+        {
+            entry.expected_version = Some(source);
+        }
+    }
+    steps.push(MigrationStep::PatchVersioned {
+        id: "inference-backend-add-claude-platform",
+        collection: "InferenceBackend",
+        patch: BACKEND_PLATFORM_PATCH,
+        lens: None,
+        expected_version: Some(target),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["claude_platform"]),
+    });
     Ok(())
 }
 

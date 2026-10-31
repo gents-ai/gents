@@ -425,13 +425,18 @@ A node-OAuth `account` is an opaque, DID-free reference minted when an
 account is first stored; `none` is the provider's original account.
 `nodeOAuthPool` rotates every call over all enabled accounts of the backend's
 provider on the executing node (`AccountRotation`); drawing paid extra usage
-when every account is past its limit is the operator's choice, off by default. -/
+when every account is past its limit is the operator's choice, off by default.
+`awsCredentials` and `googleCredentials` are static cloud credentials stored in
+the backend document like `apiKey`, so they are secrets under the same
+self-configuration guard (`SelfConfig.authPatchAllowed`). -/
 inductive BackendAuth where
   | unauthenticated
   | apiKey (key : String)
   | environment (name : String)
   | nodeOAuth (account : Option String)
   | nodeOAuthPool (allowOverage : Bool)
+  | awsCredentials (accessKeyId secretAccessKey : String) (sessionToken : Option String)
+  | googleCredentials (credentialsJson : String)
   deriving DecidableEq, Repr
 
 def oauthLookupOwner (scope : String) : BackendAuth → Option String

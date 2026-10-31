@@ -190,3 +190,39 @@ fn project_id_shape_and_sources() {
     fields.first_party_base_url = false;
     assert!(!header(&fields).contains("cc_project"));
 }
+
+fn jwt(claims: &str) -> String {
+    use base64::Engine as _;
+    let encode = |text: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(text);
+    format!("{}.{}.sig", encode("{\"alg\":\"none\"}"), encode(claims))
+}
+
+#[test]
+fn gateway_mark_is_one_only_for_a_token_that_names_the_gateway_audience() {
+    assert_eq!(gateway_mark(&jwt("{\"aud\":\"claude-gateway\"}")), "1");
+    assert_eq!(
+        gateway_mark(&jwt("{\"aud\":[\"other\",\"claude-gateway\"]}")),
+        "1"
+    );
+    assert_eq!(gateway_mark(&jwt("{\"aud\":\"other\"}")), "env");
+    assert_eq!(gateway_mark(&jwt("{}")), "env");
+    assert_eq!(gateway_mark("not-a-jwt"), "env");
+    assert_eq!(gateway_mark("a.!!!.c"), "env");
+}
+
+#[test]
+fn every_betas_provider_maps_to_its_attribution_provider() {
+    use crate::betas::Provider as Betas;
+    for (betas, expected) in [
+        (Betas::FirstParty, Provider::FirstParty),
+        (Betas::Vertex, Provider::Vertex),
+        (Betas::Bedrock, Provider::Bedrock),
+        (Betas::AnthropicAws, Provider::AnthropicAws),
+        (Betas::AnthropicGoogleCloud, Provider::AnthropicGoogleCloud),
+        (Betas::Foundry, Provider::Foundry),
+        (Betas::Mantle, Provider::Mantle),
+        (Betas::Gateway, Provider::Gateway),
+    ] {
+        assert_eq!(Provider::from(betas), expected);
+    }
+}

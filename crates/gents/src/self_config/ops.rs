@@ -978,10 +978,10 @@ pub fn guard_backend_auth(
             .map_err(|error| anyhow!("backend auth is not valid: {error}"))
     };
     let (stored, candidate) = (auth(stored)?, auth(candidate)?);
-    if matches!(candidate, BackendAuth::ApiKey { .. }) {
+    if candidate.is_stored_secret() {
         anyhow::ensure!(
             candidate == stored,
-            "raw API keys are operator-managed; select an environment or OAuth reference"
+            "raw credentials are operator-managed; select an environment or OAuth reference"
         );
     }
     if let BackendAuth::NodeOAuth { account_ref } = &candidate {

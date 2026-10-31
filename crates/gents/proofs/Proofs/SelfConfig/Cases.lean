@@ -100,6 +100,12 @@ def decodeGrants (doc : Doc) : Option Grants :=
       some { Grants.bot with packInstall := true, job := job }
   | _ => some { Grants.bot with job := job }
 
+def awsAuthText : String :=
+  "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}"
+
+def googleAuthText : String :=
+  "{\"kind\":\"google_credentials\",\"credentials_json\":\"{}\"}"
+
 def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"environment\",\"variable\":\"KEY\"}" => some (.environment "KEY")
   | "{\"kind\":\"node_oauth\"}" => some (.nodeOAuth none)
@@ -108,7 +114,10 @@ def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}" => some (.nodeOAuth (some "g2"))
   | "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}" => some (.nodeOAuthPool false)
   | "{\"kind\":\"node_oauth_pool\",\"allow_overage\":true}" => some (.nodeOAuthPool true)
-  | _ => none
+  | text =>
+    if text = awsAuthText then some (.awsCredentials "AKIDEXAMPLE" "secret" none)
+    else if text = googleAuthText then some (.googleCredentials "{}")
+    else none
 
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
   (doc "auth").bind decodeAuthText
@@ -357,6 +366,22 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "backend_pool_kept_endpoint_edit_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}")]
+    , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
+  , { name := "backend_aws_credentials_introduce_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
+    , patch := [("auth", some "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}")] }
+  , { name := "backend_aws_credentials_kept_endpoint_edit_accepted"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}")]
+    , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
+  , { name := "backend_google_credentials_introduce_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
+    , patch := [("auth", some "{\"kind\":\"google_credentials\",\"credentials_json\":\"{}\"}")] }
+  , { name := "backend_google_credentials_kept_endpoint_edit_accepted"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"google_credentials\",\"credentials_json\":\"{}\"}")]
     , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
   , { name := "profile_switch_to_pool_rejected"
     , target := .inferenceProfile, guarded := true, validates := true

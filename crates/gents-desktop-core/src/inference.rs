@@ -80,6 +80,8 @@ pub fn backend_config_view(
         BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
         BackendAuth::NodeOAuth { .. } => ("node_oauth", false, None),
         BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", false, None),
+        BackendAuth::AwsCredentials { .. } => ("aws_credentials", false, None),
+        BackendAuth::GoogleCredentials { .. } => ("google_credentials", false, None),
     };
     let advertised_models = match gents::config::backend_catalog(row, observation) {
         Ok(catalog) => catalog,

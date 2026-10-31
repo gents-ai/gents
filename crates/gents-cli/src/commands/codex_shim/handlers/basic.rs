@@ -401,6 +401,7 @@ mod tests {
             provider_kind,
             openai_wire_api: None,
             endpoint: "http://127.0.0.1:9/v1".into(),
+            claude_platform: None,
             auth,
             connect_timeout_secs: None,
             discovery_timeout_secs: None,

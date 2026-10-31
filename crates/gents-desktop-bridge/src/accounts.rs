@@ -96,6 +96,8 @@ impl BackendAuthenticationView {
             BackendAuth::Environment { variable } => ("environment", Some(variable.clone()), None),
             BackendAuth::NodeOAuth { account_ref } => ("node_oauth", None, account_ref.clone()),
             BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", None, None),
+            BackendAuth::AwsCredentials { .. } => ("aws_credentials", None, None),
+            BackendAuth::GoogleCredentials { .. } => ("google_credentials", None, None),
         };
         Self {
             revision,

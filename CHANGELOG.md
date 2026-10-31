@@ -6,6 +6,18 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Claude platform backends. Seven provider kinds (`ClaudeBedrock`,
+  `ClaudeVertex`, `ClaudeFoundry`, `ClaudeAnthropicAws`, `ClaudeMantle`,
+  `ClaudeGoogleCloud`, `ClaudeGateway`) join the Messages wire, with a typed
+  `claude_platform` settings object on the backend (`region`, `project`,
+  `location`, `workspace_id`, `resource`, and Foundry's `bearer_token`) from
+  which each platform's default base URL derives. `ClaudeGateway`,
+  `ClaudeFoundry`, `ClaudeAnthropicAws` and `ClaudeMantle` send with a static
+  key or token (`api_key` or `environment` auth), the body, betas, model ids
+  and headers Claude Code sends on that platform. `ClaudeBedrock`,
+  `ClaudeVertex` and `ClaudeGoogleCloud` are configurable but have no send path
+  yet. Backend auth gains `aws_credentials` and `google_credentials`, stored
+  secrets an agent can keep but never set, for the platforms that sign.
 - `gents config backend pool <backend-id>` and the desktop backend editor
   switch a Claude subscription backend between one account and an account pool,
   and set whether the pool may use paid extra usage. Both call one operator

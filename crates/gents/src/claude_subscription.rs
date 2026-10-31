@@ -20,7 +20,7 @@ use gents_claude::rotation::{tier, Family, Tier};
 use gents_loop::claude_messages_body::{ClaudeAccountContext, SESSION_KEY_PARAM};
 use gents_loop::provider_limit::{mark_account_rotated, ProviderLimitHeaders};
 
-use crate::claude_messages::{non_success_message, open_messages_at};
+use crate::claude_messages::{non_success_message, open_messages_at, ClaudeRoute, MESSAGES_URI};
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
 use crate::oauth_credential::{
     BearerSource, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
@@ -47,6 +47,7 @@ pub(crate) struct AccountIdentity {
     device_id: String,
     account_uuid: String,
     api_key: bool,
+    subscriber: bool,
 }
 
 impl AccountIdentity {
@@ -64,6 +65,7 @@ impl AccountIdentity {
                 .map(|(_, account)| account.to_owned())
                 .unwrap_or_default(),
             api_key: false,
+            subscriber: true,
         }
     }
 
@@ -73,6 +75,18 @@ impl AccountIdentity {
             device_id: device_id(format!("{node_did}\napi-key").as_bytes()),
             account_uuid: String::new(),
             api_key: true,
+            subscriber: false,
+        }
+    }
+
+    /// A Claude platform backend: one install id per node and backend, no account UUID and
+    /// no subscription.
+    pub(crate) fn of_platform(node_did: &str, backend_id: &str) -> Self {
+        Self {
+            device_id: device_id(format!("{node_did}\n{backend_id}\nclaude-platform").as_bytes()),
+            account_uuid: String::new(),
+            api_key: false,
+            subscriber: false,
         }
     }
 
@@ -80,7 +94,7 @@ impl AccountIdentity {
         ClaudeAccountContext {
             device_id: self.device_id.clone(),
             account_uuid: self.account_uuid.clone(),
-            subscriber: !self.api_key,
+            subscriber: self.subscriber,
             using_overage,
             api_key: self.api_key,
         }
@@ -114,6 +128,8 @@ where
     pub(crate) accounts: Arc<[ClaudeAccount<S>]>,
     /// `None` is a single account with no rotation.
     pub(crate) rotation: Option<Rotation>,
+    /// Where the requests go; the first-party API unless the backend is a Claude platform.
+    pub(crate) route: ClaudeRoute,
 }
 
 impl<S> Clone for ClaudeSubscriptionClient<S>
@@ -124,6 +140,7 @@ where
         Self {
             accounts: self.accounts.clone(),
             rotation: self.rotation.clone(),
+            route: self.route.clone(),
         }
     }
 }
@@ -149,6 +166,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         Ok(Self {
             accounts: Arc::from([account]),
             rotation: None,
+            route: ClaudeRoute::first_party(MESSAGES_URI),
         })
     }
 
@@ -203,6 +221,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
                 cache,
                 credential_ids,
             }),
+            route: ClaudeRoute::first_party(MESSAGES_URI),
         })
     }
 
@@ -244,6 +263,26 @@ impl ClaudeSubscriptionClient<ApiKeyBearer> {
                 identity: AccountIdentity::of_api_key(node_did),
             }]),
             rotation: None,
+            route: ClaudeRoute::first_party(MESSAGES_URI),
+        }
+    }
+
+    /// A Claude platform backend sending its static `key` along `route`.
+    pub(crate) fn with_platform(
+        node_did: &str,
+        backend_id: &str,
+        key: String,
+        route: ClaudeRoute,
+    ) -> Self {
+        Self {
+            accounts: Arc::from([ClaudeAccount {
+                credential_id: String::new(),
+                bearer: Arc::new(ApiKeyBearer::new(key)),
+                usage: None,
+                identity: AccountIdentity::of_platform(node_did, backend_id),
+            }]),
+            rotation: None,
+            route,
         }
     }
 }
@@ -262,6 +301,7 @@ where
                 identity: AccountIdentity::of_credential(&test_credential()),
             }]),
             rotation: None,
+            route: ClaudeRoute::first_party(MESSAGES_URI),
         }
     }
 }
@@ -298,6 +338,7 @@ where
     /// Never empty; with rotation each reporter also feeds this model's family.
     accounts: Arc<[ClaudeAccount<S>]>,
     rotation: Option<Rotation>,
+    route: ClaudeRoute,
 }
 
 impl<S> Clone for ClaudeSubscriptionModel<S>
@@ -309,6 +350,7 @@ where
             model: self.model.clone(),
             accounts: self.accounts.clone(),
             rotation: self.rotation.clone(),
+            route: self.route.clone(),
         }
     }
 }
@@ -346,7 +388,7 @@ where
         let surface = surface_of(request);
         match &self.rotation {
             Some(rotation) => open_rotated(
-                crate::claude_messages::MESSAGES_URI,
+                &self.route,
                 &self.model,
                 request,
                 surface,
@@ -359,7 +401,8 @@ where
                 let account = self.accounts.first().ok_or_else(|| {
                     CompletionError::ProviderError("Claude client has no account".to_string())
                 })?;
-                crate::claude_messages::stream_messages(
+                crate::claude_messages::open_messages_at(
+                    &self.route,
                     &self.model,
                     request,
                     &account.identity.context(false),
@@ -369,6 +412,7 @@ where
                 )
                 .await
                 .map(StreamExt::boxed)
+                .map_err(|failure| failure.error)
             }
         }
     }
@@ -407,6 +451,7 @@ where
             model,
             accounts,
             rotation: client.rotation.clone(),
+            route: client.route.clone(),
         }
     }
 
@@ -485,7 +530,7 @@ fn pool_exhausted(reset_at: Option<u64>) -> CompletionError {
 }
 
 async fn open_rotated<S>(
-    uri: &str,
+    route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
     surface: RapidHashSet<String>,
@@ -515,7 +560,7 @@ where
         .account_state(&choice.key)
         .is_some_and(|state| tier(policy, now, family, &state) == Some(Tier::Overage));
     match open_messages_at(
-        uri,
+        route,
         model,
         request,
         &account.identity.context(using_overage),

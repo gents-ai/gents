@@ -151,6 +151,37 @@ impl ClaudeAccountContext {
     }
 }
 
+/// Where a request is served: Claude Code's provider (`Te()`) and, for a gateway,
+/// the `cc_gateway` mark of its bearer token. The first-party default is the
+/// subscription and the API key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClaudeTarget {
+    /// Claude Code's provider.
+    pub provider: Provider,
+    /// The attribution `cc_gateway` value (`attribution::gateway_mark`); only a gateway has one.
+    pub gateway_mark: Option<&'static str>,
+}
+
+impl ClaudeTarget {
+    /// The first-party API.
+    pub const FIRST_PARTY: Self = Self {
+        provider: Provider::FirstParty,
+        gateway_mark: None,
+    };
+
+    /// A platform other than the first-party API.
+    pub const fn platform(provider: Provider, gateway_mark: Option<&'static str>) -> Self {
+        Self {
+            provider,
+            gateway_mark,
+        }
+    }
+
+    fn first_party(self) -> bool {
+        self.provider == Provider::FirstParty
+    }
+}
+
 /// Everything the send path needs from one planned request.
 #[derive(Debug, Clone)]
 pub struct ClaudeRequestPlan {
@@ -174,8 +205,18 @@ pub fn plan_claude_request(
     request: &CompletionRequest,
     account: &ClaudeAccountContext,
 ) -> Result<ClaudeRequestPlan, MessagesBodyError> {
+    plan_claude_request_for(model, request, account, ClaudeTarget::FIRST_PARTY)
+}
+
+/// [`plan_claude_request`] for the platform `target` serves: its betas, model id and attribution.
+pub fn plan_claude_request_for(
+    model: &str,
+    request: &CompletionRequest,
+    account: &ClaudeAccountContext,
+    target: ClaudeTarget,
+) -> Result<ClaudeRequestPlan, MessagesBodyError> {
     let context = ClaudeRequestContext::of_request(request)?;
-    plan_with_ids(model, request, account, &context, &context.ids())
+    plan_for_target(model, request, account, target, &context, &context.ids())
 }
 
 /// [`plan_claude_request`] with the session and prompt UUIDs supplied, for callers
@@ -187,6 +228,24 @@ pub fn plan_with_ids(
     context: &ClaudeRequestContext,
     ids: &ClaudeRequestIds,
 ) -> Result<ClaudeRequestPlan, MessagesBodyError> {
+    plan_for_target(
+        model,
+        request,
+        account,
+        ClaudeTarget::FIRST_PARTY,
+        context,
+        ids,
+    )
+}
+
+fn plan_for_target(
+    model: &str,
+    request: &CompletionRequest,
+    account: &ClaudeAccountContext,
+    target: ClaudeTarget,
+    context: &ClaudeRequestContext,
+    ids: &ClaudeRequestIds,
+) -> Result<ClaudeRequestPlan, MessagesBodyError> {
     let mut history: Vec<Message> = request
         .chat_history
         .iter()
@@ -195,7 +254,7 @@ pub fn plan_with_ids(
     attach_raw_arguments(&mut history, request.additional_params.as_ref());
     let origin = context.origin;
     let mode = origin.wire_mode();
-    let resolved = ResolvedModel::of(model);
+    let resolved = ResolvedModel::of(model, target.provider);
     let params = request.additional_params.as_ref();
     let previous_message_id = previous_message_id(&history);
 
@@ -206,8 +265,8 @@ pub fn plan_with_ids(
         },
         max_tokens_override: None,
         requested_effort: params.and_then(selected_effort),
-        first_party: true,
-        first_party_default_url: true,
+        first_party: target.first_party(),
+        first_party_default_url: target.first_party(),
         experimental_betas_disabled: false,
         agentic: mode.agentic,
         fork: origin.kind == Kind::Compaction,
@@ -223,7 +282,7 @@ pub fn plan_with_ids(
     );
     let traits = resolved.traits();
     let beta_request = betas::Request {
-        provider: Provider::FirstParty,
+        provider: target.provider,
         first_party_base_url: true,
         subscriber: account.subscriber,
         agentic: mode.agentic,
@@ -260,7 +319,7 @@ pub fn plan_with_ids(
         version: profile::VERSION.to_owned(),
         fingerprint: attribution::fingerprint(first_user_text(&history), profile::VERSION),
         entrypoint: mode.entrypoint.to_owned(),
-        provider: AttributionProvider::FirstParty,
+        provider: AttributionProvider::from(target.provider),
         first_party_base_url: true,
         workload: mode.workload.map(str::to_owned),
         subagent: mode.subagent,
@@ -271,7 +330,7 @@ pub fn plan_with_ids(
         turn_origin: origin.turn_origin().map(str::to_owned),
         prompt_index: position.map(|(prompt, _)| prompt),
         turn_index: position.map(|(_, turn)| turn),
-        gateway: None,
+        gateway: target.gateway_mark.map(str::to_owned),
         project: None,
     });
     let preamble = request
@@ -280,10 +339,13 @@ pub fn plan_with_ids(
         .map(str::trim)
         .filter(|text| !text.is_empty());
     let system = system::system_blocks(
-        [header.as_str(), system::identity_for(false, mode.session)]
-            .into_iter()
-            .chain(preamble)
-            .chain(system_rows(&history)),
+        [
+            header.as_str(),
+            system::identity_for(target.provider == Provider::Vertex, mode.session),
+        ]
+        .into_iter()
+        .chain(preamble)
+        .chain(system_rows(&history)),
         caching.then(|| marker.clone()),
     );
 
@@ -355,27 +417,37 @@ struct ResolvedModel {
 
 impl ResolvedModel {
     /// Claude Code sends a model id as given (the `[1m]` suffix becomes a beta) and
-    /// resolves an alias to the first-party id of its catalog entry.
-    fn of(name: &str) -> Self {
+    /// resolves an alias to the id of its catalog entry on the provider. A first-party
+    /// name also maps to the provider's id, except on Foundry, whose model string is a
+    /// deployment name (`pA`); a provider id or any other string is sent as given.
+    fn of(name: &str, provider: Provider) -> Self {
         let base = catalog::strip_1m_suffix(name);
         let long_context = base.len() != name.len();
-        let aliased = catalog::resolve_alias(base, None).and_then(catalog::find);
+        let on = catalog::CatalogProvider::from(provider);
+        let aliased = catalog::resolve_alias(base, Some(on)).and_then(catalog::find);
         match aliased.or_else(|| catalog::find(base)) {
-            Some(model) => Self {
-                wire_id: if aliased.is_some() {
-                    model
-                        .id_for(catalog::CatalogProvider::FirstParty)
-                        .unwrap_or(base)
-                        .to_owned()
-                } else {
-                    base.to_owned()
-                },
-                long_context,
-                facts: ModelFacts::of(model),
-                canonical: model.id.to_owned(),
-                capabilities: model.capabilities,
-                native_1m: model.context.is_some_and(|context| context.native_1m),
-            },
+            Some(model) => {
+                let first_party_name = base == model.id || base == model.provider_ids.first_party;
+                let translate = aliased.is_some()
+                    || (first_party_name
+                        && provider != Provider::FirstParty
+                        && provider != Provider::Foundry);
+                Self {
+                    wire_id: if translate {
+                        model
+                            .id_for(on)
+                            .unwrap_or(model.provider_ids.first_party)
+                            .to_owned()
+                    } else {
+                        base.to_owned()
+                    },
+                    long_context,
+                    facts: ModelFacts::of(model),
+                    canonical: model.id.to_owned(),
+                    capabilities: model.capabilities,
+                    native_1m: model.context.is_some_and(|context| context.native_1m),
+                }
+            }
             None => Self {
                 wire_id: base.to_owned(),
                 long_context,

@@ -29,6 +29,7 @@ pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> Stri
         openai_wire_api: agent_config.openai_wire_api,
         backend_endpoint: agent_config.backend_endpoint.clone(),
         backend_auth: agent_config.backend_auth.clone(),
+        claude_platform: agent_config.claude_platform.clone(),
     })
 }
 
@@ -583,11 +584,20 @@ fn reasoning_profile_params(
         })),
         // Grok models 400 on a forced reasoning.effort.
         (BackendProviderKind::XaiGrokOAuth, _) => None,
-        (BackendProviderKind::ClaudeCliSubscription | BackendProviderKind::AnthropicApiKey, _) => {
-            Some(serde_json::json!({
+        (
+            BackendProviderKind::ClaudeCliSubscription
+            | BackendProviderKind::AnthropicApiKey
+            | BackendProviderKind::ClaudeBedrock
+            | BackendProviderKind::ClaudeVertex
+            | BackendProviderKind::ClaudeFoundry
+            | BackendProviderKind::ClaudeAnthropicAws
+            | BackendProviderKind::ClaudeMantle
+            | BackendProviderKind::ClaudeGoogleCloud
+            | BackendProviderKind::ClaudeGateway,
+            _,
+        ) => Some(serde_json::json!({
             "output_config": { "effort": reasoning_effort.as_str() }
-            }))
-        }
+        })),
     }
 }
 
@@ -635,7 +645,14 @@ fn provider_additional_params(
         BackendProviderKind::ChatGptCodex
         | BackendProviderKind::XaiGrokOAuth
         | BackendProviderKind::ClaudeCliSubscription
-        | BackendProviderKind::AnthropicApiKey => None,
+        | BackendProviderKind::AnthropicApiKey
+        | BackendProviderKind::ClaudeBedrock
+        | BackendProviderKind::ClaudeVertex
+        | BackendProviderKind::ClaudeFoundry
+        | BackendProviderKind::ClaudeAnthropicAws
+        | BackendProviderKind::ClaudeMantle
+        | BackendProviderKind::ClaudeGoogleCloud
+        | BackendProviderKind::ClaudeGateway => None,
     }
 }
 
@@ -656,7 +673,14 @@ fn request_additional_params(
         }
         BackendProviderKind::OpenRouter
         | BackendProviderKind::XaiGrokOAuth
-        | BackendProviderKind::AnthropicApiKey => None,
+        | BackendProviderKind::AnthropicApiKey
+        | BackendProviderKind::ClaudeBedrock
+        | BackendProviderKind::ClaudeVertex
+        | BackendProviderKind::ClaudeFoundry
+        | BackendProviderKind::ClaudeAnthropicAws
+        | BackendProviderKind::ClaudeMantle
+        | BackendProviderKind::ClaudeGoogleCloud
+        | BackendProviderKind::ClaudeGateway => None,
     }
 }
 
