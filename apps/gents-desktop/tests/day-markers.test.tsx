@@ -55,8 +55,22 @@ describe("day labels", () => {
       rows,
       (row) => row.key,
       (row) => row.at,
+      day(2026, 9, 28),
     );
     expect([...opens.keys()]).toEqual(["b", "e"]);
+  });
+
+  it("opens no day above a first row from today, but marks today after an earlier day", () => {
+    const opens = (...at: string[]) => [
+      ...dayOpenings(
+        at.map((time, n) => ({ key: String(n), at: time })),
+        (row) => row.key,
+        (row) => row.at,
+        day(2026, 9, 27),
+      ).keys(),
+    ];
+    expect(opens("2026-10-27T08:00:00", "2026-10-27T09:00:00")).toEqual([]);
+    expect(opens("2026-10-26T18:00:00", "2026-10-27T08:00:00")).toEqual(["0", "1"]);
   });
 });
 
