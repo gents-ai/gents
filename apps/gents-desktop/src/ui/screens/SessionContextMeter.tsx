@@ -321,10 +321,15 @@ export function SessionContext({
   context,
   compact = false,
   loadDetails,
+  onOpenCompaction,
 }: {
   context: DesktopSessionSnapshot["context"];
   compact?: boolean;
   loadDetails?: (input: LastRequest) => Promise<SessionContextDetails | null>;
+  /* shows a compaction where it happened in the transcript */
+  onOpenCompaction?: (
+    compaction: DesktopSessionSnapshot["context"]["compactions"][number],
+  ) => void;
 }) {
   const popover = useExclusivePopover();
   const lastRequest = context.lastRequest;
@@ -571,27 +576,49 @@ export function SessionContext({
               {context.compactions
                 .slice(-5)
                 .reverse()
-                .map((entry) => (
-                  <li key={entry.compactionKey} className="flex justify-between gap-3">
-                    <span>
-                      {entry.createdAt && shortTime(entry.createdAt) ? (
-                        <time
-                          dateTime={entry.createdAt}
-                          title={fullTime(entry.createdAt)}
+                .map((entry) => {
+                  const row = (
+                    <>
+                      <span>
+                        {entry.createdAt && shortTime(entry.createdAt) ? (
+                          <time
+                            dateTime={entry.createdAt}
+                            title={fullTime(entry.createdAt)}
+                          >
+                            {shortTime(entry.createdAt)}
+                          </time>
+                        ) : (
+                          "Compacted"
+                        )}
+                      </span>
+                      <span className="text-right tabular-nums">
+                        {entry.originalTokens == null || entry.compactedTokens == null
+                          ? "Token estimates unavailable"
+                          : `${compactTokens(entry.originalTokens)} → ${compactTokens(entry.compactedTokens)}`}
+                      </span>
+                    </>
+                  );
+                  const opens = onOpenCompaction && entry.messageSequence != null;
+                  return (
+                    <li key={entry.compactionKey}>
+                      {opens ? (
+                        <button
+                          type="button"
+                          title="Show it in the transcript"
+                          onClick={() => {
+                            onOpenChange(false);
+                            onOpenCompaction(entry);
+                          }}
+                          className="-mx-1 flex w-[calc(100%+0.5rem)] cursor-pointer justify-between gap-3 rounded px-1 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                         >
-                          {shortTime(entry.createdAt)}
-                        </time>
+                          {row}
+                        </button>
                       ) : (
-                        "Compacted"
+                        <div className="flex justify-between gap-3">{row}</div>
                       )}
-                    </span>
-                    <span className="text-right tabular-nums">
-                      {entry.originalTokens == null || entry.compactedTokens == null
-                        ? "Token estimates unavailable"
-                        : `${compactTokens(entry.originalTokens)} → ${compactTokens(entry.compactedTokens)}`}
-                    </span>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
             </ul>
           )}
         </div>
