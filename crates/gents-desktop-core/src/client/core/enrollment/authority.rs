@@ -28,11 +28,44 @@ pub(super) async fn load_status_enrollment_approvals(
         "load status enrollment approvals",
     )
     .await?;
+    project_status_enrollment_response(&response, principal, local_peer_id).await
+}
+
+pub(in crate::client::core) async fn load_status_enrollment_approvals_in_txn(
+    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
+    principal: &PrincipalIdentity,
+    local_peer_id: &str,
+) -> Result<(
+    BTreeMap<String, EnrollmentAuthorityOutcome>,
+    BTreeSet<String>,
+)> {
+    for collection in [
+        "NetworkAdminPin",
+        "NetworkEnrollmentRequest",
+        "NetworkEnrollmentDecision",
+        "NetworkAuthorizationRevision",
+        "NetworkEnrollmentRouteReceipt",
+    ] {
+        gents::store::graphql::fence_arrivals(txn, collection).await?;
+    }
+    let response: defra_node::QueryResponse =
+        serde_json::from_value(txn.execute(STATUS_ENROLLMENT_QUERY).await?)?;
+    project_status_enrollment_response(&response, principal, local_peer_id).await
+}
+
+async fn project_status_enrollment_response(
+    response: &defra_node::QueryResponse,
+    principal: &PrincipalIdentity,
+    local_peer_id: &str,
+) -> Result<(
+    BTreeMap<String, EnrollmentAuthorityOutcome>,
+    BTreeSet<String>,
+)> {
     let mut conflicts = BTreeMap::<String, Vec<String>>::new();
     let mut generational_conflicts = BTreeMap::<String, Vec<(Option<u64>, String)>>::new();
     let mut request_scopes = BTreeMap::<String, (String, String)>::new();
     let mut requests = Vec::new();
-    let raw_requests = rows::<Value>(&response, "NetworkEnrollmentRequest")?;
+    let raw_requests = rows::<Value>(response, "NetworkEnrollmentRequest")?;
     for raw in &raw_requests {
         let relevant = raw_string(raw, "candidate_did") == Some(principal.did())
             || raw_string(raw, "candidate_peer") == Some(local_peer_id);
@@ -118,7 +151,7 @@ pub(super) async fn load_status_enrollment_approvals(
         },
     );
     let mut pins = BTreeMap::<String, Vec<String>>::new();
-    for raw in rows::<Value>(&response, "NetworkAdminPin")? {
+    for raw in rows::<Value>(response, "NetworkAdminPin")? {
         let Some(network_id) = raw_string(&raw, "network_id").map(str::to_string) else {
             continue;
         };
@@ -140,7 +173,7 @@ pub(super) async fn load_status_enrollment_approvals(
     }
 
     let mut decisions = Vec::new();
-    for raw in rows::<Value>(&response, "NetworkEnrollmentDecision")? {
+    for raw in rows::<Value>(response, "NetworkEnrollmentDecision")? {
         let targets = raw_authority_targets(
             &raw,
             &request_scopes,
@@ -182,7 +215,7 @@ pub(super) async fn load_status_enrollment_approvals(
     }
 
     let mut revisions = Vec::new();
-    for raw in rows::<Value>(&response, "NetworkAuthorizationRevision")? {
+    for raw in rows::<Value>(response, "NetworkAuthorizationRevision")? {
         let targets = raw_authority_targets(
             &raw,
             &request_scopes,
@@ -226,7 +259,7 @@ pub(super) async fn load_status_enrollment_approvals(
     }
 
     let mut receipts = Vec::new();
-    for raw in rows::<Value>(&response, "NetworkEnrollmentRouteReceipt")? {
+    for raw in rows::<Value>(response, "NetworkEnrollmentRouteReceipt")? {
         let targets = raw_authority_targets(
             &raw,
             &request_scopes,

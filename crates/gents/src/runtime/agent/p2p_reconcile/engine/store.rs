@@ -1,3 +1,7 @@
+mod materialize;
+
+pub use materialize::materialize_enrollment_desired_in_txn;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

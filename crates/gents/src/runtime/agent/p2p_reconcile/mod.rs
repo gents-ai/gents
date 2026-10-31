@@ -33,10 +33,11 @@ pub use diff::{
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
 pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
-    merge_layered_desired, observe_owned_pairing_live_matches, reconcile_peer_tick,
-    run_pairing_reconciler, teardown_owned_replicators_at_endpoint, update_applied_after_success,
-    EnrollmentEndpointEntry, GraphqlPairingStateStore, LoadedPairingApplied, PairingStateStore,
-    PairingTickOutcome, MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
+    materialize_enrollment_desired_in_txn, merge_layered_desired,
+    observe_owned_pairing_live_matches, reconcile_peer_tick, run_pairing_reconciler,
+    teardown_owned_replicators_at_endpoint, update_applied_after_success, EnrollmentEndpointEntry,
+    GraphqlPairingStateStore, LoadedPairingApplied, PairingStateStore, PairingTickOutcome,
+    MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
 };
 pub use enrollment_offer::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 pub use enrollment_reconcile::{

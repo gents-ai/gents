@@ -38,6 +38,8 @@ mod rows;
 #[cfg(test)]
 mod tests;
 
+pub(super) use authority::load_status_enrollment_approvals_in_txn;
+
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
     identity: &dyn NodeIdentity,

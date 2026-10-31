@@ -1298,6 +1298,7 @@ async fn reconcile_with_test_transport(core: &ClientCore, p2p: Arc<dyn P2POps>) 
         core.node_arc(),
         Arc::clone(&p2p),
         Arc::clone(&principal),
+        core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
     reconcile_status_enrollment_approvals(
@@ -1599,6 +1600,7 @@ async fn locally_removed_enrollment_stays_absent_across_reconcile() {
         core.node_arc(),
         Arc::clone(&p2p),
         Arc::clone(&principal),
+        core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
     let reconcile = || async {
@@ -2139,6 +2141,7 @@ async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns()
         core.node_arc(),
         Arc::clone(&p2p),
         Arc::clone(&principal),
+        core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
     let reconcile = || async {
@@ -2216,6 +2219,7 @@ async fn a_retirement_survives_an_absent_route_receipt_while_authority_is_curren
         core.node_arc(),
         Arc::clone(&p2p),
         Arc::clone(&principal),
+        core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
     let reconcile = || async {
@@ -2257,5 +2261,71 @@ async fn a_retirement_survives_an_absent_route_receipt_while_authority_is_curren
     );
     assert_eq!(transport.observations.load(SeqCst), 0);
 
+    Arc::new(core).shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn desired_materialization_rechecks_signed_authority_before_writing() {
+    use gents::store::config_client::ConfigAccess;
+    let temp = tempfile::tempdir().unwrap();
+    let core = start_unsupervised_core(temp.path().join("desktop")).await;
+    let admin = PrincipalIdentity::load_or_create(&crate::client::paths::DesktopPaths::from_root(
+        temp.path().join("admin"),
+    ))
+    .await
+    .unwrap();
+    let authority = signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
+    commit_test_authority(&core, &authority).await;
+    let record =
+        configure_test_enrollment_route(&core, &authority, &authority.request.server_peer).await;
+    let manager = ClientRouteManager::new(
+        core.node_arc(),
+        test_transport(&authority, true),
+        Arc::new(core.node_identity().clone()),
+        core.local_peer_id().to_owned(),
+        core.options().operator_identity_interaction,
+    );
+    manager.configure_enrollment_peer(&record).await.unwrap();
+    let access = ConfigAccess::local(core.node_arc());
+    let query = "{ PeerPairingDesired { _docID peer_id node_did enrollment_authorization_sequence enrollment_request_digest replicator_addresses } }";
+    let before = access.execute(query).await.unwrap();
+    let mut forged = record.clone();
+    forged.enrollment_authorization_sequence = Some(2);
+    assert!(manager.configure_enrollment_peer(&forged).await.is_err());
+    assert_eq!(access.execute(query).await.unwrap(), before);
+
+    let mut replacement = authority.revoked.clone();
+    replacement.kind = AuthorizationRevisionKind::Active;
+    replacement.revision_id = gents_protocol::enrollment::derive_revision_id(
+        &replacement.network_id,
+        &replacement.member_did,
+        replacement.sequence,
+        &replacement.kind,
+        &replacement.request_digest,
+    );
+    replacement.admin_sig = admin.sign(&replacement.signing_payload()).unwrap();
+    commit_revision(&core, &replacement).await;
+    assert!(
+        manager.configure_enrollment_peer(&record).await.is_err(),
+        "a superseded signed generation cannot rewrite the witness"
+    );
+    assert_eq!(access.execute(query).await.unwrap(), before);
+
+    let mut revoked = authority.revoked.clone();
+    revoked.sequence = 3;
+    revoked.revision_id = gents_protocol::enrollment::derive_revision_id(
+        &revoked.network_id,
+        &revoked.member_did,
+        revoked.sequence,
+        &revoked.kind,
+        &revoked.request_digest,
+    );
+    revoked.admin_sig = admin.sign(&revoked.signing_payload()).unwrap();
+    commit_revision(&core, &revoked).await;
+    assert!(
+        manager.configure_enrollment_peer(&record).await.is_err(),
+        "revoked authority cannot rewrite the witness"
+    );
+    assert_eq!(access.execute(query).await.unwrap(), before);
     Arc::new(core).shutdown().await.unwrap();
 }

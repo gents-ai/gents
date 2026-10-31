@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::store::identity::NodeIdentity;
 
 use super::enrollment_store::{EnrollmentProjection, GraphqlEnrollmentStore};
-use super::graphql_helpers::{graphql_string_list_literal, rows};
+use super::graphql_helpers::rows;
 use super::templates::{resolve_template, CLIENT_TEMPLATE};
 use super::{
     desired_route_is_applied, observe_owned_pairing_live_matches, EmbeddedRemoteP2pAdmin,
@@ -848,6 +848,12 @@ async fn reconcile_data_plane(
         .map(|collection| collection.to_string())
         .collect::<BTreeSet<_>>();
 
+    let mut seen = BTreeSet::new();
+    let duplicate_peers = existing
+        .iter()
+        .filter_map(|row| (!seen.insert(row.peer_id.clone())).then_some(row.peer_id.clone()))
+        .collect::<BTreeSet<_>>();
+
     let foreign_peers = existing
         .iter()
         .filter(|row| row.source.as_deref() != Some(SOURCE_ENROLLMENT))
@@ -893,21 +899,47 @@ async fn reconcile_data_plane(
             continue;
         }
         let current = enrollment_rows.get(peer_id);
-        if current
-            .is_some_and(|row| row.matches(local_did, route, CLIENT_TEMPLATE, &client_collections))
+        if !duplicate_peers.contains(peer_id)
+            && current.is_some_and(|row| {
+                row.matches(local_did, route, CLIENT_TEMPLATE, &client_collections)
+            })
         {
             continue;
         }
-        let mutation = upsert_enrollment_route_mutation(
-            route,
-            local_did,
-            &client_collections,
-            &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        );
-        crate::store::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             node,
+            None,
             "p2p.upsert_enrollment_route",
-            &mutation,
+            |txn| {
+                let client_collections = &client_collections;
+                Box::pin(async move {
+                    let fresh = store.load_projection_in_txn(txn).await?;
+                    let fence =
+                        exact_authorization_fence(&fresh, &route.member_did, &route.peer_id)?;
+                    anyhow::ensure!(
+                        fence
+                            .as_ref()
+                            .is_some_and(|fence| enrollment_route_matches_fence(route, fence)),
+                        "enrollment route generation changed before materialization"
+                    );
+                    super::materialize_enrollment_desired_in_txn(
+                        txn,
+                        local_did,
+                        &super::EnrollmentEndpointEntry {
+                            desired_id: route.peer_id.clone(),
+                            peer_id: route.peer_id.clone(),
+                            node_did: route.member_did.clone(),
+                            address: route.address.clone(),
+                            request_digest: route.request_digest.clone(),
+                            authorization_sequence: route.authorization_sequence,
+                            authorization_expires_at: route.authorization_expires_at.clone(),
+                        },
+                        client_collections,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
         )
         .await?;
     }
@@ -948,45 +980,6 @@ async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &
         )
         .await
         .map(|_| ())?,
-    )
-}
-
-fn upsert_enrollment_route_mutation(
-    route: &EnrollmentRoute,
-    local_did: &str,
-    collections: &BTreeSet<String>,
-    now: &str,
-) -> String {
-    let escape = crate::store::graphql::escape_graphql_string;
-    let peer_id = escape(&route.peer_id);
-    let local_did = escape(local_did);
-    let address = graphql_string_list_literal([route.address.as_str()]);
-    let collections = graphql_string_list_literal(collections.iter().map(String::as_str));
-    let now = escape(now);
-    let request_digest = escape(&route.request_digest);
-    let authorization_expires_at = escape(&route.authorization_expires_at);
-    format!(
-        r#"mutation {{
-            upsert_PeerPairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }},
-                add: {{
-                    peer_id: "{peer_id}", node_did: "{local_did}", template: "client",
-                    source: "enrollment", collections: {collections},
-                    enrollment_request_digest: "{request_digest}",
-                    enrollment_authorization_sequence: {},
-                    enrollment_authorization_expires_at: "{authorization_expires_at}",
-                    replicator_addresses: {address}, created_at: "{now}", updated_at: "{now}"
-                }},
-                update: {{
-                    node_did: "{local_did}", template: "client", source: "enrollment",
-                    enrollment_request_digest: "{request_digest}",
-                    enrollment_authorization_sequence: {},
-                    enrollment_authorization_expires_at: "{authorization_expires_at}",
-                    collections: {collections}, replicator_addresses: {address}, updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        route.authorization_sequence, route.authorization_sequence,
     )
 }
 
@@ -1499,31 +1492,8 @@ mod tests {
     }
 
     #[test]
-    fn enrollment_route_mutations_are_owned_bounded_and_nonempty() {
-        let route = EnrollmentRoute {
-            peer_id: "peer-\"\\".to_string(),
-            member_did: "did:key:member".to_string(),
-            address: "ticket-1".to_string(),
-            request_digest: "digest-1".to_string(),
-            authorization_sequence: 1,
-            authorization_expires_at: "2026-09-29T12:00:00Z".to_string(),
-        };
-        let collections = BTreeSet::from(["AgentRequest".to_string()]);
-        let upsert = upsert_enrollment_route_mutation(
-            &route,
-            "did:key:server",
-            &collections,
-            "2026-08-29T12:00:00Z",
-        );
-        assert!(upsert.contains("source: \"enrollment\""));
-        assert!(upsert.contains("template: \"client\""));
-        assert!(upsert.contains("enrollment_request_digest: \"digest-1\""));
-        assert!(upsert.contains("enrollment_authorization_sequence: 1"));
-        assert!(upsert.contains("enrollment_authorization_expires_at: \"2026-09-29T12:00:00Z\""));
-        assert!(upsert.contains("peer-\\\"\\\\"));
-        assert!(!upsert.contains("[]"));
-
-        let delete = delete_enrollment_route_mutation(&route.peer_id);
+    fn enrollment_route_delete_remains_scoped_to_its_source() {
+        let delete = delete_enrollment_route_mutation("peer-\"\\");
         assert!(delete.contains("source: { _eq: \"enrollment\" }"));
         assert!(delete.contains("peer-\\\"\\\\"));
     }

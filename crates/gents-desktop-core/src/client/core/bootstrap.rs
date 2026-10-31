@@ -158,6 +158,7 @@ impl ClientCore {
                 Arc::clone(&node),
                 Arc::clone(&p2p),
                 Arc::new(node_identity.clone()),
+                local_peer_id.clone(),
                 options.operator_identity_interaction,
             ));
 
