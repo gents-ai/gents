@@ -139,7 +139,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
   };
   return (
     /* the flyout and the pinned panel start their node at this height */
-    <nav className="flex h-full flex-col items-center gap-2 pt-[23px]">
+    <nav className="flex h-full flex-col items-center gap-1 pt-[23px]">
       <RailNode route={route} />
       <div className="mb-1 h-px w-5 bg-border" />
       <RailItem

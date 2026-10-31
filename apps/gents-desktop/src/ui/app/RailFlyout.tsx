@@ -346,7 +346,7 @@ export function RailFlyout({
           {/* the panel keeps its margin from the window's edge, and its
               content moves left by the rest, so each icon sits where the
               rail's does */}
-          <div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-2">
+          <div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-1">
             <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
           </div>
         </div>
