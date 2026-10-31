@@ -40,7 +40,7 @@ it("shows every account together, including an account with no configured backen
     },
   ];
   render(<AllProviderLimits views={views} onRefresh={refresh} />);
-  expect(screen.getByRole("region", { name: "Your limits" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Usage limits" })).toBeInTheDocument();
   expect(screen.getByText("Work")).toBeInTheDocument();
   expect(screen.getByText("Unbound personal")).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "Quota windows" })).toBeInTheDocument();
@@ -101,7 +101,7 @@ it("holds the panel's shape while the first read is out, not saying none were re
   const { rerender } = render(
     <AllProviderLimits views={[]} loading onRefresh={vi.fn()} />,
   );
-  const panel = screen.getByRole("region", { name: "Your limits" });
+  const panel = screen.getByRole("region", { name: "Usage limits" });
   expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
   expect(screen.queryByText("No account limits have been reported.")).toBeNull();
   rerender(<AllProviderLimits views={[]} onRefresh={vi.fn()} />);
