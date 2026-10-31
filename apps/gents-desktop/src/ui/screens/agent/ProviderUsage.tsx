@@ -153,11 +153,11 @@ function WindowRow({ w, now }: { w: UsageWindowView; now: number }) {
 
 /* one window as a bar beside the account's others, its name, percent and
    reset under it */
-/* the hairline before each window once they stand side by side: from 20rem
-   of panel for two, 28rem for three */
+/* a tick between the bars once the windows stand side by side, centred on
+   the bars' height: from 20rem of panel for two, 28rem for three */
 const PARTED: Record<number, string> = {
-  2: "@xs:not-first:before:absolute @xs:not-first:before:inset-y-0 @xs:not-first:before:-left-4 @xs:not-first:before:w-px @xs:not-first:before:bg-border",
-  3: "@md:not-first:before:absolute @md:not-first:before:inset-y-0 @md:not-first:before:-left-4 @md:not-first:before:w-px @md:not-first:before:bg-border",
+  2: "@xs:not-first:before:absolute @xs:not-first:before:-top-[3px] @xs:not-first:before:h-3 @xs:not-first:before:-left-4 @xs:not-first:before:w-px @xs:not-first:before:bg-border",
+  3: "@md:not-first:before:absolute @md:not-first:before:-top-[3px] @md:not-first:before:h-3 @md:not-first:before:-left-4 @md:not-first:before:w-px @md:not-first:before:bg-border",
 };
 
 function WindowBar({
