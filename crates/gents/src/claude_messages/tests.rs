@@ -120,7 +120,7 @@ fn echo_tool() -> ToolDefinition {
     }
 }
 
-fn echo_request() -> CompletionRequest {
+pub(super) fn echo_request() -> CompletionRequest {
     request_from_native(
         Some("You are helpful."),
         vec![Message::user("use echo")],
@@ -1071,7 +1071,6 @@ async fn transport_429_usage_cap_reports_reset_time() {
         &test_account(),
         RapidHashSet::new(),
         &bearer,
-        &ReqwestClient::new(),
         None,
     )
     .await
@@ -1090,40 +1089,7 @@ async fn transport_429_usage_cap_reports_reset_time() {
     assert_eq!(bearer.invalidations(), 0);
 }
 
-#[tokio::test]
-async fn transport_401_invalidates_the_bearer_once() {
-    let _guard = lock_fixtures_for_test().await;
-    let (url, handle) = crate::oauth_credential::test_support::one_shot_token_server(
-        401,
-        r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
-    )
-    .await;
-    let bearer = crate::claude_subscription::StaticBearer::new("access-STALE");
-    let err = stream_messages_at(
-        &url,
-        "claude-sonnet-5",
-        &echo_request(),
-        &test_account(),
-        RapidHashSet::new(),
-        &bearer,
-        &ReqwestClient::new(),
-        None,
-    )
-    .await
-    .err()
-    .expect("401");
-    assert!(err.to_string().contains("401"), "{err}");
-    assert_eq!(bearer.invalidations(), 1);
-    let request = handle.await.expect("request");
-    assert!(
-        request
-            .lines()
-            .any(|line| line.eq_ignore_ascii_case("authorization: Bearer access-STALE")),
-        "{request}"
-    );
-}
-
-fn test_account() -> ClaudeAccountContext {
+pub(super) fn test_account() -> ClaudeAccountContext {
     ClaudeAccountContext {
         device_id: "cd".repeat(32),
         account_uuid: "acct-test".into(),
@@ -1159,7 +1125,6 @@ where
                 account,
                 RapidHashSet::new(),
                 bearer,
-                &ReqwestClient::new(),
                 None,
             )
             .await;
@@ -1177,7 +1142,8 @@ fn header_lines(request: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The names of Claude Code's header set that the request carries, in wire order.
+/// The names of Claude Code's header set that the request carries, sorted. The wire order is
+/// Bun's (sorted by code point, then its defaults), pinned in `wire_tests`.
 fn claude_code_header_names(request: &str) -> Vec<String> {
     const CLAUDE_CODE_NAMES: &[&str] = &[
         "accept",
@@ -1205,11 +1171,18 @@ fn claude_code_header_names(request: &str) -> Vec<String> {
         "anthropic-beta",
         "x-client-request-id",
     ];
-    header_lines(request)
+    let mut names: Vec<String> = header_lines(request)
         .into_iter()
         .map(|(name, _)| name)
         .filter(|name| CLAUDE_CODE_NAMES.contains(&name.as_str()))
-        .collect()
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+fn sorted(mut names: Vec<&str>) -> Vec<&str> {
+    names.sort_unstable();
+    names
 }
 
 fn header_value(request: &str, name: &str) -> Option<String> {
@@ -1275,13 +1248,13 @@ const MAIN_HEADER_NAMES: &[&str] = &[
 ];
 
 #[test]
-fn a_main_turn_sends_claude_codes_header_set_in_its_order() {
+fn a_main_turn_sends_claude_codes_header_set() {
     let bearer = crate::claude_subscription::StaticBearer::new("access");
     let context = context_of(gents_claude::origin::Cause::Client, true, false);
     let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
     assert_eq!(
         claude_code_header_names(&request),
-        MAIN_HEADER_NAMES,
+        sorted(MAIN_HEADER_NAMES.to_vec()),
         "{request}"
     );
     let ids = context.ids();
@@ -1336,7 +1309,7 @@ fn every_attempt_carries_a_fresh_client_request_id() {
 }
 
 #[test]
-fn a_subagent_turn_adds_the_agent_headers_after_the_session_id() {
+fn a_subagent_turn_adds_the_agent_headers() {
     let bearer = crate::claude_subscription::StaticBearer::new("access");
     let context = context_of(gents_claude::origin::Cause::AgentNew, true, false);
     let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
@@ -1356,7 +1329,11 @@ fn a_subagent_turn_adds_the_agent_headers_after_the_session_id() {
         .unwrap()
         + 1;
     expected.insert(class, "x-claude-code-agent-type");
-    assert_eq!(claude_code_header_names(&request), expected, "{request}");
+    assert_eq!(
+        claude_code_header_names(&request),
+        sorted(expected),
+        "{request}"
+    );
     assert_eq!(
         header_value(&request, "x-claude-code-agent-type").as_deref(),
         Some("custom")
@@ -1383,7 +1360,7 @@ fn a_scheduled_task_turn_is_a_background_print_session() {
     let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
     assert_eq!(
         claude_code_header_names(&request),
-        MAIN_HEADER_NAMES,
+        sorted(MAIN_HEADER_NAMES.to_vec()),
         "{request}"
     );
     assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli-bg"));
@@ -1444,7 +1421,6 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
         &test_account(),
         RapidHashSet::new(),
         &bearer,
-        &ReqwestClient::new(),
         None,
     )
     .await
@@ -1531,7 +1507,6 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
                 &test_account(),
                 RapidHashSet::new(),
                 &bearer,
-                &ReqwestClient::new(),
                 Some(crate::usage_observation::UsageReporter::new(
                     cache.clone(),
                     node.clone(),

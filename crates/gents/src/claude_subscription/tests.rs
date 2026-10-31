@@ -401,7 +401,6 @@ mod pool_client {
                 cache: cache.clone(),
                 credential_ids,
             }),
-            http: ReqwestClient::new(),
         };
         let model = client.completion_model("claude-sonnet-5");
         (cache, client, model)
@@ -444,7 +443,6 @@ mod pool_client {
             RapidHashSet::new(),
             &model.accounts,
             rotation,
-            &model.http,
         )
         .await
         .err()
@@ -482,7 +480,6 @@ mod pool_client {
             RapidHashSet::new(),
             &model.accounts,
             rotation,
-            &model.http,
         )
         .await
         .err()

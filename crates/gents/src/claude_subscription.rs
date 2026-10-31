@@ -10,7 +10,6 @@ use rig::client::CompletionClient;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, GetTokenUsage, Usage,
 };
-use rig::http_client::ReqwestClient;
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
@@ -115,7 +114,6 @@ where
     pub(crate) accounts: Arc<[ClaudeAccount<S>]>,
     /// `None` is a single account with no rotation.
     pub(crate) rotation: Option<Rotation>,
-    pub(crate) http: ReqwestClient,
 }
 
 impl<S> Clone for ClaudeSubscriptionClient<S>
@@ -126,7 +124,6 @@ where
         Self {
             accounts: self.accounts.clone(),
             rotation: self.rotation.clone(),
-            http: self.http.clone(),
         }
     }
 }
@@ -152,7 +149,6 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         Ok(Self {
             accounts: Arc::from([account]),
             rotation: None,
-            http: ReqwestClient::new(),
         })
     }
 
@@ -207,7 +203,6 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
                 cache,
                 credential_ids,
             }),
-            http: ReqwestClient::new(),
         })
     }
 
@@ -249,7 +244,6 @@ impl ClaudeSubscriptionClient<ApiKeyBearer> {
                 identity: AccountIdentity::of_api_key(node_did),
             }]),
             rotation: None,
-            http: ReqwestClient::new(),
         }
     }
 }
@@ -268,7 +262,6 @@ where
                 identity: AccountIdentity::of_credential(&test_credential()),
             }]),
             rotation: None,
-            http: ReqwestClient::new(),
         }
     }
 }
@@ -301,7 +294,6 @@ where
     /// Never empty; with rotation each reporter also feeds this model's family.
     accounts: Arc<[ClaudeAccount<S>]>,
     rotation: Option<Rotation>,
-    http: ReqwestClient,
 }
 
 impl<S> Clone for ClaudeSubscriptionModel<S>
@@ -313,7 +305,6 @@ where
             model: self.model.clone(),
             accounts: self.accounts.clone(),
             rotation: self.rotation.clone(),
-            http: self.http.clone(),
         }
     }
 }
@@ -357,7 +348,6 @@ where
                 surface,
                 &self.accounts,
                 rotation,
-                &self.http,
             )
             .await
             .map(StreamExt::boxed),
@@ -371,7 +361,6 @@ where
                     &account.identity.context(false),
                     surface,
                     account.bearer.as_ref(),
-                    &self.http,
                     account.usage.clone(),
                 )
                 .await
@@ -414,7 +403,6 @@ where
             model,
             accounts,
             rotation: client.rotation.clone(),
-            http: client.http.clone(),
         }
     }
 
@@ -499,7 +487,6 @@ async fn open_rotated<S>(
     surface: RapidHashSet<String>,
     accounts: &Arc<[ClaudeAccount<S>]>,
     rotation: &Rotation,
-    http: &ReqwestClient,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
@@ -530,7 +517,6 @@ where
         &account.identity.context(using_overage),
         surface,
         account.bearer.as_ref(),
-        http,
         account.usage.clone(),
     )
     .await
