@@ -131,13 +131,8 @@ async fn native_twins_reject_filter_upsert_but_repair_the_canonical_witness() {
 }
 
 #[tokio::test]
-async fn conflicting_materialization_owners_and_generations_leave_all_rows_unchanged() {
-    for patch in [
-        r#"node_did: "foreign""#,
-        r#"source: "manual""#,
-        "enrollment_authorization_sequence: 3",
-        r#"enrollment_authorization_sequence: 2, enrollment_request_digest: "conflict""#,
-    ] {
+async fn conflicting_materialization_owners_leave_all_rows_unchanged() {
+    for patch in [r#"node_did: "foreign""#, r#"source: "manual""#] {
         let node = fixture().await;
         seed(&node, "route", 1).await;
         seed(&node, "route", 2).await;
@@ -175,4 +170,70 @@ async fn expired_authority_rolls_back_the_whole_materialization_transaction() {
     }).await.is_err());
     assert!(rows(&node).await.is_empty());
     node.shutdown().await;
+}
+
+#[tokio::test]
+async fn cached_generations_cannot_veto_the_current_verified_enrollment_request() {
+    for (cached_digest, cached_sequence, cached_expiry) in [
+        ("previous-request", 1, "2099-01-01T00:00:00Z"),
+        ("previous-request", 99, "2099-01-01T00:00:00Z"),
+        ("verified", 1, "2000-01-01T00:00:00Z"),
+    ] {
+        let node = fixture().await;
+        seed(&node, "route", 1).await;
+        seed(&node, "route", 2).await;
+        let before = rows(&node).await;
+        let mut twins = before.iter().collect::<Vec<_>>();
+        twins.sort_by_key(|row| row["_docID"].as_str().unwrap());
+        let canonical = twins[0]["_docID"].as_str().unwrap().to_owned();
+        let parked = twins[1]["_docID"].as_str().unwrap().to_owned();
+        // Same owner/source and equal counters do not imply the same request.
+        // Keep all other fields current so the no-op path must compare the
+        // complete verified generation, not just its counter or endpoint.
+        ConfigAccess::write_local(&node, "test.desired.cached_generations", &format!(r#"mutation {{
+            stale: update_PeerPairingDesired(docID: "{canonical}", input: {{
+                enrollment_request_digest: "{cached_digest}", enrollment_authorization_sequence: {cached_sequence},
+                enrollment_authorization_expires_at: "{cached_expiry}", replicator_addresses: ["fresh-address"]
+            }}) {{ _docID }}
+            parked: update_PeerPairingDesired(docID: "{parked}", input: {{
+                enrollment_request_digest: "verified", enrollment_authorization_sequence: 1
+            }}) {{ _docID }}
+        }}"#)).await.unwrap();
+        let parked_before = rows(&node)
+            .await
+            .into_iter()
+            .find(|row| row["_docID"] == parked)
+            .unwrap();
+        let mut current = authorized();
+        current.authorization_sequence = 1;
+        let saved = ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.desired.current_request",
+            |txn| {
+                let current = &current;
+                Box::pin(async move {
+                    materialize_enrollment_desired_in_txn(txn, "local", current, &BTreeSet::new())
+                        .await
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved, canonical);
+        let after = rows(&node).await;
+        assert_eq!(after.len(), 2);
+        let repaired = after.iter().find(|row| row["_docID"] == canonical).unwrap();
+        assert_eq!(repaired["enrollment_request_digest"], "verified");
+        assert_eq!(repaired["enrollment_authorization_sequence"], 1);
+        assert_eq!(
+            repaired["enrollment_authorization_expires_at"],
+            "2099-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            after.iter().find(|row| row["_docID"] == parked),
+            Some(&parked_before)
+        );
+        node.shutdown().await;
+    }
 }
