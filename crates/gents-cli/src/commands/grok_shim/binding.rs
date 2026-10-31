@@ -5,7 +5,8 @@ use futures_util::future::BoxFuture;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use super::acp::{internal_method, AcpRequest, AcpService};
+use super::acp::wire::{internal_method, AcpRequest};
+use super::acp::AcpService;
 use super::server::{AcpDelegate, AcpOutbound, Registration};
 use super::AcpDelegateFactoryInputs;
 

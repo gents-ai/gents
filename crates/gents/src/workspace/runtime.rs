@@ -21,11 +21,13 @@ use super::documents::{
     WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePlacementDoc, WorkspaceReceiptDoc,
     LIFECYCLE_SEALED, RECEIPT_KIND_WRITER,
 };
-use super::executor::{
-    clear_integrate_journal, execute_cleanup_workspace_plan, execute_integrate_workspace_plan,
-    execute_seal_workspace_plan, finalize_integrate_trunk, CleanupWorkspaceOutcome,
-    HostExecutorContext, IntegrateWorkspaceOutcome, RepositoryPlacementRef, SealWorkspaceOutcome,
+use super::executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
+use super::executor::integrate::{
+    clear_integrate_journal, execute_integrate_workspace_plan, finalize_integrate_trunk,
+    IntegrateWorkspaceOutcome,
 };
+use super::executor::seal::{execute_seal_workspace_plan, SealWorkspaceOutcome};
+use super::executor::{HostExecutorContext, RepositoryPlacementRef};
 use super::overlay::{optional_id, IsolatedWorkspaceRecord};
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"

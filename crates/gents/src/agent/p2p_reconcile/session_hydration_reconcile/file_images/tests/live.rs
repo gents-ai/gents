@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::agent::p2p_reconcile::embedded_impl::push_documents_to_peer;
-use crate::agent::p2p_reconcile::embedded_impl::tests::{
+use crate::agent::p2p_reconcile::embedded_impl::tests::fixtures::{
     authorize_enrollment_peer, runtime_http_test_node, runtime_http_test_node_with_schema,
     wait_for_active_peer, wait_for_peer_info,
 };

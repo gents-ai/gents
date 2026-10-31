@@ -169,8 +169,9 @@ fn synthetic(
 mod tests {
     use super::*;
     use crate::document_config::{EvalReducer, EvalSplit};
+    use crate::eval::runner::completion_is_not_evidence;
+    use crate::eval::runner::projection::completion;
     use crate::eval::runner::scripted::ScriptedExecutor;
-    use crate::eval::runner::{completion, completion_is_not_evidence};
     use crate::eval::{
         case_trial_score, classify, CaseTrialScore, EvidenceClass, OutcomeKind, ProviderReason,
         VerdictView,

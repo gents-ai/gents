@@ -32,7 +32,9 @@ mod tests;
 
 use bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
 use cli_tool::CliTool;
-use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
+use file_tools::edit_file::EditFileTool;
+use file_tools::read_tools::{GlobTool, GrepTool, ListFilesTool, ReadFileTool};
+use file_tools::write_file::WriteFileTool;
 use session_message::{
     AgentInterruptTool, AgentListTool, AgentMessageTool, AgentNewTool, AgentResumeTool,
     AgentSessionListTool, AgentSessionReadTool, AgentStopTool, CancelProcessTool,

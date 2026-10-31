@@ -5,7 +5,7 @@ use crate::tool_call_lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
 use crate::toolset::args::WriteFileArgs;
-use crate::toolset::file_tools::WriteFileTool;
+use crate::toolset::file_tools::write_file::WriteFileTool;
 use crate::toolset::shared::ToolContext;
 use gents_loop::live_output::LiveToolOutputRegistry;
 

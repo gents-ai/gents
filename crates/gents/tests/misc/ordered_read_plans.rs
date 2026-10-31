@@ -323,6 +323,15 @@ sys.stdout.write(json.dumps(strings.literals))
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+/// A module directory holds the body of its same-named file, so both follow one rule.
+fn scanned_stem(stem: &str) -> bool {
+    stem != "tests"
+        && !stem.starts_with("test_")
+        && !["_tests", "_test", ".test", ".spec", ".node-test"]
+            .iter()
+            .any(|suffix| stem.ends_with(suffix))
+}
+
 fn source_files(root: &Path, files: &mut Vec<PathBuf>) {
     if !root.exists() {
         return;
@@ -343,6 +352,9 @@ fn source_files(root: &Path, files: &mut Vec<PathBuf>) {
             ]
             .iter()
             .any(|name| path.file_name().is_some_and(|found| found == *name))
+                && path
+                    .file_name()
+                    .is_some_and(|name| scanned_stem(&name.to_string_lossy()))
             {
                 source_files(&path, files);
             }
@@ -354,14 +366,9 @@ fn source_files(root: &Path, files: &mut Vec<PathBuf>) {
                 .iter()
                 .any(|allowed| extension == *allowed)
             })
-            && path.file_stem().is_some_and(|stem| {
-                let stem = stem.to_string_lossy();
-                stem != "tests"
-                    && !stem.starts_with("test_")
-                    && !["_tests", "_test", ".test", ".spec", ".node-test"]
-                        .iter()
-                        .any(|suffix| stem.ends_with(suffix))
-            })
+            && path
+                .file_stem()
+                .is_some_and(|stem| scanned_stem(&stem.to_string_lossy()))
         {
             files.push(path);
         }

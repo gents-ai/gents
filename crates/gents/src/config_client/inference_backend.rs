@@ -9,7 +9,7 @@ pub async fn load_inference_backend_in_txn(
     node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackend>> {
-    super::desired_state::read_record(txn, Collection::InferenceBackend, node_did, backend_id)
+    super::desired_state::read::read_record(txn, Collection::InferenceBackend, node_did, backend_id)
         .await?
         .map(|(_, value)| serde_json::from_value(value).context("decoding scoped InferenceBackend"))
         .transpose()
@@ -58,7 +58,7 @@ pub async fn write_inference_backend_document(
         .transact_write("config.inference_backend.upsert", |txn| {
             Box::pin(async move {
                 write_inference_backend_in_txn(txn, backend).await?;
-                super::desired_state::read_record(
+                super::desired_state::read::read_record(
                     txn,
                     Collection::InferenceBackend,
                     &backend.node_did,

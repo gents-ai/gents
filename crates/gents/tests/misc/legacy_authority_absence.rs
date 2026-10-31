@@ -152,7 +152,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         include_str!("../../src/lifecycle/queue/goal_continuation.rs"),
         include_str!("../../../gents-cli/src/request_helpers.rs"),
         include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
-        include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+        include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"),
+        include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"),
     ];
     for source in writers {
         assert!(
@@ -198,7 +199,15 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         ),
         (
             "desktop requests",
-            include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+            concat!(
+                include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+                include_str!(
+                    "../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"
+                ),
+                include_str!(
+                    "../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"
+                ),
+            ),
         ),
     ] {
         let production = source.split("#[cfg(test)]\nmod tests {").next().unwrap();
@@ -247,12 +256,15 @@ fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
     let observer = include_str!("../../../gents-desktop-core/src/client/observe.rs");
     let merges = include_str!("../../../gents-desktop-core/src/client/store/merges.rs");
     let writes = include_str!("../../../gents-desktop-core/src/client/core/writes.rs");
+    let writes_operator =
+        include_str!("../../../gents-desktop-core/src/client/core/writes/operator.rs");
 
     assert!(!desired.contains("unwrap_or(policy::PairingDirection::ClientToRuntime)"));
     assert!(!topology.contains("teardown_unowned_replicators_at_endpoint"));
     assert!(!observer.contains("selected_is_legacy_remote"));
     assert!(!merges.contains("replace_remote_agent_scope"));
     assert!(!writes.contains("machines.next()?.clone()"));
+    assert!(!writes_operator.contains("machines.next()?.clone()"));
     assert!(policy.contains("client pairing id has no recognized direction suffix"));
 }
 

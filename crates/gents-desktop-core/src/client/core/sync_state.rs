@@ -12,7 +12,7 @@ use gents_protocol::peer_schema::{
 };
 use serde_json::Value;
 
-use super::enrollment::EnrollmentAuthorizationGeneration;
+use super::enrollment::reconcile::EnrollmentAuthorizationGeneration;
 use super::{
     p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot,
     EnrollmentActivationError, P2PHealth,
@@ -874,7 +874,6 @@ mod tests {
             [
                 "\n#[cfg(test)]\nmod tests {",
                 "\n#[cfg(test)]\nmod pairing_reconcile_tests {",
-                "\n#[cfg(test)]\nmod delete_source_tests {",
             ]
             .into_iter()
             .filter_map(|marker| source.find(marker))
@@ -885,6 +884,32 @@ mod tests {
         for (name, source) in [
             ("core", include_str!("../core.rs")),
             ("writes", include_str!("writes.rs")),
+            (
+                "writes/config_delete",
+                include_str!("writes/config_delete.rs"),
+            ),
+            ("writes/config_save", include_str!("writes/config_save.rs")),
+            ("writes/hydration", include_str!("writes/hydration.rs")),
+            (
+                "writes/hydration/documents",
+                include_str!("writes/hydration/documents.rs"),
+            ),
+            ("writes/manual_runs", include_str!("writes/manual_runs.rs")),
+            ("writes/operator", include_str!("writes/operator.rs")),
+            (
+                "writes/pending_queue",
+                include_str!("writes/pending_queue.rs"),
+            ),
+            (
+                "writes/pending_submissions",
+                include_str!("writes/pending_submissions.rs"),
+            ),
+            (
+                "writes/request_patch",
+                include_str!("writes/request_patch.rs"),
+            ),
+            ("writes/requests", include_str!("writes/requests.rs")),
+            ("writes/sessions", include_str!("writes/sessions.rs")),
             ("route_manager", include_str!("route_manager.rs")),
             ("supervisor", include_str!("supervisor.rs")),
             ("observer", include_str!("../observe.rs")),

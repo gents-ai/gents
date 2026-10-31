@@ -1,4 +1,9 @@
+use super::super::context::ToolContext;
+use super::command_run::run_command;
 use super::*;
+use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use std::time::Duration;
+
 use crate::plugin::approval::workspace;
 
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {

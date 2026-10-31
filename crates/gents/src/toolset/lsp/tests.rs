@@ -1600,7 +1600,7 @@ while True:
         operator_guard_home: None,
     };
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
-    let result = super::actions::request_maybe_retry(
+    let result = super::actions::request::request_maybe_retry(
         lease.client(),
         "textDocument/documentSymbol",
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
@@ -1614,7 +1614,7 @@ while True:
 
     let empty = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        super::actions::request_maybe_retry(
+        super::actions::request::request_maybe_retry(
             lease.client(),
             "workspace/symbol",
             serde_json::json!({"query":"missing"}),
@@ -1780,7 +1780,7 @@ async fn busy_fixture_symbols(
     };
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
     let started = std::time::Instant::now();
-    let result = super::actions::request_maybe_retry(
+    let result = super::actions::request::request_maybe_retry(
         lease.client(),
         "textDocument/documentSymbol",
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
@@ -2433,13 +2433,13 @@ fn code_action_query_selects_title_or_index() {
         serde_json::json!({"title":"Inline variable","edit":{"changes":{"a":[]}}}),
         serde_json::json!({"title":"Need resolve","data":{"id":1}}),
     ];
-    let by_title = super::actions::select_code_action(&actions, Some("inline")).unwrap();
+    let by_title = super::actions::request::select_code_action(&actions, Some("inline")).unwrap();
     assert_eq!(by_title["title"], "Inline variable");
-    let by_zero = super::actions::select_code_action(&actions, Some("0")).unwrap();
+    let by_zero = super::actions::request::select_code_action(&actions, Some("0")).unwrap();
     assert_eq!(by_zero["title"], "Extract function");
-    let by_one = super::actions::select_code_action(&actions, Some("1")).unwrap();
+    let by_one = super::actions::request::select_code_action(&actions, Some("1")).unwrap();
     assert_eq!(by_one["title"], "Inline variable");
-    let unresolved = super::actions::select_code_action(&actions[2..], None).unwrap();
+    let unresolved = super::actions::request::select_code_action(&actions[2..], None).unwrap();
     assert_eq!(unresolved["title"], "Need resolve");
 }
 
@@ -2488,7 +2488,7 @@ fn diagnostics_render_messages_for_push_pull_and_workspace_shapes() {
         "message": "useful diagnostic"
     });
 
-    let push = super::actions::format_result(
+    let push = super::actions::format::format_result(
         &context,
         LspAction::Diagnostics,
         serde_json::json!({"uri": uri, "diagnostics": [diagnostic.clone()]}),
@@ -2497,7 +2497,7 @@ fn diagnostics_render_messages_for_push_pull_and_workspace_shapes() {
     assert!(push.contains("useful diagnostic"), "{push}");
     assert!(push.contains("rustc") && push.contains("E0001"), "{push}");
 
-    let pull = super::actions::format_result(
+    let pull = super::actions::format::format_result(
         &context,
         LspAction::Diagnostics,
         serde_json::json!({"kind": "full", "items": [diagnostic.clone()]}),
@@ -2505,7 +2505,7 @@ fn diagnostics_render_messages_for_push_pull_and_workspace_shapes() {
     assert!(pull.contains("line 3"), "{pull}");
     assert!(pull.contains("useful diagnostic"), "{pull}");
 
-    let workspace = super::actions::format_result(
+    let workspace = super::actions::format::format_result(
         &context,
         LspAction::Diagnostics,
         serde_json::json!({"items": [{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs")), "items": [diagnostic]}]}),
@@ -2528,7 +2528,7 @@ fn document_symbol_cap_is_global_and_output_is_qualified() {
             })
         })
         .collect::<Vec<_>>();
-    let output = super::actions::format_result(
+    let output = super::actions::format::format_result(
         &context,
         LspAction::Symbols,
         serde_json::json!([{
@@ -2556,7 +2556,7 @@ fn requested_result_limit_applies_to_diagnostics_symbols_and_references() {
             })
         })
         .collect::<Vec<_>>();
-    let output = super::actions::format_result_with_limit(
+    let output = super::actions::format::format_result_with_limit(
         &context,
         LspAction::Diagnostics,
         serde_json::json!({"items": diagnostics}),
@@ -2567,7 +2567,7 @@ fn requested_result_limit_applies_to_diagnostics_symbols_and_references() {
         "uri": uri, "range": {"start": {"line": n, "character": 0}}, "name": format!("symbol_{n}")
     })).collect::<Vec<_>>();
     for action in [LspAction::Symbols, LspAction::References] {
-        let output = super::actions::format_result_with_limit(
+        let output = super::actions::format::format_result_with_limit(
             &context,
             action,
             serde_json::json!(locations),
@@ -2623,7 +2623,7 @@ exec sleep 30
     );
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        super::actions::run_linter_diagnostics(
+        super::actions::diagnostics::run_linter_diagnostics(
             &config,
             std::slice::from_ref(&server),
             &source,
@@ -2652,7 +2652,7 @@ exec sleep 30
     let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         None,
         cancellation,
-        super::actions::run_linter_diagnostics(
+        super::actions::diagnostics::run_linter_diagnostics(
             &config,
             &servers,
             &source,
@@ -2670,7 +2670,7 @@ exec sleep 30
 #[test]
 fn lsp_truncation_keeps_the_header() {
     let text = format!("Found 999 result(s):\n{}", "x\n".repeat(100_000));
-    let output = super::actions::truncate_model_output(text);
+    let output = super::actions::format::truncate_model_output(text);
     assert!(output.starts_with("Found 999 result(s):"), "{output}");
 }
 
@@ -2700,7 +2700,7 @@ fn sandbox_change_flips_digest() {
 fn readonly_request_rejects_unknown_payload_fields_before_start() {
     let root = tempfile::tempdir().unwrap();
     let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
-    let err = super::actions::validate_raw_request(
+    let err = super::actions::request::validate_raw_request(
         &context,
         "textDocument/hover",
         Some(r#"{"textDocument":{"uri":"file:///tmp/x"},"extra":true}"#),
@@ -2719,7 +2719,7 @@ fn readonly_request_validates_bare_and_non_file_uris() {
         "untitled:outside",
     ] {
         let payload = serde_json::json!({"textDocument": {"uri": uri}}).to_string();
-        let err = super::actions::validate_raw_request(
+        let err = super::actions::request::validate_raw_request(
             &context,
             "textDocument/documentSymbol",
             Some(&payload),
@@ -3226,7 +3226,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
                 .expect("pool must deny directly");
             assert_eq!(error, super::ARTIFACT_SCOPE_DENIAL);
             assert!(pool.get_ready(&key).await.is_none());
-            let linter = super::actions::run_linter_diagnostics(
+            let linter = super::actions::diagnostics::run_linter_diagnostics(
                 &config,
                 &[server.clone()],
                 &source.join("README.md"),
