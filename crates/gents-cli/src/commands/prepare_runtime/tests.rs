@@ -328,3 +328,51 @@ async fn preparation_missing_store_key_refuses_before_requesting_retirement() {
     assert!(!gents::store::local::store_key::home_key_file(&home).exists());
     assert!(!home.join("data").exists());
 }
+
+#[tokio::test]
+async fn unavailable_observation_is_absent_but_cannot_authorize_retirement() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = reqwest::Url::parse(&format!(
+        "http://{}/api/v0/graphql",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                RUNTIME_CONTROL_PATH,
+                post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let client = reqwest::Client::new();
+    let observed = control(
+        &client,
+        &endpoint,
+        "did:key:fixture",
+        RuntimeOperation::Observe,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(observed.is_none());
+    let retired = control(
+        &client,
+        &endpoint,
+        "did:key:fixture",
+        RuntimeOperation::Retire {
+            expected_build: "fixture".into(),
+        },
+        None,
+    )
+    .await;
+    assert_eq!(
+        refusal_reason(&retired.unwrap_err()),
+        RuntimePreparationRefusal::Unavailable
+    );
+    server.abort();
+    let _ = server.await;
+}
