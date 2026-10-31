@@ -159,6 +159,23 @@
   },
   {
     "read": {
+      "path": "crates/gents-desktop-bridge/src/snapshot/session/request_context.rs",
+      "collection": "AgentMessage",
+      "arguments": "filter: { $GENTS_scope$, request_doc_id: { _eq: \"$GENTS_doc_id$\" } }, order: { sequence: ASC }, limit: 1"
+    },
+    "bindings": [
+      {
+        "scope": "@session",
+        "doc_id": "probe"
+      },
+      {
+        "scope": "@session-absent",
+        "doc_id": "probe"
+      }
+    ]
+  },
+  {
+    "read": {
       "path": "crates/gents-desktop-core/src/client/query.rs",
       "collection": "$GENTS_AGENT_REQUEST_NAME$",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, session_id: { _eq: \"$GENTS_session$\" }, requester_did: { _eq: $GENTS_requester$ }, purpose: { _eq: \"normal\" } }, order: [{ created_at: DESC }, { request_id: DESC }, { _docID: DESC }], limit: 1"
