@@ -4,7 +4,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::run_timeline::{RunTimeline, RunTimelineEvent, TimelineRenderedRequestEvent};
+use crate::observe::run_timeline::{RunTimeline, RunTimelineEvent, TimelineRenderedRequestEvent};
 
 mod atif;
 mod build;

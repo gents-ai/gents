@@ -78,7 +78,7 @@ where
 
     pub(in crate::agent) fn with_inference_observations(
         mut self,
-        registry: crate::inference_observation::InferenceObservationRegistry,
+        registry: crate::observe::inference_observation::InferenceObservationRegistry,
     ) -> Self {
         self.inference_observations = registry;
         self

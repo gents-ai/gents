@@ -242,7 +242,7 @@ where
         let model_name = self.agent_config.model_name.clone();
         let inference_observation = self
             .inference_observations
-            .begin(crate::inference_observation::InferenceKey {
+            .begin(crate::observe::inference_observation::InferenceKey {
                 node: request.node_did.clone(),
                 session: request.session_id.clone(),
                 request: request.request_id.clone(),

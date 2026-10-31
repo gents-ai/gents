@@ -51,8 +51,10 @@ impl TelemetryGuard {
     }
 }
 
-fn log_rate_ceiling() -> gents::log_rate::RateLimitFilter {
-    gents::log_rate::RateLimitFilter::new(gents::log_rate::RateLimitConfig::default())
+fn log_rate_ceiling() -> gents::observe::log_rate::RateLimitFilter {
+    gents::observe::log_rate::RateLimitFilter::new(
+        gents::observe::log_rate::RateLimitConfig::default(),
+    )
 }
 
 pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {

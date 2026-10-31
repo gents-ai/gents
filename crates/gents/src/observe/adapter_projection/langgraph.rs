@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use gents_protocol::transcript::{present_message, PresentedMessageRole};
 use serde_json::json;
 
-use crate::run_timeline::{RunTimeline, RunTimelineEvent, TimelineMessageEvent};
+use crate::observe::run_timeline::{RunTimeline, RunTimelineEvent, TimelineMessageEvent};
 
 use super::build::presented_role_label;
 use super::redaction::{redact_option, redact_str};

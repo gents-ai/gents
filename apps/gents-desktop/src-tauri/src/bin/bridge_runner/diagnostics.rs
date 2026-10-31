@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents::run_timeline_fetch::load_run_timeline_rows;
+use gents::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::ClientCore;
 use serde::Serialize;

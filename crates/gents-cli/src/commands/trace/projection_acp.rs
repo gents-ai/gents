@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::adapter_projection::AdapterProjectionKind;
-use gents::run_timeline::{
+use gents::observe::adapter_projection::AdapterProjectionKind;
+use gents::observe::run_timeline::{
     RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent, TimelineRequestRow,
     TimelineToolCallEvent,
 };
@@ -736,7 +736,7 @@ mod tests {
     use std::sync::Arc;
 
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
-    use gents::run_timeline::{
+    use gents::observe::run_timeline::{
         TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
         TimelineRenderedRequestRef, TimelineSessionRow, TimelineToolCallRow,
     };

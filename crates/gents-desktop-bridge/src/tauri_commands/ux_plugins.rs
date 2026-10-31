@@ -148,7 +148,7 @@ pub async fn desktop_ux_data_call(
     packs::ux_data_call(
         home,
         access,
-        gents::ux_data::UxDataCall {
+        gents::observe::ux_data::UxDataCall {
             ux: request.ux,
             node_did: request.node_did,
             surface: request.surface,

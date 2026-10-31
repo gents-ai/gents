@@ -273,7 +273,9 @@ impl McpPool {
             owner_node_did: None,
             inner: Arc::new(RwLock::new(RapidHashMap::new())),
             connect_fn: default_connect_fn(resume_stats.clone()),
-            trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
+            trace_context_headers_fn: Arc::new(
+                crate::observe::runtime_trace::current_trace_context_headers,
+            ),
             idle_ttl: Some(DEFAULT_MCP_IDLE_TTL),
             resume_stats,
             park: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),
@@ -325,7 +327,9 @@ impl McpPool {
                     ))
                 },
             ),
-            trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
+            trace_context_headers_fn: Arc::new(
+                crate::observe::runtime_trace::current_trace_context_headers,
+            ),
             idle_ttl: None,
             resume_stats: ResumeStatsRegistry::default(),
             park: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),

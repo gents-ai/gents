@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::defra_node::EmbeddedNode;
-use crate::run_timeline::{RunTimelineRows, TimelineToolCallRow};
+use crate::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
 
@@ -184,7 +184,7 @@ pub async fn collect_request_evidence(
     let data = response
         .data
         .context("collect request evidence returned no data")?;
-    let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
         &ConfigAccess::local(node.clone()),
         request_id,
     )

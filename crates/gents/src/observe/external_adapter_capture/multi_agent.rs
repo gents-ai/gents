@@ -11,7 +11,7 @@ use super::{
     timestamp_for_index, ExternalAdapterCapture, ExternalAdapterImport, ExternalAdapterMapping,
     ExternalAdapterView,
 };
-use crate::run_timeline::{TimelineRequestRow, TimelineToolCallRow};
+use crate::observe::run_timeline::{TimelineRequestRow, TimelineToolCallRow};
 
 pub(super) fn import_multi_agent_capture(
     capture: &ExternalAdapterCapture,

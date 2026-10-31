@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::fs;
 
 use anyhow::{Context, Result};
-use gents::adapter_projection::{
+use gents::observe::adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, adapter_projection_native_json,
@@ -10,14 +10,14 @@ use gents::adapter_projection::{
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
 };
-use gents::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
-use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::call::lifecycle::ToolCallState;
-use gents::trace_export::{
+use gents::observe::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
+use gents::observe::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
+use gents::observe::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::call::lifecycle::ToolCallState;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -108,7 +108,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let mut entries = raw_rows
         .into_iter()
         .map(|raw| {
-            let row: gents::run_timeline::TimelineRenderedRequestRow =
+            let row: gents::observe::run_timeline::TimelineRenderedRequestRow =
                 serde_json::from_value(raw.clone()).context("decoding RenderedRequest row")?;
             Ok((row, raw))
         })
@@ -234,11 +234,11 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
 }
 
 fn capture_metadata_value(
-    row: &gents::run_timeline::TimelineRenderedRequestRow,
+    row: &gents::observe::run_timeline::TimelineRenderedRequestRow,
     raw: &Value,
     include_body: bool,
 ) -> Value {
-    let event = gents::run_timeline::rendered_request_event(row);
+    let event = gents::observe::run_timeline::rendered_request_event(row);
     let mut value = serde_json::to_value(&event).unwrap_or_else(|_| json!({}));
     value["doc_id"] = json!(row.doc_id);
     if include_body {
@@ -252,7 +252,7 @@ fn capture_metadata_value(
     value
 }
 
-fn capture_order_padded(row: &gents::run_timeline::TimelineRenderedRequestRow) -> String {
+fn capture_order_padded(row: &gents::observe::run_timeline::TimelineRenderedRequestRow) -> String {
     use gents_protocol::rendered_request::{CaptureOrderKey, CaptureScope};
 
     let scope = row
@@ -533,7 +533,7 @@ fn build_record(
     let model_name = rows
         .map(|rows| build_run_timeline(rows.clone()))
         .as_ref()
-        .and_then(gents::adapter_projection::root_observed_model);
+        .and_then(gents::observe::adapter_projection::root_observed_model);
     let backend_id = rows.and_then(|rows| {
         let mut observed = rows.inference_calls.iter().filter(|call| {
             call.request_doc_id == rows.request.doc_id && call.request_id == rows.request.request_id

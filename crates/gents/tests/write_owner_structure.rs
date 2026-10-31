@@ -2004,7 +2004,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // display only: appends a next-call hint when absent
     ("crates/gents/src/tools/native/session_history.rs", 1),
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/trace_export.rs", 6),
+    ("crates/gents/src/observe/trace_export.rs", 6),
     // serde `unknown variant` message
     ("crates/gents/src/tools/workspace/action_plan.rs", 1),
     // git show stderr
@@ -2385,6 +2385,7 @@ const PEER_TIER: usize = 4;
 const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("documents", "goal", 4),
     ("documents", "inference", 10),
+    ("documents", "observe", 1),
     ("documents", "pack", 3),
     ("documents", "plugin", 4),
     ("documents", "session", 3),
@@ -2394,6 +2395,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("goal", "session", 13),
     ("goal", "tools", 3),
     ("goal", "triggers", 6),
+    ("inference", "observe", 3),
     ("inference", "request", 2),
     ("inference", "tools", 1),
     ("pack", "plugin", 31),
@@ -2407,6 +2409,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("request", "tools", 32),
     ("request", "triggers", 32),
     ("session", "goal", 11),
+    ("session", "observe", 1),
     ("session", "request", 53),
     ("session", "tools", 35),
     ("store", "documents", 46),
@@ -2414,6 +2417,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("store", "tools", 13),
     ("store", "triggers", 5),
     ("tools", "goal", 37),
+    ("tools", "observe", 4),
     ("tools", "pack", 88),
     ("tools", "plugin", 77),
     ("tools", "request", 79),
