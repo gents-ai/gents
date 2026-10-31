@@ -1,5 +1,12 @@
 import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ChevronDown, Plus, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  ChevronDown,
+  Package,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -55,6 +62,7 @@ function ListItem({
   compact = false,
   expanded,
   onToggle,
+  inPackGroup = false,
 }: {
   row: ListRow;
   base: Extract<Route, { name: "agent" }>;
@@ -62,7 +70,10 @@ function ListItem({
   compact?: boolean;
   expanded?: boolean;
   onToggle?: () => void;
+  /** under its pack's header, which already names the pack */
+  inPackGroup?: boolean;
 }) {
+  const origin = inPackGroup ? null : packOrigin(r.tags);
   if (nested || compact) {
     return (
       <li
@@ -112,7 +123,7 @@ function ListItem({
               </span>
             )}
           </p>
-          {(r.meta || packOrigin(r.tags)) && (
+          {(r.meta || origin) && (
             <p
               className={`mt-0.5 truncate text-muted-foreground ${r.metaMono ? "font-mono text-[11px]" : "text-xs"}`}
             >
@@ -136,9 +147,7 @@ function ListItem({
               ) : (
                 r.meta
               )}
-              {packOrigin(r.tags)
-                ? `${r.meta ? " · " : ""}pack ${packOrigin(r.tags)}`
-                : ""}
+              {origin ? `${r.meta ? " · " : ""}pack ${origin}` : ""}
             </p>
           )}
         </div>
@@ -190,6 +199,26 @@ export type ListRow = {
   metaLeadToggles?: boolean;
 };
 
+/* which packs' groups a list has folded, per section, kept on this device */
+const foldsKey = (section: string) => `gents.config.packFolds.${section}`;
+function loadFolds(section: string): Set<string> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(foldsKey(section)) ?? "[]");
+    return new Set(
+      Array.isArray(saved)
+        ? saved.filter((v): v is string => typeof v === "string")
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+function saveFolds(section: string, folds: Set<string>) {
+  try {
+    localStorage.setItem(foldsKey(section), JSON.stringify([...folds]));
+  } catch {}
+}
+
 const PACK_ORIGIN_PREFIX = "gents:pack:";
 const NOT_FROM_PACK_FILTER = "__not_from_pack__";
 export function packOrigin(tags: string[] | null | undefined): string | null {
@@ -231,6 +260,15 @@ export function ListDetail({
   const [originFilter, setOriginFilter] = useState("all");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [allNested, setAllNested] = useState<Set<string>>(() => new Set());
+  const [folds, setFolds] = useState<Set<string>>(() => loadFolds(base.section));
+  const toggleFold = (pack: string) =>
+    setFolds((prev) => {
+      const next = new Set(prev);
+      if (next.has(pack)) next.delete(pack);
+      else next.add(pack);
+      saveFolds(base.section, next);
+      return next;
+    });
   const origins = useMemo(
     () =>
       Array.from(
@@ -292,6 +330,43 @@ export function ListDetail({
       [r.title, r.titleNote, r.meta, r.badge].some((t) => t?.toLowerCase().includes(q));
     return matchesOrigin && matchesQuery;
   });
+  const renderRow = (r: ListRow, inPackGroup: boolean) => (
+    <Fragment key={r.id}>
+      <ListItem
+        row={r}
+        base={base}
+        compact={compact}
+        inPackGroup={inPackGroup}
+        expanded={r.children ? expanded.has(r.id) : undefined}
+        onToggle={() =>
+          setExpanded((prev) => {
+            const next = new Set(prev);
+            if (next.has(r.id)) next.delete(r.id);
+            else next.add(r.id);
+            return next;
+          })
+        }
+      />
+      {expanded.has(r.id) &&
+        (allNested.has(r.id) || (r.children?.length ?? 0) <= NESTED_SHOWN + 1
+          ? r.children
+          : r.children?.slice(0, NESTED_SHOWN)
+        )?.map((c) => <ListItem key={c.id} row={c} base={base} nested />)}
+      {expanded.has(r.id) &&
+        !allNested.has(r.id) &&
+        (r.children?.length ?? 0) > NESTED_SHOWN + 1 && (
+          <ListItem
+            base={base}
+            nested
+            row={{
+              id: `${r.id}:more`,
+              title: `Show ${(r.children?.length ?? 0) - NESTED_SHOWN} more`,
+              onOpen: () => setAllNested((prev) => new Set(prev).add(r.id)),
+            }}
+          />
+        )}
+    </Fragment>
+  );
   return (
     <div>
       {(onCreate || createMenu || filterable || origins.length > 0) && (
@@ -348,42 +423,43 @@ export function ListDetail({
         </div>
       )}
       <ul className="divide-y divide-border/60 rounded-2xl border border-border/60 bg-raised">
-        {shown.map((r) => (
-          <Fragment key={r.id}>
-            <ListItem
-              row={r}
-              base={base}
-              compact={compact}
-              expanded={r.children ? expanded.has(r.id) : undefined}
-              onToggle={() =>
-                setExpanded((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(r.id)) next.delete(r.id);
-                  else next.add(r.id);
-                  return next;
-                })
-              }
-            />
-            {expanded.has(r.id) &&
-              (allNested.has(r.id) || (r.children?.length ?? 0) <= NESTED_SHOWN + 1
-                ? r.children
-                : r.children?.slice(0, NESTED_SHOWN)
-              )?.map((c) => <ListItem key={c.id} row={c} base={base} nested />)}
-            {expanded.has(r.id) &&
-              !allNested.has(r.id) &&
-              (r.children?.length ?? 0) > NESTED_SHOWN + 1 && (
-                <ListItem
-                  base={base}
-                  nested
-                  row={{
-                    id: `${r.id}:more`,
-                    title: `Show ${(r.children?.length ?? 0) - NESTED_SHOWN} more`,
-                    onOpen: () => setAllNested((prev) => new Set(prev).add(r.id)),
-                  }}
-                />
-              )}
-          </Fragment>
-        ))}
+        {/* your own entries first, then each pack's under its name, foldable;
+            a search shows every match, folded or not */}
+        {shown
+          .filter((r) => packOrigin(r.tags) === null)
+          .map((r) => renderRow(r, false))}
+        {origins.map((pack) => {
+          const entries = shown.filter((r) => packOrigin(r.tags) === pack);
+          if (entries.length === 0) return null;
+          const open = Boolean(q) || !folds.has(pack);
+          return (
+            <Fragment key={`pack:${pack}`}>
+              <li className="flex items-center gap-2 bg-background/40 pr-4">
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() => toggleFold(pack)}
+                  className="flex min-w-0 flex-1 items-center gap-2 py-2.5 pl-4 text-left text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronDown
+                    aria-hidden
+                    className={`size-3.5 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+                  />
+                  <Package aria-hidden className="size-3.5 shrink-0" />
+                  <span className="truncate font-medium text-foreground">{pack}</span>
+                  <span className="shrink-0">· {entries.length} from this pack</span>
+                </button>
+                <a
+                  href={href({ ...base, section: "packs", item: undefined })}
+                  className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Packs <ArrowUpRight aria-hidden className="size-3" />
+                </a>
+              </li>
+              {open && entries.map((r) => renderRow(r, true))}
+            </Fragment>
+          );
+        })}
         {rows.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">
             {empty}

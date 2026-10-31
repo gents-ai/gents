@@ -32,7 +32,11 @@ describe("pack origin configuration filters", () => {
 
     expect(screen.getByText("Review scanner")).toBeTruthy();
     expect(screen.getByText("User coder")).toBeTruthy();
-    expect(screen.getByText("enabled · pack code_review")).toBeTruthy();
+    /* the pack's header names it, so its rows don't repeat it */
+    expect(
+      screen.getByRole("button", { name: /code_review · 1 from this pack/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/pack code_review/)).toBeNull();
 
     await user.click(screen.getByTestId("skills-origin-filter"));
     await user.click(await screen.findByRole("option", { name: "Pack code_review" }));
@@ -88,5 +92,85 @@ describe("pack origin configuration filters", () => {
     expect(screen.getByText("Review scanner")).toBeTruthy();
     expect(screen.queryByText("Review summary")).toBeNull();
     expect(screen.getByText("1 of 9")).toBeTruthy();
+  });
+
+  it("lists your own entries first, then each pack's under its folding header", async () => {
+    const user = userEvent.setup();
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => store.set(key, value),
+    });
+    const rows = [
+      { id: "a", title: "Pack A one", tags: ["gents:pack:alpha"] },
+      { id: "mine", title: "My own", tags: [] },
+      { id: "b", title: "Pack B one", tags: ["gents:pack:beta"] },
+      { id: "a2", title: "Pack A two", tags: ["gents:pack:alpha"] },
+    ];
+    const list = () => (
+      <ListDetail
+        base={{ name: "agent", nodeDid: "did:key:test", section: "tools" }}
+        createLabel="New"
+        detail={() => null}
+        empty="None."
+        rows={rows}
+      />
+    );
+    const view = render(list());
+    const order = () =>
+      [...view.container.querySelectorAll("li")].map(
+        (li) => li.textContent?.trim() ?? "",
+      );
+    expect(order().map((t) => t.split(/[ ·]/)[0])).toEqual([
+      "My",
+      "alpha",
+      "Pack",
+      "Pack",
+      "beta",
+      "Pack",
+    ]);
+    expect(order()[2]).toBe("Pack A one");
+    expect(order()[5]).toBe("Pack B one");
+    const alpha = screen.getByRole("button", { name: /alpha · 2 from this pack/ });
+    expect(alpha).toHaveAttribute("aria-expanded", "true");
+    await user.click(alpha);
+    expect(alpha).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Pack A one")).toBeNull();
+    expect(screen.getByText("Pack B one")).toBeTruthy();
+
+    view.unmount();
+    render(list());
+    expect(screen.queryByText("Pack A one")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows a match inside a folded pack while searching", async () => {
+    const user = userEvent.setup();
+    const store = new Map([
+      ["gents.config.packFolds.skills", JSON.stringify(["alpha"])],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => store.set(key, value),
+    });
+    render(
+      <ListDetail
+        base={{ name: "agent", nodeDid: "did:key:test", section: "skills" }}
+        createLabel="New"
+        detail={() => null}
+        empty="None."
+        rows={[
+          { id: "needle", title: "Needle", tags: ["gents:pack:alpha"] },
+          ...Array.from({ length: 8 }, (_, n) => ({ id: `u${n}`, title: `Mine ${n}` })),
+        ]}
+      />,
+    );
+    expect(screen.queryByText("Needle")).toBeNull();
+    await user.type(
+      screen.getByRole("searchbox", { name: "Filter the list" }),
+      "Needle",
+    );
+    expect(screen.getByText("Needle")).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 });
