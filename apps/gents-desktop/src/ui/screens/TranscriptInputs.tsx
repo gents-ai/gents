@@ -192,12 +192,19 @@ export function UserInputWithState({
   content,
   state,
   actions,
+  meta,
 }: {
   content: ReactNode;
   state: string | null;
   actions?: Parameters<typeof UserMessage>[0]["actions"];
+  meta?: ReactNode;
 }) {
-  if (!state) return <UserMessage actions={actions}>{content}</UserMessage>;
+  if (!state)
+    return (
+      <UserMessage actions={actions} meta={meta}>
+        {content}
+      </UserMessage>
+    );
   return (
     <div
       className={cn(
@@ -205,11 +212,17 @@ export function UserInputWithState({
         (state === "Queued" || state === "Pending") && "opacity-70",
       )}
     >
-      <UserMessage actions={actions}>{content}</UserMessage>
+      <UserMessage actions={actions} meta={meta}>
+        {content}
+      </UserMessage>
       <Badge
         variant="outline"
         title={state === "Pending" ? "Waiting for the next safe step" : undefined}
-        className="absolute right-4 bottom-0 translate-y-1/2 border-border/60 bg-background text-[10px] font-normal text-muted-foreground"
+        className={cn(
+          "absolute right-4 translate-y-1/2 border-border/60 bg-background text-[10px] font-normal text-muted-foreground",
+          /* on the bubble's lower edge, above the row of actions under it */
+          actions || meta != null ? "bottom-8" : "bottom-0",
+        )}
       >
         {state}
       </Badge>

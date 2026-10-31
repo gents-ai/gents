@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, Copy } from "lucide-react";
+import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import type {
   DerivedCancelCauseView,
@@ -22,6 +22,7 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
+import { formatMessageTime } from "@source-inc/gents-desktop-ui";
 import { SentText } from "./SkillChips";
 import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
 import { useHeldRows } from "@/lib/useHeldRows";
@@ -31,7 +32,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@gents/ui/components/collapsible";
-import { Hint } from "./Hint";
 
 import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
@@ -61,7 +61,6 @@ import { DayMarker, dayOpenings } from "./TranscriptMarker";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
-import { useCopied } from "@/lib/clipboard";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
 import { TurnChanges } from "./TurnChanges";
@@ -104,6 +103,17 @@ function copyActions(text: string | null | undefined) {
 
 const ParentContext = createContext<ParentWork | null>(null);
 
+/* when a message was sent, beside its actions: the time, with the date
+   when it isn't today, and the full date and time on hover */
+function sentAt(at: string | null | undefined) {
+  const label = formatMessageTime(at);
+  return label ? (
+    <time dateTime={at!} title={new Date(at!).toLocaleString()}>
+      {label}
+    </time>
+  ) : undefined;
+}
+
 function OwnInput({
   item,
   state,
@@ -120,6 +130,7 @@ function OwnInput({
         }
         state={state}
         actions={[...copyActions(item.content), ...(branch ? [branch] : [])]}
+        meta={item.kind === "userMessage" ? sentAt(item.timestamp) : undefined}
       />
       <SentAttachments
         items={item.attachments}
@@ -188,10 +199,8 @@ function SessionCompaction({
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
-  final = false,
 }: {
   item: RenderedTimelineItem;
-  final?: boolean;
 }) {
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
@@ -255,7 +264,7 @@ const TranscriptItem = memo(function TranscriptItem({
     }
     case "assistantMessage":
     case "liveAssistant":
-      return <Reply item={item} final={final} />;
+      return <Reply item={item} />;
     case "toolGroup":
       return null;
     case "requestContextReductionSummary":
@@ -325,17 +334,16 @@ function StoppedNotice({
 
 function Reply({
   item,
-  final,
 }: {
   item: Extract<RenderedTimelineItem, { kind: "assistantMessage" | "liveAssistant" }>;
-  final: boolean;
 }) {
   const live = item.kind === "liveAssistant";
   return (
     <div data-testid={live ? "live-assistant" : undefined}>
       <AssistantMessage
         className={item.content ? "py-4" : undefined}
-        actions={!live && item.content && !final ? copyActions(item.content) : false}
+        actions={!live && item.content ? copyActions(item.content) : false}
+        meta={!live && item.content ? sentAt(item.timestamp) : undefined}
       >
         {readableReasoning(item.reasoning) ? (
           <Reasoning
@@ -349,7 +357,6 @@ function Reply({
         ) : null}
         {item.content ? <ReplyText content={item.content} live={live} /> : null}
       </AssistantMessage>
-      {final && item.content ? <ResponseActions text={item.content} /> : null}
     </div>
   );
 }
@@ -360,44 +367,17 @@ function ReplyText({ content, live }: { content: string; live: boolean }) {
   return <StreamText text={content} directives />;
 }
 
-function ResponseActions({ text }: { text: string }) {
-  const { copied, copy } = useCopied();
-  return (
-    <div
-      className={cn(
-        "-mt-1 flex items-center gap-1 px-1 transition-opacity duration-150 motion-reduce:transition-none",
-        !copied &&
-          "sm:opacity-0 sm:group-hover/response:opacity-100 sm:focus-within:opacity-100",
-      )}
-      data-testid="response-actions"
-    >
-      <Hint label={copied ? "Copied" : "Copy response"}>
-        <Button
-          variant="quiet"
-          size="icon-xs"
-          aria-label="Copy response"
-          onClick={() => copy(text)}
-        >
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-        </Button>
-      </Hint>
-    </div>
-  );
-}
-
 type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };
 
 const ItemRow = memo(function ItemRow({
   rowKey,
   item,
-  final,
   changes,
   day,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
   item: RenderedTimelineItem;
-  final: boolean;
   /** the files the turn this row ends changed, in its session */
   changes?: ItemChanges;
   /** the day this row opens, when it is the first of its day */
@@ -416,7 +396,7 @@ const ItemRow = memo(function ItemRow({
           <DayMarker day={day} />
         </div>
       )}
-      <TranscriptItem item={item} final={final} />
+      <TranscriptItem item={item} />
       {changes && (
         <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
       )}
@@ -834,7 +814,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                       <ItemRow
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
-                        final={finalKeys.has(entry.key)}
                         changes={changes.get(entry.key)}
                         day={dayOpens.get(entry.key) ?? null}
                       />
