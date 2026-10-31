@@ -75,7 +75,7 @@ class ToolchainSetupTests(unittest.TestCase):
         env.pop("GENTS_DEVELOPER_DIR", None)
         env.update(env_overrides)
         return subprocess.run(
-            ["bash", str(SCRIPT)],
+            ["/bin/bash", str(SCRIPT)],
             env=env,
             capture_output=True,
             text=True,
@@ -173,7 +173,7 @@ class ToolchainSetupTests(unittest.TestCase):
     def test_fails_when_xcode_select_is_absent(self):
         self.fake_xcrun(self.sdk)
         self.fake_cc()
-        result = self.run_script()
+        result = self.run_script(PATH=str(self.bin))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("xcode-select is missing", result.stdout + result.stderr)
 
@@ -187,7 +187,7 @@ class ToolchainSetupTests(unittest.TestCase):
         env.pop("GENTS_DEVELOPER_DIR", None)
         env["GENTS_PROBE_CC"] = str(self.bin / "cc")
         result = subprocess.run(
-            ["bash", str(SCRIPT)], env=env, capture_output=True, text=True
+            ["/bin/bash", str(SCRIPT)], env=env, capture_output=True, text=True
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
