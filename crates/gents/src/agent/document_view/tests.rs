@@ -200,7 +200,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
 #[tokio::test]
 async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     use crate::inference::llm::tool::Tool;
-    use crate::prompt::LayeredPromptBuilder;
+    use crate::turn::prompt::LayeredPromptBuilder;
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

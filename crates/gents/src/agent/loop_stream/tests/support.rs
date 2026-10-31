@@ -245,7 +245,7 @@ impl CompletionModel for UsageScriptedModel {
             u64::try_from(
                 completion_request_input_components(
                     &request,
-                    &crate::provider_input::ProviderInputCounter::new(
+                    &crate::turn::provider_input::ProviderInputCounter::new(
                         crate::BackendProviderKind::OpenAiCompatible,
                         crate::OpenAiWireApi::ChatCompletions,
                         "test-model",
@@ -417,7 +417,7 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
         replay: LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
-            crate::provider_input::ProviderInputCounter::new(
+            crate::turn::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
                 "test-model",

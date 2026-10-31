@@ -27,7 +27,7 @@ pub(crate) fn owned_replay_input(
             let recording_seed = recording_seed.clone();
             Box::pin(async move {
                 let started = std::time::Instant::now();
-                let boundary = crate::provider_context_reduction::capture_source_boundary(
+                let boundary = crate::turn::provider_context_reduction::capture_source_boundary(
                     &node,
                     &request.session_id,
                     &request.node_did,
@@ -57,7 +57,7 @@ pub(crate) fn owned_replay_input(
                 .await
                 .map_err(replay_resolution_error)?;
                 tracing::info!(
-                    target: "gents::provider_input",
+                    target: "gents::turn::provider_input",
                     request_id = %request.request_id,
                     request_doc_id = %request.doc_id,
                     session_id = %request.session_id,

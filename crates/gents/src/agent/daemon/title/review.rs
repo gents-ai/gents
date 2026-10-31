@@ -313,7 +313,7 @@ where
         if execution.cancellation.is_cancelled() || *shutdown.borrow() {
             return Ok(AuxiliaryResult::Interrupted);
         }
-        let mut config = crate::completion_factory::loop_config(
+        let mut config = crate::turn::completion_factory::loop_config(
             &self.agent_config,
             PREAMBLE.to_owned(),
             0,

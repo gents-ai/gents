@@ -12,7 +12,7 @@ use super::{replay_violation, CanonicalReplayScope};
 pub(crate) async fn resolve_canonical_replay_tags(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::provider_context_reduction::SourceBoundary,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
 ) -> Result<
     Vec<(
@@ -85,7 +85,7 @@ pub(crate) async fn resolve_canonical_replay_tags(
 pub(crate) async fn resolve_canonical_replay_tag(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::provider_context_reduction::SourceBoundary,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tag: &gents_loop::claude_messages_body::ReplayTag,
 ) -> Result<Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>> {
     Ok(

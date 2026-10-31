@@ -47,7 +47,7 @@ pub(in crate::session) async fn load_sequenced_messages(
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     exclude_request_doc_id: Option<&str>,
-    replay_profile: Option<crate::provider_input::ProviderInputProfile>,
+    replay_profile: Option<crate::turn::provider_input::ProviderInputProfile>,
 ) -> Result<Vec<SequencedMessage>> {
     let session_scope = session_scope_filter(node_did, session_id, requester_did);
     let mut bounds = Vec::new();

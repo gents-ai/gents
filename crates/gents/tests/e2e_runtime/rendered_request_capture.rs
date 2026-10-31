@@ -1846,7 +1846,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .await
     .unwrap()
     .expect("seed request commit");
-    let boundary = gents::provider_context_reduction::capture_source_boundary(
+    let boundary = gents::turn::provider_context_reduction::capture_source_boundary(
         db.node.as_ref(),
         session_id,
         &agent.node_did,
@@ -1857,7 +1857,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .await
     .unwrap();
     let request_local_checkpoint = vec![Message::user("REQUEST_LOCAL_ONLY_SENTINEL")];
-    let reduction_key = gents::provider_context_reduction::reduction_key(
+    let reduction_key = gents::turn::provider_context_reduction::reduction_key(
         &agent.node_did,
         session_id,
         &seed_doc,

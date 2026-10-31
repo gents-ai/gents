@@ -421,7 +421,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/completion_factory.rs",
+      "path": "crates/gents/src/turn/completion_factory.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_0$\" } }, { agent_id: { _eq: \"$GENTS_1$\" } }, { session_id: { _eq: \"$GENTS_2$\" } }, { model_name: { _eq: \"$GENTS_3$\" } }, { call_kind: { _eq: \"inference\" } } ] }, order: [{ queued_at: DESC }, { call_seq: DESC }], limit: $GENTS_CALIBRATION_CALL_SCAN$"
     },
@@ -503,7 +503,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/provider_context_reduction.rs",
+      "path": "crates/gents/src/turn/provider_context_reduction.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { $GENTS_session_scope$ }, order: { sequence: DESC }, limit: 1"
     },
@@ -518,7 +518,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/provider_context_reduction.rs",
+      "path": "crates/gents/src/turn/provider_context_reduction.rs",
       "collection": "RenderedRequest",
       "arguments": "filter: { request_doc_id: { _eq: \"$GENTS_0$\" } capture_scope: { _like: \"inference.%\" } turn_index: { _ge: $GENTS_1$ } provenance_json: { _like: \"%$GENTS_2$%\" } }, order: [{ turn_index: DESC }, { attempt: DESC }], limit: 64"
     },

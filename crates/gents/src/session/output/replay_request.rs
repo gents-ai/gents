@@ -113,7 +113,7 @@ impl ReplayRequestReader for EmbeddedNode {
 pub(crate) async fn validate_canonical_replay_boundary(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::provider_context_reduction::SourceBoundary,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<()> {
     validated_canonical_replay_boundary(node, node, scope, boundary)
         .await
@@ -124,12 +124,12 @@ pub(super) async fn validated_canonical_replay_boundary(
     node: &EmbeddedNode,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::provider_context_reduction::SourceBoundary,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<(
     BTreeSet<String>,
-    Option<crate::provider_context_reduction::TranscriptFactRef>,
+    Option<crate::turn::provider_context_reduction::TranscriptFactRef>,
 )> {
-    crate::provider_context_reduction::validate_source_boundary(
+    crate::turn::provider_context_reduction::validate_source_boundary(
         boundary,
         scope.request_doc_id,
         scope.request_commit_cid,

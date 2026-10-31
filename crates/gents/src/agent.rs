@@ -64,7 +64,7 @@ where
 {
     let allowed_targets =
         crate::tools::surface::resolve_agent_target_descriptions(tool_surface.as_ref());
-    let prompt_builder = crate::prompt::LayeredPromptBuilder::new(
+    let prompt_builder = crate::turn::prompt::LayeredPromptBuilder::new(
         agent_config.as_ref(),
         &tool_surface,
         &allowed_targets,

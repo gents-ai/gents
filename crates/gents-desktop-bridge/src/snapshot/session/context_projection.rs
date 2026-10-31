@@ -196,7 +196,7 @@ pub(super) fn build_session_context_view(
         .filter_map(|row| row.summary.clone())
         .map(gents::inference::compaction::bounded_summary)
         .collect::<Vec<_>>();
-    let displayed_provider_messages = gents::prompt::compaction_summary_message(&summaries)
+    let displayed_provider_messages = gents::turn::prompt::compaction_summary_message(&summaries)
         .into_iter()
         .chain(active_provider_messages.iter().cloned())
         .collect::<Vec<_>>();

@@ -193,7 +193,7 @@ where
         resume_from_history: bool,
         consumed_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
-        context_calibration: crate::provider_input::budget::ContextCalibration,
+        context_calibration: crate::turn::provider_input::budget::ContextCalibration,
     ) -> Result<HandleRequestOutcome> {
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
@@ -292,7 +292,7 @@ where
                     let persistence_hook = hook.clone();
 
                     let model = (*self.model).clone();
-                    let mut loop_config = crate::completion_factory::loop_config_for_request(
+                    let mut loop_config = crate::turn::completion_factory::loop_config_for_request(
                         &self.agent_config,
                         self.preamble.clone(),
                         request,
@@ -377,7 +377,7 @@ where
                             // session-prefix cursor; the stronger
                             // safe_to_reduce gate belongs to session compaction.
                             let source_boundary =
-                                crate::provider_context_reduction::capture_source_boundary(
+                                crate::turn::provider_context_reduction::capture_source_boundary(
                                     node.as_ref(),
                                     &request.session_id,
                                     &request.node_did,
@@ -401,7 +401,7 @@ where
                             let result = result?;
                             let producer_call = producer_join
                                 .filter(|join| matches!(join.call_kind, CallKind::Compaction))
-                                .map(|join| crate::provider_context_reduction::ProducerCallRef {
+                                .map(|join| crate::turn::provider_context_reduction::ProducerCallRef {
                                     call_id: join.call_id,
                                     call_seq: join.call_seq,
                                 });
@@ -448,14 +448,14 @@ where
                             )?;
                             let exact = native.exact();
                             let associations =
-                                crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                                crate::turn::provider_context_reduction::ReplayAssociations::from_tagged_split(
                                     compaction_request.required,
                                     &provider_view[..split],
                                     &provider_view[split..],
                                 );
                             let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
-                            crate::provider_context_reduction::stage_exact(
-                                crate::provider_context_reduction::NewExactProviderContextReduction {
+                            crate::turn::provider_context_reduction::stage_exact(
+                                crate::turn::provider_context_reduction::NewExactProviderContextReduction {
                                     node_did: &request.node_did,
                                     requester_did: request.requester_did.as_deref(),
                                     session_id: &request.session_id,
@@ -494,7 +494,7 @@ where
                         }
                     };
                     loop_config.authored_input = Some(authored_input(folded_prompts.clone()));
-                    let restored = crate::provider_context_reduction::load_unconsumed_for_request(
+                    let restored = crate::turn::provider_context_reduction::load_unconsumed_for_request(
                         self.node.as_ref(),
                         &request.doc_id,
                     )
@@ -545,7 +545,7 @@ where
                         (messages, prompt)
                     } else {
                         loop_config.reduction_chain_keys =
-                            crate::provider_context_reduction::load_for_request(
+                            crate::turn::provider_context_reduction::load_for_request(
                                 self.node.as_ref(),
                                 &request.doc_id,
                             )
@@ -1019,13 +1019,13 @@ pub(super) mod tests {
     use crate::inference::backends::provider::BackendProviderKind;
     use crate::inference::llm::tool::ToolDyn;
     use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-    use crate::prompt::LayeredPromptBuilder;
     use crate::request::watcher::AgentRequest;
     use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::tools::call::hook::{
         BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
     };
     use crate::tools::surface::AgentToolSurfaceConfig;
+    use crate::turn::prompt::LayeredPromptBuilder;
     use anyhow::Context;
     use futures::stream;
     use rig::completion::{
