@@ -16,9 +16,9 @@ use gents_protocol::schemas::{
 mod inventory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ImageDemandRow {
+pub(super) struct ImageDemandRow {
     document_id: String,
-    demand: FileImageDemand,
+    pub(super) demand: FileImageDemand,
 }
 
 #[async_trait]
@@ -45,6 +45,11 @@ trait ImageRequestStore: Send + Sync {
     ) -> Result<()>;
 }
 
+pub(super) async fn pending_requests(store: &GraphqlHydrationStore) -> Result<Vec<ImageDemandRow>> {
+    store.pending_images().await
+}
+
+#[cfg(test)]
 pub(super) async fn reconcile_file_images(
     store: &GraphqlHydrationStore,
     delivery: &dyn HydrationDelivery,
@@ -52,6 +57,7 @@ pub(super) async fn reconcile_file_images(
     reconcile_images(store, delivery).await
 }
 
+#[cfg(test)]
 async fn reconcile_images(
     store: &dyn ImageRequestStore,
     delivery: &dyn HydrationDelivery,
@@ -69,7 +75,7 @@ async fn reconcile_images(
     first_error.map_or(Ok(()), Err)
 }
 
-async fn serve_image(
+pub(super) async fn serve_image(
     store: &dyn ImageRequestStore,
     delivery: &dyn HydrationDelivery,
     row: &ImageDemandRow,
