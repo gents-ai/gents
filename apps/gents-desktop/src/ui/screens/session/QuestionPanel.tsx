@@ -38,6 +38,7 @@ const drafts = new Map<string, Draft>();
 export function QuestionPanel({
   items,
   onTypeInstead,
+  className,
   where,
   icon,
   aside,
@@ -45,7 +46,8 @@ export function QuestionPanel({
 }: {
   items: readonly MailboxItemView[];
   /** the person would rather write a message; the question stays open */
-  onTypeInstead: () => void;
+  onTypeInstead?: () => void;
+  className?: string;
   /** where and when it was asked, for a question shown outside its session */
   where?: ReactNode;
   /** what kind of item this is, where questions sit among other kinds */
@@ -69,6 +71,7 @@ export function QuestionPanel({
       question={question}
       position={items.length > 1 ? { at: shown, of: items.length, step } : null}
       onTypeInstead={onTypeInstead}
+      className={className}
       where={where}
       icon={icon}
       aside={aside}
@@ -82,6 +85,7 @@ function QuestionForm({
   question,
   position,
   onTypeInstead,
+  className,
   where,
   icon,
   aside,
@@ -90,7 +94,8 @@ function QuestionForm({
   item: MailboxItemView;
   question: MailboxQuestion;
   position: { at: number; of: number; step: (by: number) => void } | null;
-  onTypeInstead: () => void;
+  onTypeInstead?: () => void;
+  className?: string;
   where?: ReactNode;
   icon?: ReactNode;
   aside?: ReactNode;
@@ -181,7 +186,7 @@ function QuestionForm({
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const typing = event.target instanceof HTMLInputElement;
-    if (event.key === "Escape") {
+    if (event.key === "Escape" && onTypeInstead) {
       event.preventDefault();
       onTypeInstead();
     } else if (
@@ -243,15 +248,17 @@ function QuestionForm({
           </Button>
         </span>
       )}
-      <Button
-        variant="quiet"
-        size="icon-xs"
-        aria-label="Type a message instead"
-        title="Type a message instead (Esc)"
-        onClick={onTypeInstead}
-      >
-        <X />
-      </Button>
+      {onTypeInstead && (
+        <Button
+          variant="quiet"
+          size="icon-xs"
+          aria-label="Type a message instead"
+          title="Type a message instead (Esc)"
+          onClick={onTypeInstead}
+        >
+          <X />
+        </Button>
+      )}
     </>
   );
 
@@ -262,7 +269,10 @@ function QuestionForm({
       aria-label={`${agent} is asking`}
       data-testid="question-panel"
       onKeyDown={onKeyDown}
-      className="flex max-h-[60vh] flex-col rounded-2xl border border-border bg-raised shadow-xs outline-none"
+      className={cn(
+        "flex min-h-0 max-h-[60vh] flex-col rounded-2xl border border-border bg-raised shadow-xs outline-none",
+        className,
+      )}
     >
       <header className="flex shrink-0 flex-col gap-2 px-4 pt-3 text-xs text-muted-foreground">
         {/* with a kind line, the controls end it and who asks gets a line of
