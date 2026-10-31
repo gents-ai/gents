@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents config backend pool <backend-id>` and the desktop backend editor
+  switch a Claude subscription backend between one account and an account pool,
+  and set whether the pool may use paid extra usage. Both call one operator
+  write that replaces only the backend's `auth`; an agent still cannot add a
+  pool or change its overage choice. Editing another field of a pool backend in
+  the desktop no longer turns it back into a single-account backend.
+
 ## 1.0.0-rc0 - 2026-10-29
 
 - A job plugin may declare `host_imports: ["run_script"]`. The host then

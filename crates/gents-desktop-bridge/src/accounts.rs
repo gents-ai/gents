@@ -28,6 +28,49 @@ pub struct BackendAuthenticationSaveRequest {
     pub auth: gents::document_config::BackendAuth,
 }
 
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendRotationSaveRequest {
+    pub node_did: String,
+    pub backend_id: String,
+    pub revision: gents_desktop_core::client::ConfigEditorRevision,
+    pub rotation: gents::config_client::BackendRotation,
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolAccountView {
+    pub credential_id: String,
+    pub label: String,
+}
+
+/// The backend's rotation after a switch: `allow_overage` is set exactly when
+/// it is a pool, and `accounts` lists the pool in rotation order.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendRotationView {
+    pub backend_id: String,
+    pub allow_overage: Option<bool>,
+    pub accounts: Vec<PoolAccountView>,
+}
+
+impl From<&gents::config_client::RotationOutcome> for BackendRotationView {
+    fn from(outcome: &gents::config_client::RotationOutcome) -> Self {
+        Self {
+            backend_id: outcome.backend.backend_id.clone(),
+            allow_overage: outcome.backend.auth.pool_allow_overage(),
+            accounts: outcome
+                .members
+                .iter()
+                .map(|member| PoolAccountView {
+                    credential_id: member.credential_id.clone(),
+                    label: member.label.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendAuthenticationView {
@@ -36,6 +79,7 @@ pub struct BackendAuthenticationView {
     pub auth_kind: String,
     pub environment_variable: Option<String>,
     pub account_ref: Option<String>,
+    pub allow_overage: Option<bool>,
     pub oauth_provider: Option<String>,
 }
 
@@ -59,6 +103,7 @@ impl BackendAuthenticationView {
             auth_kind: kind.to_owned(),
             environment_variable: variable,
             account_ref,
+            allow_overage: backend.auth.pool_allow_overage(),
             oauth_provider: backend.provider_kind.oauth_provider().map(str::to_owned),
         }
     }
@@ -91,6 +136,69 @@ mod authentication_tests {
             auth: backend.auth,
         };
         assert!(!format!("{command:?}").contains("private-authentication-fixture"));
+    }
+
+    #[test]
+    fn rotation_requests_decode_the_operator_choice_and_reject_unknown_fields() {
+        use gents::config_client::BackendRotation;
+        let decode = |rotation: serde_json::Value| {
+            serde_json::from_value::<crate::types::BackendRotationSetRequest>(
+                serde_json::json!({"nodeDid":"did:test:backend","backendId":"claude","rotation":rotation}),
+            )
+        };
+        assert_eq!(
+            decode(serde_json::json!({"kind":"pool"})).unwrap().rotation,
+            BackendRotation::Pool {
+                allow_overage: None
+            }
+        );
+        assert_eq!(
+            decode(serde_json::json!({"kind":"pool","allow_overage":true}))
+                .unwrap()
+                .rotation,
+            BackendRotation::Pool {
+                allow_overage: Some(true)
+            }
+        );
+        assert_eq!(
+            decode(serde_json::json!({"kind":"single"}))
+                .unwrap()
+                .rotation,
+            BackendRotation::Single
+        );
+        assert!(decode(serde_json::json!({"kind":"pool","allowOverage":true})).is_err());
+        assert!(decode(serde_json::json!({"kind":"split"})).is_err());
+    }
+
+    #[test]
+    fn rotation_view_reports_overage_only_for_a_pool_and_keeps_account_order() {
+        let backend = |auth: serde_json::Value| -> gents::InferenceBackend {
+            serde_json::from_value(serde_json::json!({
+                "node_did":"did:test:backend", "backend_id":"claude", "name":"Claude",
+                "provider_kind":"ClaudeCliSubscription", "endpoint":"claude-cli://subscription",
+                "auth":auth
+            }))
+            .unwrap()
+        };
+        let member = |id: &str| gents::config_client::PoolMember {
+            credential_id: id.into(),
+            label: format!("label-{id}"),
+        };
+        let pool = gents::config_client::RotationOutcome {
+            backend: backend(serde_json::json!({"kind":"node_oauth_pool","allow_overage":true})),
+            members: vec![member("b"), member("a")],
+        };
+        let view = serde_json::to_value(BackendRotationView::from(&pool)).unwrap();
+        assert_eq!(view["allowOverage"], true);
+        assert_eq!(view["accounts"][0]["credentialId"], "b");
+        assert_eq!(view["accounts"][1]["label"], "label-a");
+        let single = gents::config_client::RotationOutcome {
+            backend: backend(serde_json::json!({"kind":"node_oauth"})),
+            members: Vec::new(),
+        };
+        let view = serde_json::to_value(BackendRotationView::from(&single)).unwrap();
+        assert!(view["allowOverage"].is_null());
+        assert_eq!(view["accounts"], serde_json::json!([]));
     }
 }
 const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";

@@ -232,6 +232,32 @@ Denies the desktop_backend_delete command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-backend-rotation-set`
+
+</td>
+<td>
+
+Enables the desktop_backend_rotation_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-backend-rotation-set`
+
+</td>
+<td>
+
+Denies the desktop_backend_rotation_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-backend-save`
 
 </td>

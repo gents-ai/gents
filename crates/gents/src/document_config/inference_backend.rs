@@ -162,6 +162,14 @@ impl BackendAuth {
         }
     }
 
+    /// Whether a pool may draw paid extra usage; `None` for any other auth.
+    pub fn pool_allow_overage(&self) -> Option<bool> {
+        match self {
+            Self::NodeOAuthPool { allow_overage } => Some(*allow_overage),
+            _ => None,
+        }
+    }
+
     /// The account a node OAuth backend names (Lean `oauthRef`); a pool names none.
     pub fn oauth_account_ref(&self) -> Option<&str> {
         match self {

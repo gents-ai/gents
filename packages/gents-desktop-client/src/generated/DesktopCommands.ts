@@ -5,6 +5,7 @@ import type { AgentSaveRequest } from "./AgentSaveRequest.js";
 import type { AllowedFoldersView } from "./AllowedFoldersView.js";
 import type { BackendDeleteRequest } from "./BackendDeleteRequest.js";
 import type { BackendHealthView } from "./BackendHealthView.js";
+import type { BackendRotationSetRequest } from "./BackendRotationSetRequest.js";
 import type { BackendSaveRequest } from "./BackendSaveRequest.js";
 import type { ChatSendRequest } from "./ChatSendRequest.js";
 import type { ChatSendResult } from "./ChatSendResult.js";
@@ -161,6 +162,7 @@ export type DesktopCommands = {
   desktop_app_quit: { args: Record<string, never>; result: void };
   desktop_attachment_read: { args: { path: string }; result: RequestAttachment };
   desktop_backend_delete: { args: { request: BackendDeleteRequest }; result: DesktopClientSnapshot };
+  desktop_backend_rotation_set: { args: { request: BackendRotationSetRequest }; result: DesktopClientSnapshot };
   desktop_backend_save: { args: { request: BackendSaveRequest }; result: DesktopClientSnapshot };
   desktop_background_tool: { args: { request: DesktopBackgroundToolRequest }; result: boolean };
   desktop_bootstrap_summary: { args: Record<string, never>; result: DesktopBootstrapSummary };

@@ -36,6 +36,7 @@ import { healthy, isSubscriptionKind, KINDS, SUBSCRIPTION } from "./inferenceKin
 import { UsageRows } from "./ProviderUsage";
 import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
 import { errorText } from "../../../lib/errorText";
+import { authChange, canPool, isPool, poolAccounts } from "./backendRotation";
 
 export function backendSave(
   nodeDid: string,
@@ -102,6 +103,7 @@ export function BackendEditor({
       removeProviderAccount,
     },
   } = useApp();
+  const [rotating, setRotating] = useState(false);
   const base = {
     name: "agent" as const,
     nodeDid: deployment.nodeDid,
@@ -157,17 +159,7 @@ export function BackendEditor({
       const maxQueueDepth = value.maxQueueDepth();
       const connectTimeoutSecs = value.connectTimeoutSecs();
       const discoveryTimeoutSecs = value.discoveryTimeoutSecs();
-      let auth: InferenceBackend["auth"] | undefined;
-      if (isSubscriptionKind(next.providerKind))
-        auth = {
-          kind: "node_oauth",
-          ...(backend.accountRef ? { account_ref: backend.accountRef } : {}),
-        };
-      else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
-      else if (next.apiKeyEnvVar.trim())
-        auth = { kind: "environment", variable: next.apiKeyEnvVar.trim() };
-      else if (!backend.apiKeyConfigured || isSubscriptionKind(saved.providerKind))
-        auth = { kind: "unauthenticated" };
+      const auth = authChange(backend, saved.providerKind, next, isSubscriptionKind);
 
       const changes: Partial<Omit<InferenceBackend, "node_did" | "backend_id">> = {
         name,
@@ -221,6 +213,24 @@ export function BackendEditor({
       toast(`Refresh failed: ${setupErrorMessage(error)}`);
     } finally {
       setRefreshing(false);
+    }
+  };
+  const pool = isPool(backend);
+  const rotate = async (
+    rotation: { kind: "single" } | { kind: "pool"; allow_overage?: boolean },
+    label: string,
+  ) => {
+    setRotating(true);
+    try {
+      await changeConfig(
+        "setBackendRotation",
+        { nodeDid: deployment.nodeDid, backendId: backend.backendId, rotation },
+        label,
+      );
+    } catch (error) {
+      toastFailure(label, error);
+    } finally {
+      setRotating(false);
     }
   };
   const profiles = deployment.inferenceProfiles.filter(
@@ -345,7 +355,39 @@ export function BackendEditor({
         </FactRow>
       </Group>
       <Group title={subscription ? "Subscription" : "Credential"}>
-        {subscription ? (
+        {subscription && canPool(backend) && (
+          <ChoiceRow
+            id={id("rotation")}
+            label="Accounts"
+            description="A pool rotates every call over the enabled accounts."
+            value={pool ? "pool" : "single"}
+            disabled={rotating}
+            onChange={(v) =>
+              rotate(
+                v === "pool" ? { kind: "pool" } : { kind: "single" },
+                "change the account rotation",
+              )
+            }
+            items={[
+              { value: "single", label: "One account" },
+              { value: "pool", label: "Account pool" },
+            ]}
+          />
+        )}
+        {pool && canPool(backend) ? (
+          <>
+            <SwitchRow
+              id={id("overage")}
+              label="Use paid extra usage"
+              description="Draw it once every account is past its limit."
+              checked={backend.allowOverage ?? false}
+              onChange={(v) =>
+                rotate({ kind: "pool", allow_overage: v }, "change paid extra usage")
+              }
+            />
+            <PoolAccounts accounts={poolAccounts(accounts, signIn?.provider ?? "")} />
+          </>
+        ) : subscription ? (
           <AccountRows
             deployment={deployment}
             kind={d.draft.providerKind}
@@ -522,6 +564,24 @@ export function BackendEditor({
         />
       )}
     </>
+  );
+}
+
+function PoolAccounts({ accounts }: { accounts: readonly ProviderAccountView[] }) {
+  return (
+    <FactRow label="Pool accounts">
+      {accounts.length ? (
+        <ol aria-label="Pool accounts" className="grid gap-1">
+          {accounts.map((account, index) => (
+            <li key={account.credentialId}>
+              {index + 1}. {account.label}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        "No enabled account."
+      )}
+    </FactRow>
   );
 }
 

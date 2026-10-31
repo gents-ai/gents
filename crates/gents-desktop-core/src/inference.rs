@@ -52,6 +52,8 @@ pub struct InferenceBackendView {
     pub probe_status: Option<String>,
     /// The account a subscription backend runs on; `None` is the original.
     pub account_ref: Option<String>,
+    /// Whether a pool backend may draw paid extra usage; `None` for any other backend.
+    pub allow_overage: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +114,7 @@ pub fn backend_config_view(
         advertised_models,
         probe_status: observation.and_then(|observation| observation.probe_status.clone()),
         account_ref: row.auth.oauth_account_ref().map(str::to_owned),
+        allow_overage: row.auth.pool_allow_overage(),
     }
 }
 

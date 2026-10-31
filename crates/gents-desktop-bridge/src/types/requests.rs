@@ -283,6 +283,15 @@ pub struct BackendSaveRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+pub struct BackendRotationSetRequest {
+    pub node_did: String,
+    pub backend_id: String,
+    pub rotation: gents::config_client::BackendRotation,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct InferenceProfileSaveRequest {
     pub document: gents::InferenceProfile,
 }

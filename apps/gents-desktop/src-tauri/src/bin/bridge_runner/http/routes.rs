@@ -20,8 +20,8 @@ use gents_desktop_bridge::commands::{
     rename_session, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
     save_backend_config, save_event_source_config, save_inference_profile_config, save_node_config,
     save_schedule_config, save_task_config, save_tool_service_config, save_tools_config,
-    save_trigger_config, send_chat_message, session_rows, set_default_agent,
-    test_tool_service_config,
+    save_trigger_config, send_chat_message, session_rows, set_backend_rotation_config,
+    set_default_agent, test_tool_service_config,
 };
 use gents_desktop_bridge::interrupt::interrupt_request;
 use gents_desktop_bridge::provenance::session_provenance_request;
@@ -36,15 +36,16 @@ use gents_desktop_bridge::tauri_commands::inference_setup::{
 };
 use gents_desktop_bridge::tauri_commands::operations::list_backends_with_health_for_core;
 use gents_desktop_bridge::types::{
-    AgentSaveRequest, BackendSaveRequest, ChatSendRequest, DefaultAgentSetRequest,
-    DesktopInterruptRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
-    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
-    InferenceProfileSaveRequest, NativeExecutorStatusView, NodeConfigSaveRequest,
-    PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest, ScheduleRunRequest,
-    ScheduleSaveRequest, SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
-    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
-    TriggerDeleteRequest, TriggerSaveRequest,
+    AgentSaveRequest, BackendRotationSetRequest, BackendSaveRequest, ChatSendRequest,
+    DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshot,
+    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
+    DesktopSessionProvenanceRequest, EnrollmentRequestView, EnrollmentStatusRequest,
+    EventSourceDeleteRequest, EventSourceSaveRequest, InferenceProfileSaveRequest,
+    NativeExecutorStatusView, NodeConfigSaveRequest, PeerStatusFetchRequest, RuntimeLivenessView,
+    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
+    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
+    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
+    TriggerSaveRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -648,6 +649,14 @@ pub(super) async fn handle_request(
             let request =
                 decode::<BackendSaveRequest>(&request.body, "decoding backend save request")?;
             save_backend_config(fixture.desktop_core().as_ref(), request).await?;
+            snapshot_response(fixture).await
+        }
+        ("POST", "/desktop/backend/rotation") => {
+            let request = decode::<BackendRotationSetRequest>(
+                &request.body,
+                "decoding backend rotation request",
+            )?;
+            set_backend_rotation_config(fixture.desktop_core().as_ref(), request).await?;
             snapshot_response(fixture).await
         }
         ("POST", "/desktop/inference-profile/save") => {

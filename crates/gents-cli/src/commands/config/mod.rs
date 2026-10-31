@@ -24,6 +24,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Backend { command } => match command {
             BackendCommand::Set(args) => backend::backend_set(args).await,
             BackendCommand::DiscoverModels(args) => backend::backend_discover_models(args).await,
+            BackendCommand::Pool(args) => backend::backend_pool(args).await,
             BackendCommand::List(args) => crud::config_list(crud::BACKEND_SPEC, args).await,
             BackendCommand::Show(args) => crud::config_show(crud::BACKEND_SPEC, args).await,
             BackendCommand::Rm(args) => crud::config_rm(crud::BACKEND_SPEC, args).await,

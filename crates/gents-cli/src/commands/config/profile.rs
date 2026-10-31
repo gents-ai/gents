@@ -274,7 +274,7 @@ async fn write_checked(
     Ok(output)
 }
 
-async fn target(
+pub(super) async fn target(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
 ) -> Result<(gents::config_client::ConfigAccess, String)> {

@@ -2,11 +2,11 @@ use anyhow::Result;
 use gents_desktop_core::client::ClientCore;
 
 use super::super::types::{
-    AgentDeleteRequest, AgentSaveRequest, BackendDeleteRequest, BackendSaveRequest,
-    ContextDeleteRequest, DefaultAgentSetRequest, InferenceProfileDeleteRequest,
-    InferenceProfileSaveRequest, NodeConfigSaveRequest, ScheduleDeleteRequest, SkillDeleteRequest,
-    SkillSaveRequest, TaskDeleteRequest, ToolServiceDeleteRequest, ToolsDeleteRequest,
-    ToolsSaveRequest, TriggerDeleteRequest,
+    AgentDeleteRequest, AgentSaveRequest, BackendDeleteRequest, BackendRotationSetRequest,
+    BackendSaveRequest, ContextDeleteRequest, DefaultAgentSetRequest,
+    InferenceProfileDeleteRequest, InferenceProfileSaveRequest, NodeConfigSaveRequest,
+    ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest, TaskDeleteRequest,
+    ToolServiceDeleteRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
 };
 
 pub async fn save_node_config(core: &ClientCore, request: NodeConfigSaveRequest) -> Result<()> {
@@ -97,6 +97,20 @@ pub async fn delete_context_config(core: &ClientCore, request: ContextDeleteRequ
 
 pub async fn save_backend_config(core: &ClientCore, request: BackendSaveRequest) -> Result<()> {
     core.save_backend(&request.document).await
+}
+
+pub async fn set_backend_rotation_config(
+    core: &ClientCore,
+    request: BackendRotationSetRequest,
+) -> Result<()> {
+    core.set_backend_rotation(
+        &request.node_did,
+        &request.backend_id,
+        None,
+        request.rotation,
+    )
+    .await
+    .map(drop)
 }
 
 pub async fn save_inference_profile_config(

@@ -128,6 +128,12 @@ impl ClientHost {
                     .await.map_err(|_| BridgeError::untyped("Authentication save could not be confirmed. Reopen Accounts before trying again."))?;
                 encode(())
             }
+            ClientCommand::BackendRotationSave { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let outcome = self.core.set_backend_rotation(&request.node_did, &request.backend_id, Some(&request.revision), request.rotation)
+                    .await.map_err(|_| BridgeError::untyped("The account pool change could not be confirmed. Reopen Accounts before trying again."))?;
+                encode(crate::accounts::BackendRotationView::from(&outcome))
+            }
             ClientCommand::RuntimeIsLocal { node_did } => {
                 let record = self.require_connected_runtime(&node_did).await?;
                 encode(record.is_managed_runtime())
