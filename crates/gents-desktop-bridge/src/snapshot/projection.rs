@@ -275,6 +275,7 @@ mod tests {
                     push_retry_marker_count: Some(0),
                     exhausted_fetch_count: Some(0),
                     quarantined_dag_count: Some(0),
+                    activation_error_count: 0,
                 }),
                 enrollment_requests: Some(vec![EnrollmentRequestView {
                     request_id: "request_1".into(),

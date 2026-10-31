@@ -26,6 +26,7 @@ pub struct SyncHealthView {
     pub state: String,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
+    pub activation_error_count: usize,
     pub pending_dag_count: Option<usize>,
     pub persisted_pending_dag_count: Option<usize>,
     pub push_retry_marker_count: Option<usize>,

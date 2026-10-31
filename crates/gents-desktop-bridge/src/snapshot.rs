@@ -102,6 +102,7 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
         state: health.state.as_str().to_string(),
         last_error: health.last_error.clone(),
         connected_peer_count: health.connected_peer_count,
+        activation_error_count: health.activation_error_count,
         pending_dag_count: health.pending_dag_count,
         persisted_pending_dag_count: health.persisted_pending_dag_count,
         push_retry_marker_count: health.push_retry_marker_count,

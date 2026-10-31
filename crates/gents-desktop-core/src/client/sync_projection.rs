@@ -29,6 +29,7 @@ pub struct SyncHealth {
     pub state: SyncHealthState,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
+    pub activation_error_count: usize,
     pub pending_dag_count: Option<usize>,
     pub persisted_pending_dag_count: Option<usize>,
     pub push_retry_marker_count: Option<usize>,
@@ -41,7 +42,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     let database = sync.database_sync.as_ref();
     let database_error = sync.database_sync_error.as_ref();
     let schema_skew = sync.peer_schema_skew.values().next();
-    let activation_failed = !sync.enrollment_activation_errors.is_empty();
+    let activation_error_count = sync.enrollment_activation_errors.len();
     let connected_peer_count = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
     let offline = is_offline(
         transport.status,
@@ -51,7 +52,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     if schema_skew.is_none()
         && database.is_none()
         && database_error.is_none()
-        && !activation_failed
+        && activation_error_count == 0
         && transport.status == P2PHealthStatus::Healthy
         && !offline
     {
@@ -75,7 +76,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
 
     let state = if schema_skew.is_some() {
         SyncHealthState::Incompatible
-    } else if failed || database_error.is_some() || activation_failed {
+    } else if failed || database_error.is_some() {
         SyncHealthState::Failed
     } else if offline {
         SyncHealthState::Offline
@@ -90,8 +91,6 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
         database_error.cloned()
     } else if failed {
         Some("DefraDB quarantined a document DAG that could not be merged".to_string())
-    } else if activation_failed {
-        Some("An approved peer connection could not be activated".to_string())
     } else {
         transport.last_error.clone()
     };
@@ -100,6 +99,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
         state,
         last_error,
         connected_peer_count,
+        activation_error_count,
         pending_dag_count: database.map(|status| status.pending_dags),
         persisted_pending_dag_count: database.map(|status| status.persisted_pending_dags),
         push_retry_marker_count,
@@ -326,7 +326,7 @@ mod tests {
                         request_digest: "private-enrollment-digest".into(),
                         authorization_sequence: 1,
                         authorization_expires_at: "2030-01-01T00:00:00Z".into(),
-                        stage: EnrollmentActivationStage::Route,
+                        stage: EnrollmentActivationStage::Authentication,
                     },
                 )]
                 .into(),
@@ -335,12 +335,10 @@ mod tests {
                 peers: vec![peer(true), unavailable],
             };
             let health = project_sync_health(&sync).expect("activation failure is observable");
-            assert_eq!(health.state, SyncHealthState::Failed);
+            assert_eq!(health.state, SyncHealthState::Healthy);
             assert_eq!(health.connected_peer_count, 1);
-            assert_eq!(
-                health.last_error.as_deref(),
-                Some("An approved peer connection could not be activated")
-            );
+            assert_eq!(health.activation_error_count, 1);
+            assert_eq!(health.last_error, None);
 
             sync.enrollment_activation_errors.clear();
             assert!(project_sync_health(&sync)
