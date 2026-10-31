@@ -7,10 +7,12 @@ use gents::store::graphql::escape_graphql_string;
 use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
 use serde::Deserialize;
 
-use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
+};
+use crate::support::live_receipt::{
+    export_live_receipts, required_artifact_dir, ExpectedCall, ReceiptLimits, ReceiptRequest,
 };
 use crate::support::{create_agent_message_in_scope, test_db};
 
@@ -27,11 +29,29 @@ struct RenderedRequestRow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn live_seeds_reach_the_provider() {
+    let artifact_dir = required_artifact_dir().expect("private live artifact directory");
     let target = live_target();
 
     let db = test_db("live-seed").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-seed"));
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    assert_eq!(db.node.node_identity_did(), Some(identity.did()));
     let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let mut authored_profile = target.profile(&node_did);
+    authored_profile.max_output_tokens = Some(
+        authored_profile
+            .max_output_tokens
+            .map_or(512, |cap| cap.min(512)),
+    );
+    let mut authored_sampling = target
+        .sampling(&node_did)
+        .expect("live seed receipts require referenced canonical sampling");
+    authored_sampling.seed = Some(PROFILE_SEED);
+    let expected_call = ExpectedCall::openai_chat(
+        &target.backend(&node_did),
+        &authored_profile,
+        &authored_sampling,
+    )
+    .expect("bounded authored seed target");
 
     let profile_id = default_inference_profile_id_for_agent(&agent_id);
     configure_seed_and_compaction(&db.node, &node_did, &agent_id, &profile_id).await;
@@ -74,6 +94,7 @@ async fn live_seeds_reach_the_provider() {
     let agent = boot_live_agent(&db, identity)
         .await
         .expect("boot live agent");
+    assert_eq!(agent.node_did, node_did);
 
     for (request_id, expected_seed, expect_compaction) in [
         (profile_request_id, PROFILE_SEED, false),
@@ -130,6 +151,34 @@ async fn live_seeds_reach_the_provider() {
         }
     }
 
+    let receipts = [
+        (profile_request_id, "session-live-profile-seed", false),
+        (second_request_id, "session-live-second-profile-seed", false),
+        (compaction_request_id, compaction_session_id, true),
+    ]
+    .into_iter()
+    .map(|(request_id, session_id, require_summary)| ReceiptRequest {
+        node_did: node_did.clone(),
+        requester_did: node_did.clone(),
+        agent_id: agent_id.clone(),
+        session_id: session_id.to_owned(),
+        request_id: request_id.to_owned(),
+        request_doc_id: None,
+        lifecycle_state: "completed".to_owned(),
+        ordinary: expected_call.clone(),
+        summary: require_summary.then(|| expected_call.clone()),
+        require_summary,
+    })
+    .collect::<Vec<_>>();
+    export_live_receipts(
+        &gents::ConfigAccess::local(db.node.clone()),
+        &artifact_dir,
+        "seed-history-compaction",
+        &receipts,
+        ReceiptLimits::default(),
+    )
+    .await
+    .expect("durable seed, inference and compaction receipts");
     agent.shutdown().await;
 }
 
@@ -201,7 +250,7 @@ async fn configure_seed_and_compaction(
                 threshold: Some(0.25),
                 keep_recent_tokens: None,
                 tool_result_max_chars: None,
-                summary_max_output_tokens: None,
+                summary_max_output_tokens: profile.max_output_tokens,
                 summary_file_list_max: None,
                 inference_profile_id: None,
                 tags: Vec::new(),
@@ -289,4 +338,97 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Rendere
         .transpose()
         .expect("decode RenderedRequest rows")
         .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn live_receipt_seed_controls_keep_authored_sampling_and_bound_both_outputs() {
+    use crate::support::live_inference::InferenceTarget;
+    use gents::store::config_client::read_desired_state_record_in_txn as read;
+
+    for authored_cap in [128, 4096] {
+        let target = InferenceTarget::decode(
+            "seed-controls".to_owned(),
+            serde_json::json!({
+                "node": {},
+                "inference_backends": [{
+                    "backend_id": "b", "name": "test", "provider_kind": "OpenAiCompatible",
+                    "endpoint": "http://127.0.0.1:9/v1", "max_concurrent": 1,
+                    "auth": {"kind": "unauthenticated"}
+                }],
+                "inference_profiles": [{
+                    "profile_id": "p", "backend_id": "b", "model_name": "test-model",
+                    "sampling_id": "s", "max_output_tokens": authored_cap
+                }],
+                "inference_sampling": [{"sampling_id": "s", "temperature": 1.0, "top_k": 1}]
+            }),
+        )
+        .unwrap();
+        let db = test_db("seed-controls").await;
+        let identity = db.node_identity.clone();
+        assert_eq!(db.node.node_identity_did(), Some(identity.did()));
+        let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
+        let profile_id = default_inference_profile_id_for_agent(&agent_id);
+        configure_seed_and_compaction(&db.node, &node_did, &agent_id, &profile_id).await;
+        let (profile, sampling, compaction) = gents::ConfigAccess::transact_local_readonly(
+            &db.node,
+            None,
+            "test.seed_receipt_controls",
+            |txn| {
+                let node_did = &node_did;
+                let profile_id = &profile_id;
+                let agent_id = &agent_id;
+                Box::pin(async move {
+                    let (_, profile) =
+                        read(txn, Collection::InferenceProfile, node_did, profile_id)
+                            .await?
+                            .unwrap();
+                    let sampling_id = profile["sampling_id"].as_str().unwrap();
+                    let (_, sampling) =
+                        read(txn, Collection::InferenceSampling, node_did, sampling_id)
+                            .await?
+                            .unwrap();
+                    let (_, compaction) = read(
+                        txn,
+                        Collection::Compaction,
+                        node_did,
+                        &format!("{agent_id}:compaction"),
+                    )
+                    .await?
+                    .unwrap();
+                    Ok::<_, anyhow::Error>((profile, sampling, compaction))
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(profile["max_output_tokens"], authored_cap.min(512));
+        assert_eq!(
+            compaction["summary_max_output_tokens"],
+            authored_cap.min(512)
+        );
+        assert_eq!(sampling["temperature"], 1.0);
+        assert_eq!(sampling["top_k"], 1);
+        assert_eq!(sampling["seed"], PROFILE_SEED);
+        assert!(sampling["top_p"].is_null());
+        assert_eq!(sampling["node_did"], node_did);
+        let physical = create_runtime_request(
+            &db.node,
+            &node_did,
+            &agent_id,
+            "receipt-seed-controls",
+            "receipt-seed-session",
+            "not executed",
+        )
+        .await;
+        let row = gents::ConfigAccess::local(db.node.clone())
+            .execute(&format!(
+                "{{ AgentRequest(docID: \"{}\") {{ _docID node_did requester_did session_id }} }}",
+                escape_graphql_string(&physical),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(row["data"]["AgentRequest"][0]["node_did"], node_did);
+        assert_eq!(row["data"]["AgentRequest"][0]["requester_did"], node_did);
+        db.node.shutdown().await;
+    }
 }

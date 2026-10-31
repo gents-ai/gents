@@ -17,6 +17,8 @@ pub mod http_mock;
 pub(crate) mod identity_stubs;
 pub mod interrupt;
 pub mod live_inference;
+#[cfg(feature = "live-e2e")]
+pub mod live_receipt;
 pub mod mock_endpoint;
 pub mod mock_subscription;
 pub mod p2p_waits;

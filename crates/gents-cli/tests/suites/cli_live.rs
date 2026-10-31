@@ -1,4 +1,8 @@
+use crate::support::graphql::served_endpoint;
 use crate::support::inference_target::{InferenceTarget, EVAL_TARGET_VARIABLE};
+use crate::support::live_receipt::{
+    export_live_receipts, required_artifact_dir, ExpectedCall, ReceiptLimits, ReceiptRequest,
+};
 use crate::support::*;
 
 use std::fs;
@@ -22,7 +26,7 @@ fn apply_live_file_agent_config(
     graphql: &str,
     node_did: &str,
     agents: LiveFileAgents<'_>,
-) -> Result<()> {
+) -> Result<Option<ExpectedCall>> {
     let LiveFileAgents {
         tools_id,
         host,
@@ -47,6 +51,7 @@ fn apply_live_file_agent_config(
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
+    let mut expected = None;
     if let Some(target) = target {
         let profile_id = config["agents"][0]["inference_profile_id"]
             .as_str()
@@ -65,7 +70,7 @@ fn apply_live_file_agent_config(
         let mut selected_profile = target.profile(node_did);
         selected_profile.profile_id = profile_id;
         selected_profile.backend_id = backend_id.clone();
-        *profile = serde_json::to_value(selected_profile)?;
+        *profile = serde_json::to_value(&selected_profile)?;
         let backend = config["inference_backends"]
             .as_array_mut()
             .context("inference_backends is not an array")?
@@ -74,18 +79,24 @@ fn apply_live_file_agent_config(
             .context("default inference backend is missing")?;
         let mut selected_backend = target.backend(node_did);
         selected_backend.backend_id = backend_id;
-        *backend = serde_json::to_value(selected_backend)?;
-        if let Some(sampling) = target.sampling(node_did) {
-            let rows = config
-                .as_object_mut()
-                .context("configuration object")?
-                .entry("inference_sampling")
-                .or_insert_with(|| serde_json::json!([]))
-                .as_array_mut()
-                .context("inference_sampling is not an array")?;
-            rows.retain(|row| row["sampling_id"] != sampling.sampling_id);
-            rows.push(serde_json::to_value(sampling)?);
-        }
+        *backend = serde_json::to_value(&selected_backend)?;
+        let sampling = target
+            .sampling(node_did)
+            .context("CLI live target requires a referenced sampling document")?;
+        expected = Some(ExpectedCall::openai_chat(
+            &selected_backend,
+            &selected_profile,
+            &sampling,
+        )?);
+        let rows = config
+            .as_object_mut()
+            .context("configuration object")?
+            .entry("inference_sampling")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .context("inference_sampling is not an array")?;
+        rows.retain(|row| row["sampling_id"] != sampling.sampling_id);
+        rows.push(serde_json::to_value(sampling)?);
     }
     let tools = config["tools"]
         .as_array_mut()
@@ -148,7 +159,7 @@ fn apply_live_file_agent_config(
             graphql,
         ],
     )?;
-    Ok(())
+    Ok(expected)
 }
 
 fn read_only_files(root: &std::path::Path) -> Result<Value> {
@@ -162,6 +173,10 @@ fn read_only_files(root: &std::path::Path) -> Result<Value> {
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools() -> Result<()>
 {
+    let artifact_dir = required_artifact_dir()?;
+    let target = InferenceTarget::selected().with_context(|| {
+        format!("CLI live validation requires canonical {EVAL_TARGET_VARIABLE}")
+    })?;
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("agent-home");
     let desktop_home = tempdir.path().join("desktop-home");
@@ -186,23 +201,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
-    let target = std::env::var_os(EVAL_TARGET_VARIABLE)
-        .map(|_| InferenceTarget::selected())
-        .transpose()?;
-    let model_endpoint = target
-        .as_ref()
-        .map(|target| target.endpoint().to_owned())
-        .unwrap_or_else(|| {
-            std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-                .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string())
-        });
-    let model_name = target
-        .as_ref()
-        .map(|target| target.model().to_owned())
-        .unwrap_or_else(|| {
-            std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-                .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string())
-        });
+    let model_endpoint = target.endpoint().to_owned();
+    let model_name = target.model().to_owned();
 
     let init_args = vec![
         "--home".to_string(),
@@ -296,7 +296,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some(graphql.as_str())
     );
 
-    apply_live_file_agent_config(
+    let expected = apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("live-config"),
         &graphql,
@@ -306,12 +306,48 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
             agent_ids: &[&agent_id],
-            target: target.as_ref(),
+            target: Some(&target),
         },
-    )?;
+    )?
+    .context("CLI live target did not produce authored call expectations")?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let session_id = Uuid::new_v4().to_string();
+    let access = gents::store::config_client::ConfigAccess::Graphql(served_endpoint(&graphql));
+    let now = chrono::Utc::now().to_rfc3339();
+    // The scenario covers filesystem tools and conversation continuity. An
+    // explicit user title prevents unrelated title inference (temperature 0).
+    access
+        .transact_write("test.cli_live.titled_session", |txn| {
+            let node_did = &node_did;
+            let agent_id = &agent_id;
+            let session_id = &session_id;
+            let now = &now;
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {
+                        "node_did": node_did, "requester_did": node_did,
+                        "agent_id": agent_id, "session_id": session_id, "created_at": now
+                    }}),
+                ).await?;
+                gents::session::apply_title_in_txn(
+                    txn, node_did, Some(node_did), session_id,
+                    Some("CLI filesystem validation"),
+                    gents_protocol::session::SessionTitleSource::User, now,
+                ).await?;
+                let row = gents::session::load_agent_session_row_in_txn(
+                    txn, node_did, session_id, Some(node_did),
+                ).await?.context("explicitly titled CLI session is missing")?;
+                anyhow::ensure!(row.session.agent_id == *agent_id
+                    && row.session.title.as_ref().is_some_and(|title|
+                        title.text == "CLI filesystem validation"
+                        && title.source == gents_protocol::session::SessionTitleSource::User),
+                    "CLI fixture session title or agent did not persist");
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
     let first_prompt = "Use the filesystem tools. First list demo-files, then read demo-files/alpha.txt, then reply with only the exact token in alpha.txt.";
     let first = run_cli_json(
         &home_dir,
@@ -330,6 +366,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             first_prompt,
         ],
     )?;
+    let first_receipt =
+        cli_live_receipt_request(&first, &node_did, &agent_id, &session_id, &expected)?;
     assert_eq!(
         first.get("session_id").and_then(Value::as_str),
         Some(session_id.as_str())
@@ -361,6 +399,12 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             second_prompt,
         ],
     )?;
+    let second_receipt =
+        cli_live_receipt_request(&second, &node_did, &agent_id, &session_id, &expected)?;
+    anyhow::ensure!(
+        first_receipt.request_id != second_receipt.request_id,
+        "two CLI turns must have distinct request identities"
+    );
     assert_eq!(
         second.get("session_id").and_then(Value::as_str),
         Some(session_id.as_str())
@@ -386,7 +430,71 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         "expected persisted read_file tool results to contain {alpha_token} and {beta_token}: {read_results}"
     );
 
+    export_live_receipts(
+        &access,
+        &artifact_dir,
+        "cli-filesystem-tools",
+        &[first_receipt, second_receipt],
+        ReceiptLimits::default(),
+    )
+    .await?;
+
     Ok(())
+}
+
+fn cli_live_receipt_request(
+    result: &Value,
+    node_did: &str,
+    agent_id: &str,
+    session_id: &str,
+    expected: &ExpectedCall,
+) -> Result<ReceiptRequest> {
+    for (field, wanted) in [
+        ("node_did", node_did),
+        ("agent_id", agent_id),
+        ("session_id", session_id),
+    ] {
+        anyhow::ensure!(
+            result[field].as_str() == Some(wanted),
+            "CLI {field} differs from fixture"
+        );
+        anyhow::ensure!(
+            result["request"][field].as_str() == Some(wanted),
+            "CLI request {field} differs from fixture"
+        );
+    }
+    anyhow::ensure!(
+        result["request"]["requester_did"].as_str() == Some(node_did),
+        "CLI request was not authored by the initialized node"
+    );
+    let request_id = result["request_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("CLI result lacks a request ID")?;
+    anyhow::ensure!(
+        result["request"]["request_id"].as_str() == Some(request_id),
+        "CLI result and request IDs disagree"
+    );
+    anyhow::ensure!(
+        result["request"]["lifecycle_state"] == "completed",
+        "CLI request did not complete"
+    );
+    let request_doc_id = result["request"]["request_doc_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("CLI result lacks its physical request ID")?;
+    Ok(ReceiptRequest {
+        node_did: node_did.to_owned(),
+        requester_did: node_did.to_owned(),
+        agent_id: agent_id.to_owned(),
+        session_id: session_id.to_owned(),
+        request_id: request_id.to_owned(),
+        request_doc_id: Some(request_doc_id.to_owned()),
+        lifecycle_state: "completed".to_owned(),
+        ordinary: expected.clone(),
+        summary: None,
+        require_summary: false,
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -452,7 +560,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    apply_live_file_agent_config(
+    let _ = apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("projection-config"),
         &graphql,
@@ -871,7 +979,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .iter()
         .map(|spec| spec.agent_id.as_str())
         .collect::<Vec<_>>();
-    apply_live_file_agent_config(
+    let _ = apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("smoke-config"),
         &graphql,
@@ -1181,7 +1289,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     )?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node, Duration::from_secs(30)).await?;
-    apply_live_file_agent_config(
+    let _ = apply_live_file_agent_config(
         &home,
         &tempdir.path().join("steering-config"),
         &graphql,

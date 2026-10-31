@@ -7,6 +7,9 @@ pub(crate) use document_handle::document_handle;
 pub mod graphql;
 #[path = "../../../gents/tests/support/inference_target.rs"]
 pub mod inference_target;
+#[cfg(feature = "live-e2e")]
+#[path = "../../../gents/tests/support/live_receipt.rs"]
+pub mod live_receipt;
 pub mod mocks;
 pub mod ports;
 pub mod process;

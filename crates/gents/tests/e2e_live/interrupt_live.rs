@@ -28,12 +28,14 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
-use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
     create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
     wait_for_runtime_ready, BootedAgent,
 };
 use crate::support::live_inference::{live_target, InferenceTarget};
+use crate::support::live_receipt::{
+    export_live_receipts, required_artifact_dir, ExpectedCall, ReceiptLimits, ReceiptRequest,
+};
 use crate::support::test_db;
 use crate::support::TestDb;
 
@@ -49,6 +51,7 @@ const MIN_VISIBLE_PREFIX_CHARS: usize = 40;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
+    let artifact_dir = required_artifact_dir()?;
     assert!(
         std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
         "set GENTS_LIVE_OPENAI=1 and pass --ignored to run the live interrupt smoke test"
@@ -57,7 +60,19 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     let target = live_target();
 
     let db = test_db("live-openai-interrupt").await;
+    let expected_node = db.node_identity.did().to_owned();
+    let mut authored_profile = target.profile(&expected_node);
+    authored_profile.sampling_id = Some(LIVE_SAMPLING_ID.to_owned());
+    let expected_call = ExpectedCall::openai_chat(
+        &target.backend(&expected_node),
+        &authored_profile,
+        &target.live_sampling(&expected_node, LIVE_SAMPLING_ID),
+    )?;
     let agent = boot_interrupt_agent(&db, &target).await?;
+    anyhow::ensure!(
+        agent.node_did == expected_node,
+        "runtime fixture identity changed"
+    );
 
     let request_id = "req-live-openai-interrupt";
     let session_id = "session-live-openai-interrupt";
@@ -154,6 +169,25 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     )
     .await?;
 
+    export_live_receipts(
+        &ConfigAccess::local(db.node.clone()),
+        &artifact_dir,
+        "streaming-cancellation",
+        &[ReceiptRequest {
+            node_did: node_did.clone(),
+            requester_did: node_did.clone(),
+            agent_id: LIVE_AGENT_ID.to_owned(),
+            session_id: session_id.to_owned(),
+            request_id: request_id.to_owned(),
+            request_doc_id: Some(request_doc_id),
+            lifecycle_state: "interrupted".to_owned(),
+            ordinary: expected_call,
+            summary: None,
+            require_summary: false,
+        }],
+        ReceiptLimits::default(),
+    )
+    .await?;
     agent.shutdown().await;
     Ok(())
 }
@@ -457,7 +491,11 @@ async fn wait_for_interrupted_terminal_row(
 }
 
 async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<BootedAgent> {
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-openai-interrupt"));
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    anyhow::ensure!(
+        db.node.node_identity_did() == Some(identity.did()),
+        "fixture node identity mismatch"
+    );
     let node_did = identity.did().to_string();
 
     upsert_live_backend(&db.node, &node_did, target).await;
@@ -573,4 +611,58 @@ async fn apply_fixture_documents(
     })
     .await
     .expect("apply live interrupt fixture documents");
+}
+
+#[tokio::test]
+async fn live_receipt_interrupt_controls_use_the_configured_node_and_authored_target() {
+    let target = InferenceTarget::decode(
+        "interrupt-controls".to_owned(),
+        serde_json::json!({
+            "node": {},
+            "inference_backends": [{
+                "backend_id": "b", "name": "test", "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:9/v1", "max_concurrent": 1,
+                "auth": {"kind": "unauthenticated"}
+            }],
+            "inference_profiles": [{
+                "profile_id": "p", "backend_id": "b", "model_name": "test-model",
+                "sampling_id": "s", "max_output_tokens": 4096
+            }],
+            "inference_sampling": [{"sampling_id": "s", "temperature": 1.0, "top_k": 1}]
+        }),
+    )
+    .unwrap();
+    let db = test_db("interrupt-controls").await;
+    let identity = db.node_identity.clone();
+    assert_eq!(db.node.node_identity_did(), Some(identity.did()));
+    let node_did = identity.did();
+    upsert_live_backend(&db.node, node_did, &target).await;
+    let response = ConfigAccess::local(db.node.clone()).execute(
+        "{ InferenceProfile { node_did model_name max_output_tokens sampling_id } InferenceSampling { node_did sampling_id temperature top_k top_p } }"
+    ).await.unwrap();
+    let profiles = response["data"]["InferenceProfile"].as_array().unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0]["node_did"], node_did);
+    assert_eq!(profiles[0]["model_name"], target.model());
+    assert_eq!(profiles[0]["max_output_tokens"], 4096);
+    assert_eq!(profiles[0]["sampling_id"], LIVE_SAMPLING_ID);
+    let samples = response["data"]["InferenceSampling"].as_array().unwrap();
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0]["node_did"], node_did);
+    assert_eq!(samples[0]["temperature"], 1.0);
+    assert_eq!(samples[0]["top_k"], 1);
+    assert!(samples[0]["top_p"].is_null());
+    let physical = create_runtime_request(
+        &db.node,
+        node_did,
+        LIVE_AGENT_ID,
+        "receipt-interrupt-controls",
+        "receipt-interrupt-session",
+        "not executed",
+    )
+    .await;
+    let request = fetch_request_row(&db.node, &physical).await.unwrap();
+    assert_eq!(request.node_did.as_deref(), Some(node_did));
+    assert_eq!(request.requester_did.as_deref(), Some(node_did));
+    db.node.shutdown().await;
 }
