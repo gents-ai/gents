@@ -167,3 +167,47 @@ for (const rest of ["remembered", "widest"] as const) {
     expect(left).toEqual([]);
   });
 }
+
+test("the dock's + opens a panel that isn't open yet, and stays in view when tabs overflow", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
+
+  const tabs = page.getByRole("tablist", { name: "Panels" });
+  const add = page.getByRole("button", { name: "Open a panel" });
+  await add.click();
+  /* only the panels not open yet */
+  await expect(page.getByRole("menuitem")).toHaveText(["Background", "Changes"]);
+  await page.getByRole("menuitem", { name: "Background" }).click();
+  await expect(tabs.getByRole("tab", { name: "Background" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  /* squeezed, the tabs scroll and fade under the + rather than push it out */
+  await page
+    .getByTestId("dock-tabs")
+    .evaluate((el) => ((el as HTMLElement).style.maxWidth = "190px"));
+  await expect(tabs).toHaveAttribute("data-cut", "true");
+  await expect(add).toBeInViewport();
+  const addBox = (await add.boundingBox())!;
+  const stripBox = (await tabs.boundingBox())!;
+  expect(stripBox.x + stripBox.width).toBeLessThanOrEqual(addBox.x + 1);
+  await page
+    .getByTestId("dock-tabs")
+    .evaluate((el) => ((el as HTMLElement).style.maxWidth = ""));
+
+  /* with every panel open there is nothing to add */
+  await add.click();
+  await page.getByRole("menuitem", { name: "Changes" }).click();
+  await expect(add).toHaveCount(0);
+});
