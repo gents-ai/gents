@@ -2,7 +2,6 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Map, Value};
 
 use crate::documents::Tools;
-use crate::documents::Tools;
 use crate::store::config_client::patch::{diff_docs, FieldDelta, SelfConfigTarget};
 use crate::store::config_client::{
     read_desired_state_record_in_txn, ConfigApplyTxn, DesiredStateApplyDocument,

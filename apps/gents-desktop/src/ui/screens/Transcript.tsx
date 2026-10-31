@@ -177,7 +177,12 @@ function OwnInput({
           actions={
             unavailableOf(item) || bare
               ? false
-              : [...copyActions(writtenText(item.content ?? "", item.selectedSkillIds)), ...(branch ? [branch] : [])]
+              : [
+                  ...copyActions(
+                    writtenText(item.content ?? "", item.selectedSkillIds),
+                  ),
+                  ...(branch ? [branch] : []),
+                ]
           }
         />
       )}
@@ -256,7 +261,11 @@ const TranscriptItem = memo(function TranscriptItem({
         <div>
           {!onlyAttachments(item) && (
             <UserMessage
-              actions={unavailableOf(item) ? false : copyActions(writtenText(item.content ?? "", item.selectedSkillIds))}
+              actions={
+                unavailableOf(item)
+                  ? false
+                  : copyActions(writtenText(item.content ?? "", item.selectedSkillIds))
+              }
             >
               <InputText item={item} />
             </UserMessage>
@@ -375,7 +384,11 @@ function Reply({
     <div data-testid={live ? "live-assistant" : undefined}>
       <AssistantMessage
         className={item.content ? "py-4" : undefined}
-        actions={!live && item.content && !final ? copyActions(writtenText(item.content ?? "")) : false}
+        actions={
+          !live && item.content && !final
+            ? copyActions(writtenText(item.content ?? ""))
+            : false
+        }
       >
         {readableReasoning(item.reasoning) ? (
           <Reasoning

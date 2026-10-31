@@ -53,7 +53,7 @@ pub(crate) async fn session_origin(
     scope: &SessionScope,
 ) -> Result<SessionOrigin> {
     walk(scope, |scope| async move {
-        session_origin::verified_creation_origin(access, &scope).await
+        origin::verified_creation_origin(access, &scope).await
     })
     .await
 }
