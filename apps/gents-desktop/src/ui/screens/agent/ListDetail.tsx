@@ -222,6 +222,23 @@ function saveGroupChoices(section: string, choices: Record<string, boolean>) {
   } catch {}
 }
 
+/** Which of a list's pack groups are open: the person's choice for a pack,
+    else the list's default. */
+export function usePackGroups(section: string) {
+  const [choices, setChoices] = useState<Record<string, boolean>>(() =>
+    loadGroupChoices(section),
+  );
+  return {
+    isOpen: (pack: string, byDefault: boolean) => choices[pack] ?? byDefault,
+    toggle: (pack: string, byDefault: boolean) =>
+      setChoices((prev) => {
+        const next = { ...prev, [pack]: !(prev[pack] ?? byDefault) };
+        saveGroupChoices(section, next);
+        return next;
+      }),
+  };
+}
+
 const PACK_ORIGIN_PREFIX = "gents:pack:";
 const NOT_FROM_PACK_FILTER = "__not_from_pack__";
 export function packOrigin(tags: string[] | null | undefined): string | null {
@@ -263,9 +280,7 @@ export function ListDetail({
   const [originFilter, setOriginFilter] = useState("all");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [allNested, setAllNested] = useState<Set<string>>(() => new Set());
-  const [groupChoices, setGroupChoices] = useState<Record<string, boolean>>(() =>
-    loadGroupChoices(base.section),
-  );
+  const packGroups = usePackGroups(base.section);
 
   const origins = useMemo(
     () =>
@@ -332,13 +347,8 @@ export function ListDetail({
      flood the list; with none of their own showing, the groups are the
      list, or the filter picked a pack, so they start open */
   const groupsOpenByDefault = !shown.some((r) => packOrigin(r.tags) === null);
-  const groupOpen = (pack: string) => groupChoices[pack] ?? groupsOpenByDefault;
-  const toggleGroup = (pack: string) =>
-    setGroupChoices((prev) => {
-      const next = { ...prev, [pack]: !(prev[pack] ?? groupsOpenByDefault) };
-      saveGroupChoices(base.section, next);
-      return next;
-    });
+  const groupOpen = (pack: string) => packGroups.isOpen(pack, groupsOpenByDefault);
+  const toggleGroup = (pack: string) => packGroups.toggle(pack, groupsOpenByDefault);
   const renderRow = (r: ListRow, inPackGroup: boolean) => (
     <Fragment key={r.id}>
       <ListItem
