@@ -135,3 +135,27 @@ test("a message brought back with a session chip becomes the draft once changed"
   await expect(history(page)).toHaveCount(0);
   await expect(field(page)).toContainText("see introduction-and-greetings first more");
 });
+
+test("history observes the native caret before selectionchange has reached the editor", async ({
+  page,
+}) => {
+  await sendTwo(page);
+  await page.keyboard.type("line one");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("line two");
+  await page.keyboard.press("Enter");
+  await expect(field(page)).toHaveText("");
+  await page.keyboard.press("ArrowUp");
+  await expect(history(page)).toHaveText("History 3/3");
+  await expect(field(page)).toContainText("line two");
+  await field(page).evaluate((el) => {
+    const text = el.querySelector("[data-lexical-text]")!.firstChild!;
+    const end = text.textContent!.length;
+    window.getSelection()!.setBaseAndExtent(text, end, text, end);
+    el.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }),
+    );
+  });
+  await expect(history(page)).toHaveText("History 2/3");
+  await expect(commandChips(page)).toHaveText("/host-diagnostics");
+});
