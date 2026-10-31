@@ -22,6 +22,7 @@ import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
 import { Goal } from "../SessionHeader";
+import { useMentionMenu } from "../useMentionMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import {
   ComposerFooter,
@@ -96,6 +97,12 @@ export function OpenSessionComposer({
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
     [],
     () => {},
+  );
+  const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
+  const commands = editing ? editSlash : slash;
+  const chipKinds = useMemo(
+    () => ({ ...commands.chipKinds, ...mention.chipKinds }),
+    [commands.chipKinds, mention.chipKinds],
   );
 
   /* a session that never takes this app's messages says so before anything is typed */
@@ -367,13 +374,11 @@ export function OpenSessionComposer({
             }
             onKeyDown={onKeyDown}
             fieldRef={textarea}
-            commands={editing ? editSlash.names : slash.names}
-            composerRef={editing ? editSlash.field : slash.field}
+            commands={commands.names}
+            composerRef={commands.field}
             commandsAt="word"
-            chipKinds={editing ? editSlash.chipKinds : slash.chipKinds}
-            triggers={
-              goalMode.mode ? undefined : [editing ? editSlash.trigger : slash.trigger]
-            }
+            chipKinds={chipKinds}
+            triggers={goalMode.mode ? undefined : [commands.trigger, mention.trigger]}
             clearable={!editing}
             submitLabel={
               editing
