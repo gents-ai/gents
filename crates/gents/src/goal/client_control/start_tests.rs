@@ -1,6 +1,6 @@
 use super::contract_tests::{persist_command, receipt};
 use super::*;
-use crate::agent::p2p_reconcile::session_goal_control::process_command;
+use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::KeyIdentity;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};

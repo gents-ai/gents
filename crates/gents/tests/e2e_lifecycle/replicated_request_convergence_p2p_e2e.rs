@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::{
+use gents::defra_node::EmbeddedNode;
+use gents::runtime::agent::p2p_reconcile::{
     equality_filter, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
-use gents::defra_node::EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
 use gents_protocol::request_lifecycle::RequestLifecycleState;

@@ -19,7 +19,7 @@ impl ClientCore {
         session_id: &str,
         node_did: &str,
     ) -> Result<(
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         Option<String>,
     )> {
         let session_id = normalize_required("session_id", session_id)?;
@@ -46,7 +46,7 @@ impl ClientCore {
             return Ok((progress, detail));
         }
         self.admit_session_hydration_request(
-            gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::PassiveStart,
+            gents::runtime::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::PassiveStart,
             session_id,
             node_did,
             &progress,
@@ -99,7 +99,8 @@ impl ClientCore {
         &self,
         session_id: &str,
         node_did: &str,
-    ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress> {
+    ) -> Result<gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress>
+    {
         Ok(self.session_hydration_status(session_id, node_did).await?.0)
     }
 
@@ -108,7 +109,7 @@ impl ClientCore {
         session_id: &str,
         node_did: &str,
     ) -> Result<(
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         Option<String>,
     )> {
         let session_id = normalize_required("session_id", session_id)?;
@@ -125,8 +126,8 @@ impl ClientCore {
         let (progress, _, request) = self
             .load_hydration_observation(session_id, node_did)
             .await?;
-        if !gents::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
-            gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
+        if !gents::runtime::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
+            gents::runtime::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
             &request,
             &progress,
             session_id,
@@ -140,7 +141,7 @@ impl ClientCore {
         }
         if !self
             .admit_session_hydration_request(
-                gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
+                gents::runtime::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
                 session_id,
                 node_did,
                 &progress,
@@ -155,13 +156,13 @@ impl ClientCore {
 
     async fn admit_session_hydration_request(
         &self,
-        action: gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction,
+        action: gents::runtime::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction,
         session_id: &str,
         node_did: &str,
-        observed_progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        observed_progress: &gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         evidence: Option<&LocalHydrationStartEvidence>,
     ) -> Result<bool> {
-        use gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction as Action;
+        use gents::runtime::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction as Action;
 
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
@@ -264,27 +265,27 @@ impl ClientCore {
                     }
                     let request_state = match request {
                         None => {
-                            gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Missing
+                            gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Missing
                         }
                         Some(request) => match request.status.as_deref() {
                             Some("pending") => {
-                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
+                                gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
                             }
                             Some("served") => {
-                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Served(BTreeSet::new())
+                                gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Served(BTreeSet::new())
                             }
                             Some("rejected") => {
-                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Rejected(None)
+                                gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Rejected(None)
                             }
                             Some(_) | None if action == Action::PassiveStart => {
-                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
+                                gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
                             }
                             Some(status) => anyhow::bail!("unknown session hydration request status {status:?}"),
                             None => anyhow::bail!("session hydration request is missing status"),
                         },
                     };
                     let evidence = evidence.as_ref();
-                    if !gents::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
+                    if !gents::runtime::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
                         action,
                         &request_state,
                         &observed_progress,
@@ -322,7 +323,7 @@ impl ClientCore {
         session_id: &str,
         node_did: &str,
     ) -> Result<(
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         Option<String>,
     )> {
         let (progress, detail, _) = self
@@ -336,9 +337,9 @@ impl ClientCore {
         session_id: &str,
         node_did: &str,
     ) -> Result<(
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         Option<String>,
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
+        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
     )> {
         let (request, detail) = load_hydration_server_state(
             self.node.as_ref(),
@@ -349,7 +350,7 @@ impl ClientCore {
             &self.node_identity,
         )
         .await?;
-        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
+        use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
         let verified_manifest = match &request {
             ClientHydrationRequestState::Served(documents)
             | ClientHydrationRequestState::Rejected(Some(documents)) => Some(documents),
@@ -364,7 +365,7 @@ impl ClientCore {
         )
         .await?;
         Ok((
-            gents::agent::p2p_reconcile::session_hydration::project_durable_hydration_progress(
+            gents::runtime::agent::p2p_reconcile::session_hydration::project_durable_hydration_progress(
                 session_id,
                 node_did,
                 merged,
@@ -441,11 +442,11 @@ fn hydration_request_admission_query(request_key_gql: &str) -> String {
 }
 
 fn should_start_session_hydration_request(
-    progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+    progress: &gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
     session_id: &str,
     node_did: &str,
 ) -> bool {
-    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
+    use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
     progress.session_id == session_id
         && progress.node_did == node_did
         && progress.phase == ClientHydrationPhase::Idle
@@ -453,10 +454,10 @@ fn should_start_session_hydration_request(
 
 fn hydration_start_evidence_is_ready(
     foreign_header: bool,
-    progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+    progress: &gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
     evidence: &LocalHydrationStartEvidence,
 ) -> bool {
-    gents::agent::p2p_reconcile::session_hydration::can_start_hydration(
+    gents::runtime::agent::p2p_reconcile::session_hydration::can_start_hydration(
         foreign_header,
         evidence.owned_session_present,
         progress.merged_count > 0,

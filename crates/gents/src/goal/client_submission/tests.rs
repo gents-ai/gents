@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::p2p_reconcile::session_goal_control::process_command;
+use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
 use crate::store::identity::KeyIdentity;
 use defra_node::EmbeddedNode;
 use gents_protocol::goal_control::{

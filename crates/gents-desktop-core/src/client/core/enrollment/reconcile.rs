@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_p2p_adapter::TransportPeerId;
 use futures::{stream, StreamExt};
-use gents::agent::p2p_reconcile::enrollment_candidate::validate_authenticated_server_did;
+use gents::runtime::agent::p2p_reconcile::enrollment_candidate::validate_authenticated_server_did;
 use p2p::iroh::parse_public_peer_addr;
 use tokio::time::timeout;
 

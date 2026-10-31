@@ -63,8 +63,8 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     let env_filter = with_default_transport_noise_filters(
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter)),
     );
-    let native = gents::native_logging::service_logging_enabled()
-        .then(|| gents::native_logging::layer("runtime"))
+    let native = gents::runtime::native_logging::service_logging_enabled()
+        .then(|| gents::runtime::native_logging::layer("runtime"))
         .flatten();
     let console = native.is_none();
 

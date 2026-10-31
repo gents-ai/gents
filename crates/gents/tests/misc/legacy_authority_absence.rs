@@ -42,15 +42,15 @@ fn removed_authority_collections_are_absent_from_schema_and_replication_inventor
 #[test]
 fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
     let production = [
-        include_str!("../../src/agent/p2p_reconcile/engine.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/desired.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/enrollment.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/reconcile.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/rows.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/store.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/sweep.rs"),
-        include_str!("../../src/agent/p2p_reconcile/enrollment_reconcile.rs"),
-        include_str!("../../src/agent/p2p_reconcile/session_hydration_reconcile.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/desired.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/enrollment.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/reconcile.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/rows.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/store.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/sweep.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/enrollment_reconcile.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/mod.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/network.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/pairings.rs"),
@@ -133,8 +133,8 @@ fn operator_nonce_is_local_only_and_never_broad_synced() {
 
 #[test]
 fn legacy_invite_metadata_is_wire_only_and_reciprocal_timing_does_not_return() {
-    let intervals = include_str!("../../src/agent/p2p_reconcile/intervals.rs");
-    let registry_writer = include_str!("../../src/agent/p2p_reconcile/registry.rs");
+    let intervals = include_str!("../../src/runtime/agent/p2p_reconcile/intervals.rs");
+    let registry_writer = include_str!("../../src/runtime/agent/p2p_reconcile/registry.rs");
     let registry_schema =
         include_str!("../../../gents-schemas/schemas/agent/peer_registry.graphql");
 
@@ -173,7 +173,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert_eq!(background.matches("create_AgentRequest(input:").count(), 1);
 
     let materialize = include_str!("../../src/request/lifecycle/materialize.rs");
-    let oneshot = include_str!("../../src/oneshot.rs");
+    let oneshot = include_str!("../../src/runtime/oneshot.rs");
     let signed_direct_materializer = materialize
         .split("pub async fn materialize_claimed_with_execution_binding")
         .nth(1)
@@ -250,9 +250,9 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
 
 #[test]
 fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
-    let policy = include_str!("../../src/agent/p2p_reconcile/policy.rs");
-    let desired = include_str!("../../src/agent/p2p_reconcile/engine/desired.rs");
-    let topology = include_str!("../../src/agent/p2p_reconcile/engine/remote_topology.rs");
+    let policy = include_str!("../../src/runtime/agent/p2p_reconcile/policy.rs");
+    let desired = include_str!("../../src/runtime/agent/p2p_reconcile/engine/desired.rs");
+    let topology = include_str!("../../src/runtime/agent/p2p_reconcile/engine/remote_topology.rs");
     let observer = include_str!("../../../gents-desktop-core/src/client/observe.rs");
     let merges = include_str!("../../../gents-desktop-core/src/client/store/merges.rs");
     let writes = include_str!("../../../gents-desktop-core/src/client/core/writes.rs");
@@ -271,7 +271,7 @@ fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
 #[test]
 fn request_admission_has_no_logical_only_recovery_or_terminal_mutation() {
     let request_admission = include_str!("../../src/request/admission.rs");
-    let modules = include_str!("../../src/agent/p2p_reconcile/mod.rs");
+    let modules = include_str!("../../src/runtime/agent/p2p_reconcile/mod.rs");
 
     assert!(!request_admission.contains("parent_authorizes_subagent_target"));
     assert!(request_admission.contains("load_exact_parent_request"));

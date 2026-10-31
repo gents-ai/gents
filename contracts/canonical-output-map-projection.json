@@ -71,7 +71,7 @@
       "native_owner_paths": [
         "crates/gents/src/inference/compaction.rs",
         "crates/gents/src/turn/provider_input.rs",
-        "crates/gents/src/agent/daemon/request.rs",
+        "crates/gents/src/runtime/agent/daemon/request.rs",
         "crates/gents/src/session/compaction_entries.rs"
       ],
       "consumer_paths": [
@@ -168,13 +168,13 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/request/streaming.rs",
-        "crates/gents/src/agent/stream_processor.rs",
+        "crates/gents/src/runtime/agent/stream_processor.rs",
         "crates/gents-desktop-core/src/client/observe.rs",
         "crates/gents-desktop-core/src/client/observe/projection_store.rs",
         "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/agent/loop_stream/tests/streaming.rs",
+        "crates/gents/src/runtime/agent/loop_stream/tests/streaming.rs",
         "crates/gents-desktop-core/src/client/observe/tests.rs",
         "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
         "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
@@ -217,13 +217,13 @@
       "fixture_status": "summary_only",
       "native_owner_paths": [
         "crates/gents/src/session/fork.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs",
         "crates/gents-protocol/src/session_hydration.rs",
         "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/agent/p2p_reconcile/session_hydration_closure.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_closure.rs",
         "crates/gents/tests/conformance/session_hydration.rs",
         "crates/gents/src/session/tests.rs",
         "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
@@ -303,14 +303,14 @@
         "crates/gents/src/turn/provider_input.rs",
         "crates/gents/src/inference/llm/rig_compat.rs",
         "crates/gents-loop/src/loop_stream/request_assembly.rs",
-        "crates/gents/src/agent/loop_stream.rs",
+        "crates/gents/src/runtime/agent/loop_stream.rs",
         "crates/gents/src/inference/compaction.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/turn/provider_input/tests.rs",
         "crates/gents/tests/conformance/prompt_assembly.rs",
-        "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",
-        "crates/gents/src/agent/loop_stream/tests/capture.rs",
+        "crates/gents/src/runtime/agent/loop_stream/tests/request_assembly.rs",
+        "crates/gents/src/runtime/agent/loop_stream/tests/capture.rs",
         "crates/gents/src/inference/compaction/tests.rs"
       ],
       "native_status": "pending",

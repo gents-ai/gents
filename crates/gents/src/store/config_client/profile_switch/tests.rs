@@ -370,8 +370,8 @@ async fn switch_with_companions_moves_both_in_one_transaction() {
 
 #[tokio::test]
 async fn next_turns_use_the_target_credentials() {
-    use crate::agent::PendingAgent;
     use crate::inference::auth::credential::BearerSource as _;
+    use crate::runtime::agent::PendingAgent;
     use crate::store::identity::{KeyIdentity, NodeIdentity as _};
     let key = std::env::temp_dir().join(format!("switch-{}.key", uuid::Uuid::new_v4()));
     let did = KeyIdentity::load_or_create(&key, None)

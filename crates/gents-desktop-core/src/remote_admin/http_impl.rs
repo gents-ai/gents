@@ -8,7 +8,7 @@ use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use defra_node::EmbeddedNode;
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::{
     resolve_embedded_collection_id, resolve_embedded_collection_name, to_replication_filters,
     PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
@@ -792,7 +792,7 @@ mod tests {
         let server = MockServer::start().await;
         let filters = to_replication_filters(&BTreeMap::from([(
             "AgentRequest".to_string(),
-            gents::agent::p2p_reconcile::equality_filter("node_did", "did:key:mandrake"),
+            gents::runtime::agent::p2p_reconcile::equality_filter("node_did", "did:key:mandrake"),
         )]))
         .expect("representable filter");
         let body = serde_json::json!([

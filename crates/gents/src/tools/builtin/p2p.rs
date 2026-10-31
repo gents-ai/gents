@@ -6,12 +6,12 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::agent::p2p_reconcile::{
+use crate::defra_node::EmbeddedNode;
+use crate::inference::llm::tool::{Tool, ToolDefinition};
+use crate::runtime::agent::p2p_reconcile::{
     templates::admit_app_collections, ActiveEnrollment, EmbeddedRemoteP2pAdmin,
     EnrollmentOfferIssuer, GraphqlEnrollmentStore, RemoteP2pAdmin,
 };
-use crate::defra_node::EmbeddedNode;
-use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::tools::surface::EndpointScope;
@@ -326,7 +326,7 @@ impl P2pTool {
         for name in &collections {
             validate_collection_identifier(name)?;
             ensure!(self.collections.permits(name), "application collection {name} is outside this tool's P2P collection grant. A configuration owner grants it in this agent's Tools built_ins.p2p_collections, and gents pack wire grants a wired plugin's pack collections. The grant this tool holds was fixed when this request started, so a new grant applies from the agent's next request, not in this turn: finish the turn and retry then. ACP document access remains separate; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}");
-            crate::agent::p2p_reconcile::resolve_embedded_collection_id(&self.node, name)?
+            crate::runtime::agent::p2p_reconcile::resolve_embedded_collection_id(&self.node, name)?
                 .with_context(|| format!("collection {name} is unavailable on this node"))?;
         }
         Ok(collections)
@@ -395,7 +395,8 @@ impl P2pTool {
                 let peers = bounded_observation(admin.active_peers().await?);
                 let addresses = bounded_observation(admin.peer_info().await?);
                 let mut sync =
-                    crate::p2p_observability::observe_embedded_sync_status(&self.node).await?;
+                    crate::runtime::p2p::observability::observe_embedded_sync_status(&self.node)
+                        .await?;
                 let observed_backlog_peers = sync.push_backlog.per_peer.len();
                 sync.push_backlog.per_peer.truncate(50);
                 Ok(reply(
@@ -541,7 +542,7 @@ impl P2pTool {
                 let p2p = crate::store::identity::node_p2p(&self.node)
                     .context("P2P is not running on this node")?;
                 let validity = options.get("valid_for_secs").map_or(
-                    Ok(crate::agent::p2p_reconcile::enrollment_offer::DEFAULT_OFFER_VALIDITY),
+                    Ok(crate::runtime::agent::p2p_reconcile::enrollment_offer::DEFAULT_OFFER_VALIDITY),
                     |value| {
                         value
                             .as_i64()
@@ -587,7 +588,7 @@ impl P2pTool {
             ["enrollment", "request"] => {
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
                 let request =
-                    crate::agent::p2p_reconcile::enrollment_candidate::request_enrollment(
+                    crate::runtime::agent::p2p_reconcile::enrollment_candidate::request_enrollment(
                         &self.node,
                         actor.as_ref(),
                         text("offer_token")?,
@@ -610,7 +611,7 @@ impl P2pTool {
                 }
                 .map_err(|error| {
                     let reused = gents_protocol::error_chain::find_source::<
-                        crate::agent::p2p_reconcile::EnrollmentDecisionRefusal,
+                        crate::runtime::agent::p2p_reconcile::EnrollmentDecisionRefusal,
                     >(error.as_ref())
                     .is_some_and(|refusal| {
                         refusal.code()

@@ -60,7 +60,7 @@ pub async fn read_operator_inventory(
                 Err(error) => {
                     let reason = error.downcast_ref::<super::FileInventoryPageError>()
                         .map(super::FileInventoryPageError::refusal_reason)
-                        .unwrap_or_else(|| crate::agent::p2p_reconcile::session_hydration_reconcile::file_inventory_refusal_reason(&error));
+                        .unwrap_or_else(|| crate::runtime::agent::p2p_reconcile::session_hydration_reconcile::file_inventory_refusal_reason(&error));
                     let receipt = super::sign_refusal(identity, demand, reason).await?;
                     require_operator(node, identity, authenticated_actor, demand)?;
                     return super::record_reply(

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use defra_node::QueryResponse;
-use gents::agent::p2p_reconcile::enrollment::{
+use gents::runtime::agent::p2p_reconcile::enrollment::{
     DurableEnrollmentDocuments, EnrollmentOffer as PureOffer, EnrollmentRequest as PureRequest,
     NetworkAdminPin as PureAdminPin,
 };

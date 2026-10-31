@@ -175,9 +175,9 @@ impl Drop for InferenceObservationGuard {
     }
 }
 
-impl crate::agent::Gents {
+impl crate::runtime::agent::Gents {
     pub async fn inference_observation_authorized(&self, actor: &str) -> anyhow::Result<bool> {
-        if crate::agent::p2p_reconcile::enrollment_reconcile::runtime_observation_admitted(
+        if crate::runtime::agent::p2p_reconcile::enrollment_reconcile::runtime_observation_admitted(
             Some(actor),
             self.node_did(),
             None,

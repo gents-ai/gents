@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::drop_cleanup::DropCleanup;
+use gents::runtime::drop_cleanup::DropCleanup;
 use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};

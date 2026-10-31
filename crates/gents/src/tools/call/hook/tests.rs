@@ -1176,7 +1176,7 @@ async fn publish_claimed_authored_input(
     context: Option<Message>,
     prompt: Message,
 ) {
-    use crate::agent::loop_stream::LoopStreamItem;
+    use crate::runtime::agent::loop_stream::LoopStreamItem;
     use crate::runtime::agent::stream_processor::StreamProcessor;
 
     let mut fixtures = hook_execution_fixtures().lock().await;
@@ -2471,9 +2471,14 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         ToolCallHookAction::Continue
     ));
 
-    let dispatched =
-        crate::agent::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None, None)
-            .await;
+    let dispatched = crate::runtime::agent::loop_stream::dispatch_tool(
+        &[],
+        "ghost_tool",
+        "{}".to_string(),
+        None,
+        None,
+    )
+    .await;
 
     let _ = hook
         .on_tool_result("ghost_tool", None, "internal-unknown", "{}", &dispatched)
@@ -4349,7 +4354,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         ToolCallHookAction::Continue
     ));
 
-    let dispatched = crate::agent::loop_stream::dispatch_tool(
+    let dispatched = crate::runtime::agent::loop_stream::dispatch_tool(
         &crate::tools::native::ToolSet::builder()
             .read_root(std::env::temp_dir())
             .bash_read_only()

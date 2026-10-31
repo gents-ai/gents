@@ -663,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {
-        use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
+        use gents::runtime::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
         use gents::store::config_client::ConfigAccess;
         use gents::store::graphql::escape_graphql_string;
 

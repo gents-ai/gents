@@ -297,7 +297,7 @@ pub fn classify_request_outcome(
     }
     let budget_exhausted = evidence.failure_reason.as_deref().is_some_and(|reason| {
         reason.contains("invalid_tool_call_budget_exhausted")
-            || reason.contains(crate::agent::loop_stream::REPEATED_TOOL_FAILURE_PREFIX)
+            || reason.contains(crate::runtime::agent::loop_stream::REPEATED_TOOL_FAILURE_PREFIX)
     });
     if budget_exhausted {
         return Some("tool");

@@ -596,8 +596,8 @@ async fn saved_peer_cleanup_removes_replicator_before_idempotent_disconnect() {
     assert!(calls[0].starts_with(&format!("remove-replicator:{}:", record.addr)));
     assert!(calls[1].starts_with(&format!("remove-replicator:{}:", record.addr)));
     assert_eq!(calls[2], format!("disconnect:{}", record.addr));
-    for collection in gents::agent::p2p_reconcile::client_route_collections(
-        gents::agent::p2p_reconcile::PairingDirection::ClientToRuntime,
+    for collection in gents::runtime::agent::p2p_reconcile::client_route_collections(
+        gents::runtime::agent::p2p_reconcile::PairingDirection::ClientToRuntime,
     ) {
         assert!(calls[0].contains(collection));
     }
@@ -641,7 +641,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .peers
         .iter()
         .any(|status| status.peer_id == record.peer_id));
-    let route = gents::agent::p2p_reconcile::ClientRouteIdentity::new(
+    let route = gents::runtime::agent::p2p_reconcile::ClientRouteIdentity::new(
         record.peer_id.clone(),
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
         "did:key:desktop-requester",
@@ -652,7 +652,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
     let manual_write = lifecycle
         .upsert_desired(
             &route,
-            gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
+            gents::runtime::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
         )
         .await;
     assert!(manual_write
@@ -687,7 +687,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .iter()
         .any(|status| status.peer_id == record.peer_id));
     let peer_id = gents_protocol::graphql::escape_graphql_string(
-        &route.desired_id(gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient),
+        &route.desired_id(gents::runtime::agent::p2p_reconcile::PairingDirection::RuntimeToClient),
     );
     let response = core
         .node()
@@ -1201,12 +1201,12 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
             .await
             .expect("core");
     let local: ReplicatedSchema =
-        gents::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
+        gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
             .await
             .expect("read local collection versions");
     assert_eq!(
         local.len(),
-        gents::agent::p2p_reconcile::CLIENT_COLLECTIONS.len(),
+        gents::runtime::agent::p2p_reconcile::CLIENT_COLLECTIONS.len(),
         "the desktop node registers every client route collection"
     );
     let mut next_release = local.clone();

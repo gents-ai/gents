@@ -82,7 +82,7 @@ async fn control_node(tamper: bool) -> ControlNode {
                         observed_at: chrono::Utc::now().to_rfc3339(),
                         signature: Vec::new(),
                     };
-                    gents::runtime_service::sign_control_receipt(identity.as_ref(), &mut receipt)
+                    gents::runtime::service::sign_control_receipt(identity.as_ref(), &mut receipt)
                         .await
                         .unwrap();
                     if tamper {

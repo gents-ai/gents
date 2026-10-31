@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
-use gents::agent::p2p_reconcile::{
+use gents::request::lifecycle::{prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit};
+use gents::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
+use gents::runtime::agent::p2p_reconcile::{
     enrollment_authority_channel, resolve_template, resolve_template_filters,
     run_enrollment_reconciler, run_pairing_reconciler, EmbeddedRemoteP2pAdmin, PairingDirection,
     RemoteP2pAdmin, CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
 };
-use gents::request::lifecycle::{prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_admission::{
@@ -232,7 +232,7 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
     for case in &revoked {
         prepared.push(remote.prepare(case).await);
     }
-    gents::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
+    gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
         runtime.node.clone(),
         runtime.node_identity.clone(),
     )

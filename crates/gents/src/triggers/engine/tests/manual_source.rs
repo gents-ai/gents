@@ -24,7 +24,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
         tasks,
         ..Default::default()
     })
@@ -174,7 +174,8 @@ async fn production_materializer_persists_event_source_document_lineage() {
         crate::request::admission::load_request_for_admission_test(node.as_ref(), request_doc_id)
             .await
             .unwrap();
-    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
@@ -305,7 +306,8 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     )
     .await
     .unwrap();
-    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verified = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
@@ -417,7 +419,8 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     )
     .await
     .unwrap();
-    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,

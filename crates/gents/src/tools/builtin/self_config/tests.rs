@@ -3358,9 +3358,9 @@ async fn agent_create_commits_and_resolves_after_restart() {
         "disabled"
     );
 
-    let snapshot = crate::agent::resolve_document_runtime_snapshot(
+    let snapshot = crate::runtime::agent::resolve_document_runtime_snapshot(
         &node,
-        &crate::agent::DocumentResolveContext::for_tests(
+        &crate::runtime::agent::DocumentResolveContext::for_tests(
             identity,
             crate::tools::surface::ToolCeiling::readonly(),
             Default::default(),
@@ -3837,9 +3837,10 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .iter()
         .find(|agent| agent.agent_id != seed_agent)
         .expect("agent reconciler materialized one agent");
-    let runtime_view = crate::agent::document_view::load_document_runtime_view(&node, &owner)
-        .await
-        .expect("fresh runtime view after agent publication");
+    let runtime_view =
+        crate::runtime::agent::document_view::load_document_runtime_view(&node, &owner)
+            .await
+            .expect("fresh runtime view after agent publication");
     let context_id = created.context_id.as_ref().expect("created context");
     let tools_id = runtime_view.contexts[context_id]
         .value
@@ -3858,9 +3859,9 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         "agent apply must persist the canonical selected root, not the operator ceiling"
     );
 
-    let snapshot = crate::agent::resolve_document_runtime_snapshot(
+    let snapshot = crate::runtime::agent::resolve_document_runtime_snapshot(
         &node,
-        &crate::agent::DocumentResolveContext::for_tests(
+        &crate::runtime::agent::DocumentResolveContext::for_tests(
             identity.clone(),
             crate::tools::surface::ToolCeiling::readonly_at(operator_root.path()),
             Default::default(),
@@ -3927,7 +3928,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        crate::agent::process_owned_request_with_model_for_test(
+        crate::runtime::agent::process_owned_request_with_model_for_test(
             node.clone(),
             runtime_agent.clone(),
             surface.clone(),
@@ -3981,7 +3982,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         );
     }
     let persisted_after_requests =
-        crate::agent::document_view::load_document_runtime_view(&node, &owner)
+        crate::runtime::agent::document_view::load_document_runtime_view(&node, &owner)
             .await
             .expect("reload persisted Tools after fresh owned requests");
     assert_eq!(

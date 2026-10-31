@@ -14,7 +14,7 @@
       "generated_groups": ["canonical_dispatch_observation_cases", "canonical_spawned_target_rejection_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents/src/tools/call/hook/persistence/prompt_hook.rs", "crates/gents/src/tools/call/hook.rs", "crates/gents/src/tools/call/lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents/src/tools/native/bash_tools.rs", "crates/gents/src/tools/call/hook/persistence/background_tools.rs", "crates/gents/src/tools/call/lifecycle/recovery.rs"],
-      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/tools/call/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/tools/call/hook/tests/background_admission.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/tools/call/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/tools/call/hook/tests/background_admission.rs"],
       "native_status": "pending",
       "required_cases": [
         "lost_receipt_then_replay preserves Running without either observation granting invocation authority",
@@ -144,7 +144,7 @@
         "crates/gents/src/turn/provider_input.rs",
         "crates/gents-loop/src/provider_input_budget.rs",
         "crates/gents/src/inference/compaction.rs",
-        "crates/gents/src/agent/daemon/request.rs",
+        "crates/gents/src/runtime/agent/daemon/request.rs",
         "crates/gents-loop/src/loop_stream/request_assembly.rs"
       ],
       "consumer_paths": [
@@ -201,7 +201,7 @@
         "crates/gents/src/request/lifecycle/execution_lease.rs",
         "crates/gents/src/request/admission.rs"
       ],
-      "consumer_paths": ["crates/gents/src/agent/daemon/execution_lease_regression_tests.rs"],
+      "consumer_paths": ["crates/gents/src/runtime/agent/daemon/execution_lease_regression_tests.rs"],
       "native_status": "pending",
       "required_cases": [
         "race renewal, recovery, publication and dispatch through one node's mutation gate and observe one serial winner with unchanged losers",
@@ -260,11 +260,11 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/documents/projection_acp.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs",
         "crates/gents/src/session/fork.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs",
         "crates/gents/src/session/tests.rs"
       ],
       "native_status": "pending",
@@ -321,12 +321,12 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/agent/p2p_reconcile/templates.rs",
-        "crates/gents/src/agent/p2p_reconcile/profiles.rs",
-        "crates/gents/src/agent/p2p_reconcile/policy.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs"
+        "crates/gents/src/runtime/agent/p2p_reconcile/templates.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/profiles.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/policy.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs"
       ],
-      "consumer_paths": ["crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs"],
+      "consumer_paths": ["crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs"],
       "native_status": "pending",
       "required_cases": [
         "replace response and spill routes with segment while preserving requester and agent filters and every route direction",

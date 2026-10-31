@@ -99,7 +99,7 @@ async fn local_hydration_counts_exact_origin_documents_without_reading_the_origi
         "a fork's signed origin keys are already local"
     );
     let served = roots.union(&origins).cloned().collect::<BTreeSet<_>>();
-    use gents::agent::p2p_reconcile::session_hydration::{
+    use gents::runtime::agent::p2p_reconcile::session_hydration::{
         project_durable_hydration_progress, ClientHydrationPhase, ClientHydrationRequestState,
     };
     let complete = project_durable_hydration_progress(

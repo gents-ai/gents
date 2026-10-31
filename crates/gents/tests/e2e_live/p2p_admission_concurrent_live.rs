@@ -181,7 +181,7 @@ struct LiveTopologyGuard {
     peer_a: Option<TestDb>,
     peer_b: Option<TestDb>,
     shut_down: bool,
-    runtime: gents::drop_cleanup::DropCleanup,
+    runtime: gents::runtime::drop_cleanup::DropCleanup,
 }
 
 impl LiveTopologyGuard {
@@ -192,7 +192,7 @@ impl LiveTopologyGuard {
             peer_a: Some(peer_a),
             peer_b: Some(peer_b),
             shut_down: false,
-            runtime: gents::drop_cleanup::DropCleanup::current(),
+            runtime: gents::runtime::drop_cleanup::DropCleanup::current(),
         }
     }
 

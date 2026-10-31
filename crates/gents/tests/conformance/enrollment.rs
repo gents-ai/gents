@@ -1,4 +1,4 @@
-use gents::agent::p2p_reconcile::enrollment::{
+use gents::runtime::agent::p2p_reconcile::enrollment::{
     canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field,
     AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments, EnrollmentAction,
     EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest,

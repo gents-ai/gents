@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use gents::agent::completion_retry::{
+use gents::error::InferenceError;
+use gents::inference::llm::rig_compat::classify_completion_error;
+use gents::runtime::agent::completion_retry::{
     failure_class, retry_wake_fits_deadline, CompletionRetryPolicy, CompletionRetryState,
     FailureClass, MidStreamDirective, PreStreamDirective, RetryKind,
 };
-use gents::error::InferenceError;
-use gents::inference::llm::rig_compat::classify_completion_error;
 
 /// A synthetic attempt failure as the loop classifies one: the provider
 /// report reads the attempt text and the error's rendering.

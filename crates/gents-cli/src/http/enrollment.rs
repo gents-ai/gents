@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-pub use gents::agent::p2p_reconcile::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
+pub use gents::runtime::agent::p2p_reconcile::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 
 pub(crate) type EnrollmentOfferIssuerHandle = Arc<RwLock<Option<EnrollmentOfferIssuer>>>;
 pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDecisionService>>>;
@@ -23,13 +23,13 @@ pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDe
 pub(crate) struct EnrollmentDecisionService {
     identity: Arc<dyn NodeIdentity>,
     node: Arc<EmbeddedNode>,
-    store: gents::agent::p2p_reconcile::GraphqlEnrollmentStore,
+    store: gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore,
 }
 
 impl EnrollmentDecisionService {
     pub(crate) fn new(identity: Arc<dyn NodeIdentity>, node: Arc<EmbeddedNode>) -> Self {
         Self {
-            store: gents::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
+            store: gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
                 node.clone(),
                 identity.clone(),
             ),
@@ -41,7 +41,7 @@ impl EnrollmentDecisionService {
     pub(crate) async fn decide(
         &self,
         command: &EnrollmentOperatorDecisionCommand,
-    ) -> Result<gents::agent::p2p_reconcile::EnrollmentDecisionOutcome> {
+    ) -> Result<gents::runtime::agent::p2p_reconcile::EnrollmentDecisionOutcome> {
         let now = Utc::now();
         authenticate_operator_command(self.identity.as_ref(), command, now).await?;
         consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;

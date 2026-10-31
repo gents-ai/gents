@@ -816,7 +816,7 @@ async fn generated_reply_journals_preserve_immutable_outcomes() {
 
 #[tokio::test]
 async fn generated_completion_requires_confirmed_authorized_delivery() {
-    use crate::agent::p2p_reconcile::session_hydration::{
+    use crate::runtime::agent::p2p_reconcile::session_hydration::{
         HydrationDeliveryResult, HydrationTerminalWriteResult,
     };
     let (directory, names) = tokio::task::spawn_blocking(|| {
