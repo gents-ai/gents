@@ -893,6 +893,7 @@ async fn initialize_runtime_home(
         provider_kind: backend.provider_kind,
         openai_wire_api: backend.openai_wire_api,
         endpoint: backend.endpoint.clone(),
+        claude_platform: None,
         auth: backend_auth,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,

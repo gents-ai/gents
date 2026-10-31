@@ -275,7 +275,14 @@ impl ProviderInputProfile {
             (BackendProviderKind::ChatGptCodex, _) => Self::ChatGptCodexResponses,
             (BackendProviderKind::XaiGrokOAuth, OpenAiWireApi::Responses) => Self::XaiResponses,
             (BackendProviderKind::ClaudeCliSubscription, _)
-            | (BackendProviderKind::AnthropicApiKey, _) => Self::ClaudeMessages,
+            | (BackendProviderKind::AnthropicApiKey, _)
+            | (BackendProviderKind::ClaudeBedrock, _)
+            | (BackendProviderKind::ClaudeVertex, _)
+            | (BackendProviderKind::ClaudeFoundry, _)
+            | (BackendProviderKind::ClaudeAnthropicAws, _)
+            | (BackendProviderKind::ClaudeMantle, _)
+            | (BackendProviderKind::ClaudeGoogleCloud, _)
+            | (BackendProviderKind::ClaudeGateway, _) => Self::ClaudeMessages,
         }
     }
 

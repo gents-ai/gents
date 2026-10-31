@@ -305,6 +305,7 @@ async fn deadline_fail_fast_pre_sleep() {
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 0,
         allow_repair: false,
+        account_hops: 0,
     };
     loop_config.deadline = Some(chrono::Utc::now() + chrono::Duration::seconds(10));
 

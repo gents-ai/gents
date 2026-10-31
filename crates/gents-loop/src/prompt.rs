@@ -17,9 +17,19 @@ pub fn is_system_reminder(text: &str) -> bool {
         .is_some_and(|body| body.ends_with(REMINDER_SUFFIX))
 }
 
+const CHECKPOINT_REMINDER_HEAD: &str = "Continuation checkpoints from earlier conversation";
+
+/// Whether a message text is the compaction summary a reduction leaves in the history.
+pub fn is_compaction_summary(text: &str) -> bool {
+    is_system_reminder(text)
+        && text
+            .strip_prefix(REMINDER_PREFIX)
+            .is_some_and(|body| body.starts_with(CHECKPOINT_REMINDER_HEAD))
+}
+
 pub fn continuation_checkpoint_reminder(checkpoints: &str) -> String {
     format!(
-        "Continuation checkpoints from earlier conversation (oldest to newest):\n\n{checkpoints}\n\n\
+        "{CHECKPOINT_REMINDER_HEAD} (oldest to newest):\n\n{checkpoints}\n\n\
 Continue from these checkpoints and the retained conversation. Treat recorded results as \
 evidence, not as a prohibition on verification. Re-check facts when state may have changed, \
 the checkpoint is ambiguous, or correctness depends on them. Avoid repeating completed or \

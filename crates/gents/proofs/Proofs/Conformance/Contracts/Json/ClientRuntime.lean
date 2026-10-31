@@ -267,6 +267,7 @@ private def messageBlockJson {α : Type} (payloadJson : α → String) : Canonic
 def reconstructedMessageJson (native : CanonicalOutput.ReconstructedMessage) : String :=
   "{\"role\":" ++ jsonString (roleJson native.role) ++
     ",\"native_id\":" ++ optionalStringJson native.nativeId ++
+    ",\"native_request_id\":" ++ optionalStringJson native.nativeRequestId ++
     ",\"blocks\":" ++ jsonArray (native.blocks.map (messageBlockJson byteArrayJson)) ++ "}"
 
 def canonicalMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
@@ -276,7 +277,8 @@ def canonicalMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
     ",\"refs\":" ++ jsonArray (h.refs.map payloadRefJson) ++ ",\"outcome\":" ++ outcomeJson h.outcome ++
     ",\"role\":" ++ jsonString (roleJson h.role) ++ ",\"publication\":" ++ publicationJson h.publication ++
     "},\"key\":" ++ jsonString message.key ++ ",\"sequence\":" ++ toString message.sequence ++
-    ",\"native_id\":" ++ optionalStringJson message.nativeId ++ ",\"blocks\":" ++
+    ",\"native_id\":" ++ optionalStringJson message.nativeId ++
+    ",\"native_request_id\":" ++ optionalStringJson message.nativeRequestId ++ ",\"blocks\":" ++
     jsonArray (message.blocks.map (messageBlockJson payloadSpecJson)) ++
     ",\"created_at\":" ++ toString message.createdAt ++ "}"
 

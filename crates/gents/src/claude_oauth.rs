@@ -7,15 +7,6 @@ use crate::oauth_credential::{
 };
 
 pub const CLAUDE_OAUTH_PROVIDER: &str = "claude-subscription";
-pub const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-pub const CLAUDE_OAUTH_AUTHORIZE_URL: &str = "https://claude.com/cai/oauth/authorize";
-pub const CLAUDE_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-pub const CLAUDE_OAUTH_MANUAL_REDIRECT_URL: &str =
-    "https://platform.claude.com/oauth/code/callback";
-/// The subscription (claude.ai) scope set Claude Code requests. Not the
-/// API-key-creation scope.
-pub const CLAUDE_OAUTH_SCOPES: &str =
-    "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 pub const CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_CLAUDE_OAUTH_TOKEN_URL";
 
 pub const CLAUDE_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
@@ -114,22 +105,6 @@ mod tests {
     use crate::oauth_credential::OAuthAuthProblem;
 
     #[test]
-    fn scopes_are_the_subscription_set() {
-        let scopes: Vec<&str> = CLAUDE_OAUTH_SCOPES.split(' ').collect();
-        assert_eq!(
-            scopes,
-            [
-                "user:profile",
-                "user:inference",
-                "user:sessions:claude_code",
-                "user:mcp_servers",
-                "user:file_upload"
-            ]
-        );
-        assert!(!CLAUDE_OAUTH_SCOPES.contains("org:create_api_key"));
-    }
-
-    #[test]
     fn missing_credential_guidance_names_claude_login() {
         let text = classify_claude_auth_error(
             "did:key:z6MkTest",
@@ -150,7 +125,7 @@ mod tests {
             access_token: "access-TEST".into(),
             refresh_token: "refresh-TEST".into(),
             expires_in: Some(28800),
-            scope: Some(CLAUDE_OAUTH_SCOPES.into()),
+            scope: Some(gents_claude::oauth::LOGIN_SCOPES.join(" ")),
             account_id: Some("person@example.test".into()),
             organization_uuid: None,
             account_uuid: None,

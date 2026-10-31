@@ -7,6 +7,7 @@ members = [
     "crates/fixture-domain-plugin",
     "crates/gents",
     "crates/gents-chatgpt-login",
+    "crates/gents-claude",
     "crates/gents-claude-login",
     "crates/gents-cli",
     "crates/gents-client-host",
@@ -36,6 +37,7 @@ default-members = [
     "crates/fixture-domain-plugin",
     "crates/gents",
     "crates/gents-chatgpt-login",
+    "crates/gents-claude",
     "crates/gents-claude-login",
     "crates/gents-cli",
     "crates/gents-client-host",
@@ -82,6 +84,7 @@ gents-protocol = { path = "crates/gents-protocol" }
 gents-loop = { path = "crates/gents-loop" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-login-ui = { path = "crates/gents-login-ui" }
+gents-claude = { path = "crates/gents-claude" }
 gents-claude-login = { path = "crates/gents-claude-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }
 gents-schemas = { path = "crates/gents-schemas" }

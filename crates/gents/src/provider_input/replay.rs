@@ -152,6 +152,7 @@ mod tests {
             block_indices: (0..content.len()).collect(),
             sequence,
             message: Message::Assistant {
+                request_id: None,
                 id: Some("same-provider-message-id".to_string()),
                 content,
             },

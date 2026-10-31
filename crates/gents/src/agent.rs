@@ -535,6 +535,7 @@ pub(crate) struct AgentDocumentInputs<'a> {
     pub(crate) agent_tools: AgentToolConfig,
     pub(crate) tool_ceiling: &'a ToolCeiling,
     pub(crate) skills: Vec<crate::skills::Skill>,
+    pub(crate) oauth_pool: Vec<String>,
 }
 
 pub(crate) fn agent_config_from_documents(
@@ -551,6 +552,7 @@ pub(crate) fn agent_config_from_documents(
         agent_tools,
         tool_ceiling,
         skills,
+        oauth_pool,
     } = inputs;
     let execution = inference.execution.clone().unwrap_or_default();
     let retry = inference.retry_policy.clone().unwrap_or_default();
@@ -599,6 +601,7 @@ pub(crate) fn agent_config_from_documents(
         openai_wire_api: backend.openai_wire_api,
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
+        claude_platform: backend.claude_platform,
         model_name: inference.profile.model_name.clone(),
         service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
@@ -632,6 +635,7 @@ pub(crate) fn agent_config_from_documents(
         },
         sampling: inference.sampling_config()?,
         skills,
+        oauth_pool,
     })
 }
 

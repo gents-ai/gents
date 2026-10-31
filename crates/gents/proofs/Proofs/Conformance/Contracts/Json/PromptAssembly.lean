@@ -275,21 +275,228 @@ def promptAssemblyClaudeMapCaseJson
 def promptAssemblyClaudeMapCasesJson : String :=
   jsonArray (promptAssemblyClaudeMapCases.map promptAssemblyClaudeMapCaseJson)
 
+def claudeAttributionProviderName : PromptAssembly.ClaudeAttribution.Provider → String
+  | .firstParty => "firstParty"
+  | .vertex => "vertex"
+  | .bedrock => "bedrock"
+  | .anthropicAws => "anthropicAws"
+  | .anthropicGoogleCloud => "anthropicGoogleCloud"
+  | .foundry => "foundry"
+  | .mantle => "mantle"
+  | .gateway => "gateway"
+
+def promptAssemblyClaudeAttributionCaseJson (witness : PromptAssemblyClaudeAttributionCase) :
+    String :=
+  let f := witness.fields
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name
+    ++ ",\"version\":" ++ jsonString f.version
+    ++ ",\"fingerprint\":" ++ jsonString f.fingerprint
+    ++ ",\"entrypoint\":" ++ jsonString f.entrypoint
+    ++ ",\"provider\":" ++ jsonString (claudeAttributionProviderName f.provider)
+    ++ ",\"first_party_base_url\":" ++ boolString f.firstPartyBaseUrl
+    ++ ",\"workload\":" ++ jsonOptionalString f.workload
+    ++ ",\"subagent\":" ++ boolString f.subagent
+    ++ ",\"previous_request_id\":" ++ jsonOptionalString f.previousRequestId
+    ++ ",\"prompt_id\":" ++ jsonOptionalString f.promptId
+    ++ ",\"turn_origin\":" ++ jsonOptionalString f.turnOrigin
+    ++ ",\"prompt_index\":" ++ jsonOptionalNat f.promptIndex
+    ++ ",\"turn_index\":" ++ jsonOptionalNat f.turnIndex
+    ++ ",\"gateway\":" ++ jsonOptionalString f.gateway
+    ++ ",\"project_id\":" ++ jsonOptionalString (f.project.map (·.1))
+    ++ ",\"project_source\":" ++ jsonOptionalString (f.project.map (·.2))
+    ++ ",\"header\":" ++ jsonString witness.header
+    ++ "}"
+
+def promptAssemblyClaudeAttributionCasesJson : String :=
+  jsonArray (promptAssemblyClaudeAttributionCases.map promptAssemblyClaudeAttributionCaseJson)
+
+def promptAssemblyClaudeOriginCaseJson (witness : PromptAssemblyClaudeOriginCase) : String :=
+  let o := witness.origin
+  let m := witness.mode
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name
+    ++ ",\"cause\":" ++ jsonString (claudeOriginCauseName o.cause)
+    ++ ",\"root_client\":" ++ boolString o.rootClient
+    ++ ",\"scheduled\":" ++ boolString o.scheduled
+    ++ ",\"kind\":" ++ jsonString (claudeOriginKindName o.kind)
+    ++ ",\"appends_system_prompt\":" ++ boolString o.appendsSystemPrompt
+    ++ ",\"identity\":" ++ jsonString witness.identity
+    ++ ",\"entrypoint\":" ++ jsonString m.entrypoint
+    ++ ",\"background\":" ++ boolString m.background
+    ++ ",\"workload\":" ++ jsonOptionalString m.workload
+    ++ ",\"subagent\":" ++ boolString m.subagent
+    ++ ",\"request_class\":" ++ jsonString m.requestClass.name
+    ++ ",\"main_thread_source\":" ++ boolString m.mainThreadSource
+    ++ ",\"agentic\":" ++ boolString m.agentic
+    ++ ",\"turn_origin\":" ++ jsonOptionalString witness.turnOrigin
+    ++ ",\"prompt_index_after_three\":" ++ jsonOptionalNat (witness.position.map (·.1))
+    ++ ",\"turn_index_after_three\":" ++ jsonOptionalNat (witness.position.map (·.2))
+    ++ "}"
+
+def promptAssemblyClaudeOriginCasesJson : String :=
+  jsonArray (promptAssemblyClaudeOriginCases.map promptAssemblyClaudeOriginCaseJson)
+
+def claudeFieldFactsJson (f : PromptAssembly.ClaudeBody.ModelFacts) : String :=
+  "{"
+    ++ "\"adaptive\":" ++ boolString f.adaptive
+    ++ ",\"always_thinks\":" ++ boolString f.alwaysThinks
+    ++ ",\"thinking_supported\":" ++ boolString f.thinkingSupported
+    ++ ",\"rejects_disabled\":" ++ boolString f.rejectsDisabled
+    ++ ",\"accepts_temperature\":" ++ boolString f.acceptsTemperature
+    ++ ",\"effort_capable\":" ++ boolString f.effortCapable
+    ++ ",\"max_effort\":" ++ boolString f.maxEffort
+    ++ ",\"xhigh_effort\":" ++ boolString f.xhighEffort
+    ++ ",\"caps_effort_when_disabled\":" ++ boolString f.capsEffortWhenDisabled
+    ++ ",\"per_turn_effort\":" ++ boolString f.perTurnEffort
+    ++ ",\"output_default\":" ++ toString f.outputDefault
+    ++ ",\"output_upper\":" ++ toString f.outputUpper
+    ++ ",\"default_effort\":" ++ jsonOptionalString f.defaultEffort
+    ++ "}"
+
+def claudeFieldThinkingConfigJson : PromptAssembly.ClaudeBody.ThinkingConfig → String
+  | .adaptive => "{\"kind\":\"adaptive\",\"mechanical\":false,\"budget\":null}"
+  | .disabled mechanical =>
+      "{\"kind\":\"disabled\",\"mechanical\":" ++ boolString mechanical ++ ",\"budget\":null}"
+  | .enabled budget =>
+      "{\"kind\":\"enabled\",\"mechanical\":false,\"budget\":" ++ jsonOptionalNat budget ++ "}"
+
+def claudeFieldRequestJson (r : PromptAssembly.ClaudeBody.Request) : String :=
+  "{"
+    ++ "\"thinking\":" ++ claudeFieldThinkingConfigJson r.thinking
+    ++ ",\"max_tokens_override\":" ++ jsonOptionalNat r.maxTokensOverride
+    ++ ",\"requested_effort\":" ++ jsonOptionalString r.requestedEffort
+    ++ ",\"first_party\":" ++ boolString r.firstParty
+    ++ ",\"first_party_default_url\":" ++ boolString r.firstPartyDefaultUrl
+    ++ ",\"experimental_betas_disabled\":" ++ boolString r.experimentalBetasDisabled
+    ++ ",\"agentic\":" ++ boolString r.agentic
+    ++ ",\"fork\":" ++ boolString r.fork
+    ++ ",\"display_updates\":" ++ boolString r.displayUpdates
+    ++ ",\"context_management_beta\":" ++ boolString r.contextManagementBeta
+    ++ ",\"per_turn_control_beta\":" ++ boolString r.perTurnControlBeta
+    ++ ",\"previous_message_id\":" ++ jsonOptionalString r.previousMessageId
+    ++ "}"
+
+def claudeFieldThinkingJson : Option PromptAssembly.ClaudeBody.Thinking → String
+  | none => "{\"kind\":\"none\",\"budget\":null,\"updates\":false}"
+  | some .disabled => "{\"kind\":\"disabled\",\"budget\":null,\"updates\":false}"
+  | some (.adaptive updates) =>
+      "{\"kind\":\"adaptive\",\"budget\":null,\"updates\":" ++ boolString updates ++ "}"
+  | some (.enabled budget updates) =>
+      "{\"kind\":\"enabled\",\"budget\":" ++ toString budget ++ ",\"updates\":"
+        ++ boolString updates ++ "}"
+
+def claudeFieldDiagnosticsJson : Option (Option String) → String
+  | none => "{\"present\":false,\"previous_message_id\":null}"
+  | some previous => "{\"present\":true,\"previous_message_id\":" ++ jsonOptionalString previous ++ "}"
+
 def promptAssemblyClaudeBodyCaseJson (witness : PromptAssemblyClaudeBodyCase) : String :=
+  let d := witness.decision
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"model\":" ++ jsonString witness.model ++ ","
+    ++ "\"first_user_text\":" ++ jsonString witness.firstUserText ++ ","
+    ++ "\"fingerprint_placeholder\":" ++ jsonString claudeFingerprintPlaceholder ++ ","
+    ++ "\"prompt_id\":" ++ jsonString witness.promptId ++ ","
+    ++ "\"attribution\":" ++ jsonString witness.attribution ++ ","
     ++ "\"preamble\":" ++ jsonOptionalString witness.preamble ++ ","
     ++ "\"rows\":" ++ jsonStringArray witness.rows ++ ","
     ++ "\"tools\":" ++ jsonStringArray witness.tools ++ ","
     ++ "\"system\":" ++ jsonStringArray witness.system ++ ","
+    ++ "\"system_marked\":" ++ jsonArray (witness.systemMarked.map boolString) ++ ","
     ++ "\"tools_present\":" ++ boolString witness.toolsPresent
     ++ ",\"supported_efforts\":" ++ jsonOptionalStringArray witness.supportedEfforts
     ++ ",\"effort\":" ++ jsonOptionalString witness.effort
     ++ ",\"selected_effort\":" ++ jsonOptionalString witness.selectedEffort
+    ++ ",\"facts\":" ++ claudeFieldFactsJson witness.facts
+    ++ ",\"request\":" ++ claudeFieldRequestJson witness.request
+    ++ ",\"max_tokens\":" ++ toString d.maxTokens
+    ++ ",\"thinking\":" ++ claudeFieldThinkingJson d.thinking
+    ++ ",\"temperature\":" ++ jsonOptionalNat d.temperature
+    ++ ",\"context_management\":" ++ boolString d.contextManagement
+    ++ ",\"body_effort\":" ++ jsonOptionalString d.effort
+    ++ ",\"diagnostics\":" ++ claudeFieldDiagnosticsJson d.diagnostics
+    ++ ",\"per_turn_effort\":" ++ jsonOptionalString d.perTurnEffort
     ++ "}"
 
 def promptAssemblyClaudeBodyCasesJson : String :=
   jsonArray (promptAssemblyClaudeBodyCases.map promptAssemblyClaudeBodyCaseJson)
+
+def promptAssemblyClaudeFieldCaseJson (witness : PromptAssemblyClaudeFieldCase) : String :=
+  let d := witness.decision
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name
+    ++ ",\"facts\":" ++ claudeFieldFactsJson witness.facts
+    ++ ",\"request\":" ++ claudeFieldRequestJson witness.request
+    ++ ",\"max_tokens\":" ++ toString d.maxTokens
+    ++ ",\"thinking\":" ++ claudeFieldThinkingJson d.thinking
+    ++ ",\"temperature\":" ++ jsonOptionalNat d.temperature
+    ++ ",\"context_management\":" ++ boolString d.contextManagement
+    ++ ",\"effort\":" ++ jsonOptionalString d.effort
+    ++ ",\"diagnostics\":" ++ claudeFieldDiagnosticsJson d.diagnostics
+    ++ ",\"per_turn_effort\":" ++ jsonOptionalString d.perTurnEffort
+    ++ "}"
+
+def promptAssemblyClaudeFieldCasesJson : String :=
+  jsonArray (promptAssemblyClaudeFieldCases.map promptAssemblyClaudeFieldCaseJson)
+
+def promptAssemblyClaudeFieldRowCaseJson (witness : PromptAssemblyClaudeFieldRowCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name
+    ++ ",\"is_user\":" ++ jsonArray (witness.isUser.map boolString)
+    ++ ",\"index\":" ++ jsonOptionalNat witness.index
+    ++ "}"
+
+def promptAssemblyClaudeFieldRowCasesJson : String :=
+  jsonArray (promptAssemblyClaudeFieldRowCases.map promptAssemblyClaudeFieldRowCaseJson)
+
+def claudeCacheBlockJson : PromptAssembly.ClaudeCache.Block → String
+  | .text text => "{\"type\":\"text\",\"text\":" ++ jsonString text ++ "}"
+  | .thinking => "{\"type\":\"thinking\"}"
+  | .redactedThinking => "{\"type\":\"redacted_thinking\"}"
+  | .fallback => "{\"type\":\"fallback\"}"
+  | .other kind => "{\"type\":" ++ jsonString kind ++ "}"
+
+def claudeCacheRoleName : PromptAssembly.ClaudeCache.Role → String
+  | .user => "user"
+  | .assistant => "assistant"
+  | .system => "system"
+
+def claudeCacheMessageJson (message : PromptAssembly.ClaudeCache.Message) : String :=
+  "{\"role\":" ++ jsonString (claudeCacheRoleName message.role) ++ ",\"content\":"
+    ++ (match message.content with
+      | .str text => "{\"text\":" ++ jsonString text ++ "}"
+      | .blocks blocks => "{\"blocks\":" ++ jsonArray (blocks.map claudeCacheBlockJson) ++ "}")
+    ++ "}"
+
+def claudeCachePlacedJson (placed : PromptAssembly.ClaudeCache.Placed) : String :=
+  "{\"role\":" ++ jsonString (claudeCacheRoleName placed.role)
+    ++ ",\"text\":" ++ jsonOptionalString placed.text
+    ++ ",\"blocks\":" ++ (match placed.blocks with
+      | none => "null"
+      | some blocks => jsonArray (blocks.map claudeCacheBlockJson))
+    ++ ",\"marker\":" ++ jsonOptionalNat placed.marker
+    ++ "}"
+
+def claudeCacheTtlName : PromptAssembly.ClaudeCache.Ttl → String
+  | .fiveMinutes => "5m"
+  | .oneHour => "1h"
+
+def promptAssemblyClaudeCacheCaseJson (witness : PromptAssemblyClaudeCacheCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name
+    ++ ",\"caching\":" ++ boolString witness.caching
+    ++ ",\"skip_write\":" ++ boolString witness.skipWrite
+    ++ ",\"subscriber\":" ++ boolString witness.subscriber
+    ++ ",\"main_thread\":" ++ boolString witness.mainThread
+    ++ ",\"using_overage\":" ++ boolString witness.usingOverage
+    ++ ",\"messages\":" ++ jsonArray (witness.messages.map claudeCacheMessageJson)
+    ++ ",\"placed\":" ++ jsonArray (witness.placed.map claudeCachePlacedJson)
+    ++ ",\"ttl\":" ++ jsonString (claudeCacheTtlName witness.ttl)
+    ++ "}"
+
+def promptAssemblyClaudeCacheCasesJson : String :=
+  jsonArray (promptAssemblyClaudeCacheCases.map promptAssemblyClaudeCacheCaseJson)
 
 def promptAssemblyClaudeStreamCaseJson (witness : PromptAssemblyClaudeStreamCase) : String :=
   "{"

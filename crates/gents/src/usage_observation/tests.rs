@@ -1417,3 +1417,40 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
         assert!(!output.contains(secret), "{output}");
     }
 }
+
+#[tokio::test]
+async fn a_rotation_feed_folds_response_headers_into_the_account_pool() {
+    use gents_claude::rotation::{Family, Policy};
+    let cache = Arc::new(UsageCache::default());
+    let node = crate::oauth_credential::test_support::test_node().await;
+    let account = UsageAccount::Backend {
+        node_did: "did".into(),
+        provider: "claude".into(),
+        backend_id: "b".into(),
+        connection: "c".into(),
+    };
+    let reporter = UsageReporter::new(cache.clone(), node, account).with_rotation(RotationFeed {
+        credential_id: "id-a".into(),
+        family: Family::Sonnet,
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "anthropic-ratelimit-unified-status",
+        "rejected".parse().unwrap(),
+    );
+    headers.insert(
+        "anthropic-ratelimit-unified-reset",
+        "4102444800".parse().unwrap(),
+    );
+    headers.insert(
+        "anthropic-ratelimit-unified-representative-claim",
+        "five_hour".parse().unwrap(),
+    );
+    reporter.observe(&headers, UsageSource::Error);
+    let ids = ["id-a".to_string()];
+    let now = now_unix_secs();
+    assert!(cache
+        .claude_accounts()
+        .choose(&ids, "s", Family::Sonnet, now, &Policy::default())
+        .is_none());
+}

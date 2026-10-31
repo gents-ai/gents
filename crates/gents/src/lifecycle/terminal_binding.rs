@@ -37,6 +37,7 @@ mod tests {
 
     fn reply() -> TranscriptMessage {
         TranscriptMessage {
+            native_request_id: None,
             message_key: "reply-key".into(),
             session_id: "session".into(),
             node_did: "did:test:agent".into(),

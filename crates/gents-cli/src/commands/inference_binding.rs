@@ -64,11 +64,7 @@ pub(crate) async fn load_bound_context_window(
     let observation =
         gents::backend_registry::lookup_backend_observation(node, node_did, &profile.backend_id)
             .await?;
-    let credential_scope = matches!(
-        backend.auth,
-        gents::document_config::BackendAuth::NodeOAuth { .. }
-    )
-    .then_some(node_did);
+    let credential_scope = backend.auth.uses_node_oauth().then_some(node_did);
     let catalog = observation
         .as_ref()
         .map(|observation| observation.catalog_for(credential_scope))

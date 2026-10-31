@@ -32,8 +32,10 @@ pub(crate) fn messages(case: &Case) -> Vec<Message> {
     let mut messages = vec![Message::user("Earlier request")];
     for (index, identity) in case.input.iter().enumerate() {
         messages.push(Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: identity.id.clone(),
                 call_id: identity.call_id.clone(),
                 function: ToolFunction {

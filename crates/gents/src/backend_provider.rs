@@ -49,6 +49,13 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
         BackendProviderKind::XaiGrokOAuth => "Grok / xAI OAuth",
         BackendProviderKind::ClaudeCliSubscription => "Claude CLI subscription",
         BackendProviderKind::AnthropicApiKey => "Anthropic API key",
+        BackendProviderKind::ClaudeBedrock => "Amazon Bedrock",
+        BackendProviderKind::ClaudeVertex => "Google Vertex AI",
+        BackendProviderKind::ClaudeFoundry => "Microsoft Foundry",
+        BackendProviderKind::ClaudeAnthropicAws => "Claude Platform on AWS",
+        BackendProviderKind::ClaudeMantle => "Amazon Bedrock (Mantle)",
+        BackendProviderKind::ClaudeGoogleCloud => "Claude Platform on Google Cloud",
+        BackendProviderKind::ClaudeGateway => "Claude gateway",
     }
 }
 
@@ -240,6 +247,34 @@ impl ChatGptCodexModelRecord {
     }
 }
 
+/// A Claude platform has no model listing every platform serves, so its probe asks whether
+/// the endpoint answers at all: any response below a server error is reachable. The
+/// credential is checked by the first request, not here, so no secret is sent.
+async fn probe_platform_reachability(
+    client: &Client,
+    kind: BackendProviderKind,
+    endpoint: &str,
+) -> Result<Vec<AdvertisedModel>> {
+    let url = endpoint.trim_end_matches('/');
+    let provider_name = provider_display_name(kind);
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("reaching {provider_name} at {url}"))?;
+    let status = response.status();
+    if status.is_server_error() {
+        return Err(ModelDiscoveryHttpError {
+            provider: provider_name.to_string(),
+            url: url.to_string(),
+            status: status.as_u16(),
+            body: String::new(),
+        }
+        .into());
+    }
+    Ok(Vec::new())
+}
+
 pub async fn discover_models(
     client: &Client,
     kind: BackendProviderKind,
@@ -247,6 +282,9 @@ pub async fn discover_models(
     api_key: Option<&str>,
     oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
 ) -> Result<Vec<AdvertisedModel>> {
+    if kind.is_claude_platform() {
+        return probe_platform_reachability(client, kind, endpoint).await;
+    }
     let xai_api = kind == BackendProviderKind::OpenAiCompatible
         && crate::inference_setup::is_xai_api_endpoint(endpoint);
     let endpoint = match kind {
@@ -925,6 +963,51 @@ mod tests {
         ] {
             assert!(request.contains(header), "{header} missing from {request}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_claude_platform_probe_asks_only_whether_the_endpoint_answers() {
+        for status in ["200 OK", "401 Unauthorized", "404 Not Found"] {
+            let (endpoint, requests) = spawn_model_discovery_server_with_status(status, "{}").await;
+            let models = discover_models(
+                &Client::new(),
+                BackendProviderKind::ClaudeGateway,
+                &endpoint,
+                Some("placeholder-secret"),
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{status} is reachable: {error:#}"));
+            assert!(models.is_empty());
+            let request = requests.lock().expect("requests lock")[0].to_ascii_lowercase();
+            assert!(request.starts_with("get / "), "{request}");
+            assert!(!request.contains("authorization"), "{request}");
+            assert!(!request.contains("placeholder-secret"), "{request}");
+        }
+        let (endpoint, _) =
+            spawn_model_discovery_server_with_status("503 Service Unavailable", "{}").await;
+        let error = discover_models(
+            &Client::new(),
+            BackendProviderKind::ClaudeFoundry,
+            &endpoint,
+            None,
+            None,
+        )
+        .await
+        .expect_err("a server error is not reachable");
+        let http = error
+            .downcast_ref::<ModelDiscoveryHttpError>()
+            .expect("typed error");
+        assert_eq!(http.status, 503);
+        let unreachable = discover_models(
+            &Client::new(),
+            BackendProviderKind::ClaudeMantle,
+            "http://127.0.0.1:1",
+            None,
+            None,
+        )
+        .await;
+        assert!(unreachable.is_err());
     }
 
     #[tokio::test]

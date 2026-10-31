@@ -395,7 +395,16 @@ pub fn provider_selection_for_backend(
             InferenceProviderId::Anthropic,
             InferenceAuthMethod::ClaudeOauth,
         ),
-        BackendProviderKind::AnthropicApiKey => {
+        // The setup vocabulary only picks a model recommendation, which Claude
+        // models share on every platform; the platform settings live on the backend.
+        BackendProviderKind::AnthropicApiKey
+        | BackendProviderKind::ClaudeBedrock
+        | BackendProviderKind::ClaudeVertex
+        | BackendProviderKind::ClaudeFoundry
+        | BackendProviderKind::ClaudeAnthropicAws
+        | BackendProviderKind::ClaudeMantle
+        | BackendProviderKind::ClaudeGoogleCloud
+        | BackendProviderKind::ClaudeGateway => {
             (InferenceProviderId::Anthropic, InferenceAuthMethod::ApiKey)
         }
         BackendProviderKind::OpenRouter => {

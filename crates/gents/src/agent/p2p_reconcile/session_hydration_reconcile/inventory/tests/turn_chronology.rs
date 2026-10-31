@@ -59,6 +59,7 @@ async fn finish_request(
         )
         .await;
     let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![gents_protocol::message::AssistantContent::Text(
             gents_protocol::message::Text {

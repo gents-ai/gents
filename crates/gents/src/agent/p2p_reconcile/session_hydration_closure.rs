@@ -537,6 +537,7 @@ mod tests {
                 .map(|modeled| TranscriptMessageRow {
                     doc_id: modeled.id.to_string(),
                     message: TranscriptMessage {
+                        native_request_id: None,
                         message_key: format!("modeled-message-{}", modeled.id),
                         session_id: session_for(modeled.session),
                         node_did: agent.into(),

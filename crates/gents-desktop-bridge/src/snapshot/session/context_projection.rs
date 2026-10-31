@@ -347,6 +347,7 @@ mod order_profile_tests {
             (
                 Some(1),
                 Message::Assistant {
+                    request_id: None,
                     id: Some("assistant".into()),
                     content: vec![
                         AssistantContent::Reasoning(Reasoning {

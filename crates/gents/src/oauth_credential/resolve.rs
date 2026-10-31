@@ -28,6 +28,21 @@ pub fn pick_oauth_credential<'c>(
         .min_by(|a, b| resolver_order(a, b))
 }
 
+/// The accounts a pool backend rotates over (Lean `oauthPool`): every enabled
+/// row of `provider` the node owns, in the resolver's order.
+pub fn pick_oauth_pool<'c>(
+    rows: impl IntoIterator<Item = &'c OAuthCredential>,
+    node_did: &str,
+    provider: &str,
+) -> Vec<&'c OAuthCredential> {
+    let mut pool: Vec<_> = rows
+        .into_iter()
+        .filter(|row| row.node_did == node_did && row.provider == provider && row.enabled)
+        .collect();
+    pool.sort_by(|a, b| resolver_order(a, b));
+    pool
+}
+
 pub async fn resolve_oauth_credential(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -42,6 +57,27 @@ pub async fn resolve_oauth_credential(
         ))
         .await?;
     pick_from_response(&response, node_did, provider, pick)
+}
+
+pub async fn resolve_oauth_pool(
+    access: &crate::config_client::ConfigAccess,
+    node_did: &str,
+    provider: &str,
+) -> Result<Vec<OAuthCredential>> {
+    let response = access
+        .execute(&enabled_oauth_credentials_query(
+            node_did,
+            provider,
+            OAUTH_CREDENTIAL_FIELDS,
+        ))
+        .await?;
+    let rows = oauth_credentials_from_response(&response)
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(pick_oauth_pool(&rows, node_did, provider)
+        .into_iter()
+        .cloned()
+        .collect())
 }
 
 pub(crate) async fn provider_default_account_ref(

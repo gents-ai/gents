@@ -303,6 +303,7 @@ fn fork_header(
         sequence: origin.sequence,
         role: origin.role,
         native_id: origin.native_id.clone(),
+        native_request_id: origin.native_request_id.clone(),
         blocks: origin.blocks.clone(),
         created_at: origin.created_at.clone(),
     }
@@ -581,6 +582,7 @@ mod tests {
 
     fn modeled_message(row: &Value) -> TranscriptMessage {
         TranscriptMessage {
+            native_request_id: None,
             message_key: row["key"].as_str().unwrap().to_owned(),
             sequence: u32::try_from(row["sequence"].as_u64().unwrap()).unwrap(),
             role: serde_json::from_value(row["role"].clone()).unwrap(),

@@ -22,6 +22,7 @@ pub mod chatgpt_oauth_refresh;
 pub mod claude_messages;
 pub mod claude_oauth;
 pub mod claude_oauth_refresh;
+mod claude_request_context;
 pub mod claude_subscription;
 pub mod codex_shim_binding;
 pub mod collection;

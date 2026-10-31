@@ -47,6 +47,7 @@ import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.CatalogRefresh
+import Proofs.Conformance.Contracts.Json.ClaudePlatform
 import Proofs.Conformance.Contracts.Json.PackInstallation
 import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
@@ -82,6 +83,7 @@ import Proofs.Conformance.Contracts.Json.ReductionEngine
 import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
 import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.CompletionRetry.Contracts
+import Proofs.AccountRotation.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
@@ -151,6 +153,16 @@ def snapshotJsonTail : String :=
       ++ promptAssemblyClaudeMapCasesJson ++ ","
     ++ "\"prompt_assembly_claude_body_cases\":"
       ++ promptAssemblyClaudeBodyCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_attribution_cases\":"
+      ++ promptAssemblyClaudeAttributionCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_cache_cases\":"
+      ++ promptAssemblyClaudeCacheCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_origin_cases\":"
+      ++ promptAssemblyClaudeOriginCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_field_cases\":"
+      ++ promptAssemblyClaudeFieldCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_field_row_cases\":"
+      ++ promptAssemblyClaudeFieldRowCasesJson ++ ","
     ++ "\"claude_output_config_cases\":" ++ Conformance.CompactionCheckpoint.outputCasesJson.compress ++ ","
     ++ "\"checkpoint_fallback_cases\":" ++ Conformance.CompactionCheckpoint.checkpointCasesJson.compress ++ ","
     ++ "\"checkpoint_list_fields\":" ++ Conformance.CompactionCheckpoint.listFieldsJson.compress ++ ","
@@ -491,6 +503,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
     ++ "\"catalog_refresh_cases\":"
       ++ CatalogRefresh.casesJson ++ ","
+    ++ "\"claude_platform_cases\":"
+      ++ ClaudePlatform.casesJson ++ ","
     ++ "\"plugin_reference_cases\":"
       ++ PackInstallation.casesJson ++ ","
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
@@ -584,6 +598,12 @@ def snapshotJson : String :=
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
+    ++ "\"account_rotation_select_cases\":"
+      ++ AccountRotation.Contracts.selectCasesJson ++ ","
+    ++ "\"account_rotation_attempt_cases\":"
+      ++ AccountRotation.Contracts.attemptCasesJson ++ ","
+    ++ "\"account_rotation_observe_cases\":"
+      ++ AccountRotation.Contracts.observeCasesJson ++ ","
     ++ "\"boundaries\":"
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"

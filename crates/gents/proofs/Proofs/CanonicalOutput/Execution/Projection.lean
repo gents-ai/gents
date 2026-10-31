@@ -526,7 +526,7 @@ def recoveryMessageValid (world : World) (generation : Generation)
       | _ :: _, some value =>
           value.header.request == some world.requestId &&
             value.header.session == world.sessionId && value.header.role == .assistant &&
-            value.header.outcome == .«partial» && value.nativeId.isNone &&
+            value.header.outcome == .«partial» && value.nativeId.isNone && value.nativeRequestId.isNone &&
             value.header.publication == .requestRecovery generation &&
             value.header.refs == expected && envelopeRefs value == expected &&
             value.blocks.all recoveryTextBlock &&

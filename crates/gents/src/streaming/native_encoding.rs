@@ -79,6 +79,7 @@ enum MediaDataPlan {
 pub(crate) struct EncodedNativeMessage {
     pub(crate) role: MessageRole,
     pub(crate) native_id: Option<String>,
+    pub(crate) native_request_id: Option<String>,
     pub(crate) streams: Vec<EncodedStream>,
     plans: Vec<BlockPlan>,
     pub(crate) tool_calls: Vec<EncodedToolCall>,
@@ -301,12 +302,18 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
         return Ok(EncodedNativeMessage {
             role: MessageRole::User,
             native_id: None,
+            native_request_id: None,
             streams,
             plans,
             tool_calls: Vec::new(),
         });
     }
-    let Message::Assistant { id, content } = message else {
+    let Message::Assistant {
+        id,
+        request_id,
+        content,
+    } = message
+    else {
         anyhow::bail!("unsupported native authored role")
     };
     let mut streams = Vec::new();
@@ -387,8 +394,14 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
                 });
             }
             AssistantContent::ToolCall(call) => {
-                let arguments = serde_json::to_string(&call.function.arguments)
-                    .context("encoding exact native tool arguments")?;
+                let arguments =
+                    match call.raw_arguments.as_deref().and_then(|text| {
+                        ToolCall::raw_arguments_for(&call.function.arguments, text)
+                    }) {
+                        Some(text) => text,
+                        None => serde_json::to_string(&call.function.arguments)
+                            .context("encoding exact native tool arguments")?,
+                    };
                 let stream = push_stream(
                     &mut streams,
                     block,
@@ -429,6 +442,7 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
     Ok(EncodedNativeMessage {
         role: MessageRole::Assistant,
         native_id: id.clone(),
+        native_request_id: request_id.clone(),
         streams,
         plans,
         tool_calls,
@@ -448,6 +462,7 @@ mod tests {
     #[test]
     fn assistant_encoding_round_trips_exact_native_structure() {
         let native = Message::Assistant {
+            request_id: Some("req_α".into()),
             id: Some("provider-α".into()),
             content: vec![
                 AssistantContent::Reasoning(Reasoning {
@@ -466,6 +481,7 @@ mod tests {
                 }),
                 AssistantContent::Text(gents_protocol::message::Text { text: "".into() }),
                 AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: Some(r#"{ "path": "é" }"#.into()),
                     id: "tool-一".into(),
                     call_id: Some("call-a".into()),
                     function: ToolFunction::new("read".into(), serde_json::json!({"path":"é"})),
@@ -533,6 +549,7 @@ mod tests {
             sequence: 1,
             role: encoded.role,
             native_id: encoded.native_id.clone(),
+            native_request_id: encoded.native_request_id.clone(),
             blocks,
             created_at: segment.created_at.clone(),
         };
@@ -544,5 +561,18 @@ mod tests {
             reconstruct_message(&observed, &[], &[], &header).unwrap(),
             native
         );
+        assert_eq!(segment.payload.matches(r#"{ "path": "é" }"#).count(), 1);
+
+        // A row written before the request id existed has no such key.
+        let mut row = serde_json::to_value(&header).unwrap();
+        assert_eq!(row["native_request_id"], "req_α");
+        row.as_object_mut().unwrap().remove("native_request_id");
+        let old: TranscriptMessage = serde_json::from_value(row).unwrap();
+        let Message::Assistant { request_id, .. } =
+            reconstruct_message(&observed, &[], &[], &old).unwrap()
+        else {
+            panic!("assistant message expected");
+        };
+        assert_eq!(request_id, None);
     }
 }

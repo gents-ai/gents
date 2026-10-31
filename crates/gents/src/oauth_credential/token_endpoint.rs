@@ -59,12 +59,10 @@ impl TokenEndpoint {
         R: DeserializeOwned,
     {
         let provider = self.provider;
-        let response = request.send().await.map_err(|error| {
-            OAuthAuthProblem::Other(format!(
-                "{provider} token refresh request failed: {}",
-                self.transport(&error)
-            ))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| self.transport_failure(&error))?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -77,6 +75,24 @@ impl TokenEndpoint {
         })
     }
 
+    /// Send a refresh `request` and read its whole body, for a provider whose own token owner
+    /// decodes the grant and classifies a rejection before falling back to [`Self::rejection`].
+    pub(crate) async fn respond(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<(StatusCode, bytes::Bytes), OAuthAuthProblem> {
+        let response = request
+            .send()
+            .await
+            .map_err(|error| self.transport_failure(&error))?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| self.transport_failure(&error))?;
+        Ok((status, body))
+    }
+
     /// The decoded access token, or the refresh failure its absence is.
     pub(crate) fn access_token(&self, token: Option<String>) -> Result<String, OAuthAuthProblem> {
         token.ok_or_else(|| {
@@ -87,16 +103,21 @@ impl TokenEndpoint {
         })
     }
 
-    fn transport(&self, error: &reqwest::Error) -> String {
-        match self.transport_detail {
+    fn transport_failure(&self, error: &reqwest::Error) -> OAuthAuthProblem {
+        let detail = match self.transport_detail {
             TransportDetail::Display => error.to_string(),
             TransportDetail::Kind if error.is_timeout() => "timed out".to_owned(),
             TransportDetail::Kind if error.is_connect() => "could not connect".to_owned(),
             TransportDetail::Kind => "failed".to_owned(),
-        }
+        };
+        OAuthAuthProblem::Other(format!(
+            "{} token refresh request failed: {detail}",
+            self.provider
+        ))
     }
 
-    fn rejection(&self, status: StatusCode, body: &str) -> OAuthAuthProblem {
+    /// The refresh failure an unsuccessful `status` and its `body` are.
+    pub(crate) fn rejection(&self, status: StatusCode, body: &str) -> OAuthAuthProblem {
         let value = serde_json::from_str::<Value>(body).ok();
         let expired = match status {
             StatusCode::UNAUTHORIZED => true,

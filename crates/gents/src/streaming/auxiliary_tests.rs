@@ -281,6 +281,7 @@ fn modeled_message(case: &LeanAuxiliaryOutputCase) -> Message {
         })
         .collect();
     Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::Reasoning(Reasoning { id: None, content })],
     }
@@ -519,6 +520,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             case.name
         );
         let empty_message = Message::Assistant {
+            request_id: None,
             id: None,
             content: Vec::new(),
         };

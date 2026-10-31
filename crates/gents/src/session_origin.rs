@@ -307,6 +307,50 @@ pub async fn started_by(
     verified_recorded_starter(access, scope).await
 }
 
+/// How a session was created, from its verified creation receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreationOrigin {
+    pub cause: gents_protocol::session::SessionCreationCause,
+    /// The session whose agent opened this one, when the receipt names it.
+    pub starter: Option<SessionLink>,
+}
+
+/// The verified creation of `scope`'s session; `None` when it carries no verified receipt,
+/// which is how a session a client opened looks.
+pub async fn verified_creation_origin(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<Option<CreationOrigin>> {
+    let rows = session_rows(
+        access,
+        &session_scope_filter(
+            &scope.node_did,
+            &scope.session_id,
+            scope.requester_did.as_deref(),
+        ),
+    )
+    .await?;
+    let [owner] = rows.as_slice() else {
+        return Ok(None);
+    };
+    let Some(cause) = owner
+        .session
+        .provenance
+        .as_ref()
+        .and_then(|provenance| provenance.creation_receipt.as_ref())
+        .map(|receipt| receipt.cause)
+    else {
+        return Ok(None);
+    };
+    if verified_creation_receipt(&owner.session, &owner.doc_id, cause).is_none() {
+        return Ok(None);
+    }
+    Ok(Some(CreationOrigin {
+        cause,
+        starter: verified_recorded_starter(access, scope).await?,
+    }))
+}
+
 /// The opening request `scope`'s session recorded in its provenance when it
 /// was created (Lean `AgentSession.Provenance.openingRequestDoc`). It reads the
 /// session by its exact scope, as [`started_by`] does, so a session with the

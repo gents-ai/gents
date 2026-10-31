@@ -1627,6 +1627,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
                 .flush_native_partial(
                     &lifecycle,
                     &gents_protocol::message::Message::Assistant {
+                        request_id: None,
                         id: None,
                         content: vec![
                             gents_protocol::message::AssistantContent::Reasoning(

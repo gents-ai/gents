@@ -5,6 +5,21 @@ use crate::error::{
 use crate::tool::ToolDefinition;
 use crate::ToolChoice;
 
+/// Top-level field of a serialized final provider response that holds the
+/// provider's response request id (for Claude, the `request-id` header).
+pub const RESPONSE_REQUEST_ID_FIELD: &str = "request_id";
+
+/// The request id a final provider response reports, read from the
+/// [`RESPONSE_REQUEST_ID_FIELD`] of its serialized form.
+pub fn observed_request_id<T>(raw_response: &T) -> Option<String>
+where
+    T: serde::Serialize,
+{
+    let value = serde_json::to_value(raw_response).ok()?;
+    let id = value.get(RESPONSE_REQUEST_ID_FIELD)?.as_str()?;
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
 pub trait ProviderModel:
     rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
 {
@@ -136,7 +151,7 @@ pub fn to_rig_message(msg: &message::Message) -> rig::completion::Message {
                 rig::one_or_many::OneOrMany::one(rig::completion::message::UserContent::text(""))
             }),
         },
-        message::Message::Assistant { id, content } => rig::completion::Message::Assistant {
+        message::Message::Assistant { id, content, .. } => rig::completion::Message::Assistant {
             id: id.clone(),
             content: rig::one_or_many::OneOrMany::many(
                 content
@@ -367,20 +382,43 @@ fn to_rig_document(document: &message::Document) -> rig::completion::message::Do
     }
 }
 
+/// Tool call additional parameter (never persisted or sent) carrying the
+/// provider's streamed argument text from a provider stream to
+/// [`from_rig_tool_call`], which moves it to `ToolCall::raw_arguments`.
+/// Outbound conversion never writes it: the OpenRouter client serializes a
+/// tool call's additional parameters onto the wire.
+pub const RAW_TOOL_ARGUMENTS_PARAM: &str = "_gents_raw_arguments";
+
 pub fn from_rig_tool_call(call: &rig::completion::message::ToolCall) -> message::ToolCall {
+    let arguments = crate::tool::normalize_tool_call_arguments(
+        "ingest",
+        &call.function.name,
+        &call.function.arguments,
+    );
+    let mut additional_params = call.additional_params.clone();
+    let text = match &mut additional_params {
+        Some(serde_json::Value::Object(map)) => map.remove(RAW_TOOL_ARGUMENTS_PARAM),
+        _ => None,
+    };
+    if matches!(&additional_params, Some(serde_json::Value::Object(map)) if map.is_empty())
+        && text.is_some()
+    {
+        additional_params = None;
+    }
+    let raw_arguments = text
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .and_then(|text| message::ToolCall::raw_arguments_for(&arguments, text));
     message::ToolCall {
         id: call.id.clone(),
         call_id: call.call_id.clone(),
         function: message::ToolFunction {
             name: call.function.name.clone(),
-            arguments: crate::tool::normalize_tool_call_arguments(
-                "ingest",
-                &call.function.name,
-                &call.function.arguments,
-            ),
+            arguments,
         },
         signature: call.signature.clone(),
-        additional_params: call.additional_params.clone(),
+        additional_params,
+        raw_arguments,
     }
 }
 
@@ -501,6 +539,7 @@ pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
             content: content.iter().map(from_rig_user_content).collect(),
         },
         rig::completion::Message::Assistant { id, content } => message::Message::Assistant {
+            request_id: None,
             id: id.clone(),
             content: content.iter().map(from_rig_assistant_content).collect(),
         },
@@ -864,6 +903,7 @@ mod tests {
 
     fn native_tool_call(arguments: Value) -> message::ToolCall {
         message::ToolCall {
+            raw_arguments: None,
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),
             function: message::ToolFunction {
@@ -944,5 +984,47 @@ mod tests {
         .arguments;
         assert!(healed.is_object());
         assert_eq!(healed["tool_name"], "list_hosts");
+    }
+
+    #[test]
+    fn inbound_raw_arguments_move_off_the_additional_params() {
+        let text = r#"{ "city": "NYC", "a": 1 }"#;
+        let mut rig = rig_tool_call(json!({"city": "NYC", "a": 1}));
+        rig.additional_params = Some(json!({ RAW_TOOL_ARGUMENTS_PARAM: text }));
+        let native = from_rig_tool_call(&rig);
+        assert_eq!(native.raw_arguments.as_deref(), Some(text));
+        assert_eq!(native.additional_params, None);
+
+        // Other parameters survive; only the reserved key leaves.
+        rig.additional_params = Some(json!({ RAW_TOOL_ARGUMENTS_PARAM: text, "vendor": true }));
+        let native = from_rig_tool_call(&rig);
+        assert_eq!(native.additional_params, Some(json!({"vendor": true})));
+
+        // Text already in compact form, or for other arguments, is not kept,
+        // yet the reserved key still never reaches the native call.
+        for text in [r#"{"a":1,"city":"NYC"}"#, r#"{"city":"LA"}"#, "not json"] {
+            rig.additional_params = Some(json!({ RAW_TOOL_ARGUMENTS_PARAM: text }));
+            let native = from_rig_tool_call(&rig);
+            assert_eq!(native.raw_arguments, None, "{text}");
+            assert_eq!(native.additional_params, None, "{text}");
+        }
+        rig.additional_params = None;
+        assert_eq!(from_rig_tool_call(&rig).raw_arguments, None);
+    }
+
+    #[test]
+    fn outbound_tool_calls_never_carry_the_raw_text() {
+        let mut call = native_tool_call(json!({"city": "NYC", "a": 1}));
+        call.raw_arguments = Some(r#"{ "city": "NYC", "a": 1 }"#.into());
+        let rig = to_rig_tool_call(&call);
+        assert_eq!(rig.additional_params, None);
+        let message = message::Message::Assistant {
+            id: None,
+            request_id: None,
+            content: vec![message::AssistantContent::ToolCall(call)],
+        };
+        let wire = serde_json::to_string(&to_rig_message(&message)).unwrap();
+        assert!(!wire.contains(RAW_TOOL_ARGUMENTS_PARAM));
+        assert!(!wire.contains(r#"{ \"city\""#));
     }
 }

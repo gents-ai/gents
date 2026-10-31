@@ -213,6 +213,7 @@ permissions = [
   "allow-desktop-agent-delete",
   "allow-desktop-context-delete",
   "allow-desktop-backend-save",
+  "allow-desktop-backend-rotation-set",
   "allow-desktop-inference-profile-save",
   "allow-desktop-tools-save",
   "allow-desktop-tool-service-save",

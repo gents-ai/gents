@@ -554,8 +554,10 @@ mod tests {
             "arguments": {},
         });
         let message = Message::Assistant {
+            request_id: None,
             id: Some("routed-provider-message".into()),
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "tool-call-routed".into(),
                 call_id: Some("routed-provider-call".into()),
                 function: ToolFunction::new("call_tool".into(), arguments.clone()),

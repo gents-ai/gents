@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::backend_provider::BackendProviderKind;
 use crate::config::ReasoningEffort;
 use crate::openai_wire::OpenAiWireApi;
+pub use gents_loop::claude_platform::ClaudePlatform;
 
 /// Shared provider connection. Authentication must be compatible with the
 /// provider adapter; OAuth credentials resolve through the invoking principal's DID.
@@ -20,6 +21,11 @@ pub struct InferenceBackend {
     pub endpoint: String,
     /// Missing/invalid credentials never fall back to unauthenticated access.
     pub auth: BackendAuth,
+    /// Where a Claude platform provider kind is served from; `endpoint` stays
+    /// the base URL and defaults from these settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub claude_platform: Option<ClaudePlatform>,
     /// Connection establishment only; default 10s, bounded by the operation deadline.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -105,6 +111,29 @@ pub enum BackendAuth {
         #[cfg_attr(feature = "typescript", ts(optional))]
         account_ref: Option<String>,
     },
+    /// Rotate every call over all of the node's enabled OAuthCredential rows
+    /// for the backend's provider (Lean `nodeOAuthPool`, `AccountRotation`).
+    /// `allow_overage` lets a call draw paid extra usage once every account
+    /// is past its limit; it is off unless the operator turns it on.
+    #[serde(rename = "node_oauth_pool")]
+    NodeOAuthPool {
+        #[serde(default)]
+        allow_overage: bool,
+    },
+    /// Static AWS credentials stored in the backend document under DefraDB ACP,
+    /// for the AWS Claude platforms. Secret like an API key: a self-configuration
+    /// patch can keep them but never set them.
+    AwsCredentials {
+        access_key_id: String,
+        secret_access_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional))]
+        session_token: Option<String>,
+    },
+    /// A Google service account or authorized-user credentials JSON stored in
+    /// the backend document under DefraDB ACP, for the Google Claude platforms.
+    /// Secret like an API key.
+    GoogleCredentials { credentials_json: String },
 }
 
 impl std::fmt::Debug for BackendAuth {
@@ -123,12 +152,86 @@ impl std::fmt::Debug for BackendAuth {
                 .debug_struct("NodeOAuth")
                 .field("account_ref", account_ref)
                 .finish(),
+            Self::NodeOAuthPool { allow_overage } => f
+                .debug_struct("NodeOAuthPool")
+                .field("allow_overage", allow_overage)
+                .finish(),
+            Self::AwsCredentials { access_key_id, .. } => f
+                .debug_struct("AwsCredentials")
+                .field("access_key_id", access_key_id)
+                .field("secret_access_key", &"[redacted]")
+                .field("session_token", &"[redacted]")
+                .finish(),
+            Self::GoogleCredentials { .. } => f
+                .debug_struct("GoogleCredentials")
+                .field("credentials_json", &"[redacted]")
+                .finish(),
         }
     }
 }
 
 impl BackendAuth {
-    /// The account a node OAuth backend names (Lean `oauthRef`).
+    /// Credentials come from the executing node's OAuthCredential rows
+    /// (Lean `oauthLookupOwner` is the execution scope).
+    pub fn uses_node_oauth(&self) -> bool {
+        matches!(self, Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. })
+    }
+
+    /// How a node OAuth backend resolves one account for readiness, discovery
+    /// and resume: its named account, or for a pool the earliest-connected
+    /// enabled account, so a pool resolves while any of its accounts does.
+    pub fn account_pick(&self) -> Option<crate::oauth_credential::AccountPick<'_>> {
+        match self {
+            Self::NodeOAuth { account_ref } => Some(
+                crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
+            ),
+            Self::NodeOAuthPool { .. } => {
+                Some(crate::oauth_credential::AccountPick::ProviderDefault)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether this credential form can authenticate `kind`. The Claude
+    /// platforms take a static key or token, or their cloud's credentials; a
+    /// cloud credential is refused anywhere else. Other kinds keep their own
+    /// rules (node OAuth is checked against `is_node_scoped_oauth`).
+    pub fn suits_provider(&self, kind: BackendProviderKind) -> bool {
+        use BackendProviderKind as Kind;
+        match self {
+            Self::AwsCredentials { .. } => {
+                matches!(
+                    kind,
+                    Kind::ClaudeBedrock | Kind::ClaudeMantle | Kind::ClaudeAnthropicAws
+                )
+            }
+            Self::GoogleCredentials { .. } => {
+                matches!(kind, Kind::ClaudeVertex | Kind::ClaudeGoogleCloud)
+            }
+            Self::Unauthenticated => !kind.is_claude_platform(),
+            _ => true,
+        }
+    }
+
+    /// A raw secret stored in the backend document: the self-configuration
+    /// guard lets a patch keep it but never set or change it (Lean
+    /// `authPatchAllowed`).
+    pub fn is_stored_secret(&self) -> bool {
+        matches!(
+            self,
+            Self::ApiKey { .. } | Self::AwsCredentials { .. } | Self::GoogleCredentials { .. }
+        )
+    }
+
+    /// Whether a pool may draw paid extra usage; `None` for any other auth.
+    pub fn pool_allow_overage(&self) -> Option<bool> {
+        match self {
+            Self::NodeOAuthPool { allow_overage } => Some(*allow_overage),
+            _ => None,
+        }
+    }
+
+    /// The account a node OAuth backend names (Lean `oauthRef`); a pool names none.
     pub fn oauth_account_ref(&self) -> Option<&str> {
         match self {
             Self::NodeOAuth { account_ref } => account_ref.as_deref(),

@@ -280,13 +280,14 @@ pub enum TerminalOutput {
 /// later dispatch fails. Recovery resumes its existing rows, never new calls.
 ///
 /// `blocks` is in native content order, so reconstruction yields the exact
-/// native `Message` (including `Message::Assistant.id` via `native_id`).
+/// native `Message` (including `Message::Assistant.id` and `request_id` via `native_id` and
+/// `native_request_id`).
 ///
 /// Recovery of an unheaded provider source is deliberately narrower: close its
 /// committed extent Partial (or reuse its existing Partial closure), then
 /// publish only ordinary Text streams at native part zero as Full
 /// PresentedPayload references, in original block order, with outcome Partial
-/// and native_id None. Never turn argument/reasoning/media bytes into text or
+/// and native_id and native_request_id None. Never turn argument/reasoning/media bytes into text or
 /// fabricate their missing metadata. If no eligible text stream exists, publish
 /// no assistant header for that source; retain every omitted stream as
 /// diagnostic data. An existing published header is resolved unchanged, not
@@ -316,6 +317,10 @@ pub struct TranscriptMessage {
     pub role: MessageRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_id: Option<String>,
+    /// The provider's response request id, carried like `native_id`: only a
+    /// provider assistant message has one (never system, user or recovery).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_request_id: Option<String>,
     #[serde(
         default,
         deserialize_with = "storage::deserialize_blocks",

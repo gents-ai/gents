@@ -42,7 +42,10 @@ pub use labels::{
 };
 use labels::{ensure_label_free, next_free_label, sign_in_product};
 use resolve::resolver_order;
-pub use resolve::{pick_oauth_credential, resolve_oauth_credential, AccountPick};
+pub use resolve::{
+    pick_oauth_credential, pick_oauth_pool, resolve_oauth_credential, resolve_oauth_pool,
+    AccountPick,
+};
 pub(crate) use resolve::{provider_default_account_ref, resolve_oauth_credential_in_txn};
 use rows::provider_rows_in_txn;
 pub use rows::{

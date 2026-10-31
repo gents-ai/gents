@@ -38,6 +38,48 @@ fn picked<'c>(rows: &'c [OAuthCredential], pick: AccountPick<'_>) -> Option<&'c 
 }
 
 #[test]
+fn pool_holds_every_enabled_account_of_the_node_in_resolver_order() {
+    let rows = [
+        row(DID, PROVIDER, "late", Some("late"), Some(2_000), true),
+        row(DID, PROVIDER, "off", Some("off"), Some(500), false),
+        row(
+            "did:key:zOther",
+            PROVIDER,
+            "foreign",
+            Some("f"),
+            Some(100),
+            true,
+        ),
+        row(
+            DID,
+            "chatgpt-codex",
+            "other-provider",
+            None,
+            Some(100),
+            true,
+        ),
+        row(DID, PROVIDER, "original", None, None, true),
+        row(DID, PROVIDER, "early", Some("early"), Some(1_000), true),
+    ];
+    let pool: Vec<_> = pick_oauth_pool(&rows, DID, PROVIDER)
+        .into_iter()
+        .map(|row| row.credential_id.as_str())
+        .collect();
+    assert_eq!(pool, ["original", "early", "late"]);
+    assert_eq!(
+        pool.first().copied(),
+        picked(&rows, AccountPick::ProviderDefault),
+        "a pool resolves through its first account"
+    );
+}
+
+#[test]
+fn pool_is_empty_without_an_enabled_account() {
+    let rows = [row(DID, PROVIDER, "off", None, None, false)];
+    assert!(pick_oauth_pool(&rows, DID, PROVIDER).is_empty());
+}
+
+#[test]
 fn resolver_picks_the_earliest_connected_enabled_account() {
     let rows = [
         row(DID, PROVIDER, "late", Some("late"), Some(2_000), true),

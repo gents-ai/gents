@@ -27,6 +27,7 @@ fn text_msg(role: &str, text: &str) -> Message {
             })],
         },
         "assistant" => Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::Text(Text {
                 text: text.to_string(),
@@ -55,8 +56,10 @@ fn required_reduction(result: &ReductionResult) -> ExactReduction<'_> {
 
 fn tool_call_msg(name: &str, args: &str) -> Message {
     Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),
             function: crate::llm::message::ToolFunction {
@@ -185,6 +188,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
 
 fn tool_call_content(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {
+        raw_arguments: None,
         id: id.to_string(),
         call_id: Some(id.to_string()),
         function: crate::llm::message::ToolFunction {
@@ -200,6 +204,7 @@ fn tool_call_content(id: &str) -> AssistantContent {
 fn drop_unpaired_tool_calls_removes_calls_without_results() {
     let messages = vec![
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![
                 AssistantContent::Text(Text {
@@ -250,6 +255,7 @@ fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
     let messages = vec![
         text_msg("user", "go"),
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![tool_call_content("call-X")],
         },
@@ -267,6 +273,7 @@ fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
 fn normalize_assistant_content_order_moves_text_before_tool_calls() {
     let messages = vec![
         Message::Assistant {
+            request_id: None,
             id: Some("msg-1".to_string()),
             content: vec![
                 AssistantContent::Reasoning(crate::llm::message::Reasoning::new("why")),
@@ -283,7 +290,7 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
     let out = super::history::normalize_assistant_content_order(GROUPED_PROFILE, messages);
 
     let (id, kinds): (Option<String>, Vec<&'static str>) = match &out[0] {
-        Message::Assistant { id, content } => (
+        Message::Assistant { id, content, .. } => (
             id.clone(),
             content
                 .iter()
@@ -334,6 +341,7 @@ fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
         tool_result_msg("call-GONE", "orphaned"),
         text_msg("user", "continue"),
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![tool_call_content("call-A")],
         },
@@ -392,6 +400,7 @@ fn drop_orphaned_tool_results_removes_results_after_conversation_resumes() {
     // the transcript is not enough once normal conversation has resumed.
     let messages = vec![
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![tool_call_content("call-A")],
         },
@@ -418,6 +427,7 @@ fn drop_orphaned_tool_results_removes_results_after_conversation_resumes() {
 fn sanitize_history_for_provider_drops_stale_result_and_now_unpaired_call() {
     let messages = vec![
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![tool_call_content("call-A")],
         },
@@ -438,10 +448,12 @@ fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
     let messages = vec![
         tool_result_msg("call-GONE", "orphaned"),
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![tool_call_content("call-UNPAIRED")],
         },
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![tool_call_content("call-A")],
         },
@@ -460,6 +472,7 @@ fn sanitize_repairs_result_preceding_its_call() {
     let messages = vec![
         tool_result_msg("call-A", "early result"),
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![tool_call_content("call-A")],
         },
@@ -2703,6 +2716,7 @@ fn safe_to_reduce_requires_a_sanitizer_fixed_point_and_turn_boundary() {
 #[test]
 fn safe_to_reduce_accepts_a_native_order_reasoning_text_turn() {
     let native_turn = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![
             AssistantContent::Reasoning(crate::llm::message::Reasoning::new("thinking")),
@@ -2837,8 +2851,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             .unwrap();
 
         let assistant_tool_call = Message::Assistant {
+            request_id: None,
             id: Some("provider-message".into()),
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "call-1".into(),
                 call_id: Some("call-1".into()),
                 function: crate::llm::message::ToolFunction {
@@ -3050,6 +3066,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
 
 fn scoped_call(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {
+        raw_arguments: None,
         id: id.to_string(),
         call_id: Some(id.to_string()),
         function: crate::llm::message::ToolFunction {
@@ -3103,6 +3120,7 @@ fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
         GROUPED_PROFILE,
         vec![
             Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![scoped_call("c1"), scoped_call("c1")],
             },
@@ -3121,11 +3139,13 @@ fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
 fn call_key_reuse_across_turns_survives() {
     let history = vec![
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![scoped_call("c1")],
         },
         scoped_result("c1"),
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![scoped_call("c1")],
         },
@@ -3144,11 +3164,13 @@ fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
         GROUPED_PROFILE,
         vec![
             Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![scoped_call("c1")],
             },
             scoped_result("c1"),
             Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![scoped_call("c1")],
             },
@@ -3167,6 +3189,7 @@ fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
         GROUPED_PROFILE,
         vec![
             Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![scoped_call("c1")],
             },
@@ -3192,6 +3215,7 @@ fn plain_message_between_a_call_and_its_result_ends_the_turn() {
         GROUPED_PROFILE,
         vec![
             Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![scoped_call("c1")],
             },

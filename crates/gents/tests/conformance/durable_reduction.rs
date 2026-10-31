@@ -38,8 +38,10 @@ fn boundary(request_doc_id: &str, claim_commit: u64) -> SourceBoundary {
 
 fn open_pair_projection() -> (Vec<Message>, Vec<Message>) {
     let call = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),
             function: ToolFunction {

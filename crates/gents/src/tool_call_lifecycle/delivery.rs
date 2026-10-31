@@ -2033,6 +2033,7 @@ async fn terminalize_transaction(
 
     let sequence = next_append_sequence_in_transaction(txn, node_did, session_id).await?;
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: delivery_key,
         session_id: session_id.to_owned(),
         node_did: node_did.to_owned(),
@@ -3586,6 +3587,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
     );
     let sequence = next_append_sequence_in_transaction(txn, &node_did, &session_id).await?;
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: key,
         session_id: session_id.clone(),
         node_did: node_did.clone(),

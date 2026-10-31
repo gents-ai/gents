@@ -17,4 +17,5 @@ type InferenceBackend @index(fields: ["node_did", "backend_id"], unique: true) {
     probe_status: String @index
     updated_at: DateTime @index(direction: DESC)
     catalog_freshness: JSON
+    claude_platform: JSON
 }

@@ -1060,6 +1060,7 @@ mod canonical_projection_tests {
         TranscriptMessageRow {
             doc_id: doc_id.to_string(),
             message: TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("{session_id}:message"),
                 session_id: session_id.to_string(),
                 node_did: "did:test:node".to_string(),

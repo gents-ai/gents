@@ -318,6 +318,17 @@ where
             0,
             crate::rendered_request::CaptureScopeKind::AccessReview,
         );
+        crate::claude_request_context::apply(
+            &mut config,
+            crate::claude_request_context::for_request(
+                &crate::config_client::ConfigAccess::local(self.node.clone()),
+                &self.agent_config,
+                request,
+                gents_claude::origin::Kind::OneShot,
+            )
+            .await?
+            .as_ref(),
+        )?;
         config.max_turns = 1;
         config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
         config.aggregate_token_budget = execution.aggregate_token_budget;

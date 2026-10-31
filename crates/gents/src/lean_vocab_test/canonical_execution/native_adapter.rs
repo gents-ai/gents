@@ -138,6 +138,7 @@ fn auxiliary_publication_candidate(
                     additional_params,
                     ..
                 } => AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: id.clone(),
                     call_id: call_id.clone(),
                     function: ToolFunction {
@@ -154,6 +155,7 @@ fn auxiliary_publication_candidate(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Message::Assistant {
+        request_id: header.native_request_id.clone(),
         id: header.native_id.clone(),
         content,
     })
@@ -1105,6 +1107,7 @@ impl NativeCanonicalExecution {
             key: message.message_key.clone(),
             sequence: modeled_sequence(u64::from(message.sequence))?,
             native_id: message.native_id.clone(),
+            native_request_id: message.native_request_id.clone(),
             blocks,
             created_at: self.modeled_time(&message.created_at)?,
         })
@@ -2636,6 +2639,7 @@ impl NativeCanonicalExecution {
                 LeanMessageRole::Assistant => MessageRole::Assistant,
             },
             native_id: message.native_id.clone(),
+            native_request_id: message.native_request_id.clone(),
             blocks,
             created_at: self.fixture_time(message.created_at)?.to_rfc3339(),
         })

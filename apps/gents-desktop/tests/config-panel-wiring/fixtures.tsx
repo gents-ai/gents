@@ -137,6 +137,7 @@ export const deployment: DeploymentView = {
       advertisedModels: [],
       probeStatus: null,
       accountRef: null,
+      allowOverage: null,
     },
     {
       backendId: "backend-b",
@@ -157,6 +158,7 @@ export const deployment: DeploymentView = {
       advertisedModels: [],
       probeStatus: null,
       accountRef: null,
+      allowOverage: null,
     },
   ],
   inferenceProfiles: [

@@ -1,0 +1,60 @@
+[package]
+name = "gents-claude"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Claude Code 2.1.311 Messages API wire protocol, account rotation and OAuth protocol for Gents"
+
+[features]
+# The HTTP/1.1 client that writes Bun's exact request head, and the gzip
+# encoders Bun uses. Native only: the default build stays I/O-free for the
+# wasm32-wasip1 guest.
+transport = [
+    "dep:brotli-decompressor",
+    "dep:bytes",
+    "dep:flate2",
+    "dep:httparse",
+    "dep:kovan-queue",
+    "dep:libdeflater",
+    "dep:libz-ng-sys",
+    "dep:rustls",
+    "dep:rustls-platform-verifier",
+    "dep:tokio",
+    "dep:tokio-rustls",
+    "dep:zstd",
+]
+
+[dependencies]
+base64.workspace = true
+kovan-map = "0.2.2"
+rand.workspace = true
+rapidhash.workspace = true
+serde.workspace = true
+# Key order comes from types and raw JSON, never from serde_json's map feature,
+# which would unify across the whole gents graph.
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+url = "2"
+uuid.workspace = true
+brotli-decompressor = { version = "5", optional = true }
+bytes = { workspace = true, optional = true }
+flate2 = { version = "1", optional = true }
+httparse = { version = "1", optional = true }
+kovan-queue = { version = "0.2.2", optional = true }
+# Bun 1.4.4 compresses request bodies with libdeflate 1.26 (commit 92e6a0db)
+# and, above its shared buffer, zlib-ng 2.3.3; these crates vendor the same
+# sources, so the gzip bytes match.
+libdeflater = { version = "1.26.1", optional = true }
+libz-ng-sys = { version = "1.1.31", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std", "tls12"], optional = true }
+rustls-platform-verifier = { version = "0.6", optional = true }
+tokio = { workspace = true, optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "tls12"], optional = true }
+zstd = { version = "0.13", optional = true }
+
+[dev-dependencies]
+proptest = "1"
+gents-lean-contract.workspace = true
+tokio = { workspace = true }

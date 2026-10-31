@@ -83,7 +83,7 @@ async fn fixture_stream_maps_tool_use_without_touching_the_bearer() {
     let usage = usage.expect("usage from message_delta");
     assert_eq!((usage.input_tokens, usage.output_tokens), (10, 5));
     assert_eq!(
-        client.bearer.bearer_calls(),
+        client.accounts[0].bearer.bearer_calls(),
         0,
         "fixtures never consult the bearer"
     );
@@ -123,7 +123,7 @@ async fn live_path_without_fixture_asks_the_bearer_and_fails_closed_on_bearer_er
             .contains("Claude Messages bearer: no credential"),
         "{err}"
     );
-    assert_eq!(client.bearer.bearer_calls(), 1);
+    assert_eq!(client.accounts[0].bearer.bearer_calls(), 1);
 }
 
 #[tokio::test]
@@ -139,7 +139,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
         .completion(ping_request())
         .await
         .expect("first call served");
-    assert_eq!(client.bearer.bearer_calls(), 0);
+    assert_eq!(client.accounts[0].bearer.bearer_calls(), 0);
     let err = model
         .completion(ping_request())
         .await
@@ -149,7 +149,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
             .contains("Claude Messages bearer: no credential"),
         "{err}"
     );
-    assert_eq!(client.bearer.bearer_calls(), 1);
+    assert_eq!(client.accounts[0].bearer.bearer_calls(), 1);
 }
 
 #[tokio::test]
@@ -197,11 +197,15 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
     .await
     .expect("client");
     assert!(
-        Arc::ptr_eq(&client.bearer, &again.bearer),
+        Arc::ptr_eq(&client.accounts[0].bearer, &again.accounts[0].bearer),
         "one bearer per credential id"
     );
     assert_eq!(
-        client.bearer.current_bearer().await.expect("token"),
+        client.accounts[0]
+            .bearer
+            .current_bearer()
+            .await
+            .expect("token"),
         "access-TEST"
     );
 }
@@ -236,7 +240,7 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
     )
     .await
     .expect("client");
-    let bearer = client.bearer.current_bearer().await;
+    let bearer = client.accounts[0].bearer.current_bearer().await;
     std::env::remove_var(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     assert_eq!(bearer.expect("token"), "access-NEW");
 
@@ -245,13 +249,14 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(body["grant_type"], "refresh_token");
     assert_eq!(body["refresh_token"], "refresh-TEST");
-    assert_eq!(
-        body["client_id"],
-        crate::claude_oauth::CLAUDE_OAUTH_CLIENT_ID
-    );
+    assert_eq!(body["client_id"], gents_claude::oauth::CLIENT_ID);
 
     assert_eq!(
-        client.bearer.current_bearer().await.expect("cached"),
+        client.accounts[0]
+            .bearer
+            .current_bearer()
+            .await
+            .expect("cached"),
         "access-NEW",
         "a second read must not refresh again"
     );
@@ -285,7 +290,17 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
         .collect();
     assert_eq!(
         messages_kinds,
-        vec![Kind::ClaudeCliSubscription, Kind::AnthropicApiKey]
+        vec![
+            Kind::ClaudeCliSubscription,
+            Kind::AnthropicApiKey,
+            Kind::ClaudeBedrock,
+            Kind::ClaudeVertex,
+            Kind::ClaudeFoundry,
+            Kind::ClaudeAnthropicAws,
+            Kind::ClaudeMantle,
+            Kind::ClaudeGoogleCloud,
+            Kind::ClaudeGateway,
+        ]
     );
     assert_eq!(
         gents_loop::provider_input::ProviderInputProfile::resolve(
@@ -332,7 +347,7 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
             .expect("client");
 
     assert_eq!(
-        client
+        client.accounts[0]
             .usage
             .as_ref()
             .map(|reporter| reporter.account.clone()),
@@ -343,4 +358,177 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
             account_ref: Some("acct-ref-2".into()),
         })
     );
+}
+
+mod pool_client {
+    use super::*;
+    use crate::usage_observation::now_unix_secs;
+    use gents_claude::rotation::{Family, Policy};
+    use gents_loop::claude_messages_body::SESSION_KEY_PARAM;
+    use rapidhash::HashSetExt;
+
+    const REJECTED: &[(&str, &str)] = &[
+        ("anthropic-ratelimit-unified-status", "rejected"),
+        ("anthropic-ratelimit-unified-reset", "4102444800"),
+        (
+            "anthropic-ratelimit-unified-representative-claim",
+            "five_hour",
+        ),
+    ];
+
+    async fn pool_model(
+        ids: &[&str],
+    ) -> (
+        Arc<UsageCache>,
+        ClaudeSubscriptionClient<StaticBearer>,
+        ClaudeSubscriptionModel<StaticBearer>,
+    ) {
+        let cache = Arc::new(UsageCache::default());
+        let node = test_node().await;
+        let accounts: Vec<_> = ids
+            .iter()
+            .map(|id| ClaudeAccount {
+                credential_id: (*id).to_string(),
+                bearer: Arc::new(StaticBearer::new(id)),
+                identity: AccountIdentity::of_api_key("did"),
+                usage: Some(UsageReporter::new(
+                    cache.clone(),
+                    node.clone(),
+                    UsageAccount::Backend {
+                        node_did: "did".into(),
+                        provider: "claude".into(),
+                        backend_id: (*id).to_string(),
+                        connection: "c".into(),
+                    },
+                )),
+            })
+            .collect();
+        let credential_ids: Arc<[String]> = ids.iter().map(|id| id.to_string()).collect();
+        let client = ClaudeSubscriptionClient {
+            accounts: accounts.into(),
+            rotation: Some(Rotation {
+                policy: Policy::default(),
+                cache: cache.clone(),
+                credential_ids,
+            }),
+            route: ClaudeRoute::first_party(crate::claude_messages::MESSAGES_URI),
+        };
+        let model = client.completion_model("claude-sonnet-5");
+        (cache, client, model)
+    }
+
+    fn session_request(session: &str) -> CompletionRequest {
+        let mut request = ping_request();
+        request.additional_params = Some(serde_json::json!({ SESSION_KEY_PARAM: session }));
+        request
+    }
+
+    fn choose(cache: &UsageCache, ids: &[String], session: &str) -> Option<String> {
+        cache
+            .claude_accounts()
+            .choose(
+                ids,
+                session,
+                Family::Sonnet,
+                now_unix_secs(),
+                &Policy::default(),
+            )
+            .map(|choice| choice.key)
+    }
+
+    #[tokio::test]
+    async fn a_rejected_account_hands_the_retry_to_the_next_one() {
+        let _guard = crate::claude_messages::lock_fixtures_for_test().await;
+        let url = crate::provider_http::tests::one_shot_server(
+            "429 Too Many Requests",
+            REJECTED,
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#,
+        )
+        .await;
+        let (cache, _client, model) = pool_model(&["id-a", "id-b"]).await;
+        let rotation = model.rotation.as_ref().expect("rotation");
+        let err = open_rotated(
+            &ClaudeRoute::first_party(&url),
+            "claude-sonnet-5",
+            &session_request("s"),
+            RapidHashSet::new(),
+            &model.accounts,
+            rotation,
+        )
+        .await
+        .err()
+        .expect("429");
+        let text = err.to_string();
+        assert!(text.contains("account-rotated"), "{text}");
+        assert!(text.contains("usage-exhausted"), "{text}");
+        let failure = crate::llm::rig_compat::classify_completion_error(
+            &rig::agent::StreamingError::Completion(err),
+        );
+        assert!(failure.report.account_limited);
+        assert_eq!(
+            gents_loop::completion_retry::failure_class(&failure),
+            gents_loop::completion_retry::FailureClass::AccountLimited
+        );
+        let ids: Vec<String> = vec!["id-a".into(), "id-b".into()];
+        assert_eq!(choose(&cache, &ids, "s").as_deref(), Some("id-b"));
+    }
+
+    #[tokio::test]
+    async fn every_account_exhausted_is_a_usage_limit_with_the_earliest_reset() {
+        let (cache, _client, model) = pool_model(&["id-a", "id-b"]).await;
+        let now = now_unix_secs();
+        cache
+            .claude_accounts()
+            .reject(&"id-a".to_string(), now, 4_102_444_800);
+        cache
+            .claude_accounts()
+            .reject(&"id-b".to_string(), now, 4_102_448_400);
+        let rotation = model.rotation.as_ref().expect("rotation");
+        let err = open_rotated(
+            &ClaudeRoute::first_party("http://127.0.0.1:1"),
+            "claude-sonnet-5",
+            &ping_request(),
+            RapidHashSet::new(),
+            &model.accounts,
+            rotation,
+        )
+        .await
+        .err()
+        .expect("exhausted");
+        let failure = crate::llm::rig_compat::classify_completion_error(
+            &rig::agent::StreamingError::Completion(err),
+        );
+        assert!(!failure.report.account_limited);
+        match failure.error {
+            crate::error::InferenceError::UsageLimited(limit) => assert_eq!(
+                limit.resets_at.map(|at| at.timestamp()),
+                Some(4_102_444_800)
+            ),
+            other => panic!("expected a usage limit, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_stick_to_the_account_the_pool_chose() {
+        let _guard = crate::claude_messages::lock_fixtures_for_test().await;
+        crate::claude_messages::install_messages_sse_fixtures(vec![
+            crate::claude_messages::sse_fixture_final_text("one"),
+            crate::claude_messages::sse_fixture_final_text("two"),
+        ]);
+        let (cache, _client, model) = pool_model(&["id-a", "id-b"]).await;
+        model.completion(session_request("s1")).await.expect("s1");
+        model.completion(session_request("s2")).await.expect("s2");
+        let ids: Vec<String> = vec!["id-a".into(), "id-b".into()];
+        assert_eq!(choose(&cache, &ids, "s1").as_deref(), Some("id-a"));
+        assert_eq!(choose(&cache, &ids, "s2").as_deref(), Some("id-b"));
+    }
+
+    #[tokio::test]
+    async fn a_single_account_client_shares_its_accounts_and_has_no_rotation() {
+        let (_cache, mut client, _model) = pool_model(&["id-a"]).await;
+        client.rotation = None;
+        let model = client.completion_model("claude-sonnet-5");
+        assert!(Arc::ptr_eq(&model.accounts, &client.accounts));
+        assert!(model.rotation.is_none());
+    }
 }

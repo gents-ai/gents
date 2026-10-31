@@ -183,6 +183,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             openai_wire_api: spec.openai_wire_api,
             endpoint: spec.endpoint,
             auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+            claude_platform: None,
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
             max_concurrent: None,

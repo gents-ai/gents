@@ -144,10 +144,11 @@ theorem copy_message_preserves_native_content (child : AgentSession.Scope)
     (childId : DocId) (childKey : String → String) (message : MessageEnvelope) :
     (copyMessage child childId childKey message).header.refs = message.header.refs ∧
     (copyMessage child childId childKey message).nativeId = message.nativeId ∧
+    (copyMessage child childId childKey message).nativeRequestId = message.nativeRequestId ∧
     (copyMessage child childId childKey message).blocks = message.blocks ∧
     (copyMessage child childId childKey message).createdAt = message.createdAt ∧
     (copyMessage child childId childKey message).sequence = message.sequence := by
-  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem copy_message_rewrites_only_child_key (child : AgentSession.Scope)
     (childId : DocId) (childKey : String → String) (message : MessageEnvelope) :
@@ -162,11 +163,12 @@ theorem copied_message_carries_exact_origin
       origin.sequence < cut ∧
       copied.header.origin = some origin.header.id ∧
       copied.header.refs = origin.header.refs ∧
-      copied.blocks = origin.blocks ∧ copied.nativeId = origin.nativeId := by
+      copied.blocks = origin.blocks ∧ copied.nativeId = origin.nativeId ∧
+      copied.nativeRequestId = origin.nativeRequestId := by
   simp only [copyPrefix, List.mem_map, List.mem_filter] at h
   obtain ⟨origin, ⟨hmem, hcut⟩, rfl⟩ := h
   exact ⟨origin, hmem, of_decide_eq_true hcut,
-    by simp [copyMessage, forkHeader], rfl, rfl, rfl⟩
+    by simp [copyMessage, forkHeader], rfl, rfl, rfl, rfl⟩
 
 theorem published_cursor_names_child_message
     (source : History) (parent child : AgentSession.Scope)

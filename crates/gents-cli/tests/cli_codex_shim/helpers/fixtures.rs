@@ -170,6 +170,7 @@ async fn seed_canonical_tool_transcript(
     let argument_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&argument_response, "AgentOutputSegment")?;
     let admission = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(
             node_did,
             session_id,
@@ -250,6 +251,7 @@ async fn seed_canonical_tool_transcript(
         )?;
         let delivery_sequence = 1000 + sequence;
         let delivery = TranscriptMessage {
+            native_request_id: None,
             message_key: gents::session::sequence_message_key(
                 node_did,
                 session_id,
@@ -452,6 +454,7 @@ pub(super) async fn seed_blank_materialized_completion(
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(node_did, session_id, Some(node_did), 2),
         session_id: session_id.to_owned(),
         node_did: node_did.to_owned(),

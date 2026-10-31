@@ -68,6 +68,7 @@ async fn each_accounts_backend_keeps_its_own_models() {
             openai_wire_api: spec.openai_wire_api,
             endpoint: spec.endpoint.clone(),
             auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+            claude_platform: None,
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
             max_concurrent: None,

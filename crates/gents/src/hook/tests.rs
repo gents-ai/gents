@@ -1205,8 +1205,10 @@ async fn accept_hook_tool_call(
 ) {
     let native_id = provider_call_id.unwrap_or(internal_call_id).to_string();
     let message = Message::Assistant {
+        request_id: None,
         id: Some(format!("message-{internal_call_id}")),
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: native_id,
             call_id: provider_call_id.map(str::to_string),
             function: ToolFunction {
@@ -3057,12 +3059,14 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
 
     let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
     let streamed_assistant_turn = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![
             AssistantContent::Reasoning(
                 Reasoning::new("Need to inspect the file first").with_id("rs_1".to_string()),
             ),
             AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "call-1".to_string(),
                 call_id: Some("call-1".to_string()),
                 function: ToolFunction {
@@ -3100,6 +3104,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         &hook,
         "request-streaming-turn",
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::Text(Text {
                 text: "The file looks healthy.".to_string(),
@@ -3194,6 +3199,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         &hook,
         "request-durable-reasoning",
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![
                 AssistantContent::Reasoning(Reasoning::new(

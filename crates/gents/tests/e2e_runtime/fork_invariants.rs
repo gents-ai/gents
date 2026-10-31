@@ -97,6 +97,7 @@ async fn import_scoped_message(
         None
     };
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: format!("fixture:{session}:{sequence}"),
         session_id: session.into(),
         node_did: NODE_DID.into(),

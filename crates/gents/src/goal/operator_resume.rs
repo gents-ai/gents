@@ -330,17 +330,14 @@ async fn stage_resume_inner(
             backend.enabled,
             "target backend {target_backend_id:?} is disabled"
         );
-        if let crate::document_config::BackendAuth::NodeOAuth { account_ref } = &backend.auth {
+        if let Some(pick) = backend.auth.account_pick() {
             use crate::backend_provider::BackendProviderOauthExt;
             let provider = backend
                 .provider_kind
                 .oauth_provider()
                 .context("target backend has no OAuth provider")?;
             let account = crate::oauth_credential::resolve_oauth_credential_in_txn(
-                txn,
-                node_did,
-                provider,
-                crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
+                txn, node_did, provider, pick,
             )
             .await?;
             anyhow::ensure!(

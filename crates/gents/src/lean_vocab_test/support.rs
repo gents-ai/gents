@@ -323,6 +323,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) snapshot_demotion_cases: Vec<serde_json::Value>,
     pub(crate) catalog_refresh_cases: Vec<serde_json::Value>,
+    pub(crate) claude_platform_cases: Vec<serde_json::Value>,
     pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) plugin_pin_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_lock_cases: Vec<serde_json::Value>,
@@ -366,6 +367,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
+    pub(crate) account_rotation_select_cases: Vec<LeanAccountRotationSelectCase>,
+    pub(crate) account_rotation_attempt_cases: Vec<LeanAccountRotationAttemptCase>,
+    pub(crate) account_rotation_observe_cases: Vec<LeanAccountRotationObserveCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
     pub(crate) backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
@@ -455,6 +459,12 @@ pub(crate) struct LeanContractSnapshot {
         Vec<LeanPromptAssemblyCompactionTriggerCase>,
     pub(crate) prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
+    pub(crate) prompt_assembly_claude_attribution_cases:
+        Vec<LeanPromptAssemblyClaudeAttributionCase>,
+    pub(crate) prompt_assembly_claude_cache_cases: Vec<LeanPromptAssemblyClaudeCacheCase>,
+    pub(crate) prompt_assembly_claude_origin_cases: Vec<LeanPromptAssemblyClaudeOriginCase>,
+    pub(crate) prompt_assembly_claude_field_cases: Vec<LeanPromptAssemblyClaudeFieldCase>,
+    pub(crate) prompt_assembly_claude_field_row_cases: Vec<LeanPromptAssemblyClaudeFieldRowCase>,
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
@@ -2367,6 +2377,8 @@ pub(crate) struct LeanLifecycleTransitionCase {
     pub(crate) boundary: Option<String>,
 }
 
+#[path = "account_rotation.rs"]
+mod account_rotation;
 #[path = "background_transcript.rs"]
 mod background_transcript;
 #[path = "canonical_execution.rs"]
@@ -2422,6 +2434,7 @@ mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
 mod triggers_runtime_apply;
 
+pub(crate) use account_rotation::*;
 pub(crate) use background_transcript::*;
 pub(crate) use canonical_execution::*;
 pub(crate) use canonical_output::*;
@@ -3460,6 +3473,16 @@ pub(crate) fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAs
     &lean_contract_snapshot().prompt_assembly_claude_body_cases
 }
 
+pub(crate) fn lean_prompt_assembly_claude_attribution_cases(
+) -> &'static [LeanPromptAssemblyClaudeAttributionCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_attribution_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_cache_cases(
+) -> &'static [LeanPromptAssemblyClaudeCacheCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_cache_cases
+}
+
 pub(crate) fn lean_prompt_assembly_claude_stream_cases(
 ) -> &'static [LeanPromptAssemblyClaudeStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_stream_cases
@@ -4363,4 +4386,8 @@ pub(crate) fn lean_catalog_refresh_cases() -> &'static [serde_json::Value] {
 
 pub(crate) fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().request_terminal_selection_cases
+}
+
+pub(crate) fn lean_claude_platform_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().claude_platform_cases
 }

@@ -17,6 +17,7 @@ use crate::llm::message::{AssistantContent, Message, Reasoning};
 fn core_request(reasoning: &str) -> CompletionRequest {
     let messages = vec![
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::Reasoning(
                 Reasoning::new(reasoning).with_id("rs_test".to_string()),
@@ -229,6 +230,7 @@ fn reasoning_only_chat_history_has_zero_provider_visible_message_cost() {
         "test-model",
     );
     let reasoning_only = vec![Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::Reasoning(
             Reasoning::new(&"hidden".repeat(500_000)).with_id("rs_only".to_string()),
@@ -431,6 +433,7 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
     let messages = vec![
         Message::user("draw it"),
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::ToolCall(ToolCall::new(
                 "toolu_1".into(),
@@ -491,6 +494,7 @@ fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
     let mut request = core_request("claude-visible reasoning");
     request.chat_history = OneOrMany::many(crate::llm::rig_compat::to_rig_messages(&[
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::Reasoning(Reasoning {
                 id: None,

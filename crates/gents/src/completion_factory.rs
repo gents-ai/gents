@@ -29,6 +29,7 @@ pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> Stri
         openai_wire_api: agent_config.openai_wire_api,
         backend_endpoint: agent_config.backend_endpoint.clone(),
         backend_auth: agent_config.backend_auth.clone(),
+        claude_platform: agent_config.claude_platform.clone(),
     })
 }
 
@@ -180,6 +181,7 @@ pub(crate) fn loop_config_for_request(
     request: &AgentRequest,
     aggregate_token_budget: Option<AggregateTokenBudget>,
     tool_count: usize,
+    account_hops: u32,
 ) -> anyhow::Result<LoopConfig> {
     let mut config = loop_config(
         agent_config,
@@ -198,7 +200,10 @@ pub(crate) fn loop_config_for_request(
             merge_optional_params(config.additional_params.take(), Some(additional_params));
     }
     let origin = ExecutionOrigin::from_persisted(request.execution_origin.as_deref())?;
-    config.retry_policy = CompletionRetryPolicy::resolve(&agent_config.completion_retry, origin);
+    config.retry_policy = CompletionRetryPolicy {
+        account_hops,
+        ..CompletionRetryPolicy::resolve(&agent_config.completion_retry, origin)
+    };
     config.deadline = parse_request_deadline(request.deadline.as_deref());
     Ok(config)
 }
@@ -579,11 +584,20 @@ fn reasoning_profile_params(
         })),
         // Grok models 400 on a forced reasoning.effort.
         (BackendProviderKind::XaiGrokOAuth, _) => None,
-        (BackendProviderKind::ClaudeCliSubscription | BackendProviderKind::AnthropicApiKey, _) => {
-            Some(serde_json::json!({
+        (
+            BackendProviderKind::ClaudeCliSubscription
+            | BackendProviderKind::AnthropicApiKey
+            | BackendProviderKind::ClaudeBedrock
+            | BackendProviderKind::ClaudeVertex
+            | BackendProviderKind::ClaudeFoundry
+            | BackendProviderKind::ClaudeAnthropicAws
+            | BackendProviderKind::ClaudeMantle
+            | BackendProviderKind::ClaudeGoogleCloud
+            | BackendProviderKind::ClaudeGateway,
+            _,
+        ) => Some(serde_json::json!({
             "output_config": { "effort": reasoning_effort.as_str() }
-            }))
-        }
+        })),
     }
 }
 
@@ -631,7 +645,14 @@ fn provider_additional_params(
         BackendProviderKind::ChatGptCodex
         | BackendProviderKind::XaiGrokOAuth
         | BackendProviderKind::ClaudeCliSubscription
-        | BackendProviderKind::AnthropicApiKey => None,
+        | BackendProviderKind::AnthropicApiKey
+        | BackendProviderKind::ClaudeBedrock
+        | BackendProviderKind::ClaudeVertex
+        | BackendProviderKind::ClaudeFoundry
+        | BackendProviderKind::ClaudeAnthropicAws
+        | BackendProviderKind::ClaudeMantle
+        | BackendProviderKind::ClaudeGoogleCloud
+        | BackendProviderKind::ClaudeGateway => None,
     }
 }
 
@@ -646,10 +667,20 @@ fn request_additional_params(
                 .or_else(|| normalize_cache_scope(request.request_id.as_str()))?;
             Some(serde_json::json!({ "prompt_cache_key": scope }))
         }
+        BackendProviderKind::ClaudeCliSubscription => {
+            let session = normalize_cache_scope(request.session_id.as_str())?;
+            Some(serde_json::json!({ crate::claude_messages::SESSION_KEY_PARAM: session }))
+        }
         BackendProviderKind::OpenRouter
         | BackendProviderKind::XaiGrokOAuth
-        | BackendProviderKind::ClaudeCliSubscription
-        | BackendProviderKind::AnthropicApiKey => None,
+        | BackendProviderKind::AnthropicApiKey
+        | BackendProviderKind::ClaudeBedrock
+        | BackendProviderKind::ClaudeVertex
+        | BackendProviderKind::ClaudeFoundry
+        | BackendProviderKind::ClaudeAnthropicAws
+        | BackendProviderKind::ClaudeMantle
+        | BackendProviderKind::ClaudeGoogleCloud
+        | BackendProviderKind::ClaudeGateway => None,
     }
 }
 
@@ -726,9 +757,10 @@ pub(crate) async fn build_compaction_engine(
     summary.sampling = inference.sampling_config()?;
     summary.max_turns = 0;
     summary.compaction_inference = None;
-    let api_key = match &summary.backend_auth {
-        crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
-        _ => summary.completion_client_api_key()?,
+    let api_key = if summary.backend_auth.uses_node_oauth() {
+        "no-key".to_owned()
+    } else {
+        summary.completion_client_api_key()?
     };
     let client = crate::llm::backend_client::build_backend_client(
         cache,

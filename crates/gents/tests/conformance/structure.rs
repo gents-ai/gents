@@ -14,6 +14,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("AgentSession", Gap("Canonical DB projection tests live in request_lifecycle.rs; generated exact-scope selection/refresh adapters still require the migrated session owner.")),
         ("SessionFork", WorkspaceTest("crates/gents/tests/e2e_runtime/fork_invariants.rs")),
         ("ApplyReconcile", Gap("Atomic publication requires the canonical transaction/installer owner; the retired ranked writer and test-local simulator do not implement the contract.")),
+        ("AccountRotation", WorkspaceTest("crates/gents-claude/src/rotation_tests.rs")),
         ("AuxiliaryAdmission", WorkspaceTest("crates/gents/src/request_admission/title_tests.rs")),
         ("Background", Module("conformance/background.rs")),
         ("BackendHealth", Module("conformance/backend_health.rs")),
