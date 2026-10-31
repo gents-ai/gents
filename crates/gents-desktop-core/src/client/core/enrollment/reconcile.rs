@@ -18,17 +18,17 @@ use super::map_p2p_error;
 use crate::client::peer_directory::RemovalCause;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ApprovedStatusEnrollment {
-    pub(super) network_id: String,
-    pub(super) request_id: String,
-    pub(super) server_peer: String,
-    pub(super) server_ticket: String,
-    pub(super) admin_did: String,
-    pub(super) owner_node: String,
-    pub(super) request_digest: String,
-    pub(super) authorization_sequence: u64,
-    pub(super) authorization_expires_at: String,
-    pub(super) decided_at: String,
+pub(in crate::client::core) struct ApprovedStatusEnrollment {
+    pub(in crate::client::core) network_id: String,
+    pub(in crate::client::core) request_id: String,
+    pub(in crate::client::core) server_peer: String,
+    pub(in crate::client::core) server_ticket: String,
+    pub(in crate::client::core) admin_did: String,
+    pub(in crate::client::core) owner_node: String,
+    pub(in crate::client::core) request_digest: String,
+    pub(in crate::client::core) authorization_sequence: u64,
+    pub(in crate::client::core) authorization_expires_at: String,
+    pub(in crate::client::core) decided_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +52,7 @@ impl EnrollmentAuthorizationGeneration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum EnrollmentAuthorityOutcome {
+pub(in crate::client::core) enum EnrollmentAuthorityOutcome {
     Current(ApprovedStatusEnrollment),
     Conflicted { reason: String },
 }

@@ -32,6 +32,7 @@ pub(super) struct ClientRouteManager {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     actor: Arc<PrincipalIdentity>,
+    local_peer_id: String,
     identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
     lifecycle: Mutex<()>,
 }
@@ -73,12 +74,14 @@ impl ClientRouteManager {
         node: Arc<EmbeddedNode>,
         p2p: Arc<dyn P2POps>,
         actor: Arc<PrincipalIdentity>,
+        local_peer_id: String,
         identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
     ) -> Self {
         Self {
             node,
             p2p,
             actor,
+            local_peer_id,
             identity_interaction,
             lifecycle: Mutex::new(()),
         }
@@ -461,57 +464,75 @@ impl ClientRouteManager {
         direction: PairingDirection,
         record: &PeerRecord,
     ) -> Result<()> {
-        use gents::runtime::agent::p2p_reconcile::templates::CLIENT_TEMPLATE;
+        use super::enrollment::{
+            load_status_enrollment_approvals_in_txn, reconcile::EnrollmentAuthorityOutcome,
+        };
+        use gents::runtime::agent::p2p_reconcile::materialize_enrollment_desired_in_txn;
 
-        let peer_id = escape_graphql_string(&route.desired_id(direction));
-        let node_did = escape_graphql_string(&route.owner_node_did);
-        let address = escape_graphql_string(route.transport.address());
-        let now = escape_graphql_string(
-            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        );
         anyhow::ensure!(
             record.is_enrollment(),
             "manual pairing desired authority is disabled"
         );
-        let request_digest = escape_graphql_string(
-            record
-                .enrollment_request_digest
-                .as_deref()
-                .context("enrollment record has no request digest")?,
-        );
-        let authorization_sequence = record
-            .enrollment_authorization_sequence
-            .context("enrollment record has no authorization sequence")?;
-        let authorization_expires_at = escape_graphql_string(
-            record
-                .enrollment_authorization_expires_at
-                .as_deref()
-                .context("enrollment record has no authorization expiry")?,
-        );
-        let mutation = format!(
-            r#"mutation {{ upsert_PeerPairingDesired(
-                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
-                    add: {{ peer_id: "{peer_id}", node_did: "{node_did}", collections: null,
-                        template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
-                        source: "enrollment", enrollment_request_digest: "{request_digest}",
-                        enrollment_authorization_sequence: {authorization_sequence},
-                        enrollment_authorization_expires_at: "{authorization_expires_at}",
-                        profiles: null, created_at: "{now}", updated_at: "{now}" }},
-                    update: {{ node_did: "{node_did}", collections: null,
-                        template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
-                        source: "enrollment", enrollment_request_digest: "{request_digest}",
-                        enrollment_authorization_sequence: {authorization_sequence},
-                        enrollment_authorization_expires_at: "{authorization_expires_at}",
-                        profiles: null, updated_at: "{now}" }}
-                ) {{ _docID }} }}"#
-        );
-        gents::store::config_client::ConfigAccess::write_local(
+        gents::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
+            None,
             "desktop.pairing_desired.upsert",
-            &mutation,
+            |txn| {
+                Box::pin(async {
+                    let (mut current, _) = load_status_enrollment_approvals_in_txn(
+                        txn,
+                        self.actor.as_ref(),
+                        &self.local_peer_id,
+                    )
+                    .await?;
+                    let Some(EnrollmentAuthorityOutcome::Current(approval)) =
+                        current.remove(&record.peer_id)
+                    else {
+                        anyhow::bail!(
+                            "desired route has no current verified enrollment authorization"
+                        );
+                    };
+                    anyhow::ensure!(
+                        record.node_did == approval.owner_node
+                            && record.enrollment_request_id.as_deref()
+                                == Some(approval.request_id.as_str())
+                            && record.enrollment_request_digest.as_deref()
+                                == Some(approval.request_digest.as_str())
+                            && record.enrollment_admin_did.as_deref()
+                                == Some(approval.admin_did.as_str())
+                            && record.pairing_network_id.as_deref()
+                                == Some(approval.network_id.as_str())
+                            && record.enrollment_authorization_sequence
+                                == Some(approval.authorization_sequence)
+                            && record.enrollment_authorization_expires_at.as_deref()
+                                == Some(approval.authorization_expires_at.as_str()),
+                        "desired route enrollment generation was replaced or revoked"
+                    );
+                    let (transport_peer, _) = parse_public_peer_addr(route.transport.address())?;
+                    anyhow::ensure!(
+                        transport_peer.to_string() == approval.server_peer,
+                        "desired route address is not bound to the enrolled peer"
+                    );
+                    materialize_enrollment_desired_in_txn(
+                        txn,
+                        &route.owner_node_did,
+                        &EnrollmentEndpointEntry {
+                            desired_id: route.desired_id(direction),
+                            peer_id: approval.server_peer,
+                            node_did: approval.owner_node,
+                            address: route.transport.address().to_owned(),
+                            request_digest: approval.request_digest,
+                            authorization_sequence: approval.authorization_sequence,
+                            authorization_expires_at: approval.authorization_expires_at,
+                        },
+                        &Default::default(),
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     fn remote_admin(

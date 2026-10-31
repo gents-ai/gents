@@ -498,6 +498,7 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         core.node_arc(),
         Arc::clone(&p2p),
         Arc::new(core.node_identity().clone()),
+        core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
     let options = ClientCoreOptions {

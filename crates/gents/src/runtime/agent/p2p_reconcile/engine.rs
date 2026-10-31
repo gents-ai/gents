@@ -20,7 +20,7 @@ pub use reconcile::{
     observe_owned_pairing_live_matches, reconcile_peer_tick, update_applied_after_success,
 };
 pub use remote_topology::teardown_owned_replicators_at_endpoint;
-pub use store::GraphqlPairingStateStore;
+pub use store::{materialize_enrollment_desired_in_txn, GraphqlPairingStateStore};
 pub use sweep::run_pairing_reconciler;
 
 #[cfg(test)]
