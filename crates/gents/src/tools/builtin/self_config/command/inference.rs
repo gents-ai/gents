@@ -64,7 +64,7 @@ impl ConfigCommandTool {
                     _ => unreachable!("bound resource"),
                 };
                 request.shared_ack = shared_ack;
-                self.patch(&core, verb, protect_working_agent(request))
+                self.patch(&core, verb, protect_working_agent(request, shared_ack, self.holds_catalog_grant()))
                     .await
             }
             other => bail!(
@@ -276,7 +276,7 @@ impl ConfigCommandTool {
                 self.patch(
                     &core,
                     verb,
-                    protect_working_agent(profile_target_request(Some(request_name), patch)?),
+                    protect_working_agent(profile_target_request(Some(request_name), patch)?, false, self.holds_catalog_grant()),
                 )
                 .await
             }

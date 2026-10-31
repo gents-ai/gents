@@ -358,6 +358,15 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
 }
 
 impl ConfigCommandTool {
+    /// Whether the caller holds the agent catalog grant (category `node`).
+    ///
+    /// A shared Context or Tools edit lands on every agent that selects it, so
+    /// it needs authority over the whole catalog, not just the caller's own
+    /// row. `options.shared = "acknowledge"` waives the sharing refusal only.
+    fn holds_catalog_grant(&self) -> bool {
+        self.categories.contains("node")
+    }
+
     async fn dispatch(&self, argv: &[String]) -> Result<String> {
         if let Some(resource) = config_help_resource(argv) {
             return self.help(resource, help_verb(argv));

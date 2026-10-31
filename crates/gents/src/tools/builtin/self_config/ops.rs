@@ -20,7 +20,8 @@ mod request;
 pub use documents::{apply_tool_grant_selection, validate_tool_network_selection};
 use documents::{candidate_doc, replacement_plan, safe_diff, shared_receipt};
 pub(crate) use documents::{
-    decode_merged, read_owned_doc, shared_referrers, shared_refusal, validate_merged_selection,
+    decode_merged, guard_shared_authority_in_txn, read_owned_doc, shared_referrers, shared_refusal,
+    validate_merged_selection,
 };
 pub(crate) use grants::guard_reselection_keeps_grants_in_txn;
 pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants};
@@ -217,69 +218,7 @@ impl SelfConfigCore {
     }
 
     pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
-        let Some((_doc_id, doc)) =
-            read_owned_doc(txn, SelfConfigTarget::Agent, &self.node_did, &self.agent_id).await?
-        else {
-            return Err(MissingAgent {
-                agent_id: self.agent_id.clone(),
-                suggestions: Vec::new(),
-            }
-            .into());
-        };
-        let owner = doc.get("node_did").and_then(Value::as_str).unwrap_or("");
-        if owner != self.node_did {
-            bail!(
-                "agent {} is owned by {owner:?}, not this node — self-config is self only",
-                self.agent_id
-            );
-        }
-        let context = match doc.get("context_id").and_then(Value::as_str) {
-            Some(context_id) => {
-                read_owned_doc(
-                    txn,
-                    SelfConfigTarget::AgentContext,
-                    &self.node_did,
-                    context_id,
-                )
-                .await?
-                .context("context not found")?
-                .1
-            }
-            None => Map::new(),
-        };
-        let profile_id = doc
-            .get("inference_profile_id")
-            .and_then(Value::as_str)
-            .context("agent inference profile is missing")?;
-        let profile = read_owned_doc(
-            txn,
-            SelfConfigTarget::InferenceProfile,
-            &self.node_did,
-            profile_id,
-        )
-        .await?
-        .context("profile not found")?
-        .1;
-        let execution = match profile.get("execution_id").and_then(Value::as_str) {
-            Some(id) => {
-                read_owned_doc(
-                    txn,
-                    SelfConfigTarget::InferenceExecution,
-                    &self.node_did,
-                    id,
-                )
-                .await?
-                .context("execution not found")?
-                .1
-            }
-            None => Map::new(),
-        };
-        Ok(AgentAnchor {
-            doc,
-            context,
-            profile,
-            execution,
-        })
+        load_agent_anchor_for(txn, &self.node_did, &self.agent_id).await
     }
 
     pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
@@ -607,4 +546,63 @@ impl SelfConfigCore {
             effect: "preview: nothing was written; send the same create/update call without preview to apply",
         })
     }
+}
+
+/// Load one agent's anchor by exact `agent_id`, for the invoking agent or for
+/// a sibling the write reaches. Fails closed when the row is owned elsewhere.
+pub(crate) async fn load_agent_anchor_for(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_id: &str,
+) -> Result<AgentAnchor> {
+    let Some((_doc_id, doc)) =
+        read_owned_doc(txn, SelfConfigTarget::Agent, node_did, agent_id).await?
+    else {
+        return Err(MissingAgent {
+            agent_id: agent_id.to_owned(),
+            suggestions: Vec::new(),
+        }
+        .into());
+    };
+    let owner = doc.get("node_did").and_then(Value::as_str).unwrap_or("");
+    if owner != node_did {
+        bail!("agent {agent_id} is owned by {owner:?}, not this node — self-config is self only");
+    }
+    let context = match doc.get("context_id").and_then(Value::as_str) {
+        Some(context_id) => {
+            read_owned_doc(txn, SelfConfigTarget::AgentContext, node_did, context_id)
+                .await?
+                .context("context not found")?
+                .1
+        }
+        None => Map::new(),
+    };
+    let profile_id = doc
+        .get("inference_profile_id")
+        .and_then(Value::as_str)
+        .context("agent inference profile is missing")?;
+    let profile = read_owned_doc(
+        txn,
+        SelfConfigTarget::InferenceProfile,
+        node_did,
+        profile_id,
+    )
+    .await?
+    .context("profile not found")?
+    .1;
+    let execution = match profile.get("execution_id").and_then(Value::as_str) {
+        Some(id) => {
+            read_owned_doc(txn, SelfConfigTarget::InferenceExecution, node_did, id)
+                .await?
+                .context("execution not found")?
+                .1
+        }
+        None => Map::new(),
+    };
+    Ok(AgentAnchor {
+        doc,
+        context,
+        profile,
+        execution,
+    })
 }

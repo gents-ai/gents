@@ -7,7 +7,7 @@ import unittest
 
 
 SCRIPTS = Path(__file__).resolve().parent
-SCRIPT = SCRIPTS / "setup-macos-clt-toolchain.sh"
+SCRIPT = SCRIPTS / "setup-macos-rust-toolchain.sh"
 
 
 class ToolchainSetupTests(unittest.TestCase):
@@ -39,6 +39,8 @@ class ToolchainSetupTests(unittest.TestCase):
         self.github_env = self.root / "github_env"
         self.github_env.write_text("")
         self.cc_log = self.root / "cc.log"
+        self.cargo_log = self.root / "cargo.log"
+        self.cargo_env_log = self.root / "cargo-env.log"
 
     def write_tool(self, name, body):
         path = self.bin / name
@@ -67,12 +69,23 @@ class ToolchainSetupTests(unittest.TestCase):
             f"exit {exit_code}\n",
         )
 
+    def fake_cargo(self, exit_code=0, stderr=""):
+        return self.write_tool(
+            "cargo",
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >> "{self.cargo_log}"\n'
+            f'printf "%s\\n" "${{RUSTC_WRAPPER-<unset>}}" >> "{self.cargo_env_log}"\n'
+            f'printf "%s" "{stderr}" >&2\n'
+            f"exit {exit_code}\n",
+        )
+
     def run_script(self, **env_overrides):
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}{os.pathsep}{env['PATH']}"
         env["GITHUB_ENV"] = str(self.github_env)
         env["GENTS_PROBE_CC"] = str(self.bin / "cc")
         env.pop("GENTS_DEVELOPER_DIR", None)
+        env.pop("GENTS_SKIP_CARGO_PROBE", None)
         env.update(env_overrides)
         return subprocess.run(
             ["/bin/bash", str(SCRIPT)],
@@ -93,6 +106,7 @@ class ToolchainSetupTests(unittest.TestCase):
         self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
+        self.fake_cargo()
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         exported = self.exported()
@@ -107,6 +121,7 @@ class ToolchainSetupTests(unittest.TestCase):
         self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
+        self.fake_cargo()
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.exported()["SDKROOT"], str(self.sdk))
@@ -120,6 +135,7 @@ class ToolchainSetupTests(unittest.TestCase):
         self.fake_xcode_select(self.developer)
         self.fake_xcrun(other_sdk)
         self.fake_cc()
+        self.fake_cargo()
         result = self.run_script(GENTS_DEVELOPER_DIR=str(other))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.exported()["DEVELOPER_DIR"], str(other))
@@ -129,6 +145,7 @@ class ToolchainSetupTests(unittest.TestCase):
         self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
+        self.fake_cargo()
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # The probe must be a real link of a C source, not a version check:
@@ -153,10 +170,68 @@ class ToolchainSetupTests(unittest.TestCase):
         self.assertIn("unknown architecture", result.stdout + result.stderr)
         self.assertEqual(self.exported(), {})
 
+    def test_probes_the_rust_link_path_through_cargo(self):
+        # The C probe alone is not enough: .cargo/config.toml routes Rust links
+        # through scripts/macos-clang-lld.sh, so a rust-lld/SDK mismatch passes
+        # the C probe and only fails deep inside a suite.
+        self.fake_xcode_select(self.developer)
+        self.fake_xcrun(self.sdk)
+        self.fake_cc()
+        self.fake_cargo()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.cargo_log.exists(), "cargo was never invoked")
+        invocation = self.cargo_log.read_text()
+        self.assertIn("run", invocation)
+        self.assertIn("--manifest-path", invocation)
+
+    def test_fails_fast_when_cargo_cannot_link(self):
+        self.fake_xcode_select(self.developer)
+        self.fake_xcrun(self.sdk)
+        self.fake_cc()
+        self.fake_cargo(
+            exit_code=101,
+            stderr="rust-lld: error: could not load TAPI file "
+            "libSystem.B.tbd: unknown target arm64e.x1-macos\n",
+        )
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot link a Rust binary", result.stdout + result.stderr)
+        self.assertIn("unknown target", result.stdout + result.stderr)
+        self.assertEqual(self.exported(), {})
+
+    def test_cargo_probe_clears_the_rustc_wrapper(self):
+        # The job sets RUSTC_WRAPPER=sccache, which is not on PATH this early.
+        # A probe that inherits it fails with "could not execute process
+        # `sccache ... rustc -vV`" — a cache problem that looks like a linker
+        # problem. The probe must clear the wrapper, in BOTH forms: the
+        # environment variable and a `build.rustc-wrapper` in a cargo config
+        # file, which `env -u` does not remove.
+        self.fake_xcode_select(self.developer)
+        self.fake_xcrun(self.sdk)
+        self.fake_cc()
+        self.fake_cargo()
+        result = self.run_script(RUSTC_WRAPPER="/nonexistent/sccache")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.cargo_log.exists(), "cargo was never invoked")
+        invocation = self.cargo_log.read_text()
+        self.assertIn("--config", invocation)
+        self.assertIn('build.rustc-wrapper=""', invocation)
+        self.assertEqual(self.cargo_env_log.read_text(), "\n")
+
+    def test_cargo_probe_can_be_skipped(self):
+        self.fake_xcode_select(self.developer)
+        self.fake_xcrun(self.sdk)
+        self.fake_cc()
+        result = self.run_script(GENTS_SKIP_CARGO_PROBE="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.cargo_log.exists(), "cargo ran despite the skip")
+
     def test_fails_when_xcrun_reports_no_sdk(self):
         self.fake_xcode_select(self.developer)
         self.fake_xcrun("")
         self.fake_cc()
+        self.fake_cargo()
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no macOS SDK", result.stdout + result.stderr)
@@ -166,6 +241,7 @@ class ToolchainSetupTests(unittest.TestCase):
         self.fake_xcode_select(self.root / "missing-Developer")
         self.fake_xcrun(self.sdk)
         self.fake_cc()
+        self.fake_cargo()
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Developer directory not found", result.stdout + result.stderr)
@@ -173,6 +249,7 @@ class ToolchainSetupTests(unittest.TestCase):
     def test_fails_when_xcode_select_is_absent(self):
         self.fake_xcrun(self.sdk)
         self.fake_cc()
+        self.fake_cargo()
         result = self.run_script(PATH=str(self.bin))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("xcode-select is missing", result.stdout + result.stderr)
@@ -181,10 +258,12 @@ class ToolchainSetupTests(unittest.TestCase):
         self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
+        self.fake_cargo()
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}{os.pathsep}{env['PATH']}"
         env.pop("GITHUB_ENV", None)
         env.pop("GENTS_DEVELOPER_DIR", None)
+        env.pop("GENTS_SKIP_CARGO_PROBE", None)
         env["GENTS_PROBE_CC"] = str(self.bin / "cc")
         result = subprocess.run(
             ["/bin/bash", str(SCRIPT)], env=env, capture_output=True, text=True

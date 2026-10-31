@@ -62,7 +62,7 @@ jobs:
           persist-credentials: false
       - name: Select a matching macOS SDK for the linker
         if: runner.os == 'macOS'
-        run: .github/scripts/setup-macos-clt-toolchain.sh
+        run: .github/scripts/setup-macos-rust-toolchain.sh
       - name: Install CMake for native dependencies
         if: runner.os == 'macOS'
         run: bash .github/scripts/setup-cmake.sh

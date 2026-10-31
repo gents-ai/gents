@@ -74,7 +74,11 @@ impl ConfigCommandTool {
                         .patch(
                             &core,
                             "preview",
-                            protect_working_agent(agent_request(&core, patch)),
+                            protect_working_agent(
+                                agent_request(&core, patch),
+                                false,
+                                self.holds_catalog_grant(),
+                            ),
                         )
                         .await;
                 }
@@ -99,7 +103,11 @@ impl ConfigCommandTool {
                 self.patch(
                     &core,
                     "edit",
-                    protect_working_agent(agent_request(&core, patch)),
+                    protect_working_agent(
+                        agent_request(&core, patch),
+                        false,
+                        self.holds_catalog_grant(),
+                    ),
                 )
                 .await
             }
@@ -171,11 +179,11 @@ impl ConfigCommandTool {
                 let (shared_ack, rest) = extract_shared(&rest)?;
                 let patch =
                     parse_patch_args(ParsedArgs::parse(&rest)?, SelfConfigTarget::AgentContext)?;
-                let mut request = protect_working_agent(anchored_request(
-                    SelfConfigTarget::AgentContext,
-                    "context_id",
-                    patch,
-                ));
+                let mut request = protect_working_agent(
+                    anchored_request(SelfConfigTarget::AgentContext, "context_id", patch),
+                    shared_ack,
+                    self.holds_catalog_grant(),
+                );
                 request.shared_ack = shared_ack;
                 self.patch(&core, verb, request).await
             }

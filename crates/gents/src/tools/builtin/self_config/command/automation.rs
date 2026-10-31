@@ -70,7 +70,7 @@ impl ConfigCommandTool {
                 self.patch(
                     &core,
                     verb,
-                    protect_working_agent(automation_request(&core, target, id.clone(), patch)),
+                    protect_working_agent(automation_request(&core, target, id.clone(), patch), false, self.holds_catalog_grant()),
                 )
                 .await
             }
