@@ -375,7 +375,7 @@ function Reply({
     <div data-testid={live ? "live-assistant" : undefined}>
       <AssistantMessage
         className={item.content ? "py-4" : undefined}
-        actions={!live && item.content && !final ? copyActions(writtenText(item.content ?? "", item.selectedSkillIds)) : false}
+        actions={!live && item.content && !final ? copyActions(writtenText(item.content ?? "")) : false}
       >
         {readableReasoning(item.reasoning) ? (
           <Reasoning

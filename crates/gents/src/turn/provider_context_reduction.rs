@@ -252,24 +252,18 @@ impl StagedProviderContextReduction {
     pub(crate) fn into_turn_outcome(
         self,
         node: std::sync::Arc<EmbeddedNode>,
-    ) -> Result<crate::runtime::agent::loop_stream::TurnCompactionOutcome> {
+    ) -> Result<gents_loop::loop_stream::TurnCompactionOutcome> {
         let messages = self.checkpoint_tagged_messages()?;
         let reduction_key = self.reduction_key().to_string();
-        Ok(
-            crate::runtime::agent::loop_stream::TurnCompactionOutcome::Reduced {
-                messages,
-                reduction_key,
-                commit: crate::runtime::agent::loop_stream::TurnReductionCommit::new(
-                    move || async move {
-                        self.commit(&node).await.map(drop).map_err(|error| {
-                            crate::runtime::agent::loop_stream::TurnCompactionError::Compactor(
-                                error.into(),
-                            )
-                        })
-                    },
-                ),
-            },
-        )
+        Ok(gents_loop::loop_stream::TurnCompactionOutcome::Reduced {
+            messages,
+            reduction_key,
+            commit: gents_loop::loop_stream::TurnReductionCommit::new(move || async move {
+                self.commit(&node).await.map(drop).map_err(|error| {
+                    gents_loop::loop_stream::TurnCompactionError::Compactor(error.into())
+                })
+            }),
+        })
     }
 
     pub(crate) async fn commit(

@@ -105,7 +105,12 @@ pub(super) async fn load_session_request_context_history(
     }
     let physical_ids = request_doc_ids
         .iter()
-        .map(|doc_id| format!(r#""{}""#, gents::store::graphql::escape_graphql_string(doc_id)))
+        .map(|doc_id| {
+            format!(
+                r#""{}""#,
+                gents::store::graphql::escape_graphql_string(doc_id)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let requester = requester_did
@@ -387,7 +392,8 @@ fn decode_reduction_row(row: &serde_json::Value) -> anyhow::Result<LoadedReducti
         .ok_or_else(|| anyhow::anyhow!("ProviderContextReduction row has no reduction_key"))?;
     let anchor_sequence = string("source_boundary_json")
         .and_then(|json| {
-            serde_json::from_str::<gents::turn::provider_context_reduction::SourceBoundary>(&json).ok()
+            serde_json::from_str::<gents::turn::provider_context_reduction::SourceBoundary>(&json)
+                .ok()
         })
         .and_then(|boundary| boundary.canonical_through)
         .map(|fact| fact.sequence);

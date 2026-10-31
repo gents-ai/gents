@@ -10,23 +10,27 @@ on:
       - 'crates/gents-cli/src/native_service*'
       - 'crates/gents-cli/src/native_service/**'
       - 'crates/gents-cli/src/cli/args.rs'
+      - 'crates/gents-cli/src/cli/args/**'
       - 'crates/gents-cli/src/lib.rs'
       - 'crates/gents-cli/src/commands/prepare_runtime*'
       - 'crates/gents-cli/src/http/runtime_control.rs'
-      - 'crates/gents/src/runtime_service.rs'
-      - 'crates/gents/src/agent/runtime/startup.rs'
+      - 'crates/gents/src/runtime/service.rs'
+      - 'crates/gents/src/runtime/agent/runtime/startup.rs'
+      - 'crates/gents/src/runtime/agent/runtime/startup/**'
       - 'crates/gents-desktop-bridge/**'
-      - 'crates/gents/src/tool_call_lifecycle/**'
-      - 'crates/gents/src/mailbox/**'
-      - 'crates/gents/src/agent.rs'
+      - 'crates/gents/src/tools/call/lifecycle.rs'
+      - 'crates/gents/src/tools/call/lifecycle/**'
+      - 'crates/gents/src/session/mailbox.rs'
+      - 'crates/gents/src/session/mailbox/**'
+      - 'crates/gents/src/runtime/agent.rs'
       - 'crates/gents-cli/src/commands/serve.rs'
       - 'crates/gents-cli/src/network_settings.rs'
       - 'crates/gents-cli/src/home_state.rs'
       - 'crates/gents-protocol/src/serve_lifecycle/**'
       - 'crates/gents-cli/src/service_update/**'
-      - 'crates/gents/src/home.rs'
-      - 'crates/gents/src/toolset/shared/command.rs'
-      - 'crates/gents/src/toolset/shared/command_credentials*'
+      - 'crates/gents/src/store/local/home.rs'
+      - 'crates/gents/src/store/local/home/**'
+      - 'crates/gents/src/tools/native/shared/command*'
       - 'crates/gents-migration/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -56,6 +60,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Select a matching macOS SDK for the linker
+        if: runner.os == 'macOS'
+        run: .github/scripts/setup-macos-clt-toolchain.sh
+      - name: Install CMake for native dependencies
+        if: runner.os == 'macOS'
+        run: bash .github/scripts/setup-cmake.sh
       - name: Install Linux build dependencies and start the fixture user manager
         if: runner.os == 'Linux'
         shell: bash
