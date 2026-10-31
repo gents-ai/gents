@@ -7,20 +7,43 @@ import {
   restoreSessionFilter,
   type SessionFilter,
 } from "@/lib/session-filter";
-import { browserStorage, storedStrings } from "@/lib/storage";
+import { browserStorage } from "@/lib/storage";
+
+/** The mailbox's tabs: all items, or one triage group. */
+export type MailboxTab = "all" | "decide" | "wrong" | "look" | "done";
+const MAILBOX_TABS: readonly MailboxTab[] = ["all", "decide", "wrong", "look", "done"];
+
+/** The item open in the mailbox's dialog, on the node it belongs to; its
+    place in the tab's list, for the one after it if it has gone when the
+    person comes back; and the page it was opened over, the only one it
+    shows on, so it waits while the person looks at a session from it. */
+export type MailboxOpen = {
+  nodeDid: string | null;
+  itemId: string;
+  at: number;
+  where: string;
+};
 
 export type ListViews = {
   sessionFilter: SessionFilter;
   /* the side nav's recent sessions narrow on their own */
   recentFilter: SessionFilter;
 
-  mailboxKinds: string[];
+  mailboxTab: MailboxTab;
+  /* kept while the person looks at a session and comes back; not across a
+     restart, which would open a dialog unasked */
+  mailboxOpen: MailboxOpen | null;
+  /* the mailbox's search, null when closed; the dialog steps through what
+     it leaves. Not kept across a restart. */
+  mailboxQuery: string | null;
 };
 
 const initial = (): ListViews => ({
   sessionFilter: emptyFilter,
   recentFilter: emptyFilter,
-  mailboxKinds: [],
+  mailboxTab: "all",
+  mailboxOpen: null,
+  mailboxQuery: null,
 });
 
 export function restoreListViews(stored: unknown): ListViews {
@@ -31,7 +54,9 @@ export function restoreListViews(stored: unknown): ListViews {
   return {
     sessionFilter: restoreSessionFilter(saved.sessionFilter),
     recentFilter: restoreSessionFilter(saved.recentFilter),
-    mailboxKinds: storedStrings(saved.mailboxKinds),
+    mailboxTab: MAILBOX_TABS.find((tab) => tab === saved.mailboxTab) ?? "all",
+    mailboxOpen: null,
+    mailboxQuery: null,
   };
 }
 
@@ -41,6 +66,7 @@ const store = createStore<ListViews>()(
     version: 1,
     storage: createJSONStorage(() => browserStorage),
     merge: (stored) => restoreListViews(stored),
+    partialize: ({ mailboxOpen: _open, mailboxQuery: _query, ...kept }) => kept,
   }),
 );
 
@@ -52,8 +78,14 @@ export const listViews = {
   setRecentFilter(recentFilter: SessionFilter) {
     store.setState({ recentFilter });
   },
-  setMailboxKinds(mailboxKinds: string[]) {
-    store.setState({ mailboxKinds });
+  setMailboxTab(mailboxTab: MailboxTab) {
+    store.setState({ mailboxTab });
+  },
+  setMailboxOpen(mailboxOpen: MailboxOpen | null) {
+    store.setState({ mailboxOpen });
+  },
+  setMailboxQuery(mailboxQuery: string | null) {
+    store.setState({ mailboxQuery });
   },
 };
 
