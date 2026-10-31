@@ -30,6 +30,70 @@ const USAGE_SOURCE: Record<string, string> = {
   error: "from a rejected request",
 };
 
+/* how close a window is to its limit: quiet until it is worth a look */
+export function usageLevel(pct: number) {
+  return pct >= 90 ? "danger" : pct >= 75 ? "warning" : "ok";
+}
+const FILL = {
+  ok: "bg-foreground/60",
+  warning: "bg-warning",
+  danger: "bg-destructive",
+} as const;
+const STROKE = {
+  ok: "stroke-foreground/60",
+  warning: "stroke-warning",
+  danger: "stroke-destructive",
+} as const;
+const INK = {
+  ok: "text-foreground",
+  warning: "text-warning",
+  danger: "text-destructive",
+} as const;
+
+export function resetsIn(w: UsageWindowView, now: number) {
+  return w.resetsAt ? `resets in ${shortDuration(Date.parse(w.resetsAt) - now)}` : null;
+}
+
+/** the window of an account closest to its limit */
+export function closestWindow(view?: AccountUsageView) {
+  return view?.windows.reduce<UsageWindowView | undefined>(
+    (most, w) => (!most || w.usedPct > most.usedPct ? w : most),
+    undefined,
+  );
+}
+
+/** A small ring filled to a window's use, for places with room for a glance only. */
+export function UsageRing({ pct, className }: { pct: number; className?: string }) {
+  const r = 5;
+  const around = 2 * Math.PI * r;
+  return (
+    <svg
+      viewBox="0 0 14 14"
+      aria-hidden
+      className={cn("size-3.5 shrink-0 -rotate-90", className)}
+    >
+      <circle
+        cx="7"
+        cy="7"
+        r={r}
+        fill="none"
+        strokeWidth="2.5"
+        className="stroke-foreground/15"
+      />
+      <circle
+        cx="7"
+        cy="7"
+        r={r}
+        fill="none"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeDasharray={`${(around * Math.min(pct, 100)) / 100} ${around}`}
+        className={STROKE[usageLevel(pct)]}
+      />
+    </svg>
+  );
+}
+
 /* what the row leaves out, for its tooltip: when it resets and where the
    figure came from */
 function windowDetail(w: UsageWindowView, now: number) {
@@ -67,42 +131,31 @@ function WindowRow({ w, now }: { w: UsageWindowView; now: number }) {
         className="h-1.5 overflow-hidden rounded-full bg-muted"
       >
         <span
-          className={cn(
-            "block h-full rounded-full",
-            pct >= 90 ? "bg-destructive" : "bg-foreground/60",
-          )}
+          className={cn("block h-full rounded-full", FILL[usageLevel(pct)])}
           style={{ width: `${Math.min(pct, 100)}%` }}
         />
       </span>
-      <span className="text-right text-foreground tabular-nums">{pct}%</span>
+      <span className={cn("text-right tabular-nums", INK[usageLevel(pct)])}>
+        {pct}%
+      </span>
       <span className="truncate text-xs text-muted-foreground tabular-nums">
-        {w.resetsAt
-          ? `resets in ${shortDuration(Date.parse(w.resetsAt) - now)}`
-          : w.lastKnown
-            ? "last known"
-            : ""}
+        {resetsIn(w, now) ?? (w.lastKnown ? "last known" : "")}
       </span>
     </li>
   );
 }
 
-export function UsageBar({ view }: { view?: AccountUsageView }) {
-  const top = view?.windows.reduce<UsageWindowView | undefined>(
-    (most, w) => (!most || w.usedPct > most.usedPct ? w : most),
-    undefined,
-  );
+/** An account's closest window at a glance: its name, a ring and the percent. */
+export function UsageSummary({ view }: { view?: AccountUsageView }) {
+  const top = closestWindow(view);
   if (!top) return null;
   const pct = Math.round(top.usedPct);
   return (
     <span className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground tabular-nums">
-      {top.label}{" "}
-      <span aria-hidden className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
-        <span
-          className="block h-full bg-foreground/60"
-          style={{ width: `${Math.min(pct, 100)}%` }}
-        />
+      <UsageRing pct={pct} />
+      <span className={cn(usageLevel(pct) !== "ok" && INK[usageLevel(pct)])}>
+        {top.label} {pct}%
       </span>
-      {pct}%
     </span>
   );
 }
