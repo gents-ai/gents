@@ -80,12 +80,19 @@ if [[ "${GENTS_SKIP_CARGO_PROBE:-}" != "1" ]]; then
   # Run from the repository root so .cargo/config.toml (the linker wrapper and
   # its rustflags) applies exactly as it does to the real build.
   #
-  # RUSTC_WRAPPER is unset for the probe: the job sets it to sccache, which is
-  # not on PATH this early, and a missing wrapper fails the probe with
-  # "could not execute process `sccache ... rustc -vV`" — a cache problem
-  # masquerading as a linker problem. The wrapper has no bearing on whether the
-  # linker can read the SDK, which is what this probe is for.
-  if ! probe_output="$(cd "${GITHUB_WORKSPACE:-.}" && env -u RUSTC_WRAPPER cargo run --quiet \
+  # The compiler wrapper is cleared for the probe. The job sets
+  # RUSTC_WRAPPER=sccache, which is not on PATH this early, and a missing
+  # wrapper fails the probe with "could not execute process `sccache ... rustc
+  # -vV`" — a cache problem masquerading as a linker problem. The wrapper has
+  # no bearing on whether the linker can read the SDK, which is what this probe
+  # is for.
+  #
+  # Both forms are cleared because they are not equivalent: `env -u` removes
+  # the environment variable, but a `build.rustc-wrapper` in a cargo config
+  # file survives it, and the runner has one. `--config` overrides the config
+  # file; the empty environment variable covers the variable.
+  if ! probe_output="$(cd "${GITHUB_WORKSPACE:-.}" && env RUSTC_WRAPPER= cargo run --quiet \
+      --config 'build.rustc-wrapper=""' \
       --manifest-path "${probe_crate}/Cargo.toml" --target-dir "${probe_dir}/target" 2>&1)"; then
     echo "::error::cargo cannot link a Rust binary with DEVELOPER_DIR=${developer_dir} SDKROOT=${sdk_path}:"
     printf '%s\n' "${probe_output}"

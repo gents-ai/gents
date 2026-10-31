@@ -197,11 +197,13 @@ class ToolchainSetupTests(unittest.TestCase):
         self.assertIn("unknown target", result.stdout + result.stderr)
         self.assertEqual(self.exported(), {})
 
-    def test_cargo_probe_ignores_a_missing_rustc_wrapper(self):
+    def test_cargo_probe_clears_the_rustc_wrapper(self):
         # The job sets RUSTC_WRAPPER=sccache, which is not on PATH this early.
         # A probe that inherits it fails with "could not execute process
         # `sccache ... rustc -vV`" — a cache problem that looks like a linker
-        # problem. The probe must not inherit the wrapper.
+        # problem. The probe must clear the wrapper, in BOTH forms: the
+        # environment variable and a `build.rustc-wrapper` in a cargo config
+        # file, which `env -u` does not remove.
         self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
@@ -209,6 +211,9 @@ class ToolchainSetupTests(unittest.TestCase):
         result = self.run_script(RUSTC_WRAPPER="/nonexistent/sccache")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.cargo_log.exists(), "cargo was never invoked")
+        invocation = self.cargo_log.read_text()
+        self.assertIn("--config", invocation)
+        self.assertIn("build.rustc-wrapper", invocation)
 
     def test_cargo_probe_can_be_skipped(self):
         self.fake_xcode_select(self.developer)
