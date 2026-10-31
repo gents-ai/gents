@@ -318,11 +318,13 @@ export function AllProviderLimits({
   };
   return (
     <section
-      aria-label="Your limits"
+      aria-label="Usage limits"
       className="mb-6 grid gap-3 rounded-2xl border border-border/60 bg-raised px-4 pt-2.5 pb-3.5"
     >
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-medium">Your limits</h2>
+        <h2 className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+          Usage limits
+        </h2>
         <Hint label={busy ? "Refreshing…" : "Refresh all limits"}>
           <Button
             size="icon-sm"
