@@ -133,24 +133,14 @@ impl ProviderContextReduction {
     }
 
     pub(crate) fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
-        let prefix: Vec<Message> = serde_json::from_str(&self.compacted_prefix_json)
-            .context("decoding ProviderContextReduction compacted_prefix_json")?;
-        let suffix: Vec<Message> = serde_json::from_str(&self.retained_suffix_json)
-            .context("decoding ProviderContextReduction retained_suffix_json")?;
-        let associations = self.replay_associations()?;
-        validate_replay_associations(&associations, &prefix, &suffix, &self.request_doc_id)?;
-        let checkpoint = decode_checkpoint(&self.checkpoint_messages_json, &suffix, &self.summary)?;
-        let mut tagged = Vec::with_capacity(checkpoint.len());
-        if !self.summary.trim().is_empty() {
-            tagged.push(TaggedMessage::unassociated(checkpoint[0].clone()));
-        }
-        tagged.extend(
-            suffix
-                .into_iter()
-                .zip(associations.retained_rows)
-                .map(|(message, association)| association.attach(message)),
-        );
-        Ok(tagged)
+        tagged_checkpoint(
+            &self.compacted_prefix_json,
+            &self.retained_suffix_json,
+            &self.replay_associations_json,
+            &self.checkpoint_messages_json,
+            &self.summary,
+            &self.request_doc_id,
+        )
     }
 
     pub fn source_boundary(&self) -> Result<SourceBoundary> {
@@ -200,6 +190,200 @@ pub(crate) struct NewExactProviderContextReduction<'a> {
     pub(crate) replay_associations: &'a ReplayAssociations,
     pub(crate) original_tokens: usize,
     pub(crate) compacted_tokens: usize,
+}
+
+fn tagged_checkpoint(
+    compacted_prefix_json: &str,
+    retained_suffix_json: &str,
+    replay_associations_json: &str,
+    checkpoint_messages_json: &str,
+    summary: &str,
+    request_doc_id: &str,
+) -> Result<Vec<TaggedMessage>> {
+    let prefix: Vec<Message> = serde_json::from_str(compacted_prefix_json)
+        .context("decoding ProviderContextReduction compacted_prefix_json")?;
+    let suffix: Vec<Message> = serde_json::from_str(retained_suffix_json)
+        .context("decoding ProviderContextReduction retained_suffix_json")?;
+    let associations: ReplayAssociations = serde_json::from_str(replay_associations_json)
+        .context("decoding ProviderContextReduction replay_associations_json")?;
+    validate_replay_associations(&associations, &prefix, &suffix, request_doc_id)?;
+    let checkpoint = decode_checkpoint(checkpoint_messages_json, &suffix, summary)?;
+    let mut tagged = Vec::with_capacity(checkpoint.len());
+    if !summary.trim().is_empty() {
+        tagged.push(TaggedMessage::unassociated(checkpoint[0].clone()));
+    }
+    tagged.extend(
+        suffix
+            .into_iter()
+            .zip(associations.retained_rows)
+            .map(|(message, association)| association.attach(message)),
+    );
+    Ok(tagged)
+}
+
+/// A validated reduction that has not been written. Its checkpoint is the
+/// provider view the loop measures; `commit` writes the row, and dropping it
+/// discards the reduction, so a rebuilt request that cannot fit leaves no row
+/// (`Compaction.ReductionEngine.commitRequestLocalAfterRebuild`).
+#[derive(Debug)]
+pub(crate) struct StagedProviderContextReduction {
+    intended: IntendedReduction,
+}
+
+impl StagedProviderContextReduction {
+    pub(crate) fn reduction_key(&self) -> &str {
+        &self.intended.reduction_key
+    }
+
+    pub(crate) fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
+        let intended = &self.intended;
+        tagged_checkpoint(
+            &intended.compacted_prefix_json,
+            &intended.retained_suffix_json,
+            &intended.replay_associations_json,
+            &intended.checkpoint_messages_json,
+            &intended.summary,
+            &intended.request_doc_id,
+        )
+    }
+
+    /// The loop's turn outcome for this staged reduction: the checkpoint is
+    /// measured in memory and the row is written only by the loop's commit.
+    pub(crate) fn into_turn_outcome(
+        self,
+        node: std::sync::Arc<EmbeddedNode>,
+    ) -> Result<crate::agent::loop_stream::TurnCompactionOutcome> {
+        let messages = self.checkpoint_tagged_messages()?;
+        let reduction_key = self.reduction_key().to_string();
+        Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
+            messages,
+            reduction_key,
+            commit: crate::agent::loop_stream::TurnReductionCommit::new(move || async move {
+                self.commit(&node).await.map(drop).map_err(|error| {
+                    crate::agent::loop_stream::TurnCompactionError::Compactor(error.into())
+                })
+            }),
+        })
+    }
+
+    pub(crate) async fn commit(
+        self,
+        node: &std::sync::Arc<EmbeddedNode>,
+    ) -> Result<ProviderContextReduction> {
+        let intended = self.intended;
+        let reduction_key = intended.reduction_key.clone();
+        match load_by_key(node, &reduction_key).await?.as_slice() {
+            [] => {}
+            [existing] => {
+                intended.ensure_matches(existing)?;
+                return Ok(existing.clone());
+            }
+            twins => anyhow::bail!(
+                "provider-context reduction key {reduction_key} has {} visible logical twins",
+                twins.len()
+            ),
+        }
+
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let producer_call_id = graphql_optional_string(intended.producer_call_id.as_deref());
+        let producer_call_seq = intended
+            .producer_call_seq
+            .map(|seq| seq.to_string())
+            .unwrap_or_else(|| "null".to_string());
+        let parent_reduction_key =
+            graphql_optional_string(intended.parent_reduction_key.as_deref());
+        let requester_did = graphql_optional_string(intended.requester_did.as_deref());
+        crate::config_client::ConfigAccess::transact_local_write(
+            node,
+            None,
+            "provider_context.create_reduction",
+            |txn| {
+                let intended = &intended;
+                let created_at = &created_at;
+                let producer_call_id = &producer_call_id;
+                let producer_call_seq = &producer_call_seq;
+                let parent_reduction_key = &parent_reduction_key;
+                let requester_did = &requester_did;
+                Box::pin(async move {
+                    let compacted_prefix_json =
+                        crate::rendered_request::sink::store_shared_json_in_txn(
+                            txn,
+                            &intended.compacted_prefix_json,
+                        )
+                        .await?;
+                    let retained_suffix_json =
+                        crate::rendered_request::sink::store_shared_json_in_txn(
+                            txn,
+                            &intended.retained_suffix_json,
+                        )
+                        .await?;
+                    let mutation = format!(
+                        r#"mutation {{
+            create_ProviderContextReduction(input: {{
+                reduction_key: "{reduction_key}"
+                node_did: "{node_did}"
+                requester_did: {requester_did}
+                session_id: "{session_id}"
+                request_id: "{request_id}"
+                request_doc_id: "{request_doc_id}"
+                request_commit_cid: "{request_commit_cid}"
+                reduction_index: {reduction_index}
+                turn_index: {turn_index}
+                parent_reduction_key: {parent_reduction_key}
+                producer_call_id: {producer_call_id}
+                producer_call_seq: {producer_call_seq}
+                source_boundary_json: "{source_boundary_json}"
+                compacted_prefix_json: "{compacted_prefix_json}"
+                retained_suffix_json: "{retained_suffix_json}"
+                pair_closed: true
+                checkpoint_messages_json: "{checkpoint_messages_json}"
+                replay_associations_json: "{replay_associations_json}"
+                summary: "{summary}"
+                messages_compacted: {messages_compacted}
+                original_tokens: {original_tokens}
+                compacted_tokens: {compacted_tokens}
+                created_at: "{created_at}"
+            }}) {{ _docID }}
+        }}"#,
+                        reduction_key = escape_graphql_string(&intended.reduction_key),
+                        node_did = escape_graphql_string(&intended.node_did),
+                        session_id = escape_graphql_string(&intended.session_id),
+                        request_id = escape_graphql_string(&intended.request_id),
+                        request_doc_id = escape_graphql_string(&intended.request_doc_id),
+                        request_commit_cid = escape_graphql_string(&intended.request_commit_cid),
+                        reduction_index = intended.reduction_index,
+                        turn_index = intended.turn_index,
+                        source_boundary_json =
+                            escape_graphql_string(&intended.source_boundary_json),
+                        compacted_prefix_json = escape_graphql_string(&compacted_prefix_json),
+                        retained_suffix_json = escape_graphql_string(&retained_suffix_json),
+                        checkpoint_messages_json =
+                            escape_graphql_string(&intended.checkpoint_messages_json),
+                        replay_associations_json =
+                            escape_graphql_string(&intended.replay_associations_json),
+                        summary = escape_graphql_string(&intended.summary),
+                        messages_compacted = intended.messages_compacted,
+                        original_tokens = intended.original_tokens,
+                        compacted_tokens = intended.compacted_tokens,
+                    );
+                    txn.execute(&mutation).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
+        )
+        .await
+        .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
+
+        let rows = load_by_key(node, &reduction_key).await?;
+        if rows.len() != 1 {
+            anyhow::bail!(
+                "provider-context reduction key {reduction_key} has {} visible logical twins after create",
+                rows.len()
+            );
+        }
+        intended.ensure_matches(&rows[0])?;
+        Ok(rows.into_iter().next().expect("length checked"))
+    }
 }
 
 pub fn reduction_key(
@@ -287,10 +471,17 @@ pub async fn capture_source_boundary(
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn persist(
     node: &std::sync::Arc<EmbeddedNode>,
     input: NewProviderContextReduction<'_>,
 ) -> Result<ProviderContextReduction> {
+    stage(input)?.commit(node).await
+}
+
+pub(crate) fn stage(
+    input: NewProviderContextReduction<'_>,
+) -> Result<StagedProviderContextReduction> {
     if input.checkpoint_messages.is_empty() {
         anyhow::bail!("provider-context reduction checkpoint cannot be empty");
     }
@@ -332,159 +523,40 @@ pub(crate) async fn persist(
         input.turn_index,
         input.reduction_index,
     )?;
-    let intended = IntendedReduction::from_input(&input, reduction_key.clone())?;
-
-    match load_by_key(node, &reduction_key).await?.as_slice() {
-        [] => {}
-        [existing] => {
-            intended.ensure_matches(existing)?;
-            return Ok(existing.clone());
-        }
-        twins => anyhow::bail!(
-            "provider-context reduction key {reduction_key} has {} visible logical twins",
-            twins.len()
-        ),
-    }
-
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let producer_call_id = graphql_optional_string(
-        input
-            .producer_call
-            .map(|producer| producer.call_id.as_str()),
-    );
-    let producer_call_seq = input
-        .producer_call
-        .map(|producer| producer.call_seq.to_string())
-        .unwrap_or_else(|| "null".to_string());
-    let parent_reduction_key = graphql_optional_string(input.parent_reduction_key);
-    let requester_did = graphql_optional_string(input.requester_did);
-    crate::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "provider_context.create_reduction",
-        |txn| {
-            let intended = &intended;
-            let input = &input;
-            let reduction_key = &reduction_key;
-            let created_at = &created_at;
-            let producer_call_id = &producer_call_id;
-            let producer_call_seq = &producer_call_seq;
-            let parent_reduction_key = &parent_reduction_key;
-            let requester_did = &requester_did;
-            Box::pin(async move {
-                let compacted_prefix_json =
-                    crate::rendered_request::sink::store_shared_json_in_txn(
-                        txn,
-                        &intended.compacted_prefix_json,
-                    )
-                    .await?;
-                let retained_suffix_json = crate::rendered_request::sink::store_shared_json_in_txn(
-                    txn,
-                    &intended.retained_suffix_json,
-                )
-                .await?;
-                let mutation = format!(
-                    r#"mutation {{
-            create_ProviderContextReduction(input: {{
-                reduction_key: "{reduction_key}"
-                node_did: "{node_did}"
-                requester_did: {requester_did}
-                session_id: "{session_id}"
-                request_id: "{request_id}"
-                request_doc_id: "{request_doc_id}"
-                request_commit_cid: "{request_commit_cid}"
-                reduction_index: {reduction_index}
-                turn_index: {turn_index}
-                parent_reduction_key: {parent_reduction_key}
-                producer_call_id: {producer_call_id}
-                producer_call_seq: {producer_call_seq}
-                source_boundary_json: "{source_boundary_json}"
-                compacted_prefix_json: "{compacted_prefix_json}"
-                retained_suffix_json: "{retained_suffix_json}"
-                pair_closed: true
-                checkpoint_messages_json: "{checkpoint_messages_json}"
-                replay_associations_json: "{replay_associations_json}"
-                summary: "{summary}"
-                messages_compacted: {messages_compacted}
-                original_tokens: {original_tokens}
-                compacted_tokens: {compacted_tokens}
-                created_at: "{created_at}"
-            }}) {{ _docID }}
-        }}"#,
-                    reduction_key = escape_graphql_string(reduction_key),
-                    node_did = escape_graphql_string(input.node_did),
-                    session_id = escape_graphql_string(input.session_id),
-                    request_id = escape_graphql_string(input.request_id),
-                    request_doc_id = escape_graphql_string(input.request_doc_id),
-                    request_commit_cid = escape_graphql_string(input.request_commit_cid),
-                    reduction_index = input.reduction_index,
-                    turn_index = input.turn_index,
-                    source_boundary_json = escape_graphql_string(&intended.source_boundary_json),
-                    compacted_prefix_json = escape_graphql_string(&compacted_prefix_json),
-                    retained_suffix_json = escape_graphql_string(&retained_suffix_json),
-                    checkpoint_messages_json =
-                        escape_graphql_string(&intended.checkpoint_messages_json),
-                    replay_associations_json =
-                        escape_graphql_string(&intended.replay_associations_json),
-                    summary = escape_graphql_string(input.summary.trim()),
-                    messages_compacted = input.compacted_prefix.len(),
-                    original_tokens = input.original_tokens,
-                    compacted_tokens = input.compacted_tokens,
-                );
-                txn.execute(&mutation).await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        },
-    )
-    .await
-    .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
-
-    let rows = load_by_key(node, &reduction_key).await?;
-    if rows.len() != 1 {
-        anyhow::bail!(
-            "provider-context reduction key {reduction_key} has {} visible logical twins after create",
-            rows.len()
-        );
-    }
-    intended.ensure_matches(&rows[0])?;
-    Ok(rows.into_iter().next().expect("length checked"))
+    Ok(StagedProviderContextReduction {
+        intended: IntendedReduction::from_input(&input, reduction_key)?,
+    })
 }
 
 #[cfg(test)]
 #[path = "../tests/conformance/durable_reduction.rs"]
 mod durable_reduction_conformance;
 
-pub(crate) async fn persist_exact(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) fn stage_exact(
     input: NewExactProviderContextReduction<'_>,
     reduction: crate::compaction::ExactReduction<'_>,
-) -> Result<(ProviderContextReduction, Vec<Message>)> {
+) -> Result<StagedProviderContextReduction> {
     let checkpoint_messages = reduction.checkpoint_messages();
-    let row = persist(
-        node,
-        NewProviderContextReduction {
-            node_did: input.node_did,
-            requester_did: input.requester_did,
-            session_id: input.session_id,
-            request_id: input.request_id,
-            request_doc_id: input.request_doc_id,
-            request_commit_cid: input.request_commit_cid,
-            reduction_index: input.reduction_index,
-            turn_index: input.turn_index,
-            parent_reduction_key: input.parent_reduction_key,
-            producer_call: input.producer_call,
-            source_boundary: input.source_boundary,
-            compacted_prefix: reduction.compacted_prefix,
-            retained_suffix: reduction.retained_suffix,
-            checkpoint_messages: &checkpoint_messages,
-            replay_associations: input.replay_associations,
-            summary: reduction.checkpoint,
-            original_tokens: input.original_tokens,
-            compacted_tokens: input.compacted_tokens,
-        },
-    )
-    .await?;
-    Ok((row, checkpoint_messages))
+    stage(NewProviderContextReduction {
+        node_did: input.node_did,
+        requester_did: input.requester_did,
+        session_id: input.session_id,
+        request_id: input.request_id,
+        request_doc_id: input.request_doc_id,
+        request_commit_cid: input.request_commit_cid,
+        reduction_index: input.reduction_index,
+        turn_index: input.turn_index,
+        parent_reduction_key: input.parent_reduction_key,
+        producer_call: input.producer_call,
+        source_boundary: input.source_boundary,
+        compacted_prefix: reduction.compacted_prefix,
+        retained_suffix: reduction.retained_suffix,
+        checkpoint_messages: &checkpoint_messages,
+        replay_associations: input.replay_associations,
+        summary: reduction.checkpoint,
+        original_tokens: input.original_tokens,
+        compacted_tokens: input.compacted_tokens,
+    })
 }
 
 pub async fn load_for_request(

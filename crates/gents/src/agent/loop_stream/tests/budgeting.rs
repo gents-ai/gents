@@ -424,6 +424,7 @@ async fn nested_compaction_charges_the_same_request_budget() {
                     "compacted prompt",
                 ))],
                 reduction_key: "reduction-1".to_string(),
+                commit: TurnReductionCommit::new(|| async { Ok(()) }),
             })
         })
     }));
@@ -493,6 +494,140 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
         *captured_reason.lock().await,
         Some(ContextCompactionReason::ProviderViewRepaired)
     );
+}
+
+/// A staged per-turn reduction writes its row only once the rebuilt request
+/// fits (#3283). Each expected row count is the model's
+/// `commitRequestLocalAfterRebuild` for the matching rebuilt result.
+#[tokio::test]
+async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fits() {
+    let cases = crate::lean_vocab_test::lean_compaction_projection_join_cases();
+    let committed = |result: &str| {
+        cases
+            .iter()
+            .find(|case| case.result == result)
+            .unwrap_or_else(|| panic!("Lean emitted no {result} projection-join case"))
+            .committed_reductions
+    };
+    for (retained, rebuilt_result) in [
+        ("x".repeat(8_000), "rebuilt_still_over"),
+        ("compacted prompt".to_string(), "dispatch"),
+    ] {
+        let expected_rows = committed(rebuilt_result);
+        let data_path =
+            std::env::temp_dir().join(format!("staged-turn-reduction-{}", uuid::Uuid::new_v4()));
+        let node = Arc::new(
+            crate::test_support::node_builder()
+                .data_path(&data_path)
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_runtime_schemas(&node).await.unwrap();
+        let request_doc_id = "request-doc-3283";
+        let model = ScriptedModel::new(vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]);
+        let mut loop_config = config(0);
+        loop_config.max_tokens = Some(1_000);
+        loop_config.context_window = 6_500;
+        loop_config.compaction_threshold = 0.25;
+        let compaction_node = node.clone();
+        loop_config.turn_compactor = Some(Arc::new(move |_| {
+            let node = compaction_node.clone();
+            let retained = retained.clone();
+            Box::pin(async move {
+                let compacted_prefix = [Message::user("x".repeat(8_000))];
+                let retained_suffix = [Message::user(retained)];
+                let tagged = |messages: &[Message]| {
+                    messages
+                        .iter()
+                        .cloned()
+                        .map(TaggedMessage::unassociated)
+                        .collect::<Vec<_>>()
+                };
+                let associations =
+                    crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                        Vec::new(),
+                        &tagged(&compacted_prefix),
+                        &tagged(&retained_suffix),
+                    );
+                let boundary = crate::provider_context_reduction::SourceBoundary {
+                    boundary_version: 2,
+                    request_doc_id: request_doc_id.to_string(),
+                    request_commit_cid: "claim-cid-3283".to_string(),
+                    canonical_through: None,
+                };
+                crate::provider_context_reduction::stage(
+                    crate::provider_context_reduction::NewProviderContextReduction {
+                        node_did: "did:test:test",
+                        requester_did: None,
+                        session_id: "session-3283",
+                        request_id: "request-3283",
+                        request_doc_id,
+                        request_commit_cid: "claim-cid-3283",
+                        reduction_index: 1,
+                        turn_index: 0,
+                        parent_reduction_key: None,
+                        producer_call: None,
+                        source_boundary: &boundary,
+                        compacted_prefix: &compacted_prefix,
+                        retained_suffix: &retained_suffix,
+                        checkpoint_messages: &retained_suffix,
+                        replay_associations: &associations,
+                        summary: "",
+                        original_tokens: 2_000,
+                        compacted_tokens: 10,
+                    },
+                )
+                .and_then(|staged| staged.into_turn_outcome(node))
+                .map_err(|error| TurnCompactionError::Compactor(error.into()))
+            })
+        }));
+
+        // The commit writes through the database, so drive the stream on the
+        // real clock rather than the paused-clock scripted collector.
+        let stream = run_loop_stream(
+            model,
+            None::<crate::hook::DefraSessionHook>,
+            TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
+            Vec::new(),
+            Arc::new(Vec::new()),
+            loop_config,
+        );
+        futures::pin_mut!(stream);
+        let mut text = String::new();
+        let mut error = None;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(LoopStreamItem::Text(chunk)) => text.push_str(&chunk),
+                Ok(_) => {}
+                Err(failure) => {
+                    error = Some(format!("{failure:?}"));
+                    break;
+                }
+            }
+        }
+
+        let rows = crate::provider_context_reduction::load_for_request(&node, request_doc_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            expected_rows,
+            "{rebuilt_result}: durable reduction rows after the request (error: {error:?})"
+        );
+        if expected_rows == 0 {
+            assert!(
+                error.as_deref().is_some_and(|error| error.contains("CannotFit")),
+                "{rebuilt_result}: unexpected terminal state: {error:?}"
+            );
+        } else {
+            assert_eq!(error, None, "{rebuilt_result}");
+            assert_eq!(text, "done", "{rebuilt_result}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -902,6 +1037,7 @@ async fn final_fit_failure_after_compaction_is_typed_and_never_dispatched() {
             Ok(TurnCompactionOutcome::Reduced {
                 messages: vec![request.messages.last().unwrap().clone()],
                 reduction_key: "final-fit-reduction".to_string(),
+                commit: TurnReductionCommit::new(|| async { Ok(()) }),
             })
         })
     }));
@@ -1007,6 +1143,7 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
             Ok(TurnCompactionOutcome::Reduced {
                 messages: compacted,
                 reduction_key: "reduction-1".to_string(),
+                commit: TurnReductionCommit::new(|| async { Ok(()) }),
             })
         })
     }));
@@ -1336,6 +1473,7 @@ fn overflow_loop_config(admitted: AdmittedReduction) -> LoopConfig {
                     "compacted prompt",
                 ))],
                 reduction_key: "overflow-reduction-1".to_string(),
+                commit: TurnReductionCommit::new(|| async { Ok(()) }),
             })
         })
     }));
@@ -1482,6 +1620,7 @@ async fn each_completion_turn_may_compact_once_after_an_overflow() {
                         "compacted prompt",
                     ))],
                     reduction_key: format!("overflow-reduction-{key}"),
+                    commit: TurnReductionCommit::new(|| async { Ok(()) }),
                 })
             })
         }

@@ -61,7 +61,7 @@ pub use contract::{
     LoopStreamItem, RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolveError,
     ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot,
     StructuredOutputConfig, TaggedMessage, TurnCompactionError, TurnCompactionOutcome,
-    TurnCompactionRequest,
+    TurnCompactionRequest, TurnReductionCommit,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
