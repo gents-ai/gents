@@ -61,7 +61,7 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
     let task = tokio::spawn(supervise_behaviors_with_runner(
         agents,
         shutdown_rx,
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 10,
             max_delay_ms: 25,

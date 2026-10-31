@@ -10,7 +10,7 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::request::watcher::AgentRequest;
-use crate::retry::RetryPolicy;
+use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime::startup_readiness::{BuildOutcome, BuildStanding};

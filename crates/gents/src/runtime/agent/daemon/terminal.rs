@@ -37,7 +37,7 @@ pub(super) async fn terminalize_request(
 /// the whole reason is capped: a cause can carry a whole provider response
 /// body, and the reason replicates.
 pub(super) fn request_failure_reason(error: &anyhow::Error) -> String {
-    crate::failure_text::bounded_error_chain(error.as_ref())
+    crate::request::failure_text::bounded_error_chain(error.as_ref())
 }
 
 pub(super) async fn finalize_request_failure(
@@ -58,7 +58,7 @@ pub(super) async fn finalize_request_failure(
         Err(error) => {
             record_current_request_outcome("terminalization_failed");
             record_current_failure_class(&error);
-            tracing::error!(request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+            tracing::error!(request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to atomically terminalize request and response; durable lease recovery remains pending");
             false
         }
@@ -89,7 +89,7 @@ where
         {
             tracing::warn!(
                 request_id = %request.request_id,
-                error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to release writer workspace binding after failure"
             );
         }

@@ -296,7 +296,7 @@ impl StructuredToolError {
     }
 
     pub(super) fn to_result_text(&self) -> String {
-        crate::tool_output::render(
+        crate::tools::output::render(
             self,
             &[
                 "message",

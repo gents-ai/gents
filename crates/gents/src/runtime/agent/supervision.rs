@@ -8,7 +8,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::inference::resolved::ResolvedAgent;
-use crate::retry::RetryPolicy;
+use crate::runtime::agent::retry::RetryPolicy;
 
 pub(super) async fn supervise_behaviors_with_runner<F, Fut>(
     agents: Vec<Arc<ResolvedAgent>>,

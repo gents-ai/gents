@@ -128,7 +128,7 @@ fn private_socket_directory(path: &std::path::Path) -> Result<()> {
 mod tests {
     use super::super::{acquire_startup_lock, startup_lock, LocalListener};
     use super::*;
-    use gents::file_lock::FileLock;
+    use gents::store::local::file_lock::FileLock;
     use std::time::Duration;
 
     #[tokio::test]

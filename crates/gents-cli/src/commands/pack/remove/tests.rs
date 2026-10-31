@@ -151,7 +151,7 @@ async fn same_name_assets_have_independent_removal_locks() {
             installed["installed_assets"].as_str().unwrap(),
         ));
     }
-    let _lease = gents::file_lock::FileLock::shared(
+    let _lease = gents::store::local::file_lock::FileLock::shared(
         gents::pack::materialize::cache_lock(roots[1].parent().unwrap()).unwrap(),
     )
     .unwrap();
@@ -187,7 +187,7 @@ async fn recorded_unscoped_assets_use_their_original_lock_and_retention_rules() 
     let home = tempfile::tempdir().unwrap();
     let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
     let root = home.path().join(&record.assets);
-    let _lease = gents::file_lock::FileLock::shared(
+    let _lease = gents::store::local::file_lock::FileLock::shared(
         gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
     )
     .unwrap();
@@ -240,7 +240,7 @@ async fn removing_a_materialized_pack_preserves_a_digest_named_namespace() {
         .unwrap();
     let root = Path::new(installed["installed_assets"].as_str().unwrap());
     std::fs::create_dir(root.join("runs")).unwrap();
-    let _lease = gents::file_lock::FileLock::shared(
+    let _lease = gents::store::local::file_lock::FileLock::shared(
         gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
     )
     .unwrap();

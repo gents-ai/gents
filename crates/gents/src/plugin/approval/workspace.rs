@@ -535,7 +535,7 @@ pub(crate) fn grant_at_least(
     save(home, &stored)
 }
 
-fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
+fn lock(home: &Path) -> Result<crate::store::local::file_lock::FileLock> {
     std::fs::create_dir_all(home).context("preparing workspace permissions")?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
@@ -544,7 +544,8 @@ fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
         .write(true)
         .open(home.join(LOCK))
         .context("opening the workspace permissions lock")?;
-    crate::file_lock::FileLock::exclusive(lock).context("locking workspace permissions")
+    crate::store::local::file_lock::FileLock::exclusive(lock)
+        .context("locking workspace permissions")
 }
 
 fn save(home: &Path, stored: &Stored) -> Result<()> {

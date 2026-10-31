@@ -175,7 +175,7 @@ where
                     tracing::warn!(
                         agent_id = %self.agent_config.agent_id,
                         request_id = %request.request_id,
-                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                         "rejecting request with an invalid canonical admission binding"
                     );
                     if let Err(rejection_error) = lifecycle
@@ -194,7 +194,7 @@ where
                 tracing::warn!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "failed to claim request; leaving it pending for retry"
                 );
                 return Ok(());
@@ -277,7 +277,7 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to repair workspace seal after writer success"
                     );
                     finalize_request_failure(
@@ -299,7 +299,7 @@ where
                 {
                     record_current_request_outcome("terminalization_failed");
                     record_current_failure_class(&error);
-                    tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                    tracing::error!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to atomically terminalize completed request and response");
                 }
                 return Ok(());
@@ -309,7 +309,7 @@ where
                 record_current_failure_class(&error);
                 tracing::error!(
                     request_id = %request.request_id,
-                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "failed to inspect writer workspace seal state"
                 );
                 self.finalize_failure_before_work(
@@ -476,7 +476,7 @@ where
                             crate::tools::workspace::release_writer_binding(&self.node, &request)
                                 .await
                         {
-                            tracing::warn!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                            tracing::warn!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                                 "failed to release writer workspace binding after skipped task gate");
                         }
                     }
@@ -484,7 +484,7 @@ where
                     Err(error) => {
                         record_current_request_outcome("terminalization_failed");
                         record_current_failure_class(&error);
-                        tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        tracing::error!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                             "failed to atomically terminalize completed request and response");
                     }
                 }
@@ -514,7 +514,7 @@ where
                     Err(error) => {
                         record_current_request_outcome("terminalization_failed");
                         record_current_failure_class(&error);
-                        tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        tracing::error!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                             "failed to atomically terminalize interrupted request and response");
                         return Ok(());
                     }
@@ -525,7 +525,7 @@ where
                 {
                     tracing::warn!(
                         request_id = %request.request_id,
-                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to release writer workspace binding after interrupt"
                     );
                 }

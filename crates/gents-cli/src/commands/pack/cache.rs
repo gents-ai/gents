@@ -3,11 +3,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use gents::file_lock::FileLock;
 use gents::pack::materialize::{
     cache_root, cache_root_disposition, lock_exclusive, prune_stale_asset_cache, CacheRelease,
 };
 use gents::pack::{HomePackInstall, PackKind};
+use gents::store::local::file_lock::FileLock;
 
 use crate::cli::PackPruneArgs;
 

@@ -317,7 +317,7 @@ impl crate::inference::llm::tool::Tool for BoundedWriteTool {
             .get("_docID")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;
-        Ok(crate::tool_output::render(
+        Ok(crate::tools::output::render(
             &json!({"collection":self.decl.collection, "document_id":doc_id,
                 "document":document}),
             &["document", "document_id", "collection"],

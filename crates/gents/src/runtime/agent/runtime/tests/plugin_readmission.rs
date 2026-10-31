@@ -76,7 +76,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         crate::runtime::agent::DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
             plugin_home: Some(plugin_home.path().to_path_buf()),
-            retry_policy: crate::retry::RetryPolicy {
+            retry_policy: crate::runtime::agent::retry::RetryPolicy {
                 max_retries: 3,
                 base_delay_ms: 5,
                 max_delay_ms: 10,

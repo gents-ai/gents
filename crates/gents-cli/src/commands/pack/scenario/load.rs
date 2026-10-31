@@ -41,7 +41,7 @@ pub(super) async fn resolve_scenario_dir(
     registry: Option<&str>,
 ) -> Result<(
     PathBuf,
-    Option<gents::file_lock::FileLock>,
+    Option<gents::store::local::file_lock::FileLock>,
     gents::pack::PackManifest,
 )> {
     let direct = PathBuf::from(target);

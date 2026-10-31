@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
-use crate::file_lock::FileLock;
 use crate::pack::archive::PackArchive;
+use crate::store::local::file_lock::FileLock;
 
 /// Who installed a pack: the operator through the CLI, or the model through
 /// self-configuration.

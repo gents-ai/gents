@@ -69,7 +69,7 @@ pub const CONFIG_TOOL_NAME: &str = "config";
 
 pub const SELF_CONFIG_TOOL_NAMES: [&str; 1] = [CONFIG_TOOL_NAME];
 
-pub(crate) use crate::tool_output::{ordered, Ordered};
+pub(crate) use crate::tools::output::{ordered, Ordered};
 
 const EFFECTIVE_ORDER: &[&str] = &[
     "execution_settings",

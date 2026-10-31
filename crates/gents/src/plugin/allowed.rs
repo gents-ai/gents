@@ -27,7 +27,7 @@ fn lock_file(home: &Path) -> PathBuf {
     home.join(crate::store::local::home::ALLOWED_DIRS_LOCK_FILE_NAME)
 }
 
-fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
+fn lock(home: &Path) -> Result<crate::store::local::file_lock::FileLock> {
     std::fs::create_dir_all(home).context("creating the allowed-folders home")?;
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -36,7 +36,7 @@ fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
         .write(true)
         .open(lock_file(home))
         .context("opening the allowed-folders lock")?;
-    crate::file_lock::FileLock::exclusive(file).context("locking allowed folders")
+    crate::store::local::file_lock::FileLock::exclusive(file).context("locking allowed folders")
 }
 pub fn list(home: &Path) -> Result<Vec<AllowedDir>> {
     let path = file(home);

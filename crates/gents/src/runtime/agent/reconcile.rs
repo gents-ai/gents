@@ -9,7 +9,7 @@ use tracing::Instrument;
 use crate::inference::admission::AdmissionRegistry;
 use crate::inference::resolved::ResolvedAgent;
 use crate::request::watcher::AgentRequest;
-use crate::retry::RetryPolicy;
+use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::runtime::snapshot::ResolvedRuntimeSnapshot;

@@ -21,8 +21,8 @@ use crate::inference::resolved::{
     DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
     DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::retry::RetryPolicy;
 use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
+use crate::runtime::agent::retry::RetryPolicy;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::tools::mcp::health::HealthCheckerOptions;

@@ -163,7 +163,7 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|c| c.is_ascii_alphanumeric())
 }
 
-fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
+fn lock(home: &Path) -> Result<crate::store::local::file_lock::FileLock> {
     std::fs::create_dir_all(home).context("creating the approval home")?;
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -172,7 +172,7 @@ fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
         .write(true)
         .open(lock_file(home))
         .context("opening the approval lock")?;
-    crate::file_lock::FileLock::exclusive(file).context("locking plugin approvals")
+    crate::store::local::file_lock::FileLock::exclusive(file).context("locking plugin approvals")
 }
 
 pub(super) fn lock_file(home: &Path) -> PathBuf {

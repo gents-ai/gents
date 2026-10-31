@@ -95,7 +95,7 @@ where
             let active_guard = match guard {
                 Ok(guard) => Some(RequestGuard::Unbound(guard)),
                 Err(error) => {
-                    tracing::warn!(agent_id, error = %crate::failure_text::BoundedErrorChain(&error), "request worker capacity admission stopped");
+                    tracing::warn!(agent_id, error = %crate::request::failure_text::BoundedErrorChain(&error), "request worker capacity admission stopped");
                     break Ok(());
                 }
             };
@@ -133,7 +133,7 @@ where
         let mut auxiliary_error = None;
         while let Some(joined) = auxiliary_tasks.join_next().await {
             if let Err(error) = auxiliary_task_join_result(joined) {
-                tracing::error!(error = %crate::failure_text::BoundedErrorChain(error.as_ref()), "owned auxiliary task failed during daemon exit");
+                tracing::error!(error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()), "owned auxiliary task failed during daemon exit");
                 if auxiliary_error.is_none() {
                     auxiliary_error = Some(error);
                 }
@@ -176,7 +176,7 @@ where
                 Err(error) => tracing::debug!(
                     request_id = %request.request_id,
                     candidate_request_id = %candidate.request_id,
-                    error = %crate::failure_text::BoundedErrorChain(&error),
+                    error = %crate::request::failure_text::BoundedErrorChain(&error),
                     "queued message admission not verified; it keeps its own turn"
                 ),
             }
