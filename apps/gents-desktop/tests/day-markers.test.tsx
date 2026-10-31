@@ -116,3 +116,40 @@ describe("day markers in the transcript", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("when each message was sent", () => {
+  it("sits in its actions: the time today, the date with it before", () => {
+    const sent = at(1, 16);
+    const replied = at(0, 9);
+    const session = sessionSnapshot({
+      timelineItems: [
+        userMessage({ itemKey: "u1", sequence: 1, content: "first", timestamp: sent }),
+        assistantMessage({
+          itemKey: "a2",
+          sequence: 2,
+          content: "reply",
+          timestamp: replied,
+        }),
+      ],
+    });
+    const { container } = renderIn(
+      testApp(),
+      <TranscriptPanel
+        inFlight={false}
+        scroller={null}
+        session={session}
+        workers={NO_WORKERS}
+        parentWork={NO_PARENT}
+        workerActions={{ interrupt: () => {} }}
+      />,
+    );
+    const times = [...container.querySelectorAll("time")];
+    const sentTime = times.find((time) => time.dateTime === sent)!;
+    const replyTime = times.find((time) => time.dateTime === replied)!;
+    expect(sentTime.closest('[data-slot="message-actions"]')).not.toBeNull();
+    expect(sentTime.textContent).toMatch(/\d/);
+    expect(sentTime.textContent).not.toBe(replyTime.textContent!.trim());
+    expect(replyTime.closest('[data-slot="message-actions"]')).not.toBeNull();
+    expect(replyTime.title).toBe(new Date(replied).toLocaleString());
+  });
+});
