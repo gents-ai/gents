@@ -232,6 +232,23 @@ export function usePackGroups(section: string) {
   };
 }
 
+/** What a config list says when it has nothing, inside the list's surface. */
+function EmptyRow({ children }: { children: ReactNode }) {
+  return (
+    <li className="px-4 py-8 text-center text-sm text-muted-foreground">{children}</li>
+  );
+}
+
+/** An empty config list on its own: the same card a list shows when it has
+    no entries, for pages that draw their lists another way. */
+export function EmptyList({ children }: { children: ReactNode }) {
+  return (
+    <ul className="rounded-2xl border border-border/60 bg-raised">
+      <EmptyRow>{children}</EmptyRow>
+    </ul>
+  );
+}
+
 const PACK_ORIGIN_PREFIX = "gents:pack:";
 export function packOrigin(tags: string[] | null | undefined): string | null {
   const origins = (tags ?? [])
@@ -433,11 +450,7 @@ export function ListDetail({
             </Fragment>
           );
         })}
-        {rows.length === 0 && (
-          <li className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {empty}
-          </li>
-        )}
+        {rows.length === 0 && <EmptyRow>{empty}</EmptyRow>}
         {rows.length > 0 && shown.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">
             {q ? `Nothing matches “${query.trim()}”.` : "Nothing matches."}
