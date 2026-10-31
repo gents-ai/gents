@@ -70,9 +70,9 @@ impl PeerWork {
 }
 
 enum Request {
-    Transcript(HydrationRequestRow),
-    Inventory(crate::file_inventory::requests::InventoryRequestRow),
-    Image(file_images::ImageDemandRow),
+    Transcript(Box<HydrationRequestRow>),
+    Inventory(Box<crate::file_inventory::requests::InventoryRequestRow>),
+    Image(Box<file_images::ImageDemandRow>),
 }
 
 impl Request {
@@ -95,7 +95,7 @@ impl Request {
         match self {
             Self::Transcript(row) => {
                 let mut outcome = HydrationTickOutcome::default();
-                if let Some(admitted) = admit_or_reject(store, row, &mut outcome).await? {
+                if let Some(admitted) = admit_or_reject(store, *row, &mut outcome).await? {
                     serve_admitted_request(store, delivery, admitted, &mut outcome).await?;
                 }
                 Ok(())
@@ -144,15 +144,25 @@ pub(super) async fn discover(
         }
     };
     match transcripts {
-        Ok(rows) => collect(rows.into_iter().map(Request::Transcript).collect()),
+        Ok(rows) => collect(
+            rows.into_iter()
+                .map(Box::new)
+                .map(Request::Transcript)
+                .collect(),
+        ),
         Err(error) => tracing::warn!(%error, "load pending transcript requests"),
     }
     match inventory {
-        Ok(rows) => collect(rows.into_iter().map(Request::Inventory).collect()),
+        Ok(rows) => collect(
+            rows.into_iter()
+                .map(Box::new)
+                .map(Request::Inventory)
+                .collect(),
+        ),
         Err(error) => tracing::warn!(%error, "load pending inventory requests"),
     }
     match images {
-        Ok(rows) => collect(rows.into_iter().map(Request::Image).collect()),
+        Ok(rows) => collect(rows.into_iter().map(Box::new).map(Request::Image).collect()),
         Err(error) => tracing::warn!(%error, "load pending image requests"),
     }
     let mut pending = pending.into_iter().collect::<Vec<_>>();
