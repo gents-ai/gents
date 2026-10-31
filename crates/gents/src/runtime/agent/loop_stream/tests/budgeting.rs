@@ -509,9 +509,10 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             .unwrap_or_else(|| panic!("Lean emitted no {result} projection-join case"))
             .committed_reductions
     };
-    for (retained, rebuilt_result) in [
-        ("x".repeat(8_000), "rebuilt_still_over"),
-        ("compacted prompt".to_string(), "dispatch"),
+    for (retained, max_tokens, rebuilt_result) in [
+        ("x".repeat(8_000), 1_000, "rebuilt_still_over"),
+        ("compacted prompt".to_string(), 0, "zero_output_capacity"),
+        ("compacted prompt".to_string(), 1_000, "dispatch"),
     ] {
         let expected_rows = committed(rebuilt_result);
         let data_path =
@@ -530,7 +531,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             RawStreamingChoice::FinalResponse(()),
         ]);
         let mut loop_config = config(0);
-        loop_config.max_tokens = Some(1_000);
+        loop_config.max_tokens = Some(max_tokens);
         loop_config.context_window = 6_500;
         loop_config.compaction_threshold = 0.25;
         let compaction_node = node.clone();
@@ -620,7 +621,13 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         );
         if expected_rows == 0 {
             assert!(
-                error.as_deref().is_some_and(|error| error.contains("CannotFit")),
+                error.as_deref().is_some_and(|error| error.contains(
+                    if rebuilt_result == "zero_output_capacity" {
+                        "NoOutputCapacity"
+                    } else {
+                        "CannotFit"
+                    }
+                )),
                 "{rebuilt_result}: unexpected terminal state: {error:?}"
             );
         } else {
@@ -1591,8 +1598,11 @@ fn echo_call(id: &str) -> ScriptedCall {
 /// within one turn still ends the request.
 #[tokio::test(start_paused = true)]
 async fn each_completion_turn_may_compact_once_after_an_overflow() {
-    let overflow =
-        || ScriptedCall::FailStream(CompletionError::ProviderError(CLAUDE_PROMPT_TOO_LONG.into()));
+    let overflow = || {
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            CLAUDE_PROMPT_TOO_LONG.into(),
+        ))
+    };
     let model = ScriptedModel::new_calls(vec![
         overflow(),
         echo_call("call-1"),
@@ -1822,9 +1832,8 @@ async fn provider_usage_calibrates_the_next_dispatch() {
             input_tokens: 15_006,
             output_tokens: 10,
             estimated_input_tokens: first_raw,
-        },
-    )
-    .context(second_raw);
+        })
+        .context(second_raw);
     assert!(anchored.anchored.is_some());
     assert_eq!(
         accounting[1].anchored_input_tokens, anchored.anchored,

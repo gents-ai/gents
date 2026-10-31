@@ -259,14 +259,9 @@ where
         "compacted provider input before completion dispatch"
     );
 
-    let rebuilt_can_dispatch = crate::provider_input::budget::can_dispatch(
-        after_context_tokens,
-        config.context_window,
-        crate::provider_input::budget::configured_output_ceiling(rebuilt.max_tokens),
-    );
-    if rebuilt_can_dispatch
-        && crate::provider_input::budget::threshold_decision(after_context_tokens, provider_budget)
-            == crate::provider_input::budget::ThresholdDecision::ReduceEligible
+    ensure_context_can_dispatch(&rebuilt, config, after_tokens)?;
+    if crate::provider_input::budget::threshold_decision(after_context_tokens, provider_budget)
+        == crate::provider_input::budget::ThresholdDecision::ReduceEligible
     {
         tracing::warn!(
             estimated_input_tokens = after_tokens,
