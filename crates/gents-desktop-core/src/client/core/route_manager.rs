@@ -478,7 +478,7 @@ impl ClientRouteManager {
             None,
             "desktop.pairing_desired.upsert",
             |txn| {
-                Box::pin(async {
+                Box::pin(async move {
                     let (mut current, _) = load_status_enrollment_approvals_in_txn(
                         txn,
                         self.actor.as_ref(),
