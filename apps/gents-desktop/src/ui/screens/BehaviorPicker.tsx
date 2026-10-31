@@ -198,6 +198,13 @@ function MountedAgentPicker({
           <ScrollArea className="max-h-[min(20rem,calc(var(--available-height)-8rem))] [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
             <ul role="listbox" aria-label="Agent" className="p-1">
               {own.map(row)}
+              {own.length > 0 && packs.length > 0 && (
+                <li
+                  role="separator"
+                  aria-hidden
+                  className="mx-2 my-1 h-px bg-border/60"
+                />
+              )}
               {packs.map((pack) => {
                 const members = shown.filter((b) => packOrigin(b.tags) === pack);
                 const open =
