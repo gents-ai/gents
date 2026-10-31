@@ -59,7 +59,7 @@ function RailItem({
 function RailNode({ route }: { route: Route }) {
   const node = useSelectedNode();
   const online = useOnline();
-  const nodeName = node?.node.displayName ?? null;
+  const nodeName = node ? (node.node.displayName ?? node.label) : null;
   if (!node)
     return (
       <a
