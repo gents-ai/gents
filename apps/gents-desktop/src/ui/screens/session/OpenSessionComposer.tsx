@@ -1,8 +1,13 @@
+import { QuestionPanel } from "./QuestionPanel";
+import { AskedChip } from "./AskedChip";
+import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
+import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
 import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
 import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type KeyboardEvent,
   type RefCallback,
 } from "react";
@@ -110,6 +115,17 @@ export function OpenSessionComposer({
   const otherWay = followUp === "steer" ? "queue" : "steer";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
+  /* an open question takes the composer's place until it is answered, or
+     until the person chooses to write instead; a new question asks again */
+  const questionScope = useSelectedSessionFields((session) =>
+    session?.nodeDid
+      ? { nodeDid: session.nodeDid, sessionId: session.sessionId }
+      : null,
+  );
+  const questions = useUnansweredQuestions(questionScope);
+  const questionsKey = questions.map((q) => q.itemId).join(" ");
+  const [typingFor, setTypingFor] = useState<string | null>(null);
+  const asking = questions.length > 0 && typingFor !== questionsKey && !editing;
   const draftKey = useView((view) => view.draftKey);
   const [field, setField] = useDraftField(drafts, draftKey);
   const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
@@ -232,8 +248,18 @@ export function OpenSessionComposer({
       </ComposerEditContext.Provider>
       <GoalDeliveryFeedback />
       <ChatDeliveryFeedback />
+      {asking && (
+        <QuestionPanel
+          items={questions}
+          onTypeInstead={() => setTypingFor(questionsKey)}
+        />
+      )}
+      {!asking && questions.length > 0 && (
+        <AskedChip item={questions[0]!} onAnswer={() => setTypingFor(null)} />
+      )}
       <div
         data-testid="composer"
+        hidden={asking || undefined}
         ref={attachmentRoot}
         {...activeAttachments.dropProps}
         className={cn(

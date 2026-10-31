@@ -2,13 +2,40 @@ import { parseMailboxQuestion } from "@source-inc/gents-desktop-client";
 export const parseQuestion = parseMailboxQuestion;
 import { Check } from "lucide-react";
 import type {
+  MailboxItemView,
   MailboxQuestion,
   MailboxQuestionAnswer,
 } from "@source-inc/gents-desktop-client";
+import { useStore } from "zustand";
+import { useApp } from "@/app/AppContext";
+import { chatDraftsFor } from "../../hooks/chatDrafts";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { useEffect, useRef, useState } from "react";
 import { toastFailure } from "@/lib/failure";
+
+/** Where this client's answer to `m` is: sent and waiting to be confirmed,
+    or confirmed, from the answers it keeps until delivery is known. */
+export function useAnswerDelivery(m: MailboxItemView) {
+  const { stores } = useApp();
+  const clientDid = useStore(
+    stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
+  const drafts = chatDraftsFor(
+    stores.chat.use.chatDrafts(),
+    clientDid,
+    m.targetNodeDid,
+    m.sessionId,
+    m.itemId,
+  );
+  return {
+    pending: drafts.some(
+      (draft) => !draft.result || draft.result.outcome === "deliveryUnknown",
+    ),
+    confirmed: drafts.some((draft) => draft.result && !draft.result.outcome),
+  };
+}
 
 export function QuestionAnswer({
   question,

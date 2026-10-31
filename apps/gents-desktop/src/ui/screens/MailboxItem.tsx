@@ -25,14 +25,12 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
 import { useState, type ComponentProps } from "react";
-import { useStore } from "zustand";
 import { agentName } from "./behavior";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
 import { ChatDeliveryFeedback } from "./session/ChatDeliveryFeedback";
-import { chatDraftsFor } from "../../hooks/chatDrafts";
-import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
+import { parseQuestion, QuestionAnswer, useAnswerDelivery } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
 import { span, when } from "./time";
 import { useApp } from "@/app/AppContext";
@@ -87,23 +85,8 @@ export function Item({
   const session = useFleet((state) => listedSession(state, m.nodeDid, m.sessionId));
   const {
     actions: { answerMailboxQuestion, dismissMailboxItem, openMailboxItem },
-    stores,
   } = useApp();
-  const clientDid = useStore(
-    stores.client,
-    (state) => state.snapshot?.client?.clientDid ?? null,
-  );
-  const drafts = chatDraftsFor(
-    stores.chat.use.chatDrafts(),
-    clientDid,
-    m.targetNodeDid,
-    m.sessionId,
-    m.itemId,
-  );
-  const answerPending = drafts.some(
-    (draft) => !draft.result || draft.result.outcome === "deliveryUnknown",
-  );
-  const answerConfirmed = drafts.some((draft) => draft.result && !draft.result.outcome);
+  const { pending: answerPending, confirmed: answerConfirmed } = useAnswerDelivery(m);
   const kind = KIND[m.kind] ?? {
     icon: CircleHelp,
     label: m.kind,
