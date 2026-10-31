@@ -59,6 +59,7 @@ import { SessionsScreen } from "./ui/screens/SessionsScreen";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SearchPalette } from "./ui/screens/SearchPalette";
+import { MailboxStack } from "./ui/screens/MailboxStack";
 import "./ui/screens/surfaces";
 
 import "./App.css";
@@ -211,6 +212,7 @@ function AppBody() {
       {hasLocalNode && <PluginAccessPrompt />}
       <Shortcuts />
       <SearchPalette />
+      <MailboxStack route={route} />
     </TooltipProvider>
   );
 }

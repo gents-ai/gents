@@ -15,6 +15,7 @@ import {
 } from "../src/ui/screens/SearchPalette";
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 import { useExclusivePopover } from "../src/ui/hooks/useExclusivePopover";
+import { MailboxStack } from "../src/ui/screens/MailboxStack";
 
 const NODE = "did:key:z6MkAgent";
 
@@ -115,6 +116,35 @@ const options = (group: string) =>
     .map((o) => o.textContent);
 
 describe("the search palette", () => {
+  it("opens an item on the active node in the mailbox's dialog, over the page", () => {
+    const app = testApp({
+      deployments: [
+        node({
+          sessions: [session("release", { title: "Release check" })],
+          mailboxItems: [question],
+        }),
+      ],
+      selection: { nodeDid: NODE },
+    });
+    renderRouted(app, { name: "sessions" }, (route) => (
+      <>
+        <SearchPalette />
+        <MailboxStack route={route} />
+      </>
+    ));
+    act(() => openSearch());
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Needs attention" })).getByRole(
+        "option",
+      ),
+    );
+    const dialog = screen.getByTestId("mailbox-dialog");
+    expect(
+      within(dialog).getByRole("heading", { name: "Which branch should I use?" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
+  });
+
   it("waits for the current overlay to acknowledge its exit before opening", async () => {
     const previous = renderHook(() => useExclusivePopover());
     act(() => previous.result.current.onOpenChange(true));

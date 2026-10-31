@@ -1,4 +1,5 @@
 import { QuestionPanel } from "./QuestionPanel";
+import { morph } from "@/lib/morph";
 import { AskedChip } from "./AskedChip";
 import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
 import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
@@ -44,6 +45,9 @@ import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
 import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 import { ActiveNodeLabel } from "@/app/ActiveNodeLabel";
 import { chipSkills, withSkillLines } from "@/lib/skillLines";
+
+/* the one card the composer box and the question panel share (morph.css) */
+const CARD = "[view-transition-name:composer-card] [view-transition-class:morph-card]";
 
 export function OpenSessionComposer({
   roomRef,
@@ -165,6 +169,12 @@ export function OpenSessionComposer({
     if (questionsKey && !shown && writing) setTypingFor(questionsKey);
   }
   const asking = questions.length > 0 && typingFor !== questionsKey && !editing;
+  /* the composer box and the question panel are one card, so a question
+     arriving or leaving morphs one into the other */
+  const [shownAsking, setShownAsking] = useState(asking);
+  useEffect(() => {
+    if (shownAsking !== asking) morph(() => setShownAsking(asking));
+  }, [asking, shownAsking]);
   const draftKey = useView((view) => view.draftKey);
   const [field, setField] = useDraftField(drafts, draftKey);
   const leaveHistory = history.leave;
@@ -291,22 +301,25 @@ export function OpenSessionComposer({
       </ComposerEditContext.Provider>
       <GoalDeliveryFeedback />
       <ChatDeliveryFeedback />
-      {asking && (
-        <QuestionPanel
-          items={questions}
-          onTypeInstead={() => setTypingFor(questionsKey)}
-        />
+      {shownAsking && (
+        <div className={CARD}>
+          <QuestionPanel
+            items={questions}
+            onTypeInstead={() => setTypingFor(questionsKey)}
+          />
+        </div>
       )}
-      {!asking && questions.length > 0 && (
+      {!shownAsking && questions.length > 0 && (
         <AskedChip item={questions[0]!} onAnswer={() => setTypingFor(null)} />
       )}
       <div
         data-testid="composer"
-        hidden={asking || undefined}
+        hidden={shownAsking || undefined}
         ref={attachmentRoot}
         {...activeAttachments.dropProps}
         className={cn(
           "relative grid rounded-2xl",
+          CARD,
           activeAttachments.over && "ring-2 ring-ring",
         )}
       >

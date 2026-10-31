@@ -14,6 +14,8 @@ import { openSearch } from "./SearchPalette";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 export const MOD = IS_MAC ? "⌘" : "Ctrl+";
+/** the mailbox stack's key (MailboxStack) */
+export const MAILBOX_KEYS = IS_MAC ? "⌘⇧M" : "Ctrl+Shift+M";
 const IN_DESKTOP = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 const DESKTOP_ONLY = new Set(["1", "2", "3", "n", "l"]);
 const ROWS: [string, string][] = [
@@ -22,6 +24,7 @@ const ROWS: [string, string][] = [
   [`${MOD}3`, "Configuration"],
   [`${MOD}N`, "New session"],
   [`${MOD}K`, "Search"],
+  [MAILBOX_KEYS, "Answer and triage the mailbox from anywhere"],
   [`${MOD}L`, "Focus the composer"],
   [`${MOD}↵`, "Send a follow-up the other way: steer or queue"],
   [`${IS_MAC ? "⌥⌘↑ / ⌥⌘↓" : "Ctrl+Alt+↑ / ↓"}`, "Previous / next turn"],

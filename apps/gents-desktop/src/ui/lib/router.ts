@@ -114,6 +114,12 @@ export function replace(from: Route, to: Route) {
   nav.navigate(to);
 }
 
+/** The route showing now, for an action begun outside the page's tree; null
+    before the nav is bound. */
+export function currentRoute(): Route | null {
+  return current?.route ?? null;
+}
+
 export function useRoute(): Route {
   return asDesktop(useNav()).route;
 }
