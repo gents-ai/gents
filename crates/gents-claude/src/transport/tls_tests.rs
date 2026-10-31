@@ -144,11 +144,35 @@ async fn untrusted_certificate_is_a_tls_error() {
 #[tokio::test]
 async fn wrong_server_name_is_a_tls_error() {
     let (mut t, _seen, _) = tls_server().await;
-    t.host = "127.0.0.2".into();
-    assert!(matches!(
-        client_trusting_ca().send(&t, &head(0), b"").await,
-        Err(TransportError::Tls(_))
-    ));
+    // Route an invalid certificate name to the loopback server without relying
+    // on a second loopback address being configured on the host.
+    let upstream = ("127.0.0.1", t.port);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut stream).await.unwrap();
+        assert!(request.starts_with(b"CONNECT wrong.example:"));
+        let mut upstream = TcpStream::connect(upstream).await.unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            .await
+            .unwrap();
+        let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
+    });
+    t.host = "wrong.example".into();
+    let client = Client::new(ClientOptions {
+        roots: Roots::Custom(vec![ca()]),
+        proxy: Some(Proxy {
+            host: "127.0.0.1".into(),
+            port: proxy_port,
+            authorization: None,
+        }),
+        ..ClientOptions::default()
+    })
+    .unwrap();
+    let error = client.send(&t, &head(0), b"").await.err().unwrap();
+    assert!(matches!(error, TransportError::Tls(_)), "{error:?}");
 }
 
 #[tokio::test]

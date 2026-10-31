@@ -119,7 +119,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_platform_cases_match_the_lean_owner",
         },
         ConformanceConsumer::RustTest {
-            id: "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
+            id: "inference::backends::registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
             package: "gents",
             source_path: "crates/gents/src/inference/backends/registry/tests.rs",
             module_path: "inference::backends::registry::tests",
