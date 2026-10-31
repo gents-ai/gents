@@ -1136,6 +1136,163 @@ async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgeme
     );
 }
 
+/// The acknowledgement waives only the sharing refusal. A caller that may
+/// edit its own Context still needs the agent catalog grant to change one that
+/// other agents select, because the write lands on their configuration too.
+///
+/// The hole this fences is the BOUND path: `agent context edit` on your own
+/// agent needs only the `tools` category, so before this guard a tools-only
+/// agent could acknowledge and rewrite a Context every agent on it uses. The
+/// exact-ID path already required `node` at the command layer.
+#[tokio::test]
+async fn shared_acknowledgement_does_not_widen_who_may_write() {
+    let (node, owner, tools) = setup("shared-authority", &["tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    // Two agents select one Context: the invoking agent and the worker.
+    ok(
+        &tools,
+        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+    )
+    .await;
+
+    // Bound path, no target_id, no node grant: the acknowledgement is not
+    // enough, because the write reaches the worker's configuration too.
+    let refusal = refused(
+        &tools,
+        json!({"argv":["agent","context","edit"],"options":{"shared":"acknowledge"},"set":{"system_prompt":"Shared prompt."}}),
+    )
+    .await;
+    assert!(
+        refusal.contains("agent catalog grant"),
+        "the refusal must name the missing grant: {refusal}"
+    );
+    assert!(
+        refusal.contains("beh-test") && refusal.contains(&worker),
+        "the refusal must name every affected agent: {refusal}"
+    );
+
+    // The same call with the node grant lands.
+    let (node2, owner2, tools2) = setup("shared-authority-node", &["node", "tools", "agent"]).await;
+    let worker2 = format!("{owner2}:worker");
+    crate::test_support::install_test_agent(&node2, &owner2, &worker2).await;
+    let context2 = format!("{worker2}:context");
+    ok(
+        &tools2,
+        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context2}}),
+    )
+    .await;
+    let receipt = ok(
+        &tools2,
+        json!({"argv":["agent","context","edit"],"options":{"shared":"acknowledge"},"set":{"system_prompt":"Shared prompt."}}),
+    )
+    .await;
+    assert_eq!(receipt["committed"], true);
+}
+
+/// The bound `context update` path — the call shape #3330 asked for and the
+/// help page advertises — must honour the acknowledgement. It used to capture
+/// `shared_ack` before the caller assigned it, so it always refused.
+#[tokio::test]
+async fn bound_context_update_honours_the_acknowledgement() {
+    let (node, owner, tools) = setup("bound-ack", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    ok(
+        &tools,
+        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+    )
+    .await;
+
+    // No target_id: this is the bound path, which resolves the Context from
+    // the selected agent.
+    let refusal = refused(
+        &tools,
+        json!({"argv":["agent","context","edit"],"set":{"system_prompt":"Bound prompt."}}),
+    )
+    .await;
+    assert!(refusal.contains("unshared Context and Tools"), "{refusal}");
+
+    let receipt = ok(
+        &tools,
+        json!({"argv":["agent","context","edit"],"options":{"shared":"acknowledge"},"set":{"system_prompt":"Bound prompt."}}),
+    )
+    .await;
+    assert_eq!(receipt["committed"], true);
+    let read = ok(
+        &tools,
+        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+    )
+    .await;
+    assert_eq!(read["document"]["system_prompt"], "Bound prompt.");
+}
+
+/// The bound `context preview` path must honour it too, and write nothing.
+#[tokio::test]
+async fn bound_context_preview_honours_the_acknowledgement() {
+    let (node, owner, tools) = setup("bound-ack-preview", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    ok(
+        &tools,
+        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+    )
+    .await;
+
+    let preview = ok(
+        &tools,
+        json!({"argv":["agent","context","preview"],"options":{"shared":"acknowledge"},"set":{"system_prompt":"Previewed prompt."}}),
+    )
+    .await;
+    assert_eq!(preview["committed"], false);
+    let read = ok(
+        &tools,
+        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+    )
+    .await;
+    assert_ne!(read["document"]["system_prompt"], "Previewed prompt.");
+}
+
+/// The receipt's sha256 identifies the published document's content, so two
+/// edits that publish the same document carry the same digest regardless of
+/// the order the fields were set in.
+#[tokio::test]
+async fn shared_receipt_digest_is_over_the_published_projection() {
+    let (node, owner, tools) = setup("shared-digest", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    ok(
+        &tools,
+        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+    )
+    .await;
+
+    let first = ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"options":{"shared":"acknowledge"},"set":{"system_prompt":"Same prompt.","display_name":"Same name."}}),
+    )
+    .await;
+    // Re-send the same values in the opposite order: the published document is
+    // identical, so the digest must be too.
+    let second = ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"options":{"shared":"acknowledge"},"set":{"display_name":"Same name.","system_prompt":"Same prompt."}}),
+    )
+    .await;
+    let first_digest = first["shared"]["sha256"]
+        .as_str()
+        .unwrap_or_else(|| panic!("receipt must carry a sha256: {first}"));
+    let second_digest = second["shared"]["sha256"]
+        .as_str()
+        .unwrap_or_else(|| panic!("receipt must carry a sha256: {second}"));
+    assert_eq!(first_digest, second_digest);
+    assert_eq!(first_digest.len(), 64, "{first_digest}");
+}
+
 /// An unshared edit keeps its old receipt: no `shared` block appears.
 #[tokio::test]
 async fn unshared_context_edit_receipt_has_no_shared_block() {

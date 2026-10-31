@@ -149,7 +149,7 @@ async fn load_document(
     collection: Collection,
     fields: &str,
     owner: Option<&str>,
-    local_owner: &str,
+    local_owner: Option<&str>,
     id: &str,
 ) -> Result<Option<Value>> {
     let escaped_id = escape_graphql_string(id);
@@ -184,7 +184,10 @@ async fn load_document(
     // same logical ID is not an ambiguity.
     let mut local = rows
         .iter()
-        .filter(|row| row.get("node_did").and_then(Value::as_str) == Some(local_owner))
+        .filter(|row| {
+            local_owner
+                .is_some_and(|owner| row.get("node_did").and_then(Value::as_str) == Some(owner))
+        })
         .cloned()
         .collect::<Vec<_>>();
     if local.len() == 1 {
@@ -192,7 +195,7 @@ async fn load_document(
     }
     anyhow::ensure!(
         rows.len() <= 1,
-        "ambiguous {} {id:?}: {} live rows resolve this logical id: {}. Name the owner with --node-did, or use the full ID",
+        "ambiguous {} {id:?}: {} live rows resolve this logical id: {}. Use the full <node_did>/<id> form to name one",
         collection.graphql_type(),
         rows.len(),
         rows.iter()
@@ -224,7 +227,7 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
             Collection::DatastoreToolSurface,
             "surface_id node_did display_name enabled entries created_at tags",
             Some(&tools.node_did),
-            &tools.node_did,
+            Some(&tools.node_did),
             id,
         )
         .await?
@@ -246,14 +249,17 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .context("resolving access for config agent show")?;
-    let local_owner = crate::resolve_node_did(args.home.as_deref(), None)?;
+    // The local DID only decides which row a bare ID prefers. An explicit
+    // --graphql endpoint can be read from a clean home, so a missing local DID
+    // is not an error here: the exact-ID read below still resolves.
+    let local_owner = crate::resolve_node_did(args.home.as_deref(), None).ok();
 
     let mut row = load_document(
         &access,
         Collection::Agent,
         CANONICAL_AGENT_SHOW_FIELDS,
         None,
-        &local_owner,
+        local_owner.as_deref(),
         &id,
     )
     .await?
@@ -282,7 +288,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
                 Collection::AgentContext,
                 "context_id node_did display_name description system_prompt tools_id compaction_id skill_ids tags",
                 Some(&node_did),
-                &node_did,
+                Some(&node_did),
                 context_id,
             )
             .await?
@@ -301,7 +307,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
                 Collection::Tools,
                 "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags",
                 Some(&node_did),
-                &node_did,
+                Some(&node_did),
                 tools_id,
             )
             .await?
@@ -315,7 +321,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
                 Collection::InferenceProfile,
                 CANONICAL_PROFILE_SHOW_FIELDS,
                 Some(&node_did),
-                &node_did,
+                Some(&node_did),
                 profile_id,
             )
             .await?
@@ -452,7 +458,7 @@ mod tests {
             Collection::Agent,
             "agent_id node_did display_name",
             None,
-            local,
+            Some(local),
             "web-researcher",
         )
         .await?
@@ -476,12 +482,34 @@ mod tests {
             },
         )
         .await?;
+        // A clean home has no local DID to prefer. Two rows are then a real
+        // ambiguity, and it must be reported as one — not as a missing-home
+        // error, which is what `resolve_node_did(...)?` used to produce before
+        // the read was ever attempted.
         let error = load_document(
             &access,
             Collection::Agent,
             "agent_id node_did display_name",
             None,
-            "did:key:absent-owner",
+            None,
+            "web-researcher",
+        )
+        .await
+        .expect_err("two rows with no local DID to prefer is ambiguous");
+        let message = format!("{error:#}");
+        assert!(message.contains("ambiguous"), "{message}");
+        assert!(
+            message.contains(&format!("{local}/web-researcher"))
+                && message.contains(&format!("{peer}/web-researcher")),
+            "the error must name both candidate rows: {message}"
+        );
+
+        let error = load_document(
+            &access,
+            Collection::Agent,
+            "agent_id node_did display_name",
+            None,
+            Some("did:key:absent-owner"),
             "web-researcher",
         )
         .await
@@ -629,7 +657,7 @@ mod tests {
             Collection::Agent,
             "agent_id node_did",
             Some("did:key:foreign"),
-            owner,
+            Some(owner),
             agent_id
         )
         .await?
@@ -639,7 +667,7 @@ mod tests {
             Collection::Agent,
             "agent_id node_did",
             Some(owner),
-            owner,
+            Some(owner),
             agent_id
         )
         .await?

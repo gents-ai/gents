@@ -84,15 +84,15 @@ jobs:
           bash -n scripts/measure-gents-binary.sh
           bash -n scripts/measure-gents-build-attribution.sh
           bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
-          bash -n .github/scripts/setup-macos-clt-toolchain.sh .github/scripts/setup-cmake.sh
+          bash -n .github/scripts/setup-macos-rust-toolchain.sh .github/scripts/setup-cmake.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
           shellcheck scripts/measure-gents-build-attribution.sh
           shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
-          shellcheck .github/scripts/setup-macos-clt-toolchain.sh .github/scripts/setup-cmake.sh
+          shellcheck .github/scripts/setup-macos-rust-toolchain.sh .github/scripts/setup-cmake.sh
 
       - name: Check the macOS toolchain selection
-        run: python3 .github/scripts/test-macos-clt-toolchain.py
+        run: python3 .github/scripts/test-macos-rust-toolchain.py
 
       - name: Check desktop Rust build and test graph routing
         run: python3 .github/scripts/test-desktop-rust-suite.py
@@ -111,12 +111,9 @@ jobs:
 
       - name: Check compiler-tool download recovery
         run: |
-          bash -n .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
-          shellcheck .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
+          bash -n .github/scripts/setup-afterburner-toolchains.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh
           python3 .github/scripts/test-afterburner-downloads.py
-
-      - name: Check the macOS toolchain selection
-        run: python3 .github/scripts/test-macos-rust-toolchain.py
 
   publish-control-tests:
     if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
@@ -177,7 +174,7 @@ jobs:
       # from, so cc-rs crates and the C fixtures the tests spawn with
       # /usr/bin/cc all resolve one readable SDK.
       - name: Select a matching macOS SDK for the linker
-        run: .github/scripts/setup-macos-clt-toolchain.sh
+        run: .github/scripts/setup-macos-rust-toolchain.sh
 
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
@@ -433,10 +430,11 @@ jobs:
         if: matrix.suite == 'desktop' && github.event_name != 'pull_request'
         # iOS shares the desktop crates, so desktop-only Tauri APIs break it
         # silently; a compile check is the cheapest gate (#890).
-        # The iOS SDK ships only with Xcode, not with Command Line Tools, so
-        # this step must not inherit the CLT toolchain selected above.
+        # Keep the DEVELOPER_DIR/SDKROOT selected above: it is the Xcode
+        # developer directory the linker comes from, and that Xcode ships the
+        # iOS SDKs. Unsetting them would fall back to the default SDK, which is
+        # the Command Line Tools one rust-lld cannot read.
         run: |
-          unset DEVELOPER_DIR SDKROOT
           rustup target add aarch64-apple-ios-sim
           cargo check -p gents-desktop-tauri --lib --target aarch64-apple-ios-sim
 
