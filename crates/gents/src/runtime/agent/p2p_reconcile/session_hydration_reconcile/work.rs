@@ -1,5 +1,6 @@
 use super::*;
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
+use std::collections::VecDeque;
 
 /// Bounds application request preparation across peers; native P2P owns transport concurrency.
 const MAX_ACTIVE_PEERS: usize = 8;
@@ -8,12 +9,13 @@ const MAX_ACTIVE_PEERS: usize = 8;
 pub(super) struct PeerWork {
     active: BTreeSet<String>,
     running: FuturesUnordered<BoxFuture<'static, String>>,
+    queued: VecDeque<(String, BoxFuture<'static, ()>)>,
     last_started: Option<String>,
 }
 
 impl PeerWork {
     pub(super) fn is_empty(&self) -> bool {
-        self.running.is_empty()
+        self.running.is_empty() && self.queued.is_empty()
     }
 
     fn start(
@@ -36,9 +38,33 @@ impl PeerWork {
         true
     }
 
+    fn enqueue<F>(&mut self, peer: String, work: F) -> bool
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        if self.active.contains(&peer) || self.queued.iter().any(|(queued, _)| queued == &peer) {
+            return false;
+        }
+        self.queued.push_back((peer, work.boxed()));
+        true
+    }
+
+    fn fill_slots(&mut self) {
+        // Consume each discovered batch once. Completion cannot requeue a failed attempt.
+        while self.running.len() < MAX_ACTIVE_PEERS {
+            let Some((peer, work)) = self.queued.pop_front() else {
+                break;
+            };
+            let started = self.start(peer, work);
+            debug_assert!(started, "queued peer must not already be running");
+        }
+    }
+
     pub(super) async fn next(&mut self) {
+        self.fill_slots();
         if let Some(peer) = self.running.next().await {
             self.active.remove(&peer);
+            self.fill_slots();
         }
     }
 }
@@ -108,6 +134,10 @@ pub(super) async fn discover(
             }
         }
     };
+    let complete_snapshot = transcripts.is_ok() && inventory.is_ok() && images.is_ok();
+    if complete_snapshot {
+        work.queued.clear();
+    }
     let mut collect = |requests: Vec<Request>| {
         for request in requests {
             pending.entry(request.peer()).or_default().push(request);
@@ -131,16 +161,13 @@ pub(super) async fn discover(
         pending.rotate_left(offset);
     }
     for (peer, requests) in pending {
-        if work.running.len() == MAX_ACTIVE_PEERS {
-            break;
-        }
         if work.active.contains(&peer) {
             continue;
         }
         let store = store.clone();
         let delivery = delivery.clone();
         let log_peer = peer.clone();
-        work.start(peer, async move {
+        work.enqueue(peer, async move {
             for request in requests {
                 if let Err(error) = request.serve(&store, delivery.as_ref()).await {
                     tracing::warn!(peer = %log_peer, %error, "hydration request remains pending");
@@ -151,6 +178,7 @@ pub(super) async fn discover(
     for peer in completed {
         work.active.remove(&peer);
     }
+    work.fill_slots();
 }
 
 #[cfg(test)]
@@ -175,6 +203,86 @@ mod tests {
         }
         assert!(!work.start("overflow".into(), async {}));
         assert_eq!(work.running.len(), MAX_ACTIVE_PEERS);
+    }
+
+    #[tokio::test]
+    async fn queued_ninth_peer_starts_after_failure_without_a_new_discovery() {
+        use std::sync::atomic::AtomicUsize;
+        let mut work = PeerWork::default();
+        let attempts = Arc::new(
+            (0..=MAX_ACTIVE_PEERS)
+                .map(|_| AtomicUsize::new(0))
+                .collect::<Vec<_>>(),
+        );
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut releases = Vec::new();
+        for index in 0..=MAX_ACTIVE_PEERS {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            releases.push(Some(release_tx));
+            let attempts = attempts.clone();
+            let started_tx = started_tx.clone();
+            assert!(work.enqueue(format!("peer-{index}"), async move {
+                attempts[index].fetch_add(1, Ordering::SeqCst);
+                started_tx.send(index).unwrap();
+                if index < MAX_ACTIVE_PEERS {
+                    let _ = release_rx.await;
+                }
+                let result: Result<()> = Err(anyhow::anyhow!("indeterminate delivery"));
+                assert!(result.is_err());
+            }));
+        }
+        work.fill_slots();
+        assert_eq!(work.running.len(), MAX_ACTIVE_PEERS);
+        assert_eq!(work.queued.len(), 1);
+        {
+            let first_completion = work.next();
+            tokio::pin!(first_completion);
+            let mut first_started = BTreeSet::new();
+            for _ in 0..MAX_ACTIVE_PEERS {
+                tokio::select! {
+                    _ = &mut first_completion => panic!("delivery completed before release"),
+                    peer = started_rx.recv() => { first_started.insert(peer.unwrap()); }
+                }
+            }
+            assert_eq!(
+                first_started,
+                (0..MAX_ACTIVE_PEERS).collect::<BTreeSet<_>>()
+            );
+            releases[0].take().unwrap().send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(1), &mut first_completion)
+                .await
+                .unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), work.next())
+            .await
+            .unwrap();
+        assert_eq!(started_rx.try_recv().unwrap(), MAX_ACTIVE_PEERS);
+        assert!(work.queued.is_empty());
+        assert!(attempts
+            .iter()
+            .all(|count| count.load(Ordering::SeqCst) == 1));
+        assert!(
+            work.next().now_or_never().is_none(),
+            "failed peers must not busy-retry"
+        );
+        assert!(attempts
+            .iter()
+            .all(|count| count.load(Ordering::SeqCst) == 1));
+        for release in releases.iter_mut().take(MAX_ACTIVE_PEERS).skip(1) {
+            release.take().unwrap().send(()).unwrap();
+        }
+        for _ in 1..MAX_ACTIVE_PEERS {
+            tokio::time::timeout(std::time::Duration::from_secs(1), work.next())
+                .await
+                .unwrap();
+        }
+        assert!(
+            work.is_empty(),
+            "all failed batches finish without retrying"
+        );
+        assert!(attempts
+            .iter()
+            .all(|count| count.load(Ordering::SeqCst) == 1));
     }
 
     #[tokio::test]
