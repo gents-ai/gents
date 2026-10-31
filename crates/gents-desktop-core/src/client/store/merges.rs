@@ -1224,6 +1224,7 @@ mod overlay_tests {
         Node {
             node_did: node_did.to_string(),
             display_name: Some(display_name.to_string()),
+            avatar: None,
             default_agent_id: None,
             enabled: true,
             created_at: None,

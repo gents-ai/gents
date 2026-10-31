@@ -49,7 +49,7 @@ structure DocumentSpec where
   fields : List String
 
 def documentSpec : Collection → DocumentSpec
-  | .node => ⟨"Node", "node_did", "node", ["node_did", "display_name", "default_agent_id", "enabled", "created_at", "created_by", "tags", "max_request_hop"]⟩
+  | .node => ⟨"Node", "node_did", "node", ["node_did", "display_name", "default_agent_id", "enabled", "created_at", "created_by", "tags", "max_request_hop", "avatar"]⟩
   | .agent => ⟨"Agent", "agent_id", "agent", ["agent_id", "node_did", "display_name", "description", "context_id", "inference_profile_id", "enabled", "tags", "created_at"]⟩
   | .agentContext => ⟨"AgentContext", "context_id", "agent", ["context_id", "node_did", "display_name", "description", "system_prompt", "tools_id", "compaction_id", "skill_ids", "tags"]⟩
   | .compaction => ⟨"CompactionConfig", "compaction_id", "profile", ["compaction_id", "node_did", "display_name", "strategy", "threshold", "keep_recent_tokens", "tool_result_max_chars", "summary_max_output_tokens", "summary_file_list_max", "inference_profile_id", "tags"]⟩

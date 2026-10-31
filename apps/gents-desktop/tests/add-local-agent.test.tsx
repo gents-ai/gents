@@ -29,6 +29,7 @@ const forge: DeploymentView = {
   label: "Forge",
   nodeDid: FORGE_DID,
   source: "local-standard",
+  nodeConfig: { node_did: FORGE_DID, display_name: "Forge" },
   node: {
     ...deployment.node,
     nodeDid: FORGE_DID,
@@ -263,6 +264,10 @@ describe("first-run local agent name", () => {
         client: { deployments: [forge] },
       })),
       initLocalStandardRuntime: vi.fn(async () => ({ nodeDid: FORGE_DID })),
+      saveNodeConfig: vi.fn(async () => ({
+        bootstrap: forgeBootstrap,
+        client: { deployments: [forge] },
+      })),
       startDesktopClient: vi.fn(async () => ({
         bootstrap: forgeBootstrap,
         client: { deployments: [forge] },
@@ -326,6 +331,42 @@ describe("first-run local agent name", () => {
     );
     expect(api.startManagedServer).toHaveBeenCalledWith("Scout", expect.anything());
     expect(await screen.findByText(/Scout is running/)).toBeInTheDocument();
+  });
+
+  it("keeps the portrait rolled while naming the node", async () => {
+    vi.stubGlobal(
+      "Image",
+      class {
+        src = "";
+        decode = () => Promise.resolve();
+      },
+    );
+    const { api } = setup({ existingHome: false, runtimeName: "Forge" });
+    const roll = screen.getByRole("button", { name: "Roll a new avatar" });
+    const before = roll.querySelector("img")!.getAttribute("src");
+    await userEvent.click(roll);
+    /* the reel runs from the old portrait to the kept one */
+    await waitFor(() => expect(roll.querySelectorAll("img").length).toBeGreaterThan(2));
+    const reel = [...roll.querySelectorAll("img")].map((img) =>
+      img.getAttribute("src")!,
+    );
+    expect(reel[0]).toBe(before);
+    const picked = reel[reel.length - 1].replace(/\D/g, "");
+    await userEvent.click(screen.getByTestId("setup-next"));
+
+    await waitFor(() =>
+      expect(api.saveNodeConfig).toHaveBeenCalledWith({
+        document: expect.objectContaining({ node_did: FORGE_DID, avatar: picked }),
+      }),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("leaves the node's avatar to its name when none was rolled", async () => {
+    const { api } = setup({ existingHome: false, runtimeName: "Forge" });
+    await userEvent.click(screen.getByTestId("setup-next"));
+    expect(await screen.findByText(/Forge is running/)).toBeInTheDocument();
+    expect(api.saveNodeConfig).not.toHaveBeenCalled();
   });
 
   it("fails clearly instead of continuing under another agent's name", async () => {

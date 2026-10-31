@@ -999,6 +999,40 @@ async fn node_memory_text_schema_pins_match() {
 }
 
 #[tokio::test]
+async fn node_avatar_schema_pins_match() {
+    let fresh = fresh_node().await;
+    fresh.add_collection(schemas::NODE).await.unwrap();
+    let fresh_id = fresh.get_collection("Node").unwrap().unwrap().version_id;
+    let old = fresh_node().await;
+    let old_sdl = schemas::NODE
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("avatar:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    old.add_collection(&old_sdl).await.unwrap();
+    assert_eq!(
+        old.get_collection("Node").unwrap().unwrap().version_id,
+        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby"
+    );
+    let patched = old
+        .patch_collection(
+            "Node",
+            r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (fresh_id.as_str(), patched.version_id.as_str()),
+        (
+            "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey",
+            "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli"
+        )
+    );
+    fresh.shutdown().await;
+    old.shutdown().await;
+}
+
+#[tokio::test]
 async fn starter_columns_preserve_each_supported_session_lineage() {
     let old = schemas::AGENT_SESSION
         .lines()

@@ -37,7 +37,7 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
-import { NodeAvatar } from "./AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
@@ -436,7 +436,7 @@ const AgentRow = memo(function AgentRow({
       >
         <NodeHoverCard deployment={d}>
           <span className="block shrink-0">
-            <NodeAvatar name={name} className="size-8" />
+            <NodeAvatar name={name} {...nodeAvatarOf(d)} className="size-8" />
           </span>
         </NodeHoverCard>
         <span

@@ -169,6 +169,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
             let principal = Node {
                 node_did: owner.clone(),
                 display_name: Some(serde_helpers::default_display_name_for_did(&owner)),
+                avatar: None,
                 default_agent_id: None,
                 enabled: true,
                 created_at: Some(chrono::Utc::now().to_rfc3339()),

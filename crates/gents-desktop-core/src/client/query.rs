@@ -109,7 +109,7 @@ pub(super) struct TranscriptCursorRow {
 }
 
 pub(super) const NODE_FIELDS: &str =
-    "node_did display_name default_agent_id enabled created_at created_by max_request_hop tags";
+    "node_did display_name avatar default_agent_id enabled created_at created_by max_request_hop tags";
 pub(super) const AGENT_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";
 pub(super) const NODE_RUNTIME_FIELDS: &str = "node_did reconcile_phase agent_executor_capacity agent_executor_queue_depth agent_executor_status_json last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 pub(super) const NODE_READINESS_FIELDS: &str = "node_did snapshot_json updated_at";

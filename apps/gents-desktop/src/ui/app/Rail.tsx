@@ -3,7 +3,7 @@ import { Inbox, Plus, ScrollText, Waypoints } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
@@ -82,7 +82,11 @@ function RailNode({ route }: { route: Route }) {
           route.name === "agent" && "ring-2 ring-ink",
         )}
       >
-        <NodeAvatar name={nodeName ?? "Node"} className="size-7" />
+        <NodeAvatar
+          name={nodeName ?? "Node"}
+          {...nodeAvatarOf(node)}
+          className="size-7"
+        />
         <span
           className={cn(
             "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-background",
