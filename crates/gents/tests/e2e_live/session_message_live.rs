@@ -7,8 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::documents::{
-    Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, InferenceSampling,
-    Tools,
+    Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, Tools,
 };
 use gents::goal::{set_goal, GoalStatus};
 use gents::observe::run_timeline_fetch::load_run_timeline_rows;
@@ -3824,14 +3823,7 @@ async fn configure_agent(
         reasoning_effort: Some(ReasoningEffort::High),
         ..target.profile(node_did)
     };
-    let sampling = InferenceSampling {
-        node_did: node_did.to_string(),
-        sampling_id,
-        display_name: Some("live high-thinking sampling".to_string()),
-        temperature: Some(1.0),
-        top_p: Some(0.95),
-        ..Default::default()
-    };
+    let sampling = target.live_sampling(node_did, &sampling_id);
     let context = AgentContext {
         context_id: context_id.clone(),
         node_did: node_did.to_string(),

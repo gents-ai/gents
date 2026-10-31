@@ -5,6 +5,8 @@ mod document_handle;
 pub mod fs;
 pub(crate) use document_handle::document_handle;
 pub mod graphql;
+#[path = "../../../gents/tests/support/inference_target.rs"]
+pub mod inference_target;
 pub mod mocks;
 pub mod ports;
 pub mod process;
