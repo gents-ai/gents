@@ -1051,6 +1051,228 @@ mod tests {
     };
     use crate::store::identity::KeyIdentity;
 
+    #[tokio::test]
+    async fn signed_enrollment_repairs_p2p_merged_production_unique_index_twins() {
+        use crate::runtime::agent::p2p_reconcile::embedded_impl::push_documents_to_peer;
+        use crate::runtime::agent::p2p_reconcile::embedded_impl::tests::fixtures::{
+            authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer,
+            wait_for_peer_info,
+        };
+        use crate::runtime::agent::p2p_reconcile::{PairingFilters, RemoteP2pAdmin};
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::graphql::escape_graphql_string;
+        use crate::store::identity::NodeIdentity;
+        use defra_p2p_adapter::P2pDocumentRequest;
+
+        let keys = tempfile::tempdir().unwrap();
+        let admin: Arc<dyn NodeIdentity> =
+            Arc::new(KeyIdentity::load_or_create(keys.path().join("admin.key"), None).unwrap());
+        let member: Arc<dyn NodeIdentity> =
+            Arc::new(KeyIdentity::load_or_create(keys.path().join("member.key"), None).unwrap());
+        let (receiver_test, _) = runtime_http_test_node(admin.as_ref()).await;
+        let (sender_test, _) = runtime_http_test_node(member.as_ref()).await;
+        let receiver = &receiver_test.node;
+        let sender = &sender_test.node;
+        for node in [receiver, sender] {
+            let schema = node.get_collection("PeerPairingDesired").unwrap().unwrap();
+            assert!(
+                schema.indexes.iter().any(|index| {
+                    index.unique && index.fields.len() == 1 && index.fields[0].name == "peer_id"
+                }),
+                "the fixture must retain the production unique index"
+            );
+        }
+        let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
+        let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
+        let sender_addresses = wait_for_peer_info(&sender_admin).await;
+        let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
+        sender_admin.connect(&receiver_addresses).await.unwrap();
+        wait_for_active_peer(&sender_admin).await;
+        wait_for_active_peer(&receiver_admin).await;
+        let peer = sender.p2p().unwrap().local_peer_id().await.unwrap();
+        let ticket = sender
+            .p2p()
+            .unwrap()
+            .shareable_address()
+            .await
+            .unwrap()
+            .unwrap();
+        authorize_enrollment_peer(
+            receiver.clone(),
+            admin.clone(),
+            member.clone(),
+            &peer,
+            &ticket,
+        )
+        .await;
+        let store = GraphqlEnrollmentStore::new(receiver.clone(), admin.clone());
+        let projection = store.load_projection().await.unwrap();
+        let signed = exact_authorization_fence(&projection, member.did(), &peer)
+            .unwrap()
+            .expect("current signed enrollment");
+        assert_eq!(signed.authorization_sequence, 1);
+
+        // Both local writes obey uniqueness. Only a remote merge may retain twins.
+        let mut ids = Vec::new();
+        for (node, digest) in [
+            (receiver, "previous-request-a"),
+            (sender, "previous-request-b"),
+        ] {
+            let input = serde_json::json!({
+                "peer_id": peer, "node_did": admin.did(), "source": "enrollment",
+                "template": "client", "collections": ["AgentRequest"], "profiles": null,
+                "replicator_addresses": ["previous-address"],
+                "enrollment_request_digest": digest, "enrollment_authorization_sequence": 1,
+                "enrollment_authorization_expires_at": signed.authorization_expires_at,
+            });
+            let response = ConfigAccess::transact_local_write(
+                node, None, "test.desired.seed_unique_replica", |txn| {
+                    let input = input.clone();
+                    Box::pin(async move {
+                        txn.execute_with_variables(
+                            "mutation($input: PeerPairingDesiredMutationInputArg!) { create_PeerPairingDesired(input: $input) { _docID } }",
+                            &serde_json::json!({"input": input}),
+                        ).await
+                    })
+                },
+            ).await.unwrap();
+            ids.push(
+                crate::store::graphql::created_doc_id(&response, "PeerPairingDesired").unwrap(),
+            );
+        }
+        assert_ne!(ids[0], ids[1]);
+        let mut updates = crate::subscribe_collections(receiver, ["PeerPairingDesired"]).unwrap();
+        receiver_admin
+            .add_replicator(
+                &sender_addresses,
+                &["PeerPairingDesired".into()],
+                &PairingFilters::default(),
+            )
+            .await
+            .unwrap();
+        let receiver_peer = receiver.p2p().unwrap().local_peer_id().await.unwrap();
+        push_documents_to_peer(
+            sender,
+            &receiver_peer,
+            vec![P2pDocumentRequest {
+                collection: "PeerPairingDesired".into(),
+                doc_id: ids[1].clone(),
+            }],
+        )
+        .await
+        .unwrap();
+        let access = ConfigAccess::local(receiver.clone());
+        const ROWS: &str = "{ PeerPairingDesired { _docID peer_id node_did source template collections profiles replicator_addresses enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at created_at updated_at } }";
+        // Delivery ACK only admits a head; observe both fully merged documents.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let response = access.execute(ROWS).await.unwrap();
+                let rows = response["data"]["PeerPairingDesired"].as_array().unwrap();
+                if ids
+                    .iter()
+                    .all(|id| rows.iter().any(|row| row["_docID"] == *id))
+                {
+                    break;
+                }
+                updates
+                    .recv()
+                    .await
+                    .expect("desired subscription stays open");
+            }
+        })
+        .await
+        .expect("both genuinely remote-merged twins become visible");
+        sender.shutdown().await;
+        let before = access.execute(ROWS).await.unwrap();
+        let before_rows = before["data"]["PeerPairingDesired"].as_array().unwrap();
+        assert_eq!(before_rows.len(), 2);
+        ids.sort();
+        let parked = before_rows
+            .iter()
+            .find(|row| row["_docID"] == ids[1])
+            .unwrap()
+            .clone();
+        assert_ne!(
+            before_rows[0]["enrollment_request_digest"],
+            before_rows[1]["enrollment_request_digest"]
+        );
+        assert!(before_rows
+            .iter()
+            .all(|row| row["enrollment_authorization_sequence"] == 1));
+
+        let old = ConfigAccess::write_local(receiver, "test.desired.old_filter_upsert", &format!(
+            "mutation {{ upsert_PeerPairingDesired(filter: {{peer_id: {{_eq: \"{}\"}}}}, add: {{peer_id: \"{}\", collections: null, replicator_addresses: null}}, update: {{template: \"client\"}}) {{ _docID }} }}",
+            escape_graphql_string(&peer), escape_graphql_string(&peer),
+        )).await;
+        assert!(
+            old.is_err(),
+            "real indexed twins must reproduce the old upsert failure; got {old:?}"
+        );
+        assert!(format!("{:#}", old.unwrap_err()).contains("multiple matching documents"));
+        assert_eq!(
+            access.execute(ROWS).await.unwrap(),
+            before,
+            "failed upsert is atomic"
+        );
+
+        // Exercise the production caller: signed projection is reloaded and fenced
+        // inside the same transaction as canonical witness materialization.
+        reconcile_data_plane(receiver, admin.did(), &store, &projection)
+            .await
+            .unwrap();
+        let after = access.execute(ROWS).await.unwrap();
+        let after_rows = after["data"]["PeerPairingDesired"].as_array().unwrap();
+        assert_eq!(after_rows.len(), 2);
+        assert_eq!(
+            after_rows
+                .iter()
+                .find(|row| row["_docID"] == ids[1])
+                .unwrap(),
+            &parked
+        );
+        let canonical = after_rows
+            .iter()
+            .find(|row| row["_docID"] == ids[0])
+            .unwrap();
+        assert_eq!(canonical["node_did"], admin.did());
+        assert_eq!(
+            canonical["enrollment_request_digest"],
+            signed.request_digest
+        );
+        assert_eq!(
+            canonical["enrollment_authorization_sequence"],
+            signed.authorization_sequence
+        );
+        assert_eq!(
+            canonical["enrollment_authorization_expires_at"],
+            signed.authorization_expires_at
+        );
+        assert_eq!(
+            canonical["replicator_addresses"],
+            serde_json::json!([ticket])
+        );
+        let indexed = access
+            .execute(&format!(
+                "{{ PeerPairingDesired(filter: {{peer_id: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+                escape_graphql_string(&peer),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            indexed["data"]["PeerPairingDesired"],
+            serde_json::json!([{ "_docID": ids[0] }])
+        );
+        reconcile_data_plane(receiver, admin.did(), &store, &projection)
+            .await
+            .unwrap();
+        assert_eq!(
+            access.execute(ROWS).await.unwrap(),
+            after,
+            "a repeated sweep preserves both witnesses"
+        );
+        receiver.shutdown().await;
+    }
+
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ClientObservationCase {
