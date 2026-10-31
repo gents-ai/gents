@@ -294,7 +294,14 @@ function QuestionForm({
           {!kind && controls}
         </div>
       </header>
-      <div className="min-h-0 overflow-y-auto px-4 pb-1">
+      <div
+        className={cn(
+          "min-h-0 overflow-y-auto px-4",
+          question.allow_free_text || question.multi_select || skippable
+            ? "pb-1"
+            : "pb-3",
+        )}
+      >
         <h3 className="mt-1 mb-2 font-heading text-base font-normal break-words text-foreground">
           {question.prompt}
         </h3>
@@ -407,25 +414,29 @@ function QuestionForm({
           </p>
         )}
       </div>
-      <div className="m-1.5 mt-1 flex shrink-0 items-center gap-3 rounded-xl bg-background/60 py-1.5 pr-1.5 pl-3">
-        {question.allow_free_text ? (
-          <>
-            <Pencil aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            <input
-              ref={field}
-              aria-label={textOnly ? "Your answer" : "Something else"}
-              placeholder={textOnly ? "Your answer" : "Something else"}
-              value={other}
-              disabled={busy}
-              onChange={(event) => write(event.target.value)}
-              className="min-w-0 flex-1 bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
-          </>
-        ) : (
-          <span className="flex-1" />
-        )}
-        {action}
-      </div>
+      {/* with one choice to click and nothing to write or skip, a choice is
+          the answer and the row would hold only a Send that does nothing */}
+      {(question.allow_free_text || question.multi_select || skippable) && (
+        <div className="m-1.5 mt-1 flex shrink-0 items-center gap-3 rounded-xl bg-background/60 py-1.5 pr-1.5 pl-3">
+          {question.allow_free_text ? (
+            <>
+              <Pencil aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              <input
+                ref={field}
+                aria-label={textOnly ? "Your answer" : "Something else"}
+                placeholder={textOnly ? "Your answer" : "Something else"}
+                value={other}
+                disabled={busy}
+                onChange={(event) => write(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </>
+          ) : (
+            <span className="flex-1" />
+          )}
+          {action}
+        </div>
+      )}
     </section>
   );
 }
