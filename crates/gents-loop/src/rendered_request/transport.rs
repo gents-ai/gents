@@ -84,7 +84,7 @@ fn provider_endpoint_of(scheme: Option<&str>, authority: Option<&str>) -> Option
 /// to another tenant or deployment behind the same authority, so it is part of
 /// the issuer; Claude Code sends every Messages call to `/v1/messages?beta=true`.
 /// A route without a query hashes its path alone, as stored captures did.
-fn provider_route_path_sha256(path: &str, query: Option<&str>) -> String {
+pub fn provider_route_path_sha256(path: &str, query: Option<&str>) -> String {
     let mut digest = Sha256::new();
     digest.update(path.as_bytes());
     if let Some(query) = query {

@@ -8,7 +8,6 @@ use gents_protocol::output::{
     SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
 };
 use gents_protocol::rendered_request::RenderedRequestSource;
-use sha2::{Digest, Sha256};
 
 use super::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
@@ -134,12 +133,15 @@ impl ReplayFixture {
             destination.scheme_str().expect("scheme"),
             destination.authority().expect("authority")
         );
-        let route_path_sha256 = format!("{:x}", Sha256::digest(destination.path().as_bytes()));
+        let route_path_sha256 = gents_loop::rendered_request::transport::provider_route_path_sha256(
+            destination.path(),
+            destination.query(),
+        );
         let issuer = gents_loop::rendered_request::transport::replay_issuer_for_destination(
             family,
             &destination,
         )
-        .expect("fixture route has no query");
+        .expect("fixture route names a replay issuer");
         let trace = AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
         let rendered = build_rendered_completion_request(
             &RenderedRequestContext {
