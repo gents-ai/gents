@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::output::{
     reconstruction::{reconstruct_stream, ObservedSegment},
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -300,7 +301,8 @@ pub(super) async fn validate_parent(
     let request = &rows[0];
     if require_live {
         anyhow::ensure!(
-            request["lifecycle_state"].as_str() == Some("processing")
+            RequestLifecycleState::parse_opt(request["lifecycle_state"].as_str())
+                == Some(RequestLifecycleState::Processing)
                 && request["execution_generation"].as_str() == Some(generation)
                 && request["interrupt_requested_at"].is_null()
                 && DateTime::parse_from_rfc3339(

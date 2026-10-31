@@ -106,6 +106,7 @@ export type {
   ToolServiceTestRequest,
   ToolServiceTestResult,
   ToolServiceToolView,
+  RequestLifecycleState,
 } from "./types/requests.js";
 export type {
   ChatSendResult,

@@ -265,9 +265,7 @@ pub(super) fn task_run_histories(
                     requester_did: request.requester_did.clone(),
                     session_id: normalize_optional(request.session_id.as_deref()),
                     agent_id: request.agent_id.clone(),
-                    lifecycle_state: request
-                        .lifecycle_state
-                        .map(|state| state.as_str().to_string()),
+                    lifecycle_state: request.lifecycle_state,
                     execution_origin: normalize_optional(request.execution_origin.as_deref()),
                     caused_by_trigger_id: normalize_optional(
                         request.caused_by_trigger_id.as_deref(),

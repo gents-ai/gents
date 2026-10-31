@@ -27,10 +27,10 @@ pub async fn prepare_user_message_input(
             r#"{{ AgentRequest(filter: {{
             node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }},
             purpose: {{ _eq: "normal" }},
-            lifecycle_state: {{ _in: ["claimed", "processing"] }}
+            lifecycle_state: {{ _in: {claimed_or_processing} }}
         }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(node_did),
-            escape_graphql_string(session_id),
+            escape_graphql_string(session_id), claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
         ))
         .await?;
     let rows: Vec<AgentRequestRow> =

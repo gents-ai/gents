@@ -197,7 +197,7 @@ pub struct TaskRunSummaryView {
     pub requester_did: Option<String>,
     pub session_id: Option<String>,
     pub agent_id: Option<String>,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     pub execution_origin: Option<String>,
     pub caused_by_trigger_id: Option<String>,
     pub caused_by_trigger_kind: Option<String>,

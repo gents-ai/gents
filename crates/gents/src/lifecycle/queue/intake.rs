@@ -11,12 +11,12 @@ pub(crate) async fn pending_rows_in_txn(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
             session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }},
-            lifecycle_state: {{ _eq: "pending" }} }}) {{
+            lifecycle_state: {{ _eq: "{pending}" }} }}) {{
             {} execution_lease_secs interrupt_requested_at
         }} }}"#,
             escape_graphql_string(node_did),
             escape_graphql_string(session_id),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request_admission::SIGNED_REQUEST_FIELDS, pending = RequestLifecycleState::Pending.as_str()
         ))
         .await?;
     serde_json::from_value(response["data"]["AgentRequest"].clone())

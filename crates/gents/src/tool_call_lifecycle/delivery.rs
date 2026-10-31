@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::output::{
     reconstruction::{reconstruct_stream, ObservedSegment},
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -684,7 +685,8 @@ impl ToolCallLifecycle {
                         request_row["node_did"].as_str() == Some(node_did.as_str())
                             && request_row["session_id"].as_str() == Some(session_id.as_str())
                             && request_row["requester_did"].as_str() == requester_did.as_deref()
-                            && request_row["lifecycle_state"].as_str() == Some("processing")
+                            && RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
+                                == Some(RequestLifecycleState::Processing)
                             && request_row["execution_generation"].as_str() == Some(generation.as_str())
                             && request_row["interrupt_requested_at"].is_null(),
                         "spawned admission lost live request generation ownership"
@@ -3690,7 +3692,8 @@ pub(crate) async fn start_running_in_txn(
     anyhow::ensure!(rows.len() == 1, "dispatch request is missing or ambiguous");
     let row = &rows[0];
     if row["requester_did"].as_str() != start.requester.as_deref()
-        || row["lifecycle_state"].as_str() != Some("processing")
+        || RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str())
+            != Some(RequestLifecycleState::Processing)
         || row["execution_generation"].as_str() != Some(start.generation.as_str())
         || !row["interrupt_requested_at"].is_null()
     {

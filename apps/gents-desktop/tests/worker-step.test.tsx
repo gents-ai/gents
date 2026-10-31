@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   CausedRequestView,
   RenderedToolCallView,
+  RequestLifecycleState,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 
@@ -78,7 +79,10 @@ const summary = (turnState: string | null): SessionSummary =>
     updatedAt: null,
   }) as unknown as SessionSummary;
 
-const caused = (requestId: string, lifecycleState: string): CausedRequestView => ({
+const caused = (
+  requestId: string,
+  lifecycleState: RequestLifecycleState,
+): CausedRequestView => ({
   requestId,
   nodeDid: "did:key:reviewer",
   sessionId: "child-session",
@@ -140,7 +144,7 @@ describe("an agent row", () => {
   });
 
   it("reads the caused request's lifecycle", () => {
-    const at = (state: string) =>
+    const at = (state: RequestLifecycleState) =>
       workerNow(call(), reached(caused("r", state)), Date.now());
     expect(at("pending").text).toBe("waiting for the agent to pick it up");
     expect(at("processing").tone).toBe("running");
@@ -151,7 +155,7 @@ describe("an agent row", () => {
   });
 
   it("never infers replication from a missing message count", () => {
-    for (const state of ["processing", "completed", "pending"]) {
+    for (const state of ["processing", "completed", "pending"] as const) {
       expect(
         workerNow(call(), reached(caused("r", state)), Date.now()).text,
       ).not.toMatch(/sync/i);

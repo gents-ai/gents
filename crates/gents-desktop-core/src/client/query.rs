@@ -8,6 +8,7 @@ use gents::document_config::{
 };
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{
     AgentRequestRow, AgentToolCallRow, CompactionEntryRow, GoalRow, MailboxItemRow,
     NodeReadinessRow, NodeRuntimeRow,
@@ -449,7 +450,10 @@ fn session_request_seed_query(
             .map(|did| format!("\"{}\"", escape_graphql_string(did)))
             .unwrap_or_else(|| "null".to_string());
         let mut predicates = vec![
-            "lifecycle_state: { _neq: \"completed\" }".to_string(),
+            format!(
+                "lifecycle_state: {{ _neq: \"{}\" }}",
+                RequestLifecycleState::Completed.as_str()
+            ),
             "lifecycle_state: { _eq: null }".to_string(),
             "retry_parent_request: { _neq: null }".to_string(),
             "retry_parent_request_doc_id: { _neq: null }".to_string(),

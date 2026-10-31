@@ -4,6 +4,7 @@ import type {
   DesktopSessionSnapshot,
   OperationalStatus,
   PendingTurnView,
+  RequestLifecycleState,
 } from "@source-inc/gents-desktop-client";
 import {
   isTerminalTurnState,
@@ -23,8 +24,9 @@ export type RequestProgressPresentation = {
 };
 
 export function requestProgressPresentation(
-  lifecycleState?: string | null,
+  lifecycleState?: RequestLifecycleState | null,
 ): RequestProgressPresentation | null {
+  if (!lifecycleState) return null;
   switch (lifecycleState) {
     case "workspaceBindingPending":
     case "pending":
@@ -43,8 +45,6 @@ export function requestProgressPresentation(
       return { label: "Expired", animated: false };
     case "interrupted":
       return { label: "Stopped", animated: false };
-    default:
-      return null;
   }
 }
 

@@ -59,7 +59,7 @@ async fn drain_pending_session_requests_where_in_txn(
             AgentRequest(
                 filter: {{
                     {scope},
-                    lifecycle_state: {{ _eq: "pending" }}
+                    lifecycle_state: {{ _eq: "{pending}" }}
                 }}
             ) {{
                 _docID
@@ -67,7 +67,7 @@ async fn drain_pending_session_requests_where_in_txn(
                 execution_origin
                 input
             }}
-        }}"#
+        }}"#, pending = RequestLifecycleState::Pending.as_str()
     );
 
     let response = txn.execute(&query).await?;
@@ -93,16 +93,16 @@ async fn drain_pending_session_requests_where_in_txn(
                     docID: "{escaped_doc_id}", filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         {scope},
-                        lifecycle_state: {{ _eq: "pending" }}
+                        lifecycle_state: {{ _eq: "{pending}" }}
                     }},
                     input: {{
-                        lifecycle_state: "interrupted",
+                        lifecycle_state: "{interrupted}",
                         failure_reason: "{escaped_reason}",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
-            }}"#
+            }}"#, pending = RequestLifecycleState::Pending.as_str(), interrupted = RequestLifecycleState::Interrupted.as_str()
         );
         let response = txn.execute(&mutation).await?;
         let updated = response["data"]
@@ -132,7 +132,7 @@ async fn drain_pending_session_requests_where_in_txn(
                 txn,
                 node_did,
                 &row.request_id,
-                "interrupted",
+                RequestLifecycleState::Interrupted,
                 reason,
                 &terminalized_at,
             )

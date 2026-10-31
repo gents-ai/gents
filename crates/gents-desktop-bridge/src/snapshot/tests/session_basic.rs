@@ -503,7 +503,7 @@ fn interrupted_unowned_input_survives_next_send_and_reloaded_projection() {
         .unwrap();
         assert!(
             matches!(&snapshot.timeline_items[0], RenderedTimelineItem::PendingUserTurn { request_id, content, lifecycle_state, .. }
-            if request_id == "req-1" && content == "interrupted question" && lifecycle_state.as_deref() == Some("interrupted"))
+            if request_id == "req-1" && content == "interrupted question" && *lifecycle_state == Some(RequestLifecycleState::Interrupted))
         );
         assert!(matches!(
             &snapshot.timeline_items[1],

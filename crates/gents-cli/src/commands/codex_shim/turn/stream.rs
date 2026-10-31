@@ -1206,13 +1206,14 @@ async fn announce_consumed_inputs(
     announced: &mut BTreeSet<String>,
 ) -> Result<()> {
     use gents::graphql::escape_graphql_string;
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, superseded_by_request_doc_id: {{_eq:"{}"}}, lifecycle_state: {{_eq:"superseded"}}, failure_reason: {{_eq:"{}"}} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id content created_at }} }}"#,
+        r#"{{ AgentRequest(filter: {{ node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, superseded_by_request_doc_id: {{_eq:"{}"}}, lifecycle_state: {{_eq:"{superseded}"}}, failure_reason: {{_eq:"{}"}} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id content created_at }} }}"#,
         escape_graphql_string(&current.node_did),
         escape_graphql_string(state.local_requester_did()),
         escape_graphql_string(&current.session_id),
         escape_graphql_string(&current.request_doc_id),
-        escape_graphql_string(gents::lifecycle::FOLDED_REASON)
+        escape_graphql_string(gents::lifecycle::FOLDED_REASON), superseded = RequestLifecycleState::Superseded.as_str()
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
     let rows = response

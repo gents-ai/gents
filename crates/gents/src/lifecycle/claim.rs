@@ -399,10 +399,10 @@ impl RequestLifecycle {
                     anyhow::ensure!(super::execution_policy::authorize_begin(observed, &generation, now),
                         "execution begin requires a live claimed generation");
                     let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
-                        docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "claimed" }},
+                        docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "{claimed}" }},
                             execution_generation: {{ _eq: "{}" }}, execution_lease_expires_at: {{ _eq: "{}" }} }},
-                        input: {{ lifecycle_state: "processing" }}
-                    ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry))).await?;
+                        input: {{ lifecycle_state: "{processing}" }}
+                    ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry), claimed = RequestLifecycleState::Claimed.as_str(), processing = RequestLifecycleState::Processing.as_str())).await?;
                     anyhow::ensure!(response["data"]["update_AgentRequest"].as_array()
                         .is_some_and(|rows| rows.len() == 1), "execution begin lost its request CAS");
                     Ok(())
@@ -421,15 +421,15 @@ impl RequestLifecycle {
                     docID: "{doc_id}", filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "pending" }}
+                        lifecycle_state: {{ _eq: "{pending}" }}
                     }},
                     input: {{
-                        lifecycle_state: "interrupted",
+                        lifecycle_state: "{interrupted}",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#
+            }}"#, pending = RequestLifecycleState::Pending.as_str(), interrupted = RequestLifecycleState::Interrupted.as_str()
         );
         let request = &self.request;
         let resp = crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -456,7 +456,7 @@ impl RequestLifecycle {
                             txn,
                             &request.node_did,
                             &request.request_id,
-                            "interrupted",
+                            RequestLifecycleState::Interrupted,
                             "interrupted before claim",
                             terminalized_at,
                         )
@@ -503,16 +503,16 @@ impl RequestLifecycle {
                     docID: "{doc_id}", filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "pending" }}
+                        lifecycle_state: {{ _eq: "{pending}" }}
                     }},
                     input: {{
-                        lifecycle_state: "dead",
+                        lifecycle_state: "{dead}",
                         failure_reason: "Stale",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#
+            }}"#, pending = RequestLifecycleState::Pending.as_str(), dead = RequestLifecycleState::Dead.as_str()
         );
         let request = &self.request;
         let resp = crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -539,7 +539,7 @@ impl RequestLifecycle {
                             txn,
                             &request.node_did,
                             &request.request_id,
-                            "dead",
+                            RequestLifecycleState::Dead,
                             "Stale",
                             terminalized_at,
                         )
@@ -591,17 +591,17 @@ impl RequestLifecycle {
                     docID: "{request_doc_id}", filter: {{
                         _docID: {{ _eq: "{request_doc_id}" }},
                         node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "pending" }}
+                        lifecycle_state: {{ _eq: "{pending}" }}
                     }},
                     input: {{
-                        lifecycle_state: "failed",
+                        lifecycle_state: "{failed}",
                         failure_reason: "{reason}",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0,
                         terminal_output: $terminal_output
                     }}
                 ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#
+            }}"#, pending = RequestLifecycleState::Pending.as_str(), failed = RequestLifecycleState::Failed.as_str()
         );
         let request_mutation = &request_mutation;
         let request = &self.request;
@@ -636,7 +636,7 @@ impl RequestLifecycle {
                             txn,
                             &request.node_did,
                             &request.request_id,
-                            "failed",
+                            RequestLifecycleState::Failed,
                             outcome_reason,
                             outcome_time,
                         )
@@ -780,7 +780,7 @@ impl RequestLifecycle {
                     docID: "{escaped_doc_id}", filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         purpose: {{ _eq: "{escaped_purpose}" }},
-                        lifecycle_state: {{ _eq: "pending" }},
+                        lifecycle_state: {{ _eq: "{pending}" }},
                         execution_generation: {{ _eq: {prior_generation} }}
                     }},
                     input: {{
@@ -801,7 +801,7 @@ impl RequestLifecycle {
                     _version {{ cid height fieldName }}
                 }}
             }}"#,
-                lifecycle_state = RequestLifecycleState::Claimed.as_str(),
+                lifecycle_state = RequestLifecycleState::Claimed.as_str(), pending = RequestLifecycleState::Pending.as_str()
             )
         };
 

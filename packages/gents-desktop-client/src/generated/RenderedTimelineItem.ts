@@ -3,6 +3,7 @@ import type { AttachmentView } from "./AttachmentView.js";
 import type { CapturedContext } from "./CapturedContext.js";
 import type { MessageReconstructionView } from "./MessageReconstructionView.js";
 import type { RenderedToolCallView } from "./RenderedToolCallView.js";
+import type { RequestLifecycleState } from "./RequestLifecycleState.js";
 import type { RequestOriginView } from "./RequestOriginView.js";
 import type { RequestTurnView } from "./RequestTurnView.js";
 
@@ -22,4 +23,4 @@ summary?: string | null,
  * The files the compacted messages read and modified, as the
  * compaction kept them for the model.
  */
-filesRead?: Array<string> | null, filesModified?: Array<string> | null, } | { "kind": "pendingUserTurn", itemKey: string, requestId: string, startedGoalId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, selectedSkillIds: Array<string>, lifecycleState: string | null, foldedIntoRequestId: string | null, origin: RequestOriginView | null, createdAt: string | null, } | { "kind": "automatedInput", itemKey: string, requestId?: string | null, inputRequestId?: string | null, sequence: number | null, origin: RequestOriginView, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "liveAssistant", itemKey: string, content: string | null, reasoning: string | null, };
+filesRead?: Array<string> | null, filesModified?: Array<string> | null, } | { "kind": "pendingUserTurn", itemKey: string, requestId: string, startedGoalId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, selectedSkillIds: Array<string>, lifecycleState: RequestLifecycleState | null, foldedIntoRequestId: string | null, origin: RequestOriginView | null, createdAt: string | null, } | { "kind": "automatedInput", itemKey: string, requestId?: string | null, inputRequestId?: string | null, sequence: number | null, origin: RequestOriginView, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "liveAssistant", itemKey: string, content: string | null, reasoning: string | null, };

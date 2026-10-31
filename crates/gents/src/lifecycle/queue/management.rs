@@ -781,15 +781,15 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
         } else {
             format!(
                 r#"mutation($terminal_output: JSON) {{ update_AgentRequest(docID: "{}", filter: {{
-                        _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "pending" }}
-                    }}, input: {{ lifecycle_state: "interrupted", interrupt_requested_at: "{}",
+                        _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "{pending}" }}
+                    }}, input: {{ lifecycle_state: "{interrupted}", interrupt_requested_at: "{}",
                         terminalized_at: "{}", failure_reason: "{}",
                         terminal_redrive_attempts: 0, terminal_output: $terminal_output }}) {{ _docID }} }}"#,
                 escape_graphql_string(old_id),
                 escape_graphql_string(old_id),
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-                escape_graphql_string(REMOVED_REASON)
+                escape_graphql_string(REMOVED_REASON), pending = RequestLifecycleState::Pending.as_str(), interrupted = RequestLifecycleState::Interrupted.as_str()
             )
         };
         let result = if creates.is_empty() {
@@ -817,9 +817,9 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
             node_did,
             &old.request_id,
             if creates.is_empty() {
-                "interrupted"
+                RequestLifecycleState::Interrupted
             } else {
-                "superseded"
+                RequestLifecycleState::Superseded
             },
             if creates.is_empty() {
                 REMOVED_REASON
