@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { RotateCw } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
+import { Skeleton } from "@gents/ui/components/skeleton";
 import { cn } from "@gents/ui/lib/utils";
 import { Hint } from "@/screens/Hint";
 import { setupErrorMessage } from "../../../lib/setupErrors";
@@ -266,11 +267,36 @@ export function UsageRows({ view }: { view?: AccountUsageView }) {
   );
 }
 
+/* an account's place while the first read is out, in the shape most accounts
+   take, so the panel doesn't jump when it lands */
+function AccountSkeleton() {
+  return (
+    <div aria-hidden className="grid gap-2">
+      <div className="flex items-center gap-1.5">
+        <Skeleton className="size-3.5 rounded-full" />
+        <Skeleton className="h-3 w-28" />
+      </div>
+      <div className="grid gap-x-8 gap-y-3 @xs:grid-cols-2">
+        {[0, 1].map((n) => (
+          <div key={n} className="grid gap-1.5">
+            <Skeleton className="h-1.5 w-full rounded-full" />
+            <Skeleton className="h-3 w-24" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function AllProviderLimits({
   views,
+  loading = false,
   onRefresh,
 }: {
   views: readonly AccountUsageView[];
+  /** the first read is still out: hold the panel's shape rather than say
+      nothing was reported */
+  loading?: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -309,7 +335,12 @@ export function AllProviderLimits({
           </Button>
         </Hint>
       </div>
-      {!views.length && (
+      {loading && !views.length && (
+        <div className="@container" aria-busy="true">
+          <AccountSkeleton />
+        </div>
+      )}
+      {!loading && !views.length && (
         <p className="text-sm text-muted-foreground">
           No account limits have been reported.
         </p>

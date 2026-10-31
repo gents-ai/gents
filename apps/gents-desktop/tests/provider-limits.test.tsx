@@ -96,3 +96,15 @@ it("draws each window as a meter, with its reset and source in a tooltip", () =>
   expect(week.firstElementChild).toHaveClass("bg-destructive");
   expect(week.closest("li")).toHaveTextContent("last known");
 });
+
+it("holds the panel's shape while the first read is out, not saying none were reported", () => {
+  const { rerender } = render(
+    <AllProviderLimits views={[]} loading onRefresh={vi.fn()} />,
+  );
+  const panel = screen.getByRole("region", { name: "Your limits" });
+  expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+  expect(screen.queryByText("No account limits have been reported.")).toBeNull();
+  rerender(<AllProviderLimits views={[]} onRefresh={vi.fn()} />);
+  expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
+  expect(screen.getByText("No account limits have been reported.")).toBeInTheDocument();
+});

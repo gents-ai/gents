@@ -181,6 +181,7 @@ export function InferencePanel({
       {!item && (
         <AllProviderLimits
           views={providerUsage.usage}
+          loading={providerUsage.loading}
           onRefresh={() => providerUsage.refresh(null)}
         />
       )}
