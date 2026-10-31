@@ -16,7 +16,7 @@ import { href } from "@/lib/router";
 import { NodeSwitcher } from "@/app/NodeSwitcher";
 import { placeholderFor } from "@/lib/send-status";
 import { agentOf } from "@/lib/agents";
-import { NodeAvatar } from "../AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "../AgentAvatar";
 import { AgentPicker } from "../BehaviorPicker";
 import { agentName } from "../behavior";
 import { SelectedChatFolder } from "../ChatFolderPicker";
@@ -51,7 +51,11 @@ export function NewSession() {
       className="mx-auto grid min-h-full max-w-2xl content-center gap-6 px-6 py-16 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none"
     >
       <div className="flex items-start gap-3">
-        <NodeAvatar name={nodeName} className="size-8" />
+        <NodeAvatar
+          name={nodeName}
+          {...(deployment ? nodeAvatarOf(deployment) : {})}
+          className="size-8"
+        />
         <div>
           <h1 className="font-heading text-lg font-medium text-heading">
             Start a new chat with{" "}

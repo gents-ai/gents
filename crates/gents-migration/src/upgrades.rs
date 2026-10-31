@@ -24,6 +24,11 @@ const INFERENCE_CALL_USAGE_PATCH: &str = r#"[
     {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"usage_completeness","Kind":"String"}}
 ]"#;
 
+const NODE_ROOT: &str = "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby";
+const NODE_AVATAR_TARGET: &str = "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli";
+const NODE_AVATAR_PATCH: &str =
+    r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#;
+
 const PROFILE_ROOT: &str = "bafyreiat2uhx24kbgbm54lz7nt56vtjjsfttkiwop2ntii7qn2xtceehxi";
 const PROFILE_TARGET: &str = "bafyreieksrjdkg546ymilx5qrpbtciuyr3cwqyq25u52o64lobpoek3qqi";
 const TOOL_ROOT: &str = "bafyreiexmbjxfqyg6yhjst6r746spzge27f6mhh2moyrkawbmvtvba4mbi";
@@ -151,6 +156,14 @@ pub(crate) fn include_existing_by_version(
                 "provider_total_tokens",
                 "usage_completeness",
             ][..],
+        ),
+        (
+            "Node",
+            NODE_ROOT,
+            NODE_AVATAR_TARGET,
+            "node-add-avatar",
+            NODE_AVATAR_PATCH,
+            &["avatar"][..],
         ),
         (
             "InferenceProfile",

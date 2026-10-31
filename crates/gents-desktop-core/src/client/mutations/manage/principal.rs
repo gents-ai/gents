@@ -307,7 +307,7 @@ mod tests {
         })
         .await?;
         let mut document: Node = serde_json::from_value(
-            json!({"node_did":"did:test:node","display_name":"Agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["team"]}),
+            json!({"node_did":"did:test:node","display_name":"Agent","avatar":"12","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["team"]}),
         )?;
         upsert_node(&node, &document).await?;
         document.default_agent_id = Some("default".into());
@@ -326,6 +326,7 @@ mod tests {
                 assert_eq!(saved.created_at.as_deref(), Some("2026-01-01T00:00:00Z"));
                 assert_eq!(saved.created_by.as_deref(), Some("did:test:creator"));
                 assert_eq!(saved.tags, vec!["team"]);
+                assert_eq!(saved.avatar.as_deref(), Some("12"));
                 assert!(saved.default_agent_id.is_none());
                 Ok::<_, anyhow::Error>(())
             })
@@ -339,7 +340,7 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:default";
         let seed: gents::documents::PackConfig = serde_json::from_value(json!({
-            "node":{"node_did":owner,"default_agent_id":"first","tags":["keep"]},
+            "node":{"node_did":owner,"default_agent_id":"first","avatar":"12","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
             "agents":[
@@ -380,6 +381,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(node["default_agent_id"], "second");
                 assert_eq!(node["tags"], json!(["keep"]));
+                assert_eq!(node["avatar"], "12");
                 let (_, second) = read_desired_state_record_in_txn(
                     txn,
                     Collection::Agent,
@@ -402,7 +404,7 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:components";
         let seed: gents::documents::PackConfig = serde_json::from_value(json!({
-            "node":{"node_did":owner,"display_name":"Keep name","default_agent_id":"agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
+            "node":{"node_did":owner,"display_name":"Keep name","avatar":"12","default_agent_id":"agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
             "agents":[{"node_did":owner,"agent_id":"agent","context_id":"context","inference_profile_id":"profile"}],
@@ -464,6 +466,7 @@ mod tests {
                 assert_eq!(node["default_agent_id"], "agent");
                 assert_eq!(node["created_by"], "did:test:creator");
                 assert_eq!(node["tags"], json!(["keep"]));
+                assert_eq!(node["avatar"], "12");
                 assert!(read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceProfile,

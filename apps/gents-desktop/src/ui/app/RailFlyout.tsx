@@ -7,7 +7,7 @@ import { isLocalNode } from "@/lib/firstRun";
 import { href, type Route } from "@/lib/router";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { Hint } from "@/screens/Hint";
 import { parentOf, useFleet } from "@/hooks/useFleet";
@@ -280,6 +280,7 @@ export function NavPanel({
             >
               <NodeAvatar
                 name={selected.node.displayName ?? selected.label}
+                {...nodeAvatarOf(selected)}
                 className="size-7"
               />
               <span
