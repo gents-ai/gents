@@ -41,6 +41,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     let database = sync.database_sync.as_ref();
     let database_error = sync.database_sync_error.as_ref();
     let schema_skew = sync.peer_schema_skew.values().next();
+    let activation_failed = !sync.enrollment_activation_errors.is_empty();
     let connected_peer_count = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
     let offline = is_offline(
         transport.status,
@@ -50,6 +51,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     if schema_skew.is_none()
         && database.is_none()
         && database_error.is_none()
+        && !activation_failed
         && transport.status == P2PHealthStatus::Healthy
         && !offline
     {
@@ -73,7 +75,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
 
     let state = if schema_skew.is_some() {
         SyncHealthState::Incompatible
-    } else if failed || database_error.is_some() {
+    } else if failed || database_error.is_some() || activation_failed {
         SyncHealthState::Failed
     } else if offline {
         SyncHealthState::Offline
@@ -88,6 +90,8 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
         database_error.cloned()
     } else if failed {
         Some("DefraDB quarantined a document DAG that could not be merged".to_string())
+    } else if activation_failed {
+        Some("An approved peer connection could not be activated".to_string())
     } else {
         transport.last_error.clone()
     };
@@ -303,6 +307,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(health.state, SyncHealthState::Healthy);
+    }
+
+    #[test]
+    fn enrollment_activation_failure_is_visible_beside_a_healthy_local_peer() {
+        use crate::client::core::{EnrollmentActivationError, EnrollmentActivationStage};
+
+        for database_sync in [None, Some(P2pSyncStatusSnapshot::default())] {
+            let mut unavailable = peer(false);
+            unavailable.peer_id = "remote-peer".into();
+            let mut sync = ClientSyncStateSnapshot {
+                transport: transport(P2PHealthStatus::Healthy),
+                database_sync,
+                database_sync_error: None,
+                enrollment_activation_errors: [(
+                    "remote-enrollment".into(),
+                    EnrollmentActivationError {
+                        request_digest: "private-enrollment-digest".into(),
+                        authorization_sequence: 1,
+                        authorization_expires_at: "2030-01-01T00:00:00Z".into(),
+                        stage: EnrollmentActivationStage::Route,
+                    },
+                )]
+                .into(),
+                peer_schema_skew: Default::default(),
+                directory: Vec::new(),
+                peers: vec![peer(true), unavailable],
+            };
+            let health = project_sync_health(&sync).expect("activation failure is observable");
+            assert_eq!(health.state, SyncHealthState::Failed);
+            assert_eq!(health.connected_peer_count, 1);
+            assert_eq!(
+                health.last_error.as_deref(),
+                Some("An approved peer connection could not be activated")
+            );
+
+            sync.enrollment_activation_errors.clear();
+            assert!(project_sync_health(&sync)
+                .is_none_or(|health| health.state == SyncHealthState::Healthy));
+        }
     }
 
     #[test]
