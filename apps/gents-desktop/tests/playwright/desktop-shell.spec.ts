@@ -571,8 +571,11 @@ test.describe("kit shell", () => {
     await page.getByRole("link", { name: "Mailbox" }).click();
     await expect(page.getByTestId("mailbox-screen")).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
+    await page.getByTestId("mailbox-item").getByRole("button").first().click();
+    await expect(page.getByTestId("mailbox-dialog")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
 
-    const payload = page.getByTestId("mailbox-screen").locator("pre");
+    const payload = page.getByTestId("mailbox-dialog").locator("pre");
     await expect(payload).toBeVisible();
     const widths = await payload.evaluate((element) => ({
       lineWidth: element.scrollWidth,

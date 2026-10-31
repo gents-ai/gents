@@ -8,6 +8,7 @@ afterEach(async () => {
   cleanup();
   (await import("../src/ui/preferences")).resetPreferences();
   (await import("../src/ui/app/listViews")).resetListViews();
+  (await import("../src/ui/app/mailboxSeen")).resetMailboxSeen();
 });
 
 beforeAll(() => {

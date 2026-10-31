@@ -183,6 +183,7 @@ export type DesktopUiHarnessScenario =
   | "backend-unavailable"
   | "mailbox-overflow"
   | "mailbox-question"
+  | "mailbox-many"
   | "long-content"
   | "active-turn"
   | "coding"
@@ -456,6 +457,110 @@ export function createDesktopUiHarness(
           parentItemId: null,
           deadlineAt: null,
           createdAt: STARTED_AT,
+        },
+      ],
+    };
+  }
+  if (scenario === "mailbox-many") {
+    const base = {
+      requesterDid: "did:key:desktop-harness",
+      nodeDid: NODE_DID,
+      status: "open",
+      sourceKind: "session",
+      sourceId: "session-intro",
+      sessionId: "session-intro",
+      requestId: null,
+      causeDocId: null,
+      targetNodeDid: NODE_DID,
+      targetAgentId: DEFAULT_AGENT_ID,
+      expectedCollection: null,
+      parentItemId: null,
+      deadlineAt: null,
+    };
+    const at = (minutesAgo: number) =>
+      new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    deployment = {
+      ...deployment,
+      mailboxItems: [
+        {
+          ...base,
+          itemId: "many-colour",
+          itemKey: "many-colour",
+          kind: "ask",
+          action: "start_request",
+          title: "Button colour",
+          summary:
+            "The settings page has a primary **Save** button that is the same grey as the secondary actions, so people miss it. I can restyle it now; the colour is the one choice I can't make for you.",
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Which colour should the button be?",
+            options: [
+              { id: "red", label: "Red" },
+              { id: "blue", label: "Blue" },
+              { id: "green", label: "Green" },
+            ],
+            multi_select: false,
+            allow_free_text: true,
+          }),
+          createdAt: at(4),
+        },
+        {
+          ...base,
+          itemId: "many-workspace",
+          itemKey: "many-workspace",
+          kind: "ask",
+          action: "start_request",
+          title: "Choose a workspace",
+          summary: null,
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Where should this run?",
+            options: [
+              {
+                id: "local",
+                label: "This computer",
+                description: "Uses the folder you picked",
+              },
+              { id: "remote", label: "Remote host" },
+            ],
+            multi_select: true,
+            allow_free_text: true,
+          }),
+          createdAt: at(9),
+        },
+        {
+          ...base,
+          itemId: "many-failed",
+          itemKey: "many-failed",
+          kind: "failed",
+          action: "ack",
+          title: "Nightly build failed",
+          summary:
+            "The build stopped at the test step.\n\n`cargo test -p gents` exited with 101 after 14 minutes.",
+          payload: null,
+          createdAt: at(22),
+        },
+        {
+          ...base,
+          itemId: "many-flag",
+          itemKey: "many-flag",
+          kind: "flag",
+          action: "ack",
+          title: "Disk is nearly full",
+          summary: "The node's data folder has 2 GB left.",
+          payload: null,
+          createdAt: at(41),
+        },
+        {
+          ...base,
+          itemId: "many-finished",
+          itemKey: "many-finished",
+          kind: "finished",
+          action: "ack",
+          title: "Refactor landed",
+          summary: "Split the mailbox card into a row and a dialog.",
+          payload: null,
+          createdAt: at(65),
         },
       ],
     };
@@ -870,6 +975,29 @@ export function createDesktopUiHarness(
       }
     }, 0);
   }
+
+  /* an item filed after the app started, so it reads as new */
+  if (scenario === "mailbox-many")
+    window.setTimeout(() => {
+      deployment = {
+        ...deployment,
+        mailboxItems: [
+          {
+            ...deployment.mailboxItems[0]!,
+            itemId: "many-deploy",
+            itemKey: "many-deploy",
+            kind: "finished",
+            action: "ack",
+            title: "Deploy to staging finished",
+            summary: "All 412 checks passed; staging runs the new build.",
+            payload: null,
+            createdAt: new Date().toISOString(),
+          },
+          ...deployment.mailboxItems,
+        ],
+      };
+      notify("store");
+    }, 2500);
 
   function notifyBurst(reason: string, count: number, responseOnly = false) {
     updateEvents += count;
@@ -1918,7 +2046,14 @@ export function createDesktopUiHarness(
       }
       return item;
     },
-    async dismissMailboxItem() {
+    async dismissMailboxItem(itemId) {
+      deployment = {
+        ...deployment,
+        mailboxItems: deployment.mailboxItems.map((item) =>
+          item.itemId === itemId ? { ...item, status: "dismissed" } : item,
+        ),
+      };
+      notify("store");
       return undefined;
     },
     async applyConfigComponents(request) {
@@ -4035,6 +4170,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "backend-unavailable":
     case "mailbox-overflow":
     case "mailbox-question":
+    case "mailbox-many":
     case "long-content":
     case "active-turn":
     case "coding":
