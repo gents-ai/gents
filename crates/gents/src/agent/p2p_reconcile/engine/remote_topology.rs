@@ -279,84 +279,13 @@ pub(super) async fn apply_op(
     }
 }
 
-/// Whether the replicator at `address` acknowledged the current heads of
-/// every document it routes. A replay then only discards DefraDB's retry
-/// markers and acknowledgement records, so it is skipped; any unknown or
-/// failed observation keeps the replay.
-pub(super) async fn replicator_acknowledged(
+/// Reconnects preserve the database's retry markers and acknowledgements.
+/// Re-adding the same configuration lets DefraDB resume an interrupted install.
+pub(super) async fn ensure_replicator_after_reconnect(
     admin: &dyn RemoteP2pAdmin,
     address: &str,
     desired: &PairingDesired,
-    actual: &ActualSnapshot,
-) -> bool {
-    let Some(peer_id) = actual
-        .replicator_ids_by_addr
-        .get(address)
-        .cloned()
-        .or_else(|| {
-            TransportEndpoint::parse(address.to_string())
-                .ok()
-                .map(|endpoint| endpoint.peer_id().to_string())
-        })
-    else {
-        return false;
-    };
-    for collection in desired.effective_replicator_collections() {
-        match admin
-            .replication_acknowledged(
-                &peer_id,
-                collection,
-                desired.replicator_filter.get(collection),
-            )
-            .await
-        {
-            Ok(Some(true)) => {}
-            Ok(_) => return false,
-            Err(error) => {
-                tracing::debug!(target: "gents::agent::p2p_reconcile::engine",
-                    address,
-                    collection = %collection,
-                    error = %error,
-                    "replication acknowledgement unavailable; replaying replicator"
-                );
-                return false;
-            }
-        }
-    }
-    true
-}
-
-pub(super) async fn replay_replicator_after_reconnect(
-    admin: &dyn RemoteP2pAdmin,
-    address: &str,
-    desired: &PairingDesired,
-    actual: &ActualSnapshot,
 ) -> Result<()> {
-    let id = actual
-        .replicator_ids_by_addr
-        .get(address)
-        .map(String::as_str)
-        .unwrap_or(address);
-    let old_collections = actual
-        .replicator_collections_by_addr
-        .get(address)
-        .cloned()
-        .filter(|collections| !collections.is_empty())
-        .unwrap_or_else(|| {
-            desired
-                .effective_replicator_collections()
-                .iter()
-                .cloned()
-                .collect()
-        });
-    match admin.delete_replicator(id, &old_collections).await {
-        Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("remove P2P replicator {address} for reconnect replay"));
-        }
-    }
-
     let addresses = vec![address.to_string()];
     let collections = desired
         .effective_replicator_collections()
@@ -366,6 +295,6 @@ pub(super) async fn replay_replicator_after_reconnect(
     admin
         .add_replicator(&addresses, &collections, &desired.replicator_filter)
         .await
-        .with_context(|| format!("reinstall P2P replicator {address} for reconnect replay"))?;
+        .with_context(|| format!("ensure P2P replicator {address} after reconnect"))?;
     Ok(())
 }

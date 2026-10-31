@@ -167,6 +167,8 @@ RecoverPeer(peer) ==
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount,
                   crashCount, emitCount, replayCount, acked>>
 
+\* DefraDB owns recovery of installed replication work. Gents ensures the same
+\* authorized configuration without deleting native retry or acknowledgement state.
 ReplayTerminalSnapshot(peer) ==
   /\ ReplayOnRecovery
   /\ peer \in ReplicaHolder
@@ -181,8 +183,8 @@ ReplayTerminalSnapshot(peer) ==
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline>>
 
-\* A reinstall would discard DefraDB's retry markers and acknowledgement
-\* records while delivering nothing the peer lacks.
+\* The native ensure operation preserves acknowledgements and retry markers;
+\* an already acknowledged peer needs no additional delivery.
 SkipAcknowledgedReplay(peer) ==
   /\ ReplayOnRecovery
   /\ peer \in ReplicaHolder
