@@ -140,6 +140,14 @@ function expectFields(labels: string[]) {
 
 beforeEach(() => vi.clearAllMocks());
 
+/* a limit window's row, found by how full its meter is */
+const usedRow = async (pct: number) => {
+  const meters = await screen.findAllByRole("meter");
+  const meter = meters.find((m) => m.getAttribute("aria-valuenow") === String(pct));
+  if (!meter) throw new Error(`no window at ${pct}%`);
+  return meter.closest("li")!;
+};
+
 describe("configuration panels", () => {
   it.each([
     ["AnthropicApiKey", "https://api.anthropic.com/v1", "Anthropic"],
@@ -1167,16 +1175,16 @@ describe("configuration panels", () => {
           renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
           const user = userEvent.setup();
           await user.click(await screen.findByRole("button", { name: "Refresh" }));
-          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          expect(await usedRow(12)).toBeVisible();
           await act(async () => land(usage()));
-          expect(screen.getByText(/^12% used/)).toBeVisible();
+          expect(await usedRow(12)).toBeVisible();
         });
 
         it("draws the most-used window on a row and no percent without a window", async () => {
           setup();
           expect(await screen.findByText("5h 81%")).toBeVisible();
           expect(screen.getByText("5h 20%")).toBeVisible();
-          expect(screen.getAllByText(/\d+%$/).map((e) => e.textContent)).toEqual([
+          expect(screen.getAllByText(/^\S+ \d+%$/).map((e) => e.textContent)).toEqual([
             "5h 81%",
             "5h 20%",
           ]);
@@ -1184,23 +1192,18 @@ describe("configuration panels", () => {
 
         it("opens a row with each window's percent, reset, source and age", async () => {
           setup("claude-work");
-          for (const pct of [30, 81, 10])
-            expect(
-              await screen.findByText(
-                new RegExp(
-                  `^${pct}% used · resets in 2h1[23]m \\(.+\\) · from response headers, 3m ago$`,
-                ),
-              ),
-            ).toBeVisible();
+          for (const pct of [30, 81, 10]) {
+            const row = await usedRow(pct);
+            expect(row).toHaveTextContent(/resets in 2h1[23]m/);
+            expect(row.title).toMatch(/^Resets .+ · from response headers, 3m ago$/);
+          }
         });
 
         it("marks a stale window as last known", async () => {
           setup("chatgpt-team");
-          expect(
-            await screen.findByText(
-              /^20% used · .* · from response headers, 1h10m ago · last known$/,
-            ),
-          ).toBeVisible();
+          expect((await usedRow(20)).title).toMatch(
+            / · from response headers, 1h10m ago · last known$/,
+          );
         });
 
         for (const [item, texts] of [
@@ -1212,7 +1215,7 @@ describe("configuration panels", () => {
             setup(item);
             for (const text of texts)
               expect(await screen.findByText(text)).toBeVisible();
-            expect(screen.queryByText(/% used/)).not.toBeInTheDocument();
+            expect(screen.queryByRole("meter")).not.toBeInTheDocument();
           });
 
         it("draws no usage for a disabled account", async () => {
@@ -1236,7 +1239,7 @@ describe("configuration panels", () => {
             true,
             "claude-subscription",
           );
-          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          expect(await usedRow(12)).toBeVisible();
           view.unmount();
 
           const openrouter = setup("openrouter");
