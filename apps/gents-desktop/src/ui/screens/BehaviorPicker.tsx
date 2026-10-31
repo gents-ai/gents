@@ -104,7 +104,7 @@ function MountedAgentPicker({
             popover.onOpenChange(false);
           }}
           className={cn(
-            "flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-accent",
+            "flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-xs hover:bg-accent",
             selected && "bg-muted",
           )}
         >
@@ -179,7 +179,7 @@ function MountedAgentPicker({
               }}
               placeholder="Search agents"
               aria-label="Search agents"
-              className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              className="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
             />
             <Button
               variant="ghost"
