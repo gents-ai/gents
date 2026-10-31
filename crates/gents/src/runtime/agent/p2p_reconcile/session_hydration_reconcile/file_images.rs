@@ -22,7 +22,7 @@ pub(super) struct ImageDemandRow {
 }
 
 #[async_trait]
-trait ImageRequestStore: Send + Sync {
+pub(super) trait ImageRequestStore: Send + Sync {
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>>;
     async fn prior(&self, row: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>>;
     async fn admission(&self, demand: &FileImageDemand) -> Result<LoadedHydrationAdmission>;

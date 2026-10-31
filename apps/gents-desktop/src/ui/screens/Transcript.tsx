@@ -386,7 +386,7 @@ function Reply({
         className={item.content ? "py-4" : undefined}
         actions={
           !live && item.content && !final
-            ? copyActions(writtenText(item.content ?? ""))
+            ? copyActions(writtenText(item.content ?? "", []))
             : false
         }
       >
