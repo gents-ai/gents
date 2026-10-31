@@ -24,6 +24,29 @@ export function chipSkills(parts: readonly ComposerPart[], offered: readonly str
   return ids;
 }
 
+/** `text` opened by `/<id>` for each of `skills`, one to a line with the
+    last before the text, as a person types them, so the field draws each
+    as a command chip */
+export function withCommandLines(text: string, skills: readonly string[]): string {
+  if (!skills.length) return text;
+  const lines = skills.map((id) => `/${id}`);
+  return `${lines.join("\n")} ${text}`;
+}
+
+const named = (text: string, id: string) =>
+  new RegExp(`(^|\\s)/${id.replace(/[.-]/g, "\\$&")}(?=\\s|$)`).test(text);
+
+/** a sent message's text as it was written, for copying: the skills it
+    doesn't name open it as commands, which the composer draws as chips
+    again when the text is pasted */
+export function writtenText(
+  content: string,
+  skills: readonly string[] | null | undefined,
+): string {
+  const unnamed = [...new Set(skills ?? [])].filter((id) => !named(content, id));
+  return withCommandLines(content, unnamed).trimEnd();
+}
+
 /** `text` with an opening `/skill <id>` line for each of `skills` */
 export function withSkillLines(text: string, skills: readonly string[]): string {
   return skills.length

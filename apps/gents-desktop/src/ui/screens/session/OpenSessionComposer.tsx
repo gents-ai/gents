@@ -68,13 +68,26 @@ export function OpenSessionComposer({
   const textarea = useRef<HTMLDivElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
-  const edit = useComposerEditing({ queue, onEdit, setDraft, send, textarea });
+  const agent = agentOf(deployment, agentId);
+  const editSlash = useSlashMenu(
+    deployment?.skills ?? [],
+    deployment?.contexts.find((c) => c.context_id === agent?.contextId),
+    [],
+    () => {},
+  );
+  const edit = useComposerEditing({
+    queue,
+    onEdit,
+    setDraft,
+    send,
+    textarea,
+    commands: editSlash.names,
+  });
   const editing = edit.editing;
   const editContext = useMemo(
     () => ({ editingDocId: editing?.docId ?? null, begin: edit.begin }),
     [editing?.docId, edit.begin],
   );
-  const agent = agentOf(deployment, agentId);
   const sessionId = stores.selection.use.sessionId();
   const nodeDid = stores.selection.use.nodeDid();
   const goalMode = useGoalMode({
@@ -105,12 +118,6 @@ export function OpenSessionComposer({
         })?.timelineItems ?? [],
       ),
   });
-  const editSlash = useSlashMenu(
-    deployment?.skills ?? [],
-    deployment?.contexts.find((c) => c.context_id === agent?.contextId),
-    [],
-    () => {},
-  );
   const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
   const commands = editing ? editSlash : slash;
   const chipKinds = useMemo(
@@ -284,7 +291,7 @@ export function OpenSessionComposer({
             onSend={
               editing
                 ? (text) => {
-                    const prepared = withSkillLines(text, [
+                    const skills = [
                       ...new Set([
                         ...editing.skills,
                         ...chipSkills(
@@ -292,10 +299,11 @@ export function OpenSessionComposer({
                           editSlash.names,
                         ),
                       ]),
-                    ]);
+                    ];
+                    const prepared = withSkillLines(text, skills);
                     void (editing.reached
                       ? edit.sendAsNew(text, addedAttachments(), prepared)
-                      : edit.save(text, addedAttachments(), prepared));
+                      : edit.save(text, addedAttachments(), prepared, skills));
                   }
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
