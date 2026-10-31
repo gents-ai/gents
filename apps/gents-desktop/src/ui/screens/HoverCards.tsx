@@ -12,6 +12,8 @@ import { agentReadiness } from "@/lib/agent-readiness";
 import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
 import { agentOf, backendOf } from "@/lib/agents";
 import { ProviderLogo } from "./ProviderLogo";
+import { useProviderUsage } from "../hooks/useProviders";
+import { closestWindow, resetsIn, usageLevel, UsageRing } from "./agent/ProviderUsage";
 import { useNodeReach } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
@@ -32,6 +34,44 @@ function Line({
         {children}
       </dd>
     </>
+  );
+}
+
+/* the agent's provider account at its closest limit; read only while the
+   card is open, since the card's content mounts with it */
+function AgentLimits({ nodeDid, backendId }: { nodeDid: string; backendId: string }) {
+  const { usage } = useProviderUsage(nodeDid);
+  const view = usage.find((account) => account.backendIds.includes(backendId));
+  const top = closestWindow(view);
+  if (!view || !top) return null;
+  const pct = Math.round(top.usedPct);
+  const now = Date.now();
+  return (
+    <Line
+      label="Limits"
+      title={view.windows
+        .map((w) =>
+          [`${w.label} ${Math.round(w.usedPct)}%`, resetsIn(w, now)]
+            .filter(Boolean)
+            .join(", "),
+        )
+        .join(" · ")}
+    >
+      <span className="flex min-w-0 items-center gap-1.5 tabular-nums">
+        <UsageRing pct={pct} className="size-3" />
+        <span
+          className={cn(
+            usageLevel(pct) === "warning" && "text-warning",
+            usageLevel(pct) === "danger" && "text-destructive",
+          )}
+        >
+          {top.label} {pct}%
+        </span>
+        {resetsIn(top, now) && (
+          <span className="truncate text-muted-foreground">· {resetsIn(top, now)}</span>
+        )}
+      </span>
+    </Line>
   );
 }
 
@@ -171,6 +211,9 @@ export function AgentHoverCard({
               "no backend"
             )}
           </Line>
+          {backend && (
+            <AgentLimits nodeDid={deployment.nodeDid} backendId={backend.backendId} />
+          )}
           <Line label="Files">{fileAccess(env?.fileAccess ?? "off")}</Line>
           <Line label="Commands">{bashAccess(env?.bashAccess ?? "off")}</Line>
           <Line label="Network">{network(env?.networkAccess)}</Line>

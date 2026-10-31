@@ -26,7 +26,7 @@ import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
 import { useAccounts, useProviderUsage, useSetupCatalog } from "@/hooks/useProviders";
 import { healthy, KINDS, SUBSCRIPTION } from "./inferenceKinds";
-import { UsageBar, AllProviderLimits } from "./ProviderUsage";
+import { UsageSummary, AllProviderLimits } from "./ProviderUsage";
 import { AccountDialogs, backendAccount, type AccountAction } from "./ProviderAccounts";
 import { BackendEditor } from "./BackendEditor";
 import { addItem, addingFrom } from "./draftItems";
@@ -197,7 +197,7 @@ export function InferencePanel({
             trailing: (
               <>
                 {(!SUBSCRIPTION[b.providerKind ?? ""] || stored?.enabled) && (
-                  <UsageBar view={usageOf(b.backendId)} />
+                  <UsageSummary view={usageOf(b.backendId)} />
                 )}
                 <RowMenu
                   name={b.name ?? b.backendId}

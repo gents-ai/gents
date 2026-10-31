@@ -1,10 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChipsRow, TagsRow } from "../src/ui/screens/agent/editors";
 import { AgentHoverCard } from "../src/ui/screens/HoverCards";
 import { deployment } from "./config-panel-wiring/fixtures";
+import { renderIn, testApp } from "./app-fixture";
+
+/* the card reads the agent's provider usage while open */
+const cardApp = (usage: unknown[] = []) =>
+  testApp({ api: { readProviderUsage: vi.fn().mockResolvedValue(usage) } });
 
 describe("settings polish", () => {
   it("shows canonical skill picks as removable chips", () => {
@@ -63,7 +68,8 @@ describe("settings polish", () => {
   });
 
   it("explains agent readiness and links to the canonical settings route", async () => {
-    render(
+    renderIn(
+      cardApp(),
       <AgentHoverCard deployment={deployment} agentId="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
@@ -88,7 +94,8 @@ describe("settings polish", () => {
           : backend,
       ),
     };
-    render(
+    renderIn(
+      cardApp(),
       <AgentHoverCard deployment={onClaude} agentId="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
@@ -101,7 +108,8 @@ describe("settings polish", () => {
   });
 
   it("names no company for a bare local endpoint", async () => {
-    render(
+    renderIn(
+      cardApp(),
       <AgentHoverCard deployment={deployment} agentId="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
@@ -111,5 +119,43 @@ describe("settings polish", () => {
       .hover(screen.getByRole("button", { name: "Default agent" }));
     const card = await screen.findByTestId("agent-hover-card");
     expect(card.querySelector("img")).toBeNull();
+  });
+
+  it("shows the agent's closest limit, amber once it nears it", async () => {
+    const observedAt = new Date().toISOString();
+    const window = (label: string, usedPct: number) => ({
+      label,
+      windowMinutes: 300,
+      usedPct,
+      resetsAt: null,
+      source: "header",
+      observedAt,
+      lastKnown: false,
+    });
+    renderIn(
+      cardApp([
+        {
+          label: "Work",
+          provider: "Claude",
+          backendIds: ["backend-a"],
+          windows: [window("5h", 81), window("7d", 38)],
+          plan: null,
+          note: null,
+          readAt: null,
+          readError: null,
+          read: "read",
+        },
+      ]),
+      <AgentHoverCard deployment={deployment} agentId="default">
+        <button type="button">Default agent</button>
+      </AgentHoverCard>,
+    );
+    await userEvent
+      .setup()
+      .hover(screen.getByRole("button", { name: "Default agent" }));
+    const card = await screen.findByTestId("agent-hover-card");
+    const limit = await within(card).findByText("5h 81%");
+    expect(limit).toHaveClass("text-warning");
+    expect(limit.closest("dd")).toHaveAttribute("title", "5h 81% · 7d 38%");
   });
 });
