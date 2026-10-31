@@ -12,10 +12,10 @@ use crate::defra_node::EmbeddedNode;
 use crate::eval::runner::embedded::home::{EmbeddedHome, RUNTIME_READY_TIMEOUT};
 use crate::eval::runner::executor::{FixtureDocument, StageSpec, TrialLocator};
 use crate::eval::OutcomeKind;
-use crate::graphql::graphql_with_transaction_retry;
 use crate::request::lifecycle::{
     build_signed_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
+use crate::store::graphql::graphql_with_transaction_retry;
 use crate::ConfigAccess;
 
 /// How long a seed stage without its own deadline waits for a trigger to fire

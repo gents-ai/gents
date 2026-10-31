@@ -11,7 +11,7 @@ const ORDER_FIELDS: [&str; 4] = ["queued_at", "call_seq", "call_id", "_docID"];
 /// Query inputs and retained rows stay
 /// bounded independently of the number of requests in the session.
 pub async fn load_latest_session_context_calls(
-    access: &dyn crate::config_client::ConfigRead,
+    access: &dyn crate::store::config_client::ConfigRead,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -99,7 +99,7 @@ fn call_rows(data: &Value) -> Result<&[Value]> {
 }
 
 async fn indexed_calls(
-    access: &dyn crate::config_client::ConfigRead,
+    access: &dyn crate::store::config_client::ConfigRead,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,

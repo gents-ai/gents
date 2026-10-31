@@ -1,10 +1,10 @@
 use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
 use gents::request::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -57,7 +57,7 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
         )
         .await
         .unwrap();
-    gents::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+    gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
 async fn submit_edit(

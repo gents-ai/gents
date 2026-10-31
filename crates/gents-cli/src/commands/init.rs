@@ -4,16 +4,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
-};
 use gents::documents::{
     Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
     InferenceExecution, SurfaceToolDecl, Tools,
 };
 use gents::self_config::engineer_self_config;
+use gents::store::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
+};
 use gents::{
     default_agent_id_for_node, default_inference_profile_id_for_agent, load_agent, load_node,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity, BashMode,

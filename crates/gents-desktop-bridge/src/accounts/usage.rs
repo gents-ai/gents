@@ -47,7 +47,7 @@ pub(crate) async fn account_usage_views(
     let backends = access
         .transact_readonly("desktop.usage_views", |txn| {
             Box::pin(async move {
-                gents::config_client::list_inference_backends_in_txn(txn, node_did).await
+                gents::store::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;

@@ -22,7 +22,7 @@ async fn scope_row(node: &EmbeddedNode, collection: &str, doc_id: &str) -> serde
         "AgentToolCall" => "_docID request_doc_id node_did tool_call_id lifecycle_state cancel_cause tool_failure_class",
         other => panic!("unsupported scope collection {other}"),
     };
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let response = node.execute(&format!(
         r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {fields} }} }}"#,
     )).await;
@@ -35,7 +35,7 @@ async fn queue_snapshot(
     session_id: &str,
     queue_key: Option<&str>,
 ) -> (Vec<String>, usize) {
-    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id lifecycle_state input }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let rows = response.data.unwrap()["AgentRequest"]
@@ -131,7 +131,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         assert_eq!(persisted["lifecycle_state"], "running");
         children.push(receipt.request_id);
     }
-    let escaped_parent_doc = crate::graphql::escape_graphql_string(&parent_doc_id);
+    let escaped_parent_doc = crate::store::graphql::escape_graphql_string(&parent_doc_id);
     exec(node.as_ref(), &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_parent_doc}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
     for (index, caused_request_id) in children.iter().enumerate() {
         complete_child(

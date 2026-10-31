@@ -3,10 +3,10 @@ use gents_protocol::job::{DataOp, DataWrite};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
-use crate::config_client::ConfigApplyTxn;
 use crate::plugin::data::{
     admit_write, insert_note, AdmittedWrite, InsertOutcome, OnConflict, PluginData, StampContext,
 };
+use crate::store::config_client::ConfigApplyTxn;
 
 /// Applies a plugin's data writes in the caller's transaction and returns one
 /// receipt per write. Any refused or failed write fails the whole output; the
@@ -89,7 +89,7 @@ async fn input(txn: &ConfigApplyTxn<'_>, write: &DataWrite) -> Result<String> {
     )?;
     let mut parts = Vec::with_capacity(write.fields.len());
     for (name, value) in &write.fields {
-        crate::graphql::validate_graphql_name(name)?;
+        crate::store::graphql::validate_graphql_name(name)?;
         ensure!(
             !name.starts_with('_'),
             "internal field {name:?} cannot be written"
@@ -116,7 +116,7 @@ async fn resolve_conflict(
     on_conflict: OnConflict,
 ) -> Result<Option<Value>> {
     let collection = write.collection.as_str();
-    crate::graphql::validate_graphql_name(collection)?;
+    crate::store::graphql::validate_graphql_name(collection)?;
     let keys = grant
         .unique_keys
         .get(collection)
@@ -157,7 +157,7 @@ async fn resolve_conflict(
         selection.insert("created_at");
     }
     for field in &selection {
-        crate::graphql::validate_graphql_name(field)?;
+        crate::store::graphql::validate_graphql_name(field)?;
     }
     let response = txn
         .execute(&format!(

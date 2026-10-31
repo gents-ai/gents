@@ -1,7 +1,7 @@
 use super::*;
 
 async fn request(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     session: &str,
     requester: Option<&str>,
     created: &str,
@@ -18,11 +18,11 @@ async fn request(
         )
         .await
         .unwrap();
-    crate::graphql::created_doc_id(&data, "AgentRequest").unwrap()
+    crate::store::graphql::created_doc_id(&data, "AgentRequest").unwrap()
 }
 
 async fn call(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     doc: &str,
     call_id: &str,
     session: Option<&str>,
@@ -47,7 +47,7 @@ async fn call(
 #[tokio::test]
 async fn inference_order_and_physical_scope_survive_index_hints() {
     let db = crate::support::test_db("indexed-context-scopes").await;
-    let access = crate::config_client::ConfigAccess::local(db.node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
     let old = request(
         &access,
         "session",
@@ -84,7 +84,7 @@ async fn inference_order_and_physical_scope_survive_index_hints() {
         )
         .await
         .unwrap();
-    let other = crate::graphql::created_doc_id(&other, "AgentRequest").unwrap();
+    let other = crate::store::graphql::created_doc_id(&other, "AgentRequest").unwrap();
     let input = gents_protocol::graphql::graphql_input_literal(&json!({
         "call_id": "other-node-call", "request_id": "shared-logical-id", "request_doc_id": other,
         "node_did": "did:test:other-node", "session_id": "session", "call_kind": "inference",
@@ -227,7 +227,7 @@ async fn inference_order_and_physical_scope_survive_index_hints() {
 #[tokio::test]
 async fn retained_calls_page_past_foreign_rows_and_nullable_cursor_keys() {
     let db = crate::support::test_db("paged-context-null-keys").await;
-    let access = crate::config_client::ConfigAccess::local(db.node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
     let own = request(&access, "session", None, "2026-10-01T00:00:00Z").await;
     let foreign = request(&access, "other", None, "2026-10-01T00:00:00Z").await;
     for i in 0..PAGE_SIZE + 1 {
@@ -252,7 +252,7 @@ async fn retained_calls_page_past_foreign_rows_and_nullable_cursor_keys() {
 #[tokio::test]
 async fn retained_call_selection_pages_the_scoped_requests() {
     let db = crate::support::test_db("paged-context-retained-requests").await;
-    let access = crate::config_client::ConfigAccess::local(db.node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
     let mut ids = Vec::new();
     for i in 0..PAGE_SIZE + 1 {
         ids.push(

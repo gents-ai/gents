@@ -143,14 +143,14 @@ async fn sessions_get_does_not_join_duplicate_logical_request_ids() {
     crate::sign_agent_request_create(&identity, &mut duplicate)
         .await
         .unwrap();
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "test.session_history.duplicate_request",
         &duplicate.graphql_mutation().unwrap(),
     )
     .await
     .unwrap();
-    crate::graphql::ensure_no_errors(&response, "duplicate-label request").unwrap();
+    crate::store::graphql::ensure_no_errors(&response, "duplicate-label request").unwrap();
     let response = node
         .execute(
             r#"{

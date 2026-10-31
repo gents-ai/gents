@@ -6,7 +6,7 @@ use gents_loop::rig_compat::CachedInputTokensObservation;
 
 use super::client::AdmissionError;
 use super::controller::InferenceCallRecord;
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderCallUsage(pub(crate) gents_protocol::usage::TokenUsage);
@@ -40,7 +40,7 @@ pub(super) async fn persist_call_queued(
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None)?;
-    let resp = crate::config_client::ConfigAccess::write_local_response(
+    let resp = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_call_queued",
         &mutation,
@@ -56,7 +56,7 @@ pub(super) async fn persist_call_started(
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None)
         .map_err(completion_persistence_error)?;
-    let resp = crate::config_client::ConfigAccess::write_local_response(
+    let resp = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_call_started",
         &mutation,
@@ -82,14 +82,15 @@ pub(super) async fn persist_existing_call_running(
             input: {{ call_state: "running", started_at: "{started_at}" }}
         ) {{ _docID }} }}"#
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_existing_call_running",
         &mutation,
     )
     .await?;
     anyhow::ensure!(
-        !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty(),
+        !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
+            .is_empty(),
         "InferenceCall {} is no longer queued or is missing",
         call.call_id
     );
@@ -113,7 +114,7 @@ pub(super) async fn persist_terminal_call(
         Some(&now),
         usage,
     )?;
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_terminal_call",
         &mutation,
@@ -152,13 +153,15 @@ pub(super) async fn persist_existing_call_terminal(
                 {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
         ) {{ _docID }} }}"#
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "admission.persist_existing_call_terminal",
         &mutation,
     )
     .await?;
-    if !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty() {
+    if !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
+        .is_empty()
+    {
         return Ok(());
     }
 
@@ -173,22 +176,23 @@ pub(super) async fn persist_existing_call_terminal(
                 input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
             ) {{ _docID }} }}"#
         );
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "admission.persist_late_call_usage",
             &mutation,
         )
         .await?;
-        !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty()
+        !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
+            .is_empty()
     } else {
         let query = format!(r#"{{ InferenceCall(filter: {{ {terminal_filter} }}) {{ _docID }} }}"#);
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             node.as_ref(),
             &query,
             "confirm terminal InferenceCall",
         )
         .await?;
-        !crate::graphql::rows::<serde_json::Value>(&response, "InferenceCall")?.is_empty()
+        !crate::store::graphql::rows::<serde_json::Value>(&response, "InferenceCall")?.is_empty()
     };
     anyhow::ensure!(
         exists,

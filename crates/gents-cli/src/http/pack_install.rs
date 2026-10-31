@@ -115,7 +115,7 @@ fn encode_request(
 }
 
 pub(crate) async fn install_remote(
-    endpoint: &gents::config_client::GraphqlEndpoint,
+    endpoint: &gents::store::config_client::GraphqlEndpoint,
     owner: &str,
     pack: &PackSource,
     dependencies: &[PackSource],
@@ -366,7 +366,7 @@ async fn install_owned(
         expect_digest: None,
         explicit: request.explicit,
     };
-    let access = gents::config_client::ConfigAccess::Graphql(state.p2p_graphql.clone());
+    let access = gents::store::config_client::ConfigAccess::Graphql(state.p2p_graphql.clone());
     let mut result = crate::commands::pack::install_documents_pack_resolved(
         &access,
         &state.node_did,

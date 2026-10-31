@@ -13,13 +13,13 @@ use rig::http_client::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
 use crate::documents::{BackendAuth, InferenceBackend};
 use crate::inference::auth::credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };
 use crate::inference::backends::provider::BackendProviderOauthExt;
 use crate::inference::resolved::ResolvedAgent;
+use crate::store::config_client::ConfigAccess;
 
 /// Provider clients bind a physical credential row or a keyed backend
 /// connection identity. Inventory reads resolve the currently configured
@@ -576,7 +576,7 @@ pub async fn read_node_usage(
     let backends = access
         .transact_readonly("usage_observation.read_node", |txn| {
             Box::pin(async move {
-                crate::config_client::list_inference_backends_in_txn(txn, node_did).await
+                crate::store::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;

@@ -3,11 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::config_client::{ConfigAccess, ConfigRead};
-use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::session::{
     decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
 };
+use crate::store::config_client::{ConfigAccess, ConfigRead};
+use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
 
@@ -704,7 +704,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
 mod tests;
 
 pub(crate) async fn verified_starter_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     provenance: &gents_protocol::session::SessionProvenance,
     node_did: &str,
     session_id: &str,
@@ -756,7 +756,7 @@ pub(crate) async fn verified_starter_in_txn(
 }
 
 pub(crate) async fn issue_creation_receipt_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     session_doc_id: &str,
@@ -1182,7 +1182,7 @@ where
 }
 
 async fn agent_new_binding_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
     opening: &str,
 ) -> Result<Option<String>> {

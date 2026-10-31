@@ -5,9 +5,9 @@ use serde_json::Value;
 use super::super::admit::{root_call_of, StepCall, StepRow};
 use super::super::input::{chain_of, derive_children_in_txn, CallArgs};
 use super::super::records::{read_pin, read_progress, read_step_state};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
 use crate::plugin::job_calls::job_state;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::query::load_tool_call_arguments_in_txn;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 
@@ -192,7 +192,7 @@ pub(in crate::tools::background::job) async fn store_running_progress(
     admission: &crate::tools::call::lifecycle::admission_fixture::PublishedAdmission,
 ) {
     use super::super::records::{write_progress_in_txn, HostProgressFacts};
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobProgress, JobState};
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
     ConfigAccess::transact_local_write(&admission.node, None, "test.driver.progress", |txn| {

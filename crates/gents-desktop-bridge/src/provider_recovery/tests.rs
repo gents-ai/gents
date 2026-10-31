@@ -38,7 +38,7 @@ impl Fixture {
                 "enabled": enabled, "auth": {"kind":"api_key", "key":format!("TOKEN-SECRET-{id}")},
             }))
             .unwrap();
-            gents::config_client::write_inference_backend_document(&access, &backend)
+            gents::store::config_client::write_inference_backend_document(&access, &backend)
                 .await
                 .unwrap();
             access
@@ -70,12 +70,12 @@ impl Fixture {
         let profile = serde_json::from_value(json!({
             "node_did":identity.did(), "profile_id":"profile-a", "backend_id":"main", "model_name":"model-a",
         })).unwrap();
-        gents::config_client::write_inference_profile_document(&access, &profile)
+        gents::store::config_client::write_inference_profile_document(&access, &profile)
             .await
             .unwrap();
         for name in ["engineer", "reviewer"] {
             let agent = serde_json::from_value(json!({"node_did":identity.did(), "agent_id":name, "inference_profile_id":"profile-a"})).unwrap();
-            gents::config_client::write_agent_document(&access, &agent)
+            gents::store::config_client::write_agent_document(&access, &agent)
                 .await
                 .unwrap();
         }
@@ -108,8 +108,8 @@ impl Fixture {
             )
             .await
             .unwrap();
-        let did = gents::graphql::escape_graphql_string(identity.did());
-        let reason = gents::graphql::escape_graphql_string(reason);
+        let did = gents::store::graphql::escape_graphql_string(identity.did());
+        let reason = gents::store::graphql::escape_graphql_string(reason);
         access.write("test.recovery.failed_request", &format!(r#"mutation {{
             update_AgentRequest(filter: {{request_id: {{_eq: "stopped"}}}}, input: {{lifecycle_state: "failed"}}) {{_docID}}
             own_call: create_InferenceCall(input: {{call_id: "failed-call", request_id: "stopped", node_did: "{did}",

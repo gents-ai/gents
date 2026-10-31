@@ -4,12 +4,12 @@ use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::created_doc_id;
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
     output_segment_create_variables, OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::graphql::created_doc_id;
 
 use super::{
     source::{load_request_in_txn, load_source_in_txn},

@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use gents::config_client::GraphqlEndpoint;
 use gents::plugin::approval::{self, Answer, Request};
+use gents::store::config_client::GraphqlEndpoint;
 use tokio::sync::mpsc;
 
 use super::{approvals, GoalBackedSubmission};

@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use std::time::Duration;
 

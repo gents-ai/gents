@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 
-use crate::config_client::ConfigAccess;
 use crate::eval::optimization::job::{
     derive_state, fold_jobs_for_owner, job_ids_in_txn, JobState, JournalEntry,
 };
+use crate::store::config_client::ConfigAccess;
 
 pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();

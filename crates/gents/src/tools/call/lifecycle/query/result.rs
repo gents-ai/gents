@@ -1,6 +1,6 @@
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
 use crate::inference::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use anyhow::{anyhow, Context, Result};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSource, PresentedPayload,
@@ -1355,7 +1355,7 @@ mod tests {
             escape_graphql_string(&session_id), escape_graphql_string(&node_did), parent.message_sequence,
             escape_graphql_string(&parent.deadline_at.to_rfc3339()),
         )).await.unwrap();
-        let doc_id = crate::graphql::created_doc_id(&created, "AgentToolCall").unwrap();
+        let doc_id = crate::store::graphql::created_doc_id(&created, "AgentToolCall").unwrap();
         let error = load_tool_call_arguments(&access, &doc_id, &node_did, &session_id, None)
             .await
             .unwrap_err();

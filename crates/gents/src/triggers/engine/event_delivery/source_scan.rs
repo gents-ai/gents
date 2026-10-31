@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 const SOURCE_SCAN_PAGE_SIZE: usize = 1_000;
 
@@ -27,15 +27,15 @@ pub(crate) async fn load_source_rows(
     field: Option<&str>,
     filter: Option<&str>,
 ) -> Result<Vec<Value>> {
-    crate::graphql::validate_collection_identifier(collection)?;
+    crate::store::graphql::validate_collection_identifier(collection)?;
     if let Some(field) = field {
-        crate::graphql::validate_graphql_name(field)?;
+        crate::store::graphql::validate_graphql_name(field)?;
     }
     let base = filter
         .map(str::trim)
         .filter(|filter| !filter.is_empty())
         .unwrap_or("{}");
-    crate::graphql::validate_graphql_filter_fragment(base)?;
+    crate::store::graphql::validate_graphql_filter_fragment(base)?;
     let mut after = String::new();
     let mut documents = Vec::new();
     loop {
@@ -76,7 +76,7 @@ pub(crate) async fn load_source_rows(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
@@ -99,7 +99,7 @@ pub(crate) mod tests {
                                     escape_graphql_string(&format!("group-{index}"))
                                 ))
                                 .await?;
-                            ids.push(crate::graphql::created_doc_id(&response, "RescanSource")?);
+                            ids.push(crate::store::graphql::created_doc_id(&response, "RescanSource")?);
                         }
                         Ok::<_, anyhow::Error>(ids)
                     })

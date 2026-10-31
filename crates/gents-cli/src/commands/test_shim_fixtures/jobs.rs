@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
-use gents::graphql::ensure_no_errors;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::ensure_no_errors;
 use serde_json::json;
 
 use super::tool_admission::seed_canonical_tool_call;
@@ -77,7 +77,7 @@ pub(crate) async fn seed_job_row(
     )
     .await;
     pin.chain_root_doc_id = doc_id.clone();
-    let escaped_doc_id = gents::graphql::escape_graphql_string(&doc_id);
+    let escaped_doc_id = gents::store::graphql::escape_graphql_string(&doc_id);
     let mutation = format!(
         r#"mutation($job_pin: JSON, $job_progress: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, input: {{
             await_mode: "background", status: "{lifecycle}", deadline_at: "2126-06-01T10:00:00Z", {ended}
@@ -141,7 +141,7 @@ async fn seed_signed_request(
     let row = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            gents::graphql::escape_graphql_string(request_id),
+            gents::store::graphql::escape_graphql_string(request_id),
             gents::SIGNED_REQUEST_FIELDS,
         ))
         .await;

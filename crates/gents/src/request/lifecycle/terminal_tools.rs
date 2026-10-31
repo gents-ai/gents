@@ -3,9 +3,9 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, Outp
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use serde::Deserialize;
 
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::canonical_rows::TranscriptMessageRow;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::{escape_graphql_string, response_has_documents};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolAccountingRejection {
@@ -105,7 +105,7 @@ pub(super) async fn account_tools_in_txn(
     }}"#
         ))
         .await?;
-    let tools: Vec<ToolDocument> = crate::graphql::rows(&response, "AgentToolCall")?;
+    let tools: Vec<ToolDocument> = crate::store::graphql::rows(&response, "AgentToolCall")?;
     for header in headers.iter().filter(|h| matches!(&h.message.publication,
         MessagePublication::RequestExecution { execution_generation } if execution_generation == generation)
         && h.message.outcome == OutputOutcome::Complete && h.message.role == MessageRole::Assistant) {
@@ -287,7 +287,7 @@ pub(super) async fn account_tools_in_txn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
 
     #[tokio::test]
     async fn generated_plugin_child_request_accounting_matches_execution_owner() {

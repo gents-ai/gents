@@ -2,11 +2,11 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use crate::config_client::DesiredStateApplyPlan;
 use crate::documents::template::parse_template_for_validation;
 use crate::eval::optimization::subject::{baseline_text, MaterializedPack};
 use crate::eval::optimization::target::TargetField;
 use crate::pack::interpolate;
+use crate::store::config_client::DesiredStateApplyPlan;
 use crate::{Collection, ConfigReferences};
 
 mod seeds;

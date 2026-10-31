@@ -365,7 +365,7 @@ pub(crate) async fn install_pack_slot(
     pack: &PackSource,
     slot: &str,
     profile: &str,
-) -> Result<gents::config_client::DesiredStateApplyCounts> {
+) -> Result<gents::store::config_client::DesiredStateApplyCounts> {
     let manifest = pack.manifest();
     let config = pack_config(pack, owner)?;
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
@@ -547,7 +547,7 @@ mod tests {
                 let found = access
                     .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
-                            gents::config_client::read_desired_state_record_in_txn(
+                            gents::store::config_client::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,
                             )
                             .await

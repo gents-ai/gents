@@ -1,6 +1,6 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::{graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
+use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
 use gents_protocol::{
     goal_control::{
         GoalControlOutcome, GoalOperation, SessionGoalControl, SessionGoalControlReceipt,

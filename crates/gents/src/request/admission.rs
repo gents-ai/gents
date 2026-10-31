@@ -16,8 +16,8 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::request::watcher::AgentRequest;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::NodeIdentity;
 
 #[derive(Debug)]
@@ -231,10 +231,10 @@ pub(crate) async fn terminalize_pending_request_rejection(
         }}"#
     );
     let mutation = &mutation;
-    crate::config_client::ConfigAccess::transact_local_idempotent(
+    crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::IdempotentTransactionRetry::Standard,
         operation,
         |txn| {
             let owner = &owner;
@@ -637,7 +637,7 @@ async fn verify_request_input(
             "runtime queue source requires authenticated local-control issuance",
         )?;
         if queue.position.is_some() {
-            crate::config_client::ConfigAccess::transact_local_readonly(
+            crate::store::config_client::ConfigAccess::transact_local_readonly(
                 node,
                 None,
                 "admission.queue_position",
@@ -840,7 +840,7 @@ pub(crate) async fn load_request_context(
     Option<crate::documents::Tools>,
     Vec<crate::documents::AgentTargetDocument>,
 )> {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     let owner = node_did.to_owned();
     let agent_id = agent_id.to_owned();
     ConfigAccess::transact_local_readonly(node, None, "request_admission.context", move |txn| {
@@ -862,7 +862,7 @@ pub(crate) fn classify_context_error(error: anyhow::Error) -> AgentRequestAdmiss
 /// [`load_request_context`] inside `txn`; a refusal is an
 /// [`AgentRequestAdmissionError`] in the returned error.
 pub(crate) async fn load_request_context_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<(
@@ -870,9 +870,9 @@ pub(crate) async fn load_request_context_in_txn(
     Option<crate::documents::Tools>,
     Vec<crate::documents::AgentTargetDocument>,
 )> {
-    use crate::config_client::read_desired_state_document_in_txn as read;
     use crate::documents::{Agent, AgentContext, AgentTargetDocument, Tools};
     use crate::store::collection::Collection;
+    use crate::store::config_client::read_desired_state_document_in_txn as read;
     let agent: Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_id)
             .await?
@@ -944,8 +944,8 @@ async fn verify_automated_trigger_source(
         r#"{{ Trigger(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ trigger_id node_did task_id source enabled }} }}"#,
         escape_graphql_string(doc),
     ), "reload runtime trigger").await.map_err(AgentRequestAdmissionError::unavailable)?;
-    let triggers: Vec<TriggerRow> =
-        crate::graphql::rows(&response, "Trigger").map_err(AgentRequestAdmissionError::denied)?;
+    let triggers: Vec<TriggerRow> = crate::store::graphql::rows(&response, "Trigger")
+        .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
         triggers.len() == 1,
         "runtime trigger is missing or ambiguous",
@@ -966,8 +966,8 @@ async fn verify_automated_trigger_source(
         r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_id enabled }} }}"#,
         escape_graphql_string(&trigger.task_id), escape_graphql_string(node_did),
     ), "reload runtime trigger task").await.map_err(AgentRequestAdmissionError::unavailable)?;
-    let tasks: Vec<TaskRow> =
-        crate::graphql::rows(&response, "Task").map_err(AgentRequestAdmissionError::denied)?;
+    let tasks: Vec<TaskRow> = crate::store::graphql::rows(&response, "Task")
+        .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
         tasks.len() == 1 && tasks[0].enabled && tasks[0].agent_id == target_agent_id,
         "runtime trigger task is missing, disabled, ambiguous, or targets another agent",
@@ -1199,7 +1199,7 @@ async fn load_signed_request(
     )
     .await
     .map_err(AgentRequestAdmissionError::unavailable)?;
-    crate::graphql::first_row(&response, "AgentRequest")
+    crate::store::graphql::first_row(&response, "AgentRequest")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
             AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
@@ -1268,12 +1268,13 @@ mod tests {
             .unwrap();
         let created = node.execute(&create.graphql_mutation().unwrap()).await;
         assert!(!created.has_errors(), "{:?}", created.errors);
-        let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        let doc_id =
+            crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
+                .unwrap()
+                .unwrap()["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned();
 
         super::terminalize_pending_request_rejection(
             &node,
@@ -1285,14 +1286,14 @@ mod tests {
         .await
         .unwrap();
 
-        let escaped_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+        let escaped_doc_id = crate::store::graphql::escape_graphql_string(&doc_id);
         let selected = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
             ))
             .await;
         assert!(!selected.has_errors(), "{:?}", selected.errors);
-        let row = crate::graphql::first_row::<serde_json::Value>(&selected, "AgentRequest")
+        let row = crate::store::graphql::first_row::<serde_json::Value>(&selected, "AgentRequest")
             .unwrap()
             .unwrap();
         assert_eq!(row["lifecycle_state"], "failed");
@@ -1320,7 +1321,7 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        let owner = crate::graphql::escape_graphql_string(identity.did());
+        let owner = crate::store::graphql::escape_graphql_string(identity.did());
         for mutation in [
             format!(
                 r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
@@ -1372,12 +1373,13 @@ mod tests {
                 .unwrap();
             let result = node.execute(&create.graphql_mutation().unwrap()).await;
             assert!(!result.has_errors(), "{:?}", result.errors);
-            let doc = crate::graphql::single_mutation_document(&result, "create_AgentRequest")
-                .unwrap()
-                .unwrap()["_docID"]
-                .as_str()
-                .unwrap()
-                .to_owned();
+            let doc =
+                crate::store::graphql::single_mutation_document(&result, "create_AgentRequest")
+                    .unwrap()
+                    .unwrap()["_docID"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
             let request = super::load_request_for_admission_test(&node, &doc)
                 .await
                 .unwrap();
@@ -1401,7 +1403,7 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        let owner = crate::graphql::escape_graphql_string(identity.did());
+        let owner = crate::store::graphql::escape_graphql_string(identity.did());
         for mutation in [
             format!(
                 r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
@@ -1449,12 +1451,13 @@ mod tests {
                 .unwrap();
             let result = node.execute(&create.graphql_mutation().unwrap()).await;
             assert!(!result.has_errors(), "{:?}", result.errors);
-            let doc_id = crate::graphql::single_mutation_document(&result, "create_AgentRequest")
-                .unwrap()
-                .unwrap()["_docID"]
-                .as_str()
-                .unwrap()
-                .to_owned();
+            let doc_id =
+                crate::store::graphql::single_mutation_document(&result, "create_AgentRequest")
+                    .unwrap()
+                    .unwrap()["_docID"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
 
             let request = super::load_request_for_admission_test(&node, &doc_id)
                 .await
@@ -1479,7 +1482,7 @@ mod tests {
             let selected = node
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                    crate::graphql::escape_graphql_string(session_id),
+                    crate::store::graphql::escape_graphql_string(session_id),
                     crate::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
@@ -1541,7 +1544,7 @@ mod tests {
             .unwrap();
         let result = node.execute(&create.graphql_mutation().unwrap()).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
-        crate::graphql::single_mutation_document(&result, "create_AgentRequest")
+        crate::store::graphql::single_mutation_document(&result, "create_AgentRequest")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -1564,7 +1567,7 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        let node_did = crate::graphql::escape_graphql_string(identity.did());
+        let node_did = crate::store::graphql::escape_graphql_string(identity.did());
         for (session_id, requester_did) in [
             ("corrupt-foreign-scope", Some(foreign.did())),
             ("corrupt-own-scope", Some(identity.did())),
@@ -1572,7 +1575,7 @@ mod tests {
             let requester = match requester_did {
                 Some(did) => format!(
                     r#"requester_did: "{}","#,
-                    crate::graphql::escape_graphql_string(did)
+                    crate::store::graphql::escape_graphql_string(did)
                 ),
                 None => "requester_did: null,".to_owned(),
             };
@@ -1582,7 +1585,7 @@ mod tests {
                         session_id: "{}", node_did: "{node_did}", {requester} agent_id: "agent",
                         created_at: "not-an-rfc3339-timestamp"
                     }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(session_id),
+                    crate::store::graphql::escape_graphql_string(session_id),
                 ))
                 .await;
             assert!(!seeded.has_errors(), "{session_id}: {:?}", seeded.errors);
@@ -1604,7 +1607,7 @@ mod tests {
             let selected = node
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
-                    crate::graphql::escape_graphql_string(&doc_id),
+                    crate::store::graphql::escape_graphql_string(&doc_id),
                 ))
                 .await;
             assert!(!selected.has_errors(), "{:?}", selected.errors);
@@ -1616,7 +1619,7 @@ mod tests {
             let sessions = node
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                    crate::graphql::escape_graphql_string(session_id),
+                    crate::store::graphql::escape_graphql_string(session_id),
                     crate::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
@@ -1651,7 +1654,7 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        let node_did = crate::graphql::escape_graphql_string(identity.did());
+        let node_did = crate::store::graphql::escape_graphql_string(identity.did());
         for (session_id, sibling_request_id, sibling_created_at) in [
             ("facts-invalid-created-at", "sibling-invalid", "yesterday"),
             (
@@ -1685,9 +1688,9 @@ mod tests {
                         content: "sibling turn", lifecycle_state: "pending",
                         created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
                     }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(sibling_request_id),
-                    crate::graphql::escape_graphql_string(session_id),
-                    crate::graphql::escape_graphql_string(sibling_created_at),
+                    crate::store::graphql::escape_graphql_string(sibling_request_id),
+                    crate::store::graphql::escape_graphql_string(session_id),
+                    crate::store::graphql::escape_graphql_string(sibling_created_at),
                 ))
                 .await;
             assert!(!sibling.has_errors(), "{session_id}: {:?}", sibling.errors);
@@ -1705,7 +1708,7 @@ mod tests {
             let selected = node
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
-                    crate::graphql::escape_graphql_string(&doc_id),
+                    crate::store::graphql::escape_graphql_string(&doc_id),
                 ))
                 .await;
             assert!(!selected.has_errors(), "{:?}", selected.errors);
@@ -1717,7 +1720,7 @@ mod tests {
             let sessions = node
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                    crate::graphql::escape_graphql_string(session_id),
+                    crate::store::graphql::escape_graphql_string(session_id),
                     crate::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
@@ -1782,7 +1785,7 @@ mod tests {
                     .unwrap();
                 let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did()).build().await.unwrap());
                 ensure_runtime_schemas(&node).await.unwrap();
-                let node_did = crate::graphql::escape_graphql_string(identity.did());
+                let node_did = crate::store::graphql::escape_graphql_string(identity.did());
                 let created = node
                     .execute(&format!(
                         r#"mutation {{ create_AgentRequest(input: {{
@@ -1796,7 +1799,7 @@ mod tests {
                     ))
                     .await;
                 assert!(!created.has_errors(), "{:?}", created.errors);
-                let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+                let doc_id = crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
                     .unwrap()
                     .unwrap()["_docID"]
                     .as_str()
@@ -1816,7 +1819,7 @@ mod tests {
                 let selected = node
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} AgentSession(filter: {{ session_id: {{ _eq: "skew-session" }} }}) {{ _docID }} }}"#,
-                        crate::graphql::escape_graphql_string(&doc_id),
+                        crate::store::graphql::escape_graphql_string(&doc_id),
                     ))
                     .await;
                 assert!(!selected.has_errors(), "{:?}", selected.errors);
@@ -1872,7 +1875,7 @@ mod tests {
         let response = node.execute(&query).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let mut row: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&response, "AgentRequest")
+            crate::store::graphql::first_row(&response, "AgentRequest")
                 .unwrap()
                 .unwrap();
         row.lifecycle_state =
@@ -1941,7 +1944,7 @@ mod tests {
         );
         ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-        let owner = crate::graphql::escape_graphql_string(identity.did());
+        let owner = crate::store::graphql::escape_graphql_string(identity.did());
         let seeded = node.execute(&format!(r#"mutation {{ create_Agent(input: {{agent_id:"agent-1",node_did:"{owner}",inference_profile_id:"inference",enabled:true}}) {{_docID}} }}"#)).await;
         assert!(!seeded.has_errors(), "{:?}", seeded.errors);
         let request_id = uuid::Uuid::new_v4().to_string();
@@ -1994,7 +1997,7 @@ mod tests {
         queued.content = "stale queued content".to_string();
 
         let runtime_state = node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
-            crate::graphql::escape_graphql_string(&doc_id))).await;
+            crate::store::graphql::escape_graphql_string(&doc_id))).await;
         assert!(!runtime_state.has_errors(), "{:?}", runtime_state.errors);
         let (_authority_owner, authority) = enrollment_authority_channel();
         let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, authority);
@@ -2010,7 +2013,7 @@ mod tests {
         let response = node
             .execute(&format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&queued.doc_id),
+                crate::store::graphql::escape_graphql_string(&queued.doc_id),
             ))
             .await;
         assert!(

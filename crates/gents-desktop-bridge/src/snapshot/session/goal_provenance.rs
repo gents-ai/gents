@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use gents::config_client::ConfigRead;
 use gents::session::canonical_rows::TranscriptMessageRow;
+use gents::store::config_client::ConfigRead;
 use gents_desktop_core::client::CanonicalTranscriptDependencies;
 use gents_protocol::output::{
     origin::{resolve_origin, ObservedMessage},

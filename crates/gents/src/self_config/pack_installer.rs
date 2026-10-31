@@ -186,7 +186,7 @@ impl PackInstaller {
             }
             _ => coordinate.to_owned(),
         };
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let installed = crate::pack::installed_packs(
             self.home.as_deref(),
             Some((&access, self.core.node_did())),
@@ -235,7 +235,7 @@ impl PackInstaller {
                 .transpose()
                 .map_err(Into::into);
         }
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
@@ -283,7 +283,7 @@ impl PackInstaller {
         bindings: &crate::pack::PackInferenceBindings,
     ) -> anyhow::Result<()> {
         let owner = self.core.node_did();
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
             Some(self.core.identity()?),
             "self_config.pack_profile_choice",

@@ -1395,9 +1395,9 @@ mod data_calls {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::config_client::ConfigAccess;
     use crate::plugin::data::DataCaller;
     use crate::plugin::PluginVerdict;
+    use crate::store::config_client::ConfigAccess;
 
     const NODE: &str = "did:key:z6Mknode";
 
@@ -1683,7 +1683,7 @@ mod tool_writes {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::published_spawn_parent;
 
     const NODE: &str = "did:key:z6Mknode";
@@ -1977,11 +1977,11 @@ mod job_calls {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::config_client::ConfigAccess;
     use crate::plugin::data::StampContext;
     use crate::plugin::executor::PluginCall;
     use crate::plugin::job_calls::JobCaller;
     use crate::plugin::PluginVerdict;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
     use crate::tools::background::job::input::tests::{completed_request, open};
     use crate::tools::background::job::keys::{job_session_id, job_spawn_key};

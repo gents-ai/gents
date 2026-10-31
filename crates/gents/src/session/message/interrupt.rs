@@ -3,8 +3,8 @@ use defra_node::EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::config_client::ConfigAccess;
 use crate::session::origin::SessionScope;
+use crate::store::config_client::ConfigAccess;
 
 pub fn agent_interrupt_allowed(
     caller_session: &str,
@@ -48,7 +48,7 @@ pub async fn interrupt_session(
         let session_id = target.session_id.clone();
         let node_did = target.node_did.clone();
         let requester_did = target.requester_did.clone();
-        return crate::config_client::ConfigAccess::transact_local_write(
+        return crate::store::config_client::ConfigAccess::transact_local_write(
             node,
             None,
             "session.interrupt",

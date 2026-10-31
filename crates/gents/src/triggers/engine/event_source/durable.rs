@@ -1,6 +1,6 @@
 use super::*;
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use gents_protocol::event_delivery::EventConsumer;
 
 pub(super) struct PendingCheckpoint {
@@ -135,7 +135,7 @@ impl EventSource {
                 "trigger.advance_arrival",
                 |txn| {
                     Box::pin(async {
-                        crate::config_client::event_source_cursor::checkpoint_prefix(
+                        crate::store::config_client::event_source_cursor::checkpoint_prefix(
                             txn,
                             &pending.owner,
                             &EventConsumer::Trigger {
@@ -289,7 +289,7 @@ impl EventSource {
             "trigger.read_arrival_cursor",
             |txn| {
                 Box::pin(async {
-                    crate::config_client::event_source_cursor::load_for_source(
+                    crate::store::config_client::event_source_cursor::load_for_source(
                         txn,
                         &owner,
                         &consumer,
@@ -302,27 +302,25 @@ impl EventSource {
         .await?;
         let record = match record {
             Some(record) => record,
-            None => {
-                ConfigAccess::transact_local_write(
-                    &self.node,
-                    None,
-                    "trigger.seed_arrival_cursor",
-                    |txn| {
-                        Box::pin(async {
-                            crate::config_client::event_source_cursor::load_or_seed_for_source(
-                                txn,
-                                &owner,
-                                &consumer,
-                                &trigger.source_collection,
-                            )
-                            .await
-                        })
-                    },
-                )
-                .await?
-            }
+            None => ConfigAccess::transact_local_write(
+                &self.node,
+                None,
+                "trigger.seed_arrival_cursor",
+                |txn| {
+                    Box::pin(async {
+                        crate::store::config_client::event_source_cursor::load_or_seed_for_source(
+                            txn,
+                            &owner,
+                            &consumer,
+                            &trigger.source_collection,
+                        )
+                        .await
+                    })
+                },
+            )
+            .await?,
         };
-        let response = crate::graphql::graphql_with_transaction_retry(&self.node, &format!(
+        let response = crate::store::graphql::graphql_with_transaction_retry(&self.node, &format!(
             "{{ _documentArrivals(collection: \"{}\", after: \"{}\", limit: 128) {{ head next entries {{ cursor docID }} }} }}",
             escape_graphql_string(&record.cursor.source_collection), escape_graphql_string(&record.cursor.after)), "trigger.read_arrivals").await?;
         let data = response.data.context("arrival query omitted data")?;
@@ -399,7 +397,7 @@ impl EventSource {
     ) -> anyhow::Result<()> {
         ConfigAccess::transact_local_write(&self.node, None, "trigger.exclude_arrival", |txn| {
             Box::pin(async {
-                crate::config_client::event_source_cursor::exclude_arrival(
+                crate::store::config_client::event_source_cursor::exclude_arrival(
                     txn,
                     owner,
                     &EventConsumer::Trigger {

@@ -11,11 +11,11 @@ use serde_json::json;
 use super::inference::tests::InterruptionCapture;
 use super::{AgentDaemon, AgentDaemonInit};
 use crate::agent::runtime::StartupBarrier;
-use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
+use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };
@@ -142,7 +142,9 @@ impl Harness {
         .unwrap();
         ConfigAccess::transact_local_write(&self.node, None, "test.task_hooks", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         })
         .await
         .unwrap();
@@ -183,18 +185,18 @@ impl Harness {
     }
 
     async fn trigger_doc_id(&self) -> String {
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             self.node.as_ref(),
             &format!(
                 r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(self.owner()),
-                crate::graphql::escape_graphql_string(TRIGGER_ID),
+                crate::store::graphql::escape_graphql_string(self.owner()),
+                crate::store::graphql::escape_graphql_string(TRIGGER_ID),
             ),
             "test.load_task_hook_trigger",
         )
         .await
         .unwrap();
-        let row: serde_json::Value = crate::graphql::first_row(&response, "Trigger")
+        let row: serde_json::Value = crate::store::graphql::first_row(&response, "Trigger")
             .unwrap()
             .expect("installed Trigger");
         row["_docID"].as_str().expect("Trigger doc id").to_owned()
@@ -293,7 +295,7 @@ impl Harness {
                 )
                 .await
                 .expect("create task-hook AgentRequest");
-                crate::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+                crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
             }
         };
         crate::request::admission::load_request_for_admission_test(self.node.as_ref(), &doc_id)
@@ -362,17 +364,17 @@ impl Harness {
     }
 
     async fn request_row(&self, doc_id: &str) -> serde_json::Value {
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             self.node.as_ref(),
             &format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state failure_reason }} }}"#,
-                crate::graphql::escape_graphql_string(doc_id),
+                crate::store::graphql::escape_graphql_string(doc_id),
             ),
             "test.load_task_hook_request",
         )
         .await
         .unwrap();
-        crate::graphql::first_row(&response, "AgentRequest")
+        crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("AgentRequest row")
     }
@@ -709,18 +711,18 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
 async fn workspace_bindings(
     harness: &Harness,
 ) -> Vec<crate::tools::workspace::WorkspaceBindingDoc> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         &harness.node,
         &format!(
             r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
-            crate::graphql::escape_graphql_string(WORKSPACE_ID),
-            crate::graphql::escape_graphql_string(harness.owner()),
+            crate::store::graphql::escape_graphql_string(WORKSPACE_ID),
+            crate::store::graphql::escape_graphql_string(harness.owner()),
         ),
         "test.task_hook_bindings",
     )
     .await
     .unwrap();
-    crate::graphql::rows(&response, "WorkspaceBinding").unwrap()
+    crate::store::graphql::rows(&response, "WorkspaceBinding").unwrap()
 }
 
 async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
@@ -757,8 +759,8 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
         "test.remove_workspace_placement",
         &format!(
             r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(WORKSPACE_ID),
-            crate::graphql::escape_graphql_string(harness.owner()),
+            crate::store::graphql::escape_graphql_string(WORKSPACE_ID),
+            crate::store::graphql::escape_graphql_string(harness.owner()),
         ),
     )
     .await
@@ -1001,7 +1003,7 @@ async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
             "test.replace_task_hook_generation",
             &format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&doc_id),
+                crate::store::graphql::escape_graphql_string(&doc_id),
             ),
         )
         .await
@@ -1160,7 +1162,7 @@ impl Harness {
                 "test.supersede_task_hook_execution",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(&doc_id),
+                    crate::store::graphql::escape_graphql_string(&doc_id),
                 ),
             )
             .await
@@ -1267,7 +1269,7 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         }
         ConfigAccess::write_local(&harness.node, "test.revoke_between_task_hooks", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&doc_id)
+            crate::store::graphql::escape_graphql_string(&doc_id)
         )).await.unwrap();
         std::fs::write(gate, "revoked").unwrap();
     };

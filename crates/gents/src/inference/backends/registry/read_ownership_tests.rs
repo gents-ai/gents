@@ -6,7 +6,7 @@ use super::lookup_backend_observation;
 use crate::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
 use crate::inference::llm::tool::Tool;
 use crate::store::identity::NodeIdentity;
-use crate::{config_client::ConfigAccess, defra_node::EmbeddedNode};
+use crate::{defra_node::EmbeddedNode, store::config_client::ConfigAccess};
 
 #[tokio::test]
 async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {

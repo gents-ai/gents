@@ -1,4 +1,4 @@
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::tools::surface::{
     measured_mcp_services_for_access, AgentToolSurfaceConfig, RuntimeToolAvailability, ToolCeiling,
 };

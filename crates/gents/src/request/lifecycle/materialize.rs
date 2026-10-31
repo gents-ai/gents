@@ -77,10 +77,10 @@ async fn resolve_created_agent_request_doc_id(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 2) {{ _docID request_id }} }}"#
     );
     let query_resp =
-        crate::graphql::graphql_with_transaction_retry(node, &query, lookup_error).await?;
+        crate::store::graphql::graphql_with_transaction_retry(node, &query, lookup_error).await?;
 
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
-        crate::graphql::rows(&query_resp, "AgentRequest")?;
+        crate::store::graphql::rows(&query_resp, "AgentRequest")?;
     if rows.len() != 1 {
         anyhow::bail!(
             "{missing_doc_id_error}: request_id lookup returned {} documents",
@@ -139,7 +139,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let mutation = &mutation;
 
-    let response = crate::config_client::ConfigAccess::transact_local_write(
+    let response = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "lifecycle.materialize_pending",
@@ -513,7 +513,7 @@ pub(crate) async fn write_pending_auxiliary_request(
     let mutation = create
         .graphql_mutation_selecting(crate::request::watcher::AGENT_REQUEST_FIELDS)
         .map_err(anyhow::Error::msg)?;
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "lifecycle.materialize_auxiliary",
         &mutation,
@@ -706,27 +706,28 @@ pub async fn activate_workspace_bound_request(
         workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
         pending = RequestLifecycleState::Pending.as_str(),
     );
-    let response = crate::config_client::ConfigAccess::write_local(
+    let response = crate::store::config_client::ConfigAccess::write_local(
         node,
         "lifecycle.activate_workspace_bound",
         &mutation,
     )
     .await?;
     let response: defra_node::QueryResponse = serde_json::from_value(response)?;
-    if crate::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none() {
+    if crate::store::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none()
+    {
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                 request_id lifecycle_state workspace_id
             }} }}"#,
             doc_id = escape_graphql_string(request_doc_id),
         );
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             node,
             &query,
             "recover workspace-bound request activation",
         )
         .await?;
-        let row = crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+        let row = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
             &response,
             "AgentRequest",
         )?;
@@ -878,7 +879,7 @@ impl RequestLifecycle {
         };
         let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-        let resp = crate::config_client::ConfigAccess::write_local(
+        let resp = crate::store::config_client::ConfigAccess::write_local(
             &node,
             "lifecycle.materialize_before_claim",
             &mutation,
@@ -973,7 +974,7 @@ pub(super) struct LabeledSessionRows {
 }
 
 async fn labeled_session_rows_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<LabeledSessionRows> {
     let response = txn
@@ -1026,7 +1027,7 @@ pub(crate) fn created_session_provenance(
 }
 
 pub(super) async fn apply_request_session_projection(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
     now: &str,
 ) -> Result<()> {
@@ -1104,7 +1105,7 @@ pub(super) async fn apply_request_session_projection(
 }
 
 pub(crate) async fn project_refused_request_session_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
     now: &str,
 ) -> Result<()> {
@@ -1139,7 +1140,7 @@ pub(crate) async fn project_refused_request_session_in_txn(
 }
 
 async fn project_refused_request_onto_session_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
     now: &str,
 ) -> Result<()> {
@@ -1296,7 +1297,7 @@ pub struct TaskDeliveryAdmission {
 }
 
 pub async fn write_task_delivery(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
@@ -1315,7 +1316,7 @@ pub async fn write_task_delivery_local(
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "lifecycle.admit_task_delivery",
@@ -1332,7 +1333,7 @@ pub(crate) async fn write_trigger_delivery(
     prepared: &crate::triggers::engine::durable::PreparedFire,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "lifecycle.admit_trigger_delivery",
@@ -1382,7 +1383,7 @@ pub(crate) async fn write_trigger_delivery(
 
 #[doc(hidden)]
 pub async fn supersede_trigger_requests_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     trigger_id: &str,
     excluded_request_id: Option<&str>,
@@ -1450,7 +1451,7 @@ pub async fn supersede_trigger_requests_in_txn(
 }
 
 async fn stage_task_delivery(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
@@ -1460,7 +1461,7 @@ async fn stage_task_delivery(
 }
 
 async fn stage_task_delivery_with_receipt(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
@@ -1472,7 +1473,8 @@ async fn stage_task_delivery_with_receipt(
                 create.caused_by_trigger_id.as_deref() == Some(fire.identity.trigger_id.as_str()),
                 "event request and receipt trigger identity disagree"
             );
-            crate::config_client::event_source_cursor::validate_event_admission(txn, fire).await?;
+            crate::store::config_client::event_source_cursor::validate_event_admission(txn, fire)
+                .await?;
         }
         anyhow::ensure!(
             create.node_did == fire.identity.owner_did
@@ -1617,7 +1619,7 @@ mod task_delivery_tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         let identity = gents_protocol::trigger_delivery::FireIdentity {
             owner_did: PIN_FIXED_DID.into(),
             trigger_id: "manual:task".into(),
@@ -1714,7 +1716,7 @@ mod task_delivery_tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         let message =
             "trigger graph-trigger-retired belongs to a retired graph revision; it no longer runs";
         let lineage = || TriggerLineage {

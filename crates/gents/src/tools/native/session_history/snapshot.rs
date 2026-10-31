@@ -9,7 +9,7 @@ use super::{
     clamp_limit, clean, decode, quoted_graphql_list, CompactionRow, SessionHistoryRow,
     SessionHistorySnapshot, SessionRow,
 };
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 pub async fn load_session_history_snapshot(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -18,7 +18,7 @@ pub async fn load_session_history_snapshot(
 ) -> Result<SessionHistorySnapshot> {
     let agent = node_did.trim().to_owned();
     anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "session.history",
@@ -31,7 +31,7 @@ pub async fn load_session_history_snapshot(
 }
 
 pub async fn load_session_history_snapshot_with_access(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
@@ -46,7 +46,7 @@ pub async fn load_session_history_snapshot_with_access(
 }
 
 async fn load_session_history_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {

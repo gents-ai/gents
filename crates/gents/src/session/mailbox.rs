@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::documents::{WriteToolDecl, WriteToolField};
-use crate::graphql::{
+use crate::inference::llm::tool::ToolDefinition;
+use crate::store::graphql::{
     escape_graphql_string, graphql_with_transaction_retry, rows, single_mutation_document,
     validate_collection_identifier, validate_graphql_name,
 };
-use crate::inference::llm::tool::ToolDefinition;
 
 mod dismiss;
 mod domain;
@@ -553,7 +553,7 @@ async fn stamp_notification(
         deadline_at = optional_string_field("deadline_at", args.deadline_at.as_deref()),
         now = escape_graphql_string(&now),
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "mailbox.create_stamped_item",
         &mutation,
@@ -844,7 +844,7 @@ async fn transition_open_item(
         escape_graphql_string(&now),
         escape_graphql_string(&now),
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "mailbox.close_item",
         &mutation,

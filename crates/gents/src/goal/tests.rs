@@ -17,12 +17,13 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     );
     let response = node.execute(&request).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let request_doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
-        .unwrap()
-        .and_then(|document| document.get("_docID"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap()
-        .to_owned();
+    let request_doc_id =
+        crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
+            .unwrap()
+            .and_then(|document| document.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_owned();
     for (seq, prompt, completion) in [(1, 1000, 50), (2, 200, 7)] {
         let call = format!(
             r#"mutation {{ add_InferenceCall(input: {{
@@ -39,7 +40,7 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
         let response = node.execute(&call).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
-    let usage = crate::config_client::ConfigAccess::transact_local_readonly(
+    let usage = crate::store::config_client::ConfigAccess::transact_local_readonly(
         &node,
         None,
         "goal.session_usage_breakdown_test",

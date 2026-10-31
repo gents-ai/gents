@@ -2,10 +2,10 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
 
 use super::{decode_merged, read_owned_doc, AgentAnchor};
-use crate::config_client::patch::SelfConfigTarget;
-use crate::config_client::ConfigApplyTxn;
 use crate::documents::{BackendAuth, Tools};
 use crate::inference::backends::provider::BackendProviderOauthExt;
+use crate::store::config_client::patch::SelfConfigTarget;
+use crate::store::config_client::ConfigApplyTxn;
 
 /// Lean `SelfConfig.keepsReach`.
 pub fn guard_agent_keeps_reach(

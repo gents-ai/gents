@@ -8,8 +8,8 @@ use gents_protocol::event_delivery::EventConsumer;
 use serde_json::Value;
 use tokio::time::MissedTickBehavior;
 
-use crate::config_client::{event_source_cursor, ConfigAccess};
-use crate::graphql::{document_composite_version, escape_graphql_string};
+use crate::store::config_client::{event_source_cursor, ConfigAccess};
+use crate::store::graphql::{document_composite_version, escape_graphql_string};
 use crate::UpdateSubscriptionSource;
 
 use super::claim::invocation_is_claimable;
@@ -327,7 +327,7 @@ impl CallbackEngine {
         let mut after = self.load_cursor(binding, source).await?;
         loop {
             let page_start = after.clone();
-            let response = crate::graphql::graphql_with_transaction_retry(
+            let response = crate::store::graphql::graphql_with_transaction_retry(
                 &self.node,
                 &format!(
                     "{{ _documentArrivals(collection: \"{}\", after: \"{}\", limit: 128) {{ next entries {{ cursor docID }} }} }}",
@@ -525,16 +525,19 @@ impl CallbackEngine {
         doc_id: &str,
         field: &str,
     ) -> Result<Option<String>> {
-        crate::graphql::validate_collection_identifier(collection)?;
-        crate::graphql::validate_graphql_name(field)?;
+        crate::store::graphql::validate_collection_identifier(collection)?;
+        crate::store::graphql::validate_graphql_name(field)?;
         let query = format!(
             "{{{collection}(filter:{{_docID:{{_eq:\"{}\"}}}},limit:1){{{field}}}}}",
             escape_graphql_string(doc_id)
         );
-        let response =
-            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "source_field")
-                .await?;
-        Ok(crate::graphql::rows::<Value>(&response, collection)?
+        let response = crate::store::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "source_field",
+        )
+        .await?;
+        Ok(crate::store::graphql::rows::<Value>(&response, collection)?
             .first()
             .and_then(|row| row.get(field))
             .and_then(Value::as_str)
@@ -763,7 +766,8 @@ pub(super) async fn fetch_source_doc(
         id = escape_graphql_string(source_doc_id),
     );
     let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "fetch_source_doc").await?;
+        crate::store::graphql::graphql_with_transaction_retry(node, &query, "fetch_source_doc")
+            .await?;
     let Some(row) = response
         .data
         .as_ref()
@@ -833,7 +837,7 @@ mod grouped_tests {
             .unwrap());
         let query = "{CallbackInvocation {input origin idempotency_key lifecycle_state error}}";
         let response = node.execute(query).await;
-        let rows = crate::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
+        let rows = crate::store::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
         assert_eq!(rows.len(), 1);
         let frozen = crate::triggers::callback::documents::callback_input_from_storage(
             rows[0]["input"].clone(),
@@ -841,7 +845,7 @@ mod grouped_tests {
         let members = node
             .execute("{CallbackMember(order:{_docID:ASC}){value}}")
             .await;
-        let ordered = crate::graphql::rows::<Value>(&members, "CallbackMember").unwrap();
+        let ordered = crate::store::graphql::rows::<Value>(&members, "CallbackMember").unwrap();
         assert_eq!(
             frozen,
             Value::Array(ordered),
@@ -863,7 +867,7 @@ mod grouped_tests {
             .await
             .unwrap());
         let response = node.execute(query).await;
-        let rows = crate::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
+        let rows = crate::store::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
         assert_eq!(
             rows.len(),
             1,

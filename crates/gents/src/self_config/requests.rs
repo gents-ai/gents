@@ -426,7 +426,7 @@ pub(super) fn automation_request(
             if target == SelfConfigTarget::EventSource {
                 if let Some(collection) = merged.get("source_collection").and_then(Value::as_str) {
                     anyhow::ensure!(
-                        crate::config_client::collection_is_installed(txn, collection).await?,
+                        crate::store::config_client::collection_is_installed(txn, collection).await?,
                         "event source source_collection {collection:?} is not an installed collection; install its schema first with the schema tool (argv:[\"help\",\"collection\"])"
                     );
                 }

@@ -420,7 +420,7 @@ impl EvalDefinition {
                             ensure!(!collections.is_empty(), "schema capture {name} needs collection names");
                             let mut names = BTreeSet::new();
                             for collection in collections {
-                                crate::graphql::validate_collection_identifier(collection)?;
+                                crate::store::graphql::validate_collection_identifier(collection)?;
                                 ensure!(names.insert(collection), "schema capture {name} repeats {collection}");
                             }
                         },
@@ -500,7 +500,7 @@ mod tests {
             value["updated_at"] = updated_at.into();
             let parsed = parse(value);
             assert_eq!(parsed.updated_at.as_deref(), Some(updated_at));
-            crate::config_client::desired_state_document_digest(
+            crate::store::config_client::desired_state_document_digest(
                 &serde_json::to_value(&parsed).unwrap(),
             )
             .unwrap()
@@ -519,7 +519,8 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(pack.eval_definitions.len(), 1);
-        let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&pack).unwrap();
+        let plan =
+            crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&pack).unwrap();
         assert!(plan
             .documents()
             .iter()

@@ -197,8 +197,8 @@ async fn requests(
 ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(session),
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
     Ok(serde_json::from_value(

@@ -126,7 +126,7 @@ pub(crate) async fn bind_codex_shim(
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
-        graphql: gents::config_client::GraphqlEndpoint::as_principal(
+        graphql: gents::store::config_client::GraphqlEndpoint::as_principal(
             args.graphql.clone(),
             args.node_did.clone(),
         ),

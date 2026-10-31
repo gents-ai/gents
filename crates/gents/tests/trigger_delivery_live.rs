@@ -3,10 +3,10 @@
 mod support;
 
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{
+use gents::store::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
 use std::{

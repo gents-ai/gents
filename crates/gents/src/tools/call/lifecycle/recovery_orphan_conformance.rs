@@ -35,7 +35,7 @@ async fn terminalize_accepted_parent(
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output }} }}"#,
-            crate::graphql::escape_graphql_string(request_doc_id),
+            crate::store::graphql::escape_graphql_string(request_doc_id),
         ))
         .await;
     assert!(
@@ -74,8 +74,8 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
         .node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state await_mode }} AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ caused_by_parent_tool_call_doc_id interrupt_requested_at lifecycle_state }} }}"#,
-            crate::graphql::escape_graphql_string(&tool_doc_id),
-            crate::graphql::escape_graphql_string(&message.caused_request_doc_id),
+            crate::store::graphql::escape_graphql_string(&tool_doc_id),
+            crate::store::graphql::escape_graphql_string(&message.caused_request_doc_id),
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::control::control;
 use gents::tools::background::job::dispatch::split_address;
 use gents::tools::background::job::view::{

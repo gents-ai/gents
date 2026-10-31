@@ -1792,10 +1792,10 @@ async fn attribution_of(node: &EmbeddedNode, request_id: &str) -> Option<String>
     let response = node
         .execute(&format!(
             r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{}"}}}}) {{ backend_config_fingerprint }} }}"#,
-            crate::graphql::escape_graphql_string(request_id)
+            crate::store::graphql::escape_graphql_string(request_id)
         ))
         .await;
-    crate::graphql::rows::<Value>(&response, "InferenceCall")
+    crate::store::graphql::rows::<Value>(&response, "InferenceCall")
         .ok()?
         .first()?
         .get("backend_config_fingerprint")?
@@ -2132,7 +2132,7 @@ async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation
             .await;
             let response = access.execute(&format!(
                 r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#,
-                crate::graphql::escape_graphql_string(&request_id)
+                crate::store::graphql::escape_graphql_string(&request_id)
             )).await.unwrap();
             let rows = response["data"]["InferenceCall"].as_array().unwrap();
             assert_eq!(rows.len(), 1, "{}", case["name"]);

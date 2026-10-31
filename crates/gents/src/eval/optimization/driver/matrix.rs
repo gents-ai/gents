@@ -18,7 +18,6 @@ use self::fixtures::{
     SMALL_DEFINITION, TRIALS_PER_CASE, VALIDATION_CASES,
 };
 use self::journal::runs_started;
-use crate::config_client::ConfigAccess;
 use crate::documents::EvalSplit;
 use crate::eval::checks::CheckRegistry;
 use crate::eval::optimization::driver::{run_job, JobOutcome, JobRequest};
@@ -27,6 +26,7 @@ use crate::eval::optimization::proposer::Proposer;
 use crate::eval::optimization::target::JobTarget;
 use crate::eval::runner::freeze::tests::{Launching, OWNER};
 use crate::eval::runner::{Capture, RunOptions, ScriptedExecutor, TrialExecutor};
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 pub(crate) struct Harness {

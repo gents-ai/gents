@@ -5,9 +5,9 @@ pub use crate::documents::InferenceBackend;
 use crate::documents::{
     AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackendObservation,
 };
-use crate::graphql::escape_graphql_string;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
+use crate::store::graphql::escape_graphql_string;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -259,9 +259,12 @@ async fn query_backend_records(
 ) -> Result<Vec<(String, InferenceBackend)>> {
     let query =
         format!("query {{ InferenceBackend({arguments}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}");
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "query_backend_records")
-            .await?;
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "query_backend_records",
+    )
+    .await?;
     response
         .data
         .as_ref()
@@ -346,7 +349,7 @@ pub async fn lookup_backend_observation(
     node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackendObservation>> {
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "backend_registry.observation",
@@ -360,7 +363,7 @@ pub async fn lookup_backend_observation(
 }
 
 pub async fn lookup_backend_observation_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackendObservation>> {
@@ -426,7 +429,7 @@ async fn write_probe_observation(
         r#"mutation {{ update_InferenceBackend(docID: "{}", input: {input}) {{ _docID }} }}"#,
         escape_graphql_string(&doc_id)
     );
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "backend_registry.update_probe",
         &mutation,
@@ -442,7 +445,7 @@ pub(crate) async fn record_model_catalog(
     backend: &InferenceBackend,
     catalog: BackendModelCatalog,
 ) -> Result<()> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "backend_registry.record_catalog",
@@ -455,7 +458,7 @@ pub(crate) async fn record_model_catalog(
 }
 
 pub async fn record_model_catalog_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     backend: &InferenceBackend,
     catalog: BackendModelCatalog,
 ) -> Result<()> {
@@ -561,7 +564,7 @@ pub async fn record_model_catalog_in_txn(
 // The credential that authorized discovery has no representation in
 // `BackendModelCatalog`.
 pub async fn record_discovered_catalog_on(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     backend: &InferenceBackend,
     models: Vec<AdvertisedModel>,
 ) -> Result<BackendModelCatalog> {
@@ -580,7 +583,7 @@ pub async fn record_discovered_catalog_on(
 }
 
 pub async fn record_connection_catalog_on(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     owner: &str,
     provider_kind: BackendProviderKind,
     endpoint: &str,

@@ -5,8 +5,8 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::request::watcher::AgentRequest;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 pub(crate) async fn resolve_request_doc_id(
     node: &EmbeddedNode,

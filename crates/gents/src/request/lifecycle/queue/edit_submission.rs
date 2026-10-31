@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::session_input_edit::{
@@ -147,7 +147,7 @@ async fn submit_prepared_edit(
             ),
         )
         .await?;
-    let doc_id = crate::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
     match tokio::time::timeout(RECEIPT_WAIT, answered(access, &doc_id, &command)).await {
         Ok(receipt) => receipt,
         Err(_) => anyhow::bail!(
@@ -198,7 +198,7 @@ async fn effect_visible(
     command: &SessionInputEdit,
     receipt: &SessionInputEditReceipt,
 ) -> Result<bool> {
-    let ids = crate::graphql::graphql_string_list_literal(
+    let ids = crate::store::graphql::graphql_string_list_literal(
         command
             .edit
             .selected_request_doc_ids

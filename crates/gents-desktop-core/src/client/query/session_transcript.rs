@@ -15,7 +15,7 @@ const MAX_CANONICAL_DEPENDENCY_ROWS: usize = 2_048;
 #[derive(Clone, Copy)]
 pub(super) enum TranscriptAccess<'a> {
     Local(&'a EmbeddedNode),
-    Config(&'a gents::config_client::ConfigAccess),
+    Config(&'a gents::store::config_client::ConfigAccess),
 }
 
 impl TranscriptAccess<'_> {
@@ -48,7 +48,8 @@ pub(super) async fn read_request_documents(
     let mut observed =
         rapidhash::RapidHashSet::with_capacity_and_hasher(unique_doc_ids.len(), Default::default());
     for batch in unique_doc_ids.chunks(BATCH_SIZE) {
-        let ids = gents::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
+        let ids =
+            gents::store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
         let query =
             format!(r#"{{ {AGENT_REQUEST_NAME}(docIDs: {ids}) {{ {AGENT_REQUEST_FIELDS} }} }}"#);
         let data = access.execute(&query, operation).await?;
@@ -587,7 +588,7 @@ pub async fn load_session_transcript_page(
 }
 
 pub async fn load_session_transcript_page_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -626,7 +627,7 @@ pub async fn load_session_transcript_window(
 }
 
 pub async fn load_session_transcript_window_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -848,7 +849,7 @@ async fn load_session_transcript_window_with_access(
             .chain(unanswered.iter().filter_map(|row| row.message_sequence))
             .max()
             .unwrap_or_default();
-        let owners = gents::graphql::graphql_string_list_literal(
+        let owners = gents::store::graphql::graphql_string_list_literal(
             unanswered
                 .iter()
                 .filter_map(|row| row.request_doc_id.as_deref())
@@ -1014,7 +1015,7 @@ pub async fn load_session_context_store(
 }
 
 pub async fn load_session_context_store_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -1101,7 +1102,7 @@ pub async fn load_session_compaction_entries(
 }
 
 pub async fn load_session_compaction_entries_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -1226,7 +1227,7 @@ mod dependency_identity_tests {
             let mutation = format!(
                 "mutation {{ create_CompactionEntry(input: {{ compaction_key: \"{key}\", session_id: \"session\", node_did: \"{owner}\", requester_did: {requester}, sequence: 1, summary: \"retained\" }}) {{ _docID }} }}"
             );
-            gents::config_client::ConfigAccess::write_local(
+            gents::store::config_client::ConfigAccess::write_local(
                 &node,
                 "test.context.compaction",
                 &mutation,

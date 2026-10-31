@@ -322,7 +322,9 @@ async fn upsert_backend_configuration(
     node: &std::sync::Arc<EmbeddedNode>,
     backend: &InferenceBackend,
 ) {
-    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     let value = serde_json::to_value(backend).unwrap();
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::InferenceBackend,
@@ -332,7 +334,9 @@ async fn upsert_backend_configuration(
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.backend.seed", |txn| {
         let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();

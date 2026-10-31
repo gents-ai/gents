@@ -79,7 +79,7 @@ fn scoped_request_sessions_filter(
 ) -> String {
     let node_did = escape_graphql_string(node_did);
     let session_ids =
-        crate::graphql::graphql_string_list_literal(session_ids.iter().map(String::as_str));
+        crate::store::graphql::graphql_string_list_literal(session_ids.iter().map(String::as_str));
     let requester_filter = requester_filter(requester_scope);
     format!(
         r#"filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _in: {session_ids} }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
@@ -101,7 +101,7 @@ fn requester_filter(requester_scope: Option<Option<&str>>) -> String {
 }
 
 pub(crate) async fn load_scoped_request_facts_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session: &gents_protocol::session::AgentSession,
     all_requesters: bool,
 ) -> Result<Vec<SessionRequestFact>> {
@@ -119,7 +119,7 @@ pub(crate) async fn load_scoped_request_facts_in_txn(
 }
 
 async fn load_request_facts_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     requester_scope: Option<Option<&str>>,
@@ -230,7 +230,7 @@ pub(crate) fn session_current_hop(facts: &[SessionRequestFact]) -> u32 {
 }
 
 pub(crate) async fn load_session_current_hop_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
@@ -245,7 +245,7 @@ pub(crate) async fn load_session_current_hop(
     session_id: &str,
 ) -> Result<u32> {
     let (node_did, session_id) = (node_did.to_owned(), session_id.to_owned());
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "session.current_hop",
@@ -260,7 +260,7 @@ pub(crate) async fn load_session_current_hop(
 }
 
 pub async fn load_latest_request_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     requester_scope: Option<Option<&str>>,
@@ -270,7 +270,7 @@ pub async fn load_latest_request_in_txn(
 }
 
 pub(crate) async fn load_latest_requests_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_ids: &[String],
     requester_scope: Option<Option<&str>>,
@@ -367,7 +367,7 @@ fn normalize_preview(content: &str) -> String {
 }
 
 pub(crate) async fn advance_session_request_observation_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     incoming: &SessionRequestFact,
     preview_content: &str,
     now: &str,
@@ -394,7 +394,7 @@ pub(crate) const REFUSAL_PROJECTION_EVENT_TARGET: &str = "gents::refusal_project
 /// Write failures still propagate; they roll the refusal back with every
 /// other mutation it owns.
 pub(crate) async fn advance_refused_request_observation_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     incoming: &SessionRequestFact,
     preview_content: &str,
     now: &str,
@@ -416,7 +416,7 @@ enum ObservationBoundary {
 }
 
 async fn advance_observation_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     incoming: &SessionRequestFact,
     preview_content: &str,
     now: &str,
@@ -486,7 +486,7 @@ pub(crate) struct SessionRequestRefresh<'a> {
 }
 
 pub(crate) async fn refresh_session_request_observation_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -530,7 +530,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
         }}"#
     );
     let response = txn.execute_local_response(&query).await?;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentRequest")?;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "AgentRequest")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "session observation refresh found duplicate authoritative request rows"
@@ -595,7 +595,7 @@ pub(crate) async fn update_session_title_with_source(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid title update timestamp")?;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.update_title",
@@ -621,7 +621,7 @@ pub(crate) async fn update_session_title_with_source(
 }
 
 pub async fn apply_title_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -692,14 +692,14 @@ pub(crate) async fn load_recent_titles_for_agent(
         }}"#
     );
 
-    let resp = crate::graphql::graphql_with_transaction_retry(
+    let resp = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load_recent_titles_for_agent",
     )
     .await?;
 
-    let rows = crate::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
     let mut sessions: Vec<gents_protocol::session::AgentSession> = rows
         .iter()
         .map(|row| decode_session_row(row).map(|row| row.session))

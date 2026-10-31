@@ -8,9 +8,9 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
 use crate::request::watcher::AgentRequest;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 
 use super::materialize::EnqueuedAgentRequest;
 use super::ExecutionOrigin;

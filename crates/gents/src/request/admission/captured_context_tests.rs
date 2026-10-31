@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -21,7 +21,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
     crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
-    let owner = crate::graphql::escape_graphql_string(identity.did());
+    let owner = crate::store::graphql::escape_graphql_string(identity.did());
     for mutation in [
         format!(
             r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}" }}) {{ _docID }} }}"#
@@ -70,7 +70,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         )
         .await
         .unwrap();
-        let doc = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+        let doc = crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -89,7 +89,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         let stored = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{ {} }} }}"#,
-                crate::graphql::escape_graphql_string(&doc),
+                crate::store::graphql::escape_graphql_string(&doc),
                 crate::SIGNED_REQUEST_FIELDS,
             ))
             .await

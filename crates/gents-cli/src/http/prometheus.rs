@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
 
@@ -17,7 +17,7 @@ use crate::http::liveness::{
     LivenessActivityRow, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
 use crate::post_graphql;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
@@ -180,7 +180,7 @@ pub(crate) async fn render_prometheus_metrics(
     let data = with_local_native_executors(data);
     let inference_metrics = load_inference_metrics_query_data(graphql).await?;
     let background_completion = gents::load_background_completion_diagnostics(
-        &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
+        &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
         local_node_did,
     )
     .await
@@ -1704,7 +1704,7 @@ mod tests {
         });
 
         let data = load_metrics_query_data(
-            &gents::config_client::GraphqlEndpoint::anonymous(format!(
+            &gents::store::config_client::GraphqlEndpoint::anonymous(format!(
                 "http://{addr}/api/v0/graphql"
             )),
             "did:test:local",

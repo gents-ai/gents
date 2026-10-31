@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::config_client::ConfigAccess;
 use crate::documents::{EvalDefinition, EvalSplit};
 use crate::eval::checks::CHECK_REGISTRY_VERSION;
 use crate::eval::runner::executor::{Capture, InferenceBinding, Isolation};
 use crate::eval::{
     create_run, load_run, CellSpec, RunOrigin, RunRecord, DENOMINATOR_POLICY_V1, TAXONOMY_VERSION,
 };
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 pub(crate) mod documents;

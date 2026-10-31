@@ -6,7 +6,7 @@ use crate::eval::runner::embedded::observe::{
     classify_request_outcome, RequestEvidence, TerminalObservation,
 };
 use crate::eval::{OutcomeKind, ProviderReason};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// External premise: an eval trial reads a request's persisted
 /// `failure_reason`, the only record of why inference failed; the durable

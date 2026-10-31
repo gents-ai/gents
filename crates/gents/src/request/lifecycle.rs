@@ -4,9 +4,9 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::request::watcher::AgentRequest;
 use crate::session;
+use crate::store::graphql::{escape_graphql_string, response_has_documents};
 
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};

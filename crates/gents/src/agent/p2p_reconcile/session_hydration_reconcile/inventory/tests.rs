@@ -224,7 +224,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                     let response = txn.execute_with_variables(
                         "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
                         &json!({"input": input})).await?;
-                    crate::graphql::created_doc_id(&response, "ToolFileChange")
+                    crate::store::graphql::created_doc_id(&response, "ToolFileChange")
                 })
             }).await.unwrap())
             };
@@ -273,7 +273,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                     let response = txn.execute_with_variables(
                         "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
                         &json!({"input": input})).await?;
-                    crate::graphql::created_doc_id(&response, "ToolFileInventory")
+                    crate::store::graphql::created_doc_id(&response, "ToolFileInventory")
                 })
             }).await.unwrap();
             if let Some(foreign) = foreign {
@@ -435,7 +435,7 @@ async fn retain_fork_fixture_capture(
             let response = txn.execute_with_variables(
                 "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
                 &json!({"input": input})).await?;
-            let observation = crate::graphql::created_doc_id(&response, "ToolFileChange")?;
+            let observation = crate::store::graphql::created_doc_id(&response, "ToolFileChange")?;
             input.as_object_mut().unwrap().remove("file_changes");
             input["changes"] = json!([FileChangeMetadata::from(change)]);
             input["observation_doc_id"] = json!(observation);

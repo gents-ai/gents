@@ -122,7 +122,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             .find(|case| case["name"] == "resume_waits_for_owned_background")
             .expect("Lean session-control model includes owned-background settlement");
 
-        let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
+        let escaped_agent = crate::store::graphql::escape_graphql_string(&node_did);
         for mutation in [
             format!(
                 r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
@@ -227,7 +227,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 modeled["stopped_after_settlement"]
             );
         }
-        let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state cancel_cause }} }}"#
@@ -332,7 +332,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .unwrap();
     let terminal_row = admission.node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-        crate::graphql::escape_graphql_string(&tool_doc_id)
+        crate::store::graphql::escape_graphql_string(&tool_doc_id)
     )).await;
     assert_eq!(
         terminal_row.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],

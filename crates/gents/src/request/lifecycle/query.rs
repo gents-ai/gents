@@ -1,5 +1,5 @@
 use super::*;
-use crate::graphql::{cursor_after_arg, cursor_page};
+use crate::store::graphql::{cursor_after_arg, cursor_page};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -41,17 +41,18 @@ pub(super) async fn request_view(
         }}"#,
     );
 
-    let resp = crate::graphql::graphql_with_transaction_retry(node, &query, "request status query")
-        .await?;
+    let resp =
+        crate::store::graphql::graphql_with_transaction_retry(node, &query, "request status query")
+            .await?;
 
-    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
+    let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
 
     Ok(rows.into_iter().next())
 }
 
 /// The read and winning request CAS must share the transaction's mutation gate.
 pub(super) async fn claim_queue_allows(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<bool> {
     let owner = escape_graphql_string(&request.node_did);
@@ -71,7 +72,7 @@ pub(super) async fn claim_queue_allows(
         ))
         .await?;
     let Some(candidate_row) =
-        crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+        crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
     else {
         return Ok(false);
     };
@@ -221,7 +222,7 @@ pub(super) async fn claim_queue_allows(
 }
 
 async fn claim_receipts_for_request_ids(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner_did: &str,
     request_ids: &[&str],
 ) -> Result<rapidhash::RapidHashMap<String, QueueReceipt>> {
@@ -229,7 +230,7 @@ async fn claim_receipts_for_request_ids(
     let mut receipts = rapidhash::RapidHashMap::default();
     for request_batch in request_ids.chunks(CLAIM_QUEUE_PAGE_SIZE) {
         let mut seen_ids = rapidhash::RapidHashSet::default();
-        let ids = crate::graphql::graphql_string_list_literal(
+        let ids = crate::store::graphql::graphql_string_list_literal(
             request_batch
                 .iter()
                 .filter_map(|request_id| seen_ids.insert(*request_id).then_some(*request_id)),

@@ -171,7 +171,7 @@ impl EmbeddedRemoteP2pAdmin {
         collection: &str,
         filter: Option<&FilterPredicate>,
     ) -> RemoteP2pAdminResult<Vec<String>> {
-        crate::graphql::validate_collection_identifier(collection)
+        crate::store::graphql::validate_collection_identifier(collection)
             .map_err(|error| RemoteP2pAdminError::LocalError(error.to_string()))?;
         let filter = match filter {
             None => serde_json::Value::Null,
@@ -187,7 +187,7 @@ impl EmbeddedRemoteP2pAdmin {
             "query($filter: {collection}FilterArg) {{ {collection}(filter: $filter) {{ _docID }} }}"
         );
         let variables = serde_json::json!({ "filter": filter });
-        let response = crate::config_client::ConfigAccess::transact_local_readonly(
+        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             None,
             "p2p_reconcile.replicated_document_ids",

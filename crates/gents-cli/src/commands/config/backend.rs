@@ -2,11 +2,11 @@ use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
 use crate::{resolve_node_did, BackendResolutionMode};
 use anyhow::{Context, Result};
-use gents::config_client::{
+use gents::documents::{BackendAuth, InferenceBackend};
+use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use gents::documents::{BackendAuth, InferenceBackend};
 use gents::{discover_backend_models, BackendProviderKind, Collection};
 use serde_json::json;
 

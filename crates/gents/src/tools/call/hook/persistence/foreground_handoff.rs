@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::runtime::{
     current_tool_runtime_context, scope_request_tool_execution_with_workspace_overlay,
     ToolWorkspaceScope,
@@ -169,7 +169,7 @@ impl DefraSessionHook {
                     inspect = false;
                     let query = format!(
                         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ background_requested_at }} }}"#,
-                        crate::graphql::escape_graphql_string(&doc)
+                        crate::store::graphql::escape_graphql_string(&doc)
                     );
                     match ConfigAccess::local(hook.node.clone()).execute(&query).await {
                         Ok(value)

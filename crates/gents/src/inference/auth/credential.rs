@@ -248,7 +248,7 @@ pub fn oauth_credential_id(node_did: &str, provider: &str) -> String {
 }
 
 pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
-    let credential_id = crate::graphql::escape_graphql_string(credential_id);
+    let credential_id = crate::store::graphql::escape_graphql_string(credential_id);
     format!(
         r#"query {{
             OAuthCredential(
@@ -268,7 +268,7 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     let add_input = render_oauth_input(&fields, &[]);
     // `node_did` is immutable, so the update branch must omit it on this DefraDB pin.
     let update_input = render_oauth_input(&fields, SET_ONCE_FIELDS);
-    let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
+    let credential_id = crate::store::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
             upsert_OAuthCredential(
@@ -311,8 +311,8 @@ pub fn pick_oauth_credential<'c>(
 }
 
 fn enabled_oauth_credentials_query(node_did: &str, provider: &str, fields: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let provider = crate::store::graphql::escape_graphql_string(provider);
     format!(
         r#"query {{
             OAuthCredential(
@@ -329,7 +329,7 @@ fn enabled_oauth_credentials_query(node_did: &str, provider: &str, fields: &str)
 }
 
 pub async fn resolve_oauth_credential(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,
@@ -345,7 +345,7 @@ pub async fn resolve_oauth_credential(
 }
 
 pub(crate) async fn provider_default_account_ref(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
 ) -> Result<Option<String>> {
@@ -357,7 +357,7 @@ pub(crate) async fn provider_default_account_ref(
 }
 
 pub(crate) async fn resolve_oauth_credential_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,
@@ -416,7 +416,7 @@ pub async fn lookup_oauth_credential_by_id(
     node: &EmbeddedNode,
     credential_id: &str,
 ) -> Result<Option<OAuthCredential>> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &oauth_credential_by_id_query(credential_id),
         "lookup_oauth_credential_by_id",
@@ -430,7 +430,7 @@ pub async fn lookup_oauth_credential_by_id(
 }
 
 pub fn oauth_credentials_for_node_query(node_did: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
     format!(
         r#"query {{
             OAuthCredential(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
@@ -441,7 +441,7 @@ pub fn oauth_credentials_for_node_query(node_did: &str) -> String {
 }
 
 pub fn oauth_credential_by_doc_id_query(doc_id: &str) -> String {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     format!(
         r#"query {{
             OAuthCredential(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
@@ -455,7 +455,7 @@ pub async fn list_oauth_credentials(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<OAuthCredential>> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &oauth_credentials_for_node_query(node_did),
         "list_oauth_credentials",
@@ -468,7 +468,7 @@ pub async fn list_oauth_credentials(
 }
 
 pub async fn list_oauth_credentials_on(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<OAuthCredential>> {
     let response = access
@@ -485,7 +485,7 @@ pub async fn lookup_oauth_credential_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<Option<OAuthCredential>> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &oauth_credential_by_doc_id_query(doc_id),
         "lookup_oauth_credential_by_doc_id",
@@ -503,9 +503,12 @@ pub async fn upsert_oauth_credential(
     credential: &OAuthCredential,
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
-    let response =
-        crate::config_client::ConfigAccess::write_local(node, "oauth_credential.upsert", &mutation)
-            .await?;
+    let response = crate::store::config_client::ConfigAccess::write_local(
+        node,
+        "oauth_credential.upsert",
+        &mutation,
+    )
+    .await?;
     Ok(gents_protocol::graphql::extract_mutation_doc_id(
         &response,
         "OAuthCredential",
@@ -513,7 +516,7 @@ pub async fn upsert_oauth_credential(
 }
 
 pub async fn upsert_oauth_credential_on(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     credential: &OAuthCredential,
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
@@ -578,8 +581,8 @@ fn sign_in_product(provider: &str) -> Option<OAuthProduct> {
 }
 
 fn oauth_credentials_of_provider_query(node_did: &str, provider: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let provider = crate::store::graphql::escape_graphql_string(provider);
     format!(
         r#"query {{
             OAuthCredential(filter: {{
@@ -593,7 +596,7 @@ fn oauth_credentials_of_provider_query(node_did: &str, provider: &str) -> String
 }
 
 async fn provider_rows_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
 ) -> Result<Vec<OAuthCredential>> {
@@ -664,10 +667,10 @@ pub(crate) fn preset_account_backend(
 }
 
 async fn write_account_backend(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     backend: &crate::InferenceBackend,
 ) -> Result<()> {
-    crate::config_client::write_inference_backend_in_txn(txn, backend)
+    crate::store::config_client::write_inference_backend_in_txn(txn, backend)
         .await
         .context(
             "the account's backend could not be stored, so the sign-in was not saved; \
@@ -676,7 +679,7 @@ async fn write_account_backend(
 }
 
 async fn sync_account_backend(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
     old_label: Option<&str>,
 ) -> Result<()> {
@@ -684,7 +687,7 @@ async fn sync_account_backend(
         return Ok(());
     };
     let serving: Vec<_> =
-        crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| backend.auth.oauth_account_ref() == Some(account_ref))
@@ -746,7 +749,7 @@ fn next_free_label(rows: &[OAuthCredential], provider: &str) -> String {
 }
 
 pub async fn store_sign_in(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     credential: OAuthCredential,
     label: Option<&str>,
 ) -> Result<SignIn> {
@@ -808,7 +811,7 @@ fn sign_in_match(
 }
 
 async fn store_sign_in_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     mut credential: OAuthCredential,
     label: Option<String>,
 ) -> Result<SignIn> {
@@ -852,7 +855,7 @@ async fn store_sign_in_in_txn(
                     {}
                 }}) {{ _docID }}
             }}"#,
-            crate::graphql::escape_graphql_string(&doc_id),
+            crate::store::graphql::escape_graphql_string(&doc_id),
             render_oauth_input(&fields, &set_once),
         );
         txn.execute(&mutation).await?;
@@ -895,7 +898,7 @@ async fn store_sign_in_in_txn(
                 {}
             }}) {{ _docID }}
         }}"#,
-        crate::graphql::escape_graphql_string(&credential.credential_id),
+        crate::store::graphql::escape_graphql_string(&credential.credential_id),
         render_oauth_input(&fields, &[]),
     );
     let response = txn.execute(&mutation).await?;
@@ -917,12 +920,12 @@ async fn store_sign_in_in_txn(
 }
 
 async fn original_account_profiles(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
 ) -> Result<Vec<String>> {
     use crate::inference::backends::provider::BackendProviderOauthExt;
     let backends: Vec<_> =
-        crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| {
@@ -934,7 +937,7 @@ async fn original_account_profiles(
             .map(|backend| backend.backend_id)
             .collect();
     Ok(
-        crate::config_client::list_inference_profiles_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_profiles_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|profile| backends.contains(&profile.backend_id))
@@ -1087,13 +1090,13 @@ fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
         .map(|id| {
             format!(
                 r#", credential_id: {{ _eq: "{}" }}"#,
-                crate::graphql::escape_graphql_string(id)
+                crate::store::graphql::escape_graphql_string(id)
             )
         })
         .unwrap_or_default();
     format!(
         r#"{{ node_did: {{ _eq: "{}" }}, provider: {{ _in: [{providers}] }}{credential} }}"#,
-        crate::graphql::escape_graphql_string(node_did)
+        crate::store::graphql::escape_graphql_string(node_did)
     )
 }
 
@@ -1102,7 +1105,7 @@ fn account_not_found(credential_id: &str) -> anyhow::Error {
 }
 
 pub async fn list_accounts(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<AccountSummary>> {
     let response = access
@@ -1140,7 +1143,7 @@ pub async fn list_accounts(
 }
 
 pub async fn set_account_label(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     credential_id: &str,
     label: &str,
@@ -1172,7 +1175,7 @@ pub async fn set_account_label(
                     .context("stored OAuthCredential has no _docID")?;
                 txn.execute(&format!(
                     r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(doc_id),
+                    crate::store::graphql::escape_graphql_string(doc_id),
                     gents_protocol::graphql::nullable_string_field("label", Some(&label)),
                 ))
                 .await?;
@@ -1188,7 +1191,7 @@ pub async fn set_account_label(
 }
 
 pub async fn set_account_enabled(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     credential_id: &str,
     enabled: bool,
@@ -1207,7 +1210,7 @@ pub async fn set_account_enabled(
 }
 
 pub async fn remove_account_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     credential_id: &str,
 ) -> Result<()> {
@@ -1234,7 +1237,7 @@ fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<
     if response
         .get("data")
         .and_then(|data| data.get(field))
-        .is_some_and(crate::graphql::response_has_documents)
+        .is_some_and(crate::store::graphql::response_has_documents)
     {
         Ok(())
     } else {
@@ -1253,7 +1256,7 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
     let field = |name: &str, value: &str| {
         format!(
             r#"{name}: "{}""#,
-            crate::graphql::escape_graphql_string(value)
+            crate::store::graphql::escape_graphql_string(value)
         )
     };
     let datetime_field = |name: &str, value: Option<DateTime<Utc>>| {
@@ -1510,11 +1513,11 @@ fn refresh_update_mutation(
     let document = match &credential.doc_id {
         Some(doc_id) => format!(
             r#"_docID: {{ _eq: "{}" }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ),
         None => format!(
             r#"credential_id: {{ _eq: "{}" }}"#,
-            crate::graphql::escape_graphql_string(&credential.credential_id)
+            crate::store::graphql::escape_graphql_string(&credential.credential_id)
         ),
     };
     let fields: Vec<_> = oauth_credential_input_fields(credential)
@@ -1532,7 +1535,7 @@ fn refresh_update_mutation(
                 }}
             ) {{ _docID }}
         }}"#,
-        crate::graphql::escape_graphql_string(stored_refresh_token),
+        crate::store::graphql::escape_graphql_string(stored_refresh_token),
         render_oauth_input(&fields, &[]),
     )
 }
@@ -1731,7 +1734,7 @@ impl DbCredentialBearer {
         let mut last_error = None;
         let mut delay_ms = 200u64;
         for attempt in 0..3u32 {
-            match crate::config_client::ConfigAccess::write_local(
+            match crate::store::config_client::ConfigAccess::write_local(
                 &self.node,
                 "oauth_credential.refresh",
                 &mutation,
@@ -1742,7 +1745,7 @@ impl DbCredentialBearer {
                     let written = response
                         .get("data")
                         .and_then(|data| data.get("update_OAuthCredential"))
-                        .is_some_and(crate::graphql::response_has_documents);
+                        .is_some_and(crate::store::graphql::response_has_documents);
                     return Ok(if written {
                         RefreshPersist::Written
                     } else {
@@ -2517,7 +2520,7 @@ mod resolver_tests {
         ] {
             upsert_oauth_credential(&node, &credential).await.unwrap();
         }
-        let access = crate::config_client::ConfigAccess::local(node);
+        let access = crate::store::config_client::ConfigAccess::local(node);
         for (pick, expected) in [
             (AccountPick::Reference(Some("b")), "xai-oauth:b"),
             (AccountPick::Reference(None), "xai-oauth:original"),
@@ -2572,8 +2575,8 @@ mod resolver_tests {
 mod sign_in_tests {
     use super::test_support::{test_node, unsigned_jwt};
     use super::*;
-    use crate::config_client::ConfigAccess;
     use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    use crate::store::config_client::ConfigAccess;
 
     const DID: &str = "did:key:zSignIn";
 
@@ -2696,10 +2699,10 @@ mod sign_in_tests {
 mod lifecycle_tests {
     use super::test_support::{test_node, unsigned_jwt};
     use super::*;
-    use crate::config_client::ConfigAccess;
     use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    use crate::store::config_client::ConfigAccess;
 
     #[derive(Debug, Clone, Copy)]
     enum Product {
@@ -3493,7 +3496,7 @@ mod lifecycle_tests {
                 enabled: true,
                 tags: Vec::new(),
             };
-            crate::config_client::write_inference_backend_document(&access, &original)
+            crate::store::config_client::write_inference_backend_document(&access, &original)
                 .await
                 .unwrap();
             store(&access, product.sign_in(&did, "a", "refresh-a")).await;
@@ -3736,7 +3739,7 @@ mod lifecycle_tests {
 
         let mut custom = backend.clone();
         custom.name = "Custom".into();
-        crate::config_client::write_inference_backend_document(&access, &custom)
+        crate::store::config_client::write_inference_backend_document(&access, &custom)
             .await
             .unwrap();
         set_account_label(&access, did, id, "Home").await.unwrap();
@@ -3801,7 +3804,7 @@ mod lifecycle_tests {
                 enabled: true,
                 tags: Vec::new(),
             };
-            crate::config_client::write_inference_backend_document(&access, &original)
+            crate::store::config_client::write_inference_backend_document(&access, &original)
                 .await
                 .unwrap();
             let profile = serde_json::from_value(json!({
@@ -3811,7 +3814,7 @@ mod lifecycle_tests {
                 "model_name": "model-x",
             }))
             .unwrap();
-            crate::config_client::write_inference_profile_document(&access, &profile)
+            crate::store::config_client::write_inference_profile_document(&access, &profile)
                 .await
                 .unwrap();
         }
@@ -3877,9 +3880,9 @@ mod lifecycle_tests {
 mod backfill_tests {
     use super::test_support::{one_shot_token_server, test_node, unsigned_jwt, TOKEN_URL_ENV};
     use super::*;
-    use crate::config_client::ConfigAccess;
     use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    use crate::store::config_client::ConfigAccess;
 
     const XAI_ENV: &str = crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
     const CHATGPT_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -4421,7 +4424,7 @@ mod cooldown_tests {
             r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
             gents_protocol::graphql::nullable_string_field("label", label),
         );
-        crate::config_client::ConfigAccess::write_local(node, "test.label", &mutation)
+        crate::store::config_client::ConfigAccess::write_local(node, "test.label", &mutation)
             .await
             .unwrap();
     }
@@ -4512,7 +4515,7 @@ mod cooldown_tests {
             OAuthRefreshKind::Xai,
             XAI_OAUTH_PRODUCT,
         );
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         access
             .transact_write("test.remove", |txn| {
                 let credential_id = credential_id.clone();
@@ -4560,7 +4563,7 @@ mod cooldown_tests {
             OAuthRefreshKind::Xai,
             XAI_OAUTH_PRODUCT,
         );
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         set_account_enabled(&access, did, &credential_id, false)
             .await
             .unwrap();

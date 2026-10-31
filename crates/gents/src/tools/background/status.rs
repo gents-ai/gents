@@ -8,7 +8,7 @@ use chrono::Utc;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 use crate::session::canonical_rows::{
     decode_scoped_request_output_segments, request_output_segments_query,
@@ -149,7 +149,7 @@ pub(crate) async fn handle_list_background_tools(
             }}
         }}"#
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "handle_list_background_tools",
@@ -275,9 +275,12 @@ pub(crate) async fn read_tool_output_slice(
             }}
         }}"#
     );
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "read_tool_output_slice")
-            .await?;
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "read_tool_output_slice",
+    )
+    .await?;
     let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };
@@ -340,7 +343,7 @@ pub(crate) async fn canonical_tool_output(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<String> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &request_output_segments_query(request_doc_id),
         "query canonical tool output",
@@ -372,7 +375,7 @@ impl CanonicalToolOutputObservation {
 }
 
 pub(crate) async fn observe_canonical_tool_output_with_access(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     tool_doc_id: &str,
     request_doc_id: &str,
     session_id: &str,
@@ -604,7 +607,7 @@ pub fn supports_foreground_backgrounding(name: &str) -> bool {
 /// Requests a handoff of one exact native invocation. The runtime publishes
 /// its background receipt only after assuming responsibility for completion.
 pub async fn request_foreground_backgrounding(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     request_id: &str,

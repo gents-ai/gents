@@ -3,8 +3,8 @@ use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tools::call::lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -781,7 +781,7 @@ fn decode_tool_call_rows(response: &defra_node::QueryResponse) -> Result<Vec<Too
 
 #[cfg(test)]
 mod tests {
-    use gents::graphql::ensure_no_errors;
+    use gents::store::graphql::ensure_no_errors;
     fn request_fixture(
         id: &str,
         session: &str,
@@ -1670,11 +1670,11 @@ mod tests {
         (dir, node)
     }
 
-    use gents::graphql::single_mutation_document;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents::store::graphql::single_mutation_document;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,

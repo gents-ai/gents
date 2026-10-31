@@ -132,7 +132,7 @@ async fn wait_for_live_node_readiness(
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let last_observation = match crate::commands::status::load_live_node_readiness(
-            &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
+            &gents::store::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
             node_did,
         )
         .await
@@ -582,7 +582,7 @@ async fn serve_foreground(
     mut args: ServeArgs,
     executor: tokio::runtime::Handle,
     mut startup: Option<super::prepare_runtime::PreparedStartup>,
-    store_lifetime: &mut Option<gents::config_client::ConfigAccess>,
+    store_lifetime: &mut Option<gents::store::config_client::ConfigAccess>,
 ) -> Result<()> {
     #[cfg(not(unix))]
     anyhow::ensure!(
@@ -796,7 +796,7 @@ async fn serve_foreground(
             .context("building embedded DefraDB node")?,
     );
     let store_access =
-        match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
+        match gents::store::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
             Ok(access) => access,
             Err(error) => {
                 node.shutdown().await;
@@ -1333,7 +1333,7 @@ struct ServeRuntime {
     handle: Option<tokio::task::JoinHandle<Result<()>>>,
     shutdown_owner: Option<(
         Arc<gents::defra_node::EmbeddedNode>,
-        gents::config_client::ConfigAccess,
+        gents::store::config_client::ConfigAccess,
     )>,
 }
 
@@ -1364,7 +1364,7 @@ impl ServeRuntime {
     fn retain_shutdown_owner(
         mut self,
         node: Arc<gents::defra_node::EmbeddedNode>,
-        access: gents::config_client::ConfigAccess,
+        access: gents::store::config_client::ConfigAccess,
     ) -> Self {
         self.shutdown_owner = Some((node, access));
         self
@@ -1420,7 +1420,7 @@ impl Drop for ServeRuntime {
 
 async fn shutdown_claimed_node(
     node: Arc<gents::defra_node::EmbeddedNode>,
-    access: gents::config_client::ConfigAccess,
+    access: gents::store::config_client::ConfigAccess,
 ) {
     let shutdown = tokio::spawn(async move {
         node.shutdown().await;

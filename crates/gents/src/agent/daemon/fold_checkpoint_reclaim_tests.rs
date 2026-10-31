@@ -35,7 +35,7 @@ async fn create_user_message(
         .unwrap();
     let response = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+    let doc_id = crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
         .unwrap()
         .expect("created request receipt")["_docID"]
         .as_str()
@@ -53,7 +53,7 @@ async fn authored_user_entries(
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#,
-            crate::graphql::escape_graphql_string(&request.doc_id)
+            crate::store::graphql::escape_graphql_string(&request.doc_id)
         ))
         .await;
     let mut entries = Vec::new();
@@ -216,12 +216,12 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             .is_some(),
             persist_checkpoint
         );
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.fold_checkpoint_reclaim",
             &format!(
                 r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending", deadline: null }}) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&head.doc_id)
+                crate::store::graphql::escape_graphql_string(&head.doc_id)
             ),
         )
         .await
@@ -355,7 +355,7 @@ async fn create_retry(
         .unwrap();
     let response = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+    let doc_id = crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
         .unwrap()
         .expect("created retry receipt")["_docID"]
         .as_str()
@@ -514,10 +514,10 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             .process_request(retry.clone(), shutdown_rx.clone())
             .await
             .unwrap();
-        let retry_diagnostic = crate::graphql::graphql_with_transaction_retry(
+        let retry_diagnostic = crate::store::graphql::graphql_with_transaction_retry(
             &node,
             &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
-                crate::graphql::escape_graphql_string(&retry.doc_id)),
+                crate::store::graphql::escape_graphql_string(&retry.doc_id)),
             "retry-selection-test-diagnostic",
         ).await.unwrap();
         assert_eq!(

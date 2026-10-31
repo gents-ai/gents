@@ -1260,7 +1260,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     assert_eq!(valid["valid"], true);
     assert!(valid["checked_documents"].as_u64().unwrap() > 0);
     assert_eq!(valid["collections"]["Agent"], 1);
-    let owner = crate::graphql::escape_graphql_string(&owner);
+    let owner = crate::store::graphql::escape_graphql_string(&owner);
     crate::ConfigAccess::write_local(&node, "test.audit.corrupt", &format!(
         r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{owner}"}}, context_id: {{_eq: "beh-test:context"}}}}, input: {{tools_id: "absent-tools"}}) {{context_id}} }}"#
     )).await.unwrap();
@@ -1291,7 +1291,7 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
     let foreign = node_identity("audit-foreign").did().to_string();
     crate::ConfigAccess::write_local(&node, "test.audit.foreign", &format!(
         r#"mutation {{create_AgentContext(input: {{node_did: "{}", context_id: "foreign-context", tools_id: "missing-foreign-tools"}}) {{context_id}}}}"#,
-        crate::graphql::escape_graphql_string(&foreign)
+        crate::store::graphql::escape_graphql_string(&foreign)
     )).await.unwrap();
     let valid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(valid["valid"], true, "{valid}");
@@ -1325,7 +1325,7 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
     .is_err());
     crate::ConfigAccess::write_local(&node, "test.audit.restricted", &format!(
         r#"mutation {{update_InferenceProfile(filter: {{node_did: {{_eq: "{}"}}, profile_id: {{_eq: "beh-test:inference"}}}}, input: {{backend_id: "missing-backend"}}) {{profile_id}}}}"#,
-        crate::graphql::escape_graphql_string(&owner)
+        crate::store::graphql::escape_graphql_string(&owner)
     )).await.unwrap();
     let invalid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(invalid["valid"], false);

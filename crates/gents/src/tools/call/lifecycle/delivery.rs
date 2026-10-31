@@ -81,7 +81,7 @@ struct PluginWritesFailed(String);
 /// the transaction owner replays it and, once exhausted, it stays a transient
 /// error rather than a plugin refusal.
 fn plugin_writes_failed(error: anyhow::Error) -> anyhow::Error {
-    if crate::config_client::is_transaction_step_unavailable(&error) {
+    if crate::store::config_client::is_transaction_step_unavailable(&error) {
         return error;
     }
     let text = format!("{error:#}");

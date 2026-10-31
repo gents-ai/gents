@@ -111,7 +111,7 @@ pub(crate) fn p2p_http_client() -> Result<reqwest::Client> {
 }
 
 pub(super) async fn p2p_probe_get(
-    graphql: &gents::config_client::GraphqlEndpoint,
+    graphql: &gents::store::config_client::GraphqlEndpoint,
     url: &str,
 ) -> Value {
     let request = p2p_http_client().and_then(|client| Ok(graphql.authorize(client.get(url))?));

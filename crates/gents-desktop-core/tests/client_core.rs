@@ -36,8 +36,10 @@ async fn signed_empty_hydration_receipt(
         .sign(&receipt.signing_payload()?)
         .await?;
     Ok((
-        gents::graphql::escape_graphql_string(&canonical_manifest_json(&receipt.served_manifest)?),
-        gents::graphql::escape_graphql_string(&receipt.signer_did),
+        gents::store::graphql::escape_graphql_string(&canonical_manifest_json(
+            &receipt.served_manifest,
+        )?),
+        gents::store::graphql::escape_graphql_string(&receipt.signer_did),
         bs58::encode(receipt.signature).into_string(),
     ))
 }
@@ -185,7 +187,7 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
         .node()
         .execute(&format!(
             r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "must-not-be-local" }} }}) {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(node_did)
+            gents::store::graphql::escape_graphql_string(node_did)
         ))
         .await;
     assert!(
@@ -231,7 +233,7 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
             .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let requester_did = gents::store::graphql::escape_graphql_string(core.node_identity().did());
     let node_did = "did:test:amy";
     persist_local_route(&core, node_did).await?;
     let session_id = "session-with-local-failed-turn";
@@ -276,8 +278,10 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
     assert_eq!(progress.phase.as_str(), "serving");
     assert_eq!(progress.merged_count, 1);
     assert_eq!(progress.served_count, None);
-    let request_key =
-        gents::graphql::escape_graphql_string(&format!("{}:{session_id}", core.local_peer_id()));
+    let request_key = gents::store::graphql::escape_graphql_string(&format!(
+        "{}:{session_id}",
+        core.local_peer_id()
+    ));
     let response = core
         .node()
         .execute(&format!(
@@ -321,7 +325,7 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
         ClientCoreOptions::local_simulated_route(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let requester_did = gents::store::graphql::escape_graphql_string(core.node_identity().did());
     let node_did = "did:test:amy";
     let session_id = "brand-new-session";
     persist_local_route(&core, node_did).await?;
@@ -381,11 +385,11 @@ async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<
         ClientCoreOptions::local_only(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let requester_did = gents::store::graphql::escape_graphql_string(core.node_identity().did());
     let node_did = core.node_identity().did().to_string();
     let session_id = "session-served-empty";
     let raw_request_key = format!("{}:{session_id}", core.local_peer_id());
-    let request_key = gents::graphql::escape_graphql_string(&raw_request_key);
+    let request_key = gents::store::graphql::escape_graphql_string(&raw_request_key);
     let (manifest, signer, signature) = signed_empty_hydration_receipt(
         &core,
         &raw_request_key,
@@ -441,11 +445,11 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
         ClientCoreOptions::local_only(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let requester_did = gents::store::graphql::escape_graphql_string(core.node_identity().did());
     let node_did = core.node_identity().did().to_string();
     let session_id = "session-forged-receipt";
     let raw_request_key = format!("{}:{session_id}", core.local_peer_id());
-    let request_key = gents::graphql::escape_graphql_string(&raw_request_key);
+    let request_key = gents::store::graphql::escape_graphql_string(&raw_request_key);
     let (manifest, signer, signature) = signed_empty_hydration_receipt(
         &core,
         &raw_request_key,
@@ -504,14 +508,14 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         ClientCoreOptions::local_simulated_route(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let requester_did = gents::store::graphql::escape_graphql_string(core.node_identity().did());
     let node_did = core.node_identity().did().to_string();
     persist_local_route(&core, &node_did).await?;
     let session_id = "session-rejected";
     let other_session_id = "session-other";
     let raw_request_key = format!("{}:{session_id}", core.local_peer_id());
-    let request_key = gents::graphql::escape_graphql_string(&raw_request_key);
-    let other_request_key = gents::graphql::escape_graphql_string(&format!(
+    let request_key = gents::store::graphql::escape_graphql_string(&raw_request_key);
+    let other_request_key = gents::store::graphql::escape_graphql_string(&format!(
         "{}:{other_session_id}",
         core.local_peer_id()
     ));

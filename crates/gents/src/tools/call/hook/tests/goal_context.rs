@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -50,7 +50,7 @@ async fn request(
         )
         .await
         .unwrap();
-    crate::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+    crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
 pub(super) async fn bind_signed_request(
@@ -85,7 +85,7 @@ pub(super) async fn bind_signed_request(
         )
         .await
         .unwrap();
-    let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     access
         .transact_write("test.goal_tool_bind_existing_goal", |txn| {
             Box::pin(async {
@@ -108,7 +108,7 @@ pub(super) async fn bind_signed_request(
         .await
         .unwrap();
     access.write("test.goal_tool_finish_previous_requests", &format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_neq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}}}"#,
-        crate::graphql::escape_graphql_string(&doc))).await.unwrap();
+        crate::store::graphql::escape_graphql_string(&doc))).await.unwrap();
     claim_signed_request(node, hook, request_id, session).await;
 }
 
@@ -130,7 +130,7 @@ async fn claim_request_fixture(
 ) {
     let access = ConfigAccess::local(node.clone());
     let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
-        crate::graphql::escape_graphql_string(request_id), crate::graphql::escape_graphql_string(session), crate::request::admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
+        crate::store::graphql::escape_graphql_string(request_id), crate::store::graphql::escape_graphql_string(session), crate::request::admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     assert_eq!(
@@ -303,7 +303,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                             Ok(doc)
                         } else {
                             let response=txn.execute_with_variables("mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",&json!({"input":input})).await?;
-                            crate::graphql::created_doc_id(&response,"Goal")
+                            crate::store::graphql::created_doc_id(&response,"Goal")
                         }
                     })
                 }).await.unwrap();
@@ -325,9 +325,9 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .creation_key
                 };
                 access.write("test.goal_tool_original_claim", &format!(r#"mutation {{create_GoalCreationClaim(input: {{creation_key: "{}", goal_id: "{}", node_did: "{}", session_id: "{}", objective: "Original caller goal", created_at: "2026-10-21T00:00:00Z"}}) {{_docID}}}}"#,
-                    crate::graphql::escape_graphql_string(&creation_key),
-                    crate::graphql::escape_graphql_string(&goal_id(identity.did(), &session, id)),
-                    crate::graphql::escape_graphql_string(identity.did()),crate::graphql::escape_graphql_string(&session))).await.unwrap();
+                    crate::store::graphql::escape_graphql_string(&creation_key),
+                    crate::store::graphql::escape_graphql_string(&goal_id(identity.did(), &session, id)),
+                    crate::store::graphql::escape_graphql_string(identity.did()),crate::store::graphql::escape_graphql_string(&session))).await.unwrap();
             }
             for id in case["retire_documents"].as_array().unwrap() {
                 access
@@ -335,7 +335,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         "test.goal_tool_retire",
                         &format!(
                             r#"mutation {{delete_Goal(docID: "{}") {{_docID}}}}"#,
-                            crate::graphql::escape_graphql_string(
+                            crate::store::graphql::escape_graphql_string(
                                 &documents[&id.as_u64().unwrap()]
                             )
                         ),
@@ -344,7 +344,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .unwrap();
             }
             access.write("test.goal_tool_terminal_roots", &format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_neq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}}}"#,
-                crate::graphql::escape_graphql_string(&caller))).await.unwrap();
+                crate::store::graphql::escape_graphql_string(&caller))).await.unwrap();
             let request_id = format!("goal-tool-{entry_id}");
             claim_request_fixture(
                 &node,
@@ -426,7 +426,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     terminated,
                     "unavailable attribution must stop the current provider loop"
                 );
-                let scope = crate::graphql::escape_graphql_string(&caller);
+                let scope = crate::store::graphql::escape_graphql_string(&caller);
                 let observed = access.execute(&format!(r#"{{AgentToolCall(filter: {{request_doc_id: {{_eq: "{scope}"}}}}) {{lifecycle_state tool_failure_class}}}}"#)).await.unwrap();
                 let rows = observed["data"]["AgentToolCall"].as_array().unwrap();
                 assert_eq!(rows.len(), 1);

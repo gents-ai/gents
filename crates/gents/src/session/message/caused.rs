@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 use super::commit::load_receipt;
 
@@ -39,13 +39,13 @@ pub(crate) async fn observe_caused_request(
         }} }}"#,
         escape_graphql_string(&receipt.request_doc_id),
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load the request a session-message row caused",
     )
     .await?;
-    let Some(caused) = crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+    let Some(caused) = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
         &response,
         "AgentRequest",
     )?

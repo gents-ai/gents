@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -92,7 +92,7 @@ pub enum ProviderRecoveryResult {
 }
 
 async fn validate_scope(access: &ConfigAccess, request: &ProviderRecoveryRequest) -> Result<()> {
-    use gents::graphql::escape_graphql_string;
+    use gents::store::graphql::escape_graphql_string;
     anyhow::ensure!(
         !request.node_did.trim().is_empty()
             && !request.session_id.trim().is_empty()
@@ -143,7 +143,7 @@ pub async fn plan(
     let mut companions = Vec::new();
     let mut unavailable = None;
     if let Some(profile) = blocked.profile.as_deref() {
-        match gents::config_client::switch_candidates(
+        match gents::store::config_client::switch_candidates(
             access,
             &request.node_did,
             profile,
@@ -187,7 +187,7 @@ pub async fn plan(
         resets_at: blocked.resets_at.map(|time| time.to_rfc3339()),
         candidates,
         companion_profiles: companions,
-        switch_cost: gents::config_client::SWITCH_COST.into(),
+        switch_cost: gents::store::config_client::SWITCH_COST.into(),
         unavailable_reason: unavailable,
         goal,
     }))
@@ -224,7 +224,7 @@ pub async fn apply(
                     reason: "That account is no longer eligible for this model.".into(),
                 });
             }
-            gents::config_client::switch_profile_account(
+            gents::store::config_client::switch_profile_account(
                 access,
                 &scope.node_did,
                 profile_id,

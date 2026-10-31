@@ -67,7 +67,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         .write("test.edit.request", &create.graphql_mutation().unwrap())
         .await
         .unwrap();
-    let original = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let original = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let edit = PendingQueueEdit {
         expected_request_doc_ids: vec![original.clone()],
         selected_request_doc_ids: vec![original.clone()],
@@ -112,7 +112,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
 async fn submit(node: &Arc<EmbeddedNode>, command: &SessionInputEdit) -> String {
     let response = ConfigAccess::local(node.clone()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-    crate::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
+    crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
 }
 
 async fn raw_receipt(node: &Arc<EmbeddedNode>, id: &str) -> Option<String> {

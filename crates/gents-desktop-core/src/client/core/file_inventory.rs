@@ -1,9 +1,9 @@
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::file_inventory::{
     admit_demand, begin_client_progress, load_client_progress_for_scope, receive_client_reply,
     resume_client_progress, verified_client_response,
 };
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::NodeIdentity;
 use gents_protocol::file_inventory::{
     FileInventoryAdmission, FileInventoryObservation, FileInventoryPageDemand,
@@ -356,7 +356,7 @@ mod tests {
                     "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
                     &json!({"input": {"node_did": owner, "session_id": session, "requester_did": owner,
                         "agent_id": "fixture", "created_at": "2026-10-24T00:00:00Z"}})).await?;
-                gents::graphql::created_doc_id(&result, "AgentSession")
+                gents::store::graphql::created_doc_id(&result, "AgentSession")
             })
         }).await?;
         let demand = FileInventoryPageDemand {
@@ -595,7 +595,7 @@ mod tests {
                     &json!({"input": {"node_did": source.did(), "session_id": "shared-received",
                         "requester_did": source.did(), "agent_id": "fixture", "created_at": "2026-10-28T00:00:00Z"}}),
                 ).await?;
-                gents::graphql::created_doc_id(&response, "AgentSession")
+                gents::store::graphql::created_doc_id(&response, "AgentSession")
             })
         }).await?;
         let first = core

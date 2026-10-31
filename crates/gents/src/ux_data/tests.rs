@@ -5,11 +5,11 @@ use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 
 use super::*;
-use crate::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use crate::pack::{
     write_home_install, HomePackInstall, PackKind, PackUxPlugin, UxContributions, UxDataSurface,
+};
+use crate::store::config_client::{
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::Collection;
 

@@ -21,9 +21,12 @@ pub(crate) async fn configured_mcp_services(
     node_did: &str,
 ) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
     let query = services_query(node_did)?;
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "configured_mcp_services")
-            .await?;
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "configured_mcp_services",
+    )
+    .await?;
     parse_services(response.data.as_ref(), node_did)
 }
 
@@ -40,9 +43,11 @@ fn services_query(node_did: &str) -> anyhow::Result<String> {
         !node_did.trim().is_empty(),
         "MCP registry owner is required"
     );
-    let (fields, _) =
-        crate::config_client::config_projection(crate::Collection::ToolServiceRegistry, None)?;
-    let owner = crate::graphql::escape_graphql_string(node_did);
+    let (fields, _) = crate::store::config_client::config_projection(
+        crate::Collection::ToolServiceRegistry,
+        None,
+    )?;
+    let owner = crate::store::graphql::escape_graphql_string(node_did);
     let query = format!(
         "{{ ToolServiceRegistry(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
         fields.join(" ")

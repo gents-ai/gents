@@ -281,7 +281,7 @@ impl ReplayFixture {
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
         let close_doc_id =
-            crate::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+            crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
                 .unwrap()
                 .unwrap()["_docID"]
                 .as_str()
@@ -397,7 +397,7 @@ impl ReplayFixture {
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
         let close_doc_id =
-            crate::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+            crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
                 .unwrap()
                 .unwrap()["_docID"]
                 .as_str()
@@ -566,20 +566,21 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
                 lifecycle_state: "pending", execution_origin: "interactive",
                 created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(REQUEST_ID),
-            crate::graphql::escape_graphql_string(NODE_DID),
-            crate::graphql::escape_graphql_string(SESSION_ID),
-            crate::graphql::escape_graphql_string(&now),
+            crate::store::graphql::escape_graphql_string(REQUEST_ID),
+            crate::store::graphql::escape_graphql_string(NODE_DID),
+            crate::store::graphql::escape_graphql_string(SESSION_ID),
+            crate::store::graphql::escape_graphql_string(&now),
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let request_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let request_commit_cid = crate::graphql::newest_document_composite_commit(
+    let request_doc_id =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let request_commit_cid = crate::store::graphql::newest_document_composite_commit(
         &node,
         &request_doc_id,
         "replay fixture request",
@@ -707,7 +708,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let close_doc_id =
-        crate::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+        crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -789,12 +790,13 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let header_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentMessage")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let header_doc_id =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentMessage")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
     let boundary = capture_source_boundary(
         &node,
         SESSION_ID,
@@ -960,18 +962,18 @@ async fn exact_capture_source_binds_canonical_assistant_across_request_versions(
         .await;
     assert!(projection.is_none());
     assert_eq!(observed.candidates().await.unwrap().len(), 1);
-    let later_deadline = crate::graphql::escape_graphql_string(
+    let later_deadline = crate::store::graphql::escape_graphql_string(
         &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     );
     let updated = observed
         .node
         .execute(&format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{later_deadline}" }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&observed.request_doc_id),
+            crate::store::graphql::escape_graphql_string(&observed.request_doc_id),
         ))
         .await;
     assert!(!updated.has_errors(), "{:?}", updated.errors);
-    let newest = crate::graphql::newest_document_composite_commit(
+    let newest = crate::store::graphql::newest_document_composite_commit(
         &observed.node,
         &observed.request_doc_id,
         "later replay request version",
@@ -1248,7 +1250,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     let mut duplicate = fixture.header.clone();
     duplicate.sequence += 1;
     duplicate.message_key.push_str("-physical-duplicate");
-    let access = crate::config_client::ConfigAccess::local(fixture.node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(fixture.node.clone());
     access
         .transact_write("test.replay.duplicate_header", |txn| {
             let duplicate = duplicate.clone();
@@ -1395,19 +1397,20 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
                 lifecycle_state: "pending", execution_origin: "interactive",
                 created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(NODE_DID),
-            crate::graphql::escape_graphql_string(SESSION_ID),
-            crate::graphql::escape_graphql_string(&now),
+            crate::store::graphql::escape_graphql_string(NODE_DID),
+            crate::store::graphql::escape_graphql_string(SESSION_ID),
+            crate::store::graphql::escape_graphql_string(&now),
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let current_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let current_commit_cid = crate::graphql::newest_document_composite_commit(
+    let current_doc_id =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let current_commit_cid = crate::store::graphql::newest_document_composite_commit(
         &fixture.node,
         &current_doc_id,
         "replay fixture next request",
@@ -1523,7 +1526,7 @@ async fn stored_agent_request(fixture: &ReplayFixture) -> crate::request::watche
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(&fixture.request_doc_id),
+            crate::store::graphql::escape_graphql_string(&fixture.request_doc_id),
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
@@ -1806,7 +1809,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         .collect::<Vec<_>>();
     let filter = capture_keys
         .iter()
-        .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
+        .map(|key| format!("\"{}\"", crate::store::graphql::escape_graphql_string(key)))
         .collect::<Vec<_>>()
         .join(", ");
     let response = fixture
@@ -1972,7 +1975,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let poisoned_doc =
-        crate::graphql::single_mutation_document(&created, "create_RenderedRequestBlock")
+        crate::store::graphql::single_mutation_document(&created, "create_RenderedRequestBlock")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()

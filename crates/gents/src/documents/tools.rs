@@ -635,7 +635,9 @@ impl Tools {
         let mut errors = Vec::new();
         if let Some(built_ins) = &self.built_ins {
             for collection in &built_ins.p2p_collections {
-                if let Err(error) = crate::graphql::validate_collection_identifier(collection) {
+                if let Err(error) =
+                    crate::store::graphql::validate_collection_identifier(collection)
+                {
                     errors.push(format!("built_ins.p2p_collections: {error}"));
                 }
             }
@@ -806,7 +808,9 @@ impl Tools {
                 false,
             );
             for collection in datastore.write_collections.iter().flatten() {
-                if let Err(error) = crate::graphql::validate_collection_identifier(collection) {
+                if let Err(error) =
+                    crate::store::graphql::validate_collection_identifier(collection)
+                {
                     errors.push(format!("datastore.write_collections: {error}"));
                 }
             }
@@ -836,7 +840,7 @@ impl Tools {
             for plugin in integrations.plugins.iter().flatten() {
                 let mut inputs = std::collections::BTreeSet::new();
                 for field in &plugin.input_fields {
-                    if crate::graphql::validate_graphql_name(&field.name).is_err()
+                    if crate::store::graphql::validate_graphql_name(&field.name).is_err()
                         || field.fill.is_none()
                         || field.required
                         || !inputs.insert(&field.name)
@@ -898,7 +902,8 @@ impl Tools {
                 false,
             );
             for category in self_config.self_config_categories.iter().flatten() {
-                if !crate::config_client::patch::SELF_CONFIG_CATEGORIES.contains(&category.as_str())
+                if !crate::store::config_client::patch::SELF_CONFIG_CATEGORIES
+                    .contains(&category.as_str())
                 {
                     errors.push(format!("unknown self_config category {category:?}"));
                 }
@@ -923,7 +928,7 @@ impl Tools {
 /// context -> `tools_id`. `None` when the agent has no context or the
 /// context selects no Tools; a missing referenced document is an error.
 pub async fn load_agent_tools_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<Option<Tools>> {
@@ -936,12 +941,12 @@ pub async fn load_agent_tools_in_txn(
 /// context is `None` when the agent has none, the Tools when the context
 /// selects none; a missing referenced document is an error.
 pub async fn load_agent_context_and_tools_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
-    use crate::config_client::read_desired_state_document_in_txn as read;
     use crate::store::collection::Collection;
+    use crate::store::config_client::read_desired_state_document_in_txn as read;
     use anyhow::Context as _;
     let agent: super::Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_id)

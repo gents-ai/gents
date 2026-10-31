@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use gents_protocol::serve_lifecycle::{
     control::{
         current_capabilities, RuntimeControlCommand, RuntimeControlDisposition,

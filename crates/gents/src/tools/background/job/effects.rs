@@ -131,7 +131,7 @@ pub(crate) struct JobContext<'a> {
 }
 
 pub(crate) async fn stage_effects_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     job: &JobContext<'_>,
     fresh: &[&JobSpawn],
     effects: &JobEffects,
@@ -144,7 +144,7 @@ pub(crate) async fn stage_effects_in_txn(
 /// `stage_effects_in_txn` returning the staged requests. A failed step commit
 /// may still have landed: the caller keeps these for `recover_step_commit`.
 pub(crate) async fn stage_recorded_effects_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     job: &JobContext<'_>,
     fresh: &[&JobSpawn],
     effects: &JobEffects,
@@ -199,7 +199,7 @@ pub(crate) async fn recover_step_commit(
     commit_error: anyhow::Error,
     staged: &[AgentRequestCreate],
 ) -> Result<()> {
-    let recovery = crate::config_client::ConfigAccess::transact_local_readonly(
+    let recovery = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         identity,
         "plugin_job.recover_step_commit",
@@ -238,7 +238,7 @@ fn latest<'a>(row: &'a StepRow, slot: &str) -> Option<&'a StepChild> {
 }
 
 async fn stage_spawn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     job: &JobContext<'_>,
     spawn: &JobSpawn,
 ) -> Result<AgentRequestCreate> {
@@ -286,7 +286,7 @@ async fn stage_spawn(
 }
 
 async fn message_hop(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     job: &JobContext<'_>,
     node_did: &str,
     session_id: &str,
@@ -305,7 +305,7 @@ async fn message_hop(
     reason = "fields of the staged AgentRequest"
 )]
 async fn stage_request(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     cause: &SessionMessageCause,
     node_did: &str,
     agent_id: &str,
@@ -384,7 +384,7 @@ async fn stage_request(
 type StoredRequest = gents_protocol::row::AgentRequestRow;
 
 async fn one_request(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     retry_key: &str,
 ) -> Result<Option<StoredRequest>> {
     let response = txn
@@ -392,7 +392,7 @@ async fn one_request(
             r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
                 {}
             }} }}"#,
-            crate::graphql::escape_graphql_string(retry_key),
+            crate::store::graphql::escape_graphql_string(retry_key),
             crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
@@ -449,8 +449,8 @@ mod tests {
     use serde_json::json;
 
     use super::{admit_scratch, interrupt_slots, write_scratch};
-    use crate::config_client::ConfigAccess;
     use crate::session::origin::SessionScope;
+    use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::JobScratch;
 
     fn file(name: &str, content: &str) -> JobScratch {
@@ -584,7 +584,7 @@ mod tests {
     }
 
     async fn stamp(node: &std::sync::Arc<EmbeddedNode>, doc_id: &str) -> Option<String> {
-        let escaped = crate::graphql::escape_graphql_string(doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(doc_id);
         let response = node
             .execute(&format!(
                 "{{AgentRequest(filter:{{_docID:{{_eq:\"{escaped}\"}}}}){{interrupt_requested_at}}}}"
@@ -890,10 +890,10 @@ mod tests {
                 caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
                 input
             }} }}"#,
-            crate::graphql::escape_graphql_string(key)
+            crate::store::graphql::escape_graphql_string(key)
         );
         let response =
-            crate::graphql::graphql_with_transaction_retry(node, &query, "job staging read")
+            crate::store::graphql::graphql_with_transaction_retry(node, &query, "job staging read")
                 .await
                 .unwrap();
         response
@@ -979,7 +979,7 @@ mod tests {
         let response = ConfigAccess::local(harness.node.clone())
             .execute(&format!(
                 "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
-                crate::graphql::escape_graphql_string(doc),
+                crate::store::graphql::escape_graphql_string(doc),
                 crate::request::watcher::AGENT_REQUEST_FIELDS,
             ))
             .await

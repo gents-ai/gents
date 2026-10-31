@@ -16,13 +16,13 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
-use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::plugin::job_calls::job_state;
 use crate::provider_usage::{sum_charged_from_persisted_parts, sum_persisted_usage_columns};
 use crate::request::admission::load_request_context;
 use crate::request::binding::load_agent_request_by_doc_id;
 use crate::request::watcher::AgentRequest;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
+use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::admit::{meet, StepChild};
 use crate::tools::background::job::ancestry::started_by_job;
 use crate::tools::background::job::control::resume_echo;
@@ -747,7 +747,7 @@ pub(crate) mod tests {
     use serde_json::{json, Value};
 
     use super::{derive_children, CHILD_QUERIES};
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::background::job::keys::{job_message_key, job_session_id, job_spawn_key};
 
     pub(crate) async fn open() -> Arc<EmbeddedNode> {
@@ -793,8 +793,8 @@ pub(crate) mod tests {
             Box::pin(async move {
                 txn.execute(&format!(
                     r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{lifecycle_state: "{}"}}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(row_doc_id),
-                    crate::graphql::escape_graphql_string(state)
+                    crate::store::graphql::escape_graphql_string(row_doc_id),
+                    crate::store::graphql::escape_graphql_string(state)
                 ))
                 .await?;
                 Ok::<_, anyhow::Error>(())
@@ -1196,7 +1196,7 @@ pub(crate) mod tests {
             ))
             .await;
         let row: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&row, "AgentRequest")
+            crate::store::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
@@ -1548,7 +1548,7 @@ pub(crate) mod tests {
         }))
         .unwrap();
         let access = ConfigAccess::local(node.clone());
-        crate::config_client::write_tools_document(&access, &tools)
+        crate::store::config_client::write_tools_document(&access, &tools)
             .await
             .unwrap();
         insert(
@@ -1591,7 +1591,7 @@ pub(crate) mod tests {
             ))
             .await;
         let row: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&response, "AgentRequest")
+            crate::store::graphql::first_row(&response, "AgentRequest")
                 .unwrap()
                 .unwrap();
         let mut request = RequestLifecycle::new_with_node_did(

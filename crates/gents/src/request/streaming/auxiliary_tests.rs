@@ -16,7 +16,6 @@ use gents_protocol::output::{
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
 use super::{auxiliary, canonical, native_encoding, DefraStreamWriter};
-use crate::config_client::ConfigAccess;
 use crate::lean_vocab_test::{
     lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
     LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication,
@@ -25,10 +24,11 @@ use crate::lean_vocab_test::{
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+use crate::store::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
-    use crate::config_client::ConfigApplyTxn;
+    use crate::store::config_client::ConfigApplyTxn;
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use gents_protocol::output::OutputOutcome;
     use gents_protocol::request_admission::{
@@ -71,7 +71,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
         )
         .await
         .unwrap();
-    let parent_doc = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    let parent_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
     let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc)
         .await
         .unwrap();
@@ -140,7 +140,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
 
     let query = format!(
         "{{AgentOutputSegment(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{{AGENT_OUTPUT_SEGMENT_FIELDS}}} AgentMessage {{_docID}}}}",
-        crate::graphql::escape_graphql_string(&request.doc_id),
+        crate::store::graphql::escape_graphql_string(&request.doc_id),
     );
     let before = access.execute(&query).await.unwrap();
     let originals = before["data"]["AgentOutputSegment"].as_array().unwrap();
@@ -294,10 +294,10 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(&request_id),
-        crate::graphql::escape_graphql_string(&session_id),
-        crate::graphql::escape_graphql_string(&request_id),
-        crate::graphql::escape_graphql_string(&now),
+        crate::store::graphql::escape_graphql_string(&request_id),
+        crate::store::graphql::escape_graphql_string(&session_id),
+        crate::store::graphql::escape_graphql_string(&request_id),
+        crate::store::graphql::escape_graphql_string(&now),
     );
     let access = ConfigAccess::local(node.clone());
     access
@@ -306,7 +306,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         .unwrap();
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-        crate::graphql::escape_graphql_string(&request_id),
+        crate::store::graphql::escape_graphql_string(&request_id),
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
     let response = access.execute(&query).await.unwrap();
@@ -397,7 +397,7 @@ fn native_raw(
 }
 
 async fn output_state(node: &Arc<EmbeddedNode>, request_doc_id: &str) -> serde_json::Value {
-    let request_doc_id = crate::graphql::escape_graphql_string(request_doc_id);
+    let request_doc_id = crate::store::graphql::escape_graphql_string(request_doc_id);
     let response = ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
@@ -852,7 +852,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         .await
         .unwrap();
 
-        let request_doc_id = crate::graphql::escape_graphql_string(&request.doc_id);
+        let request_doc_id = crate::store::graphql::escape_graphql_string(&request.doc_id);
         let response = ConfigAccess::local(node.clone()).execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         )).await.unwrap();

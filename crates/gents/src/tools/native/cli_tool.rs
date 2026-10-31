@@ -469,7 +469,7 @@ mod tests {
         tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
         crate::tools::call::lifecycle::load_tool_call_presentation(
-            &crate::config_client::ConfigAccess::local(node.clone()),
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
             tool.doc_id().unwrap(),
             tool.node_did(),
             tool.session_id(),

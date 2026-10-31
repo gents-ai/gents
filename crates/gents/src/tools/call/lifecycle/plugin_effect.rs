@@ -6,13 +6,13 @@ use gents_protocol::output::{
     OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
 };
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::{created_doc_id, escape_graphql_string};
 use crate::session::canonical_rows::{
     decode_scoped_request_output_segments, output_segment_create_variables,
     request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::graphql::{created_doc_id, escape_graphql_string};
 
 use super::{ToolCallLifecycle, ToolCallState};
 use crate::plugin::tool_calls::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};

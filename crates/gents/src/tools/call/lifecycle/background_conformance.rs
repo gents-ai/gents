@@ -1,5 +1,5 @@
 use super::{AwaitMode, CancelCause};
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
@@ -9,7 +9,7 @@ async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id await_mode lifecycle_state cancel_cause status }} }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);

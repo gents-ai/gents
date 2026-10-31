@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::super::cli_process::{path_arg, run_cli_json};
 use super::manifest::BackgroundCompletionExpectation;
 use super::results::graphql_rows;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 
 #[derive(Debug, Clone)]

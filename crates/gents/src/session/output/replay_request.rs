@@ -25,7 +25,7 @@ async fn load_replay_request_facts_batch(
             .map(|request_doc_id| {
                 format!(
                     r#""{}""#,
-                    crate::graphql::escape_graphql_string(request_doc_id)
+                    crate::store::graphql::escape_graphql_string(request_doc_id)
                 )
             })
             .collect::<Vec<_>>()
@@ -34,7 +34,7 @@ async fn load_replay_request_facts_batch(
             r#"{{ requests: AgentRequest(docIDs: [{ids}]) {{ _docID request_id purpose session_id node_did requester_did }}"#
         );
         for (index, request_doc_id) in chunk.iter().enumerate() {
-            let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+            let escaped = crate::store::graphql::escape_graphql_string(request_doc_id);
             query.push_str(&format!(
                 r#" commit{index}: _commits(docID: "{escaped}") {{ cid height fieldName signature {{ identity type }} }}"#
             ));
@@ -70,7 +70,7 @@ async fn load_replay_request_facts_batch(
                 .with_context(|| {
                     format!("canonical replay commit batch omitted {request_doc_id}")
                 })?;
-            let commits = crate::graphql::decode_composite_commits(commit_rows)?;
+            let commits = crate::store::graphql::decode_composite_commits(commit_rows)?;
             let rows = grouped
                 .remove(request_doc_id)
                 .expect("requested request IDs were initialized");
@@ -95,7 +95,7 @@ pub(crate) trait ReplayRequestReader: Sync {
 #[derive(Clone)]
 pub(crate) struct ReplayRequestFacts {
     pub(in crate::session) rows: Vec<serde_json::Value>,
-    commits: Vec<crate::graphql::CompositeCommit>,
+    commits: Vec<crate::store::graphql::CompositeCommit>,
 }
 
 #[async_trait::async_trait]
@@ -169,7 +169,7 @@ pub(super) async fn validated_canonical_replay_boundary(
             && i64::from(high_water_header.message.sequence) == high_water.sequence,
         "canonical replay high-water header disagrees with its physical scope or sequence"
     );
-    let high_water_commit = crate::graphql::newest_document_composite_commit(
+    let high_water_commit = crate::store::graphql::newest_document_composite_commit(
         node,
         &high_water.doc_id,
         "canonical replay high-water header",

@@ -129,7 +129,7 @@ pub(super) fn parse_patch_args(
         !patch.is_empty(),
         "empty patch; use top-level set for fields or clear for optional field names"
     );
-    crate::config_client::patch::ensure_admissible(target, &patch)?;
+    crate::store::config_client::patch::ensure_admissible(target, &patch)?;
     Ok(patch)
 }
 

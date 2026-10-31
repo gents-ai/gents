@@ -30,11 +30,11 @@ use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
 use crate::agent::runtime::StartupBarrier;
 use crate::defra_node::P2PConfig;
 use crate::ensure_runtime_schemas;
-use crate::graphql::escape_graphql_string;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::prompt::LayeredPromptBuilder;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
@@ -90,7 +90,7 @@ async fn explicit_file_image_push_keeps_unselected_images_and_collection_interes
             "node_did": sender_identity.did(), "requester_did": receiver_identity.did(),
             "session_id": "session", "file_changes": images,
         }});
-        let response = crate::config_client::ConfigAccess::transact_local_write(
+        let response = crate::store::config_client::ConfigAccess::transact_local_write(
             sender, None, "test.file_images.seed", move |txn| {
                 let variables = variables.clone();
                 Box::pin(async move { txn.execute_with_variables(
@@ -100,10 +100,10 @@ async fn explicit_file_image_push_keeps_unselected_images_and_collection_interes
             },
         ).await.unwrap();
         if tool == "selected-tool" {
-            selected = crate::graphql::created_doc_id(&response, "ToolFileChange").unwrap();
+            selected = crate::store::graphql::created_doc_id(&response, "ToolFileChange").unwrap();
         }
     }
-    let receiver_access = crate::config_client::ConfigAccess::local(receiver.clone());
+    let receiver_access = crate::store::config_client::ConfigAccess::local(receiver.clone());
     assert!(receiver_access
         .execute("{ ToolFileChange { _docID } }")
         .await
@@ -240,7 +240,7 @@ async fn explicit_file_image_push_keeps_unselected_images_and_collection_interes
         });
         let visible = if let Some(actor) = actor {
             let did = actor.parse().unwrap();
-            let result = crate::config_client::ConfigAccess::transact_local_write(
+            let result = crate::store::config_client::ConfigAccess::transact_local_write(
                 owner,
                 Some(did),
                 "test.file_images.storage_access",
@@ -269,8 +269,8 @@ async fn explicit_file_image_push_keeps_unselected_images_and_collection_interes
         };
         assert_eq!(visible, case["expected"].as_bool().unwrap(), "{case}");
         let http = match actor {
-            Some(did) => crate::config_client::ConfigAccess::graphql_as(endpoint, did),
-            None => crate::config_client::ConfigAccess::graphql(endpoint),
+            Some(did) => crate::store::config_client::ConfigAccess::graphql_as(endpoint, did),
+            None => crate::store::config_client::ConfigAccess::graphql(endpoint),
         };
         let response = http
             .execute("{ ToolFileChange { _docID file_changes } }")
@@ -301,7 +301,7 @@ async fn explicit_file_image_push_keeps_unselected_images_and_collection_interes
             Some(Duration::from_secs(5)),
         )
         .await;
-    let copied = crate::config_client::ConfigAccess::local(outsider.clone())
+    let copied = crate::store::config_client::ConfigAccess::local(outsider.clone())
         .execute("{ ToolFileChange { _docID } }")
         .await
         .unwrap();

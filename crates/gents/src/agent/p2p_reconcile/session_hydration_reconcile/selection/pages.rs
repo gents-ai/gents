@@ -1,5 +1,5 @@
 use super::*;
-use crate::graphql::CURSOR_PAGE_SIZE;
+use crate::store::graphql::CURSOR_PAGE_SIZE;
 use gents_protocol::session_hydration::SessionHydrationCollection;
 
 pub(super) const PAGE_SIZE: usize = CURSOR_PAGE_SIZE;
@@ -22,7 +22,7 @@ pub(super) fn page_query(
     filter: &str,
     after: Option<&str>,
 ) -> String {
-    crate::graphql::cursor_query(
+    crate::store::graphql::cursor_query(
         hydration_collection_name(collection),
         fields(collection),
         filter,

@@ -171,7 +171,7 @@ pub(in crate::commands) async fn complete_canonical_tool_call(
     let response = node
         .execute(&format!(
             r#"mutation {{ update_AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}} }}"#,
-            gents::graphql::escape_graphql_string(tool_doc_id)
+            gents::store::graphql::escape_graphql_string(tool_doc_id)
         ))
         .await;
     assert!(
@@ -241,7 +241,7 @@ pub(in crate::commands) async fn complete_canonical_spawned_process_output(
     let created_at = chrono::Utc::now().to_rfc3339();
     let owner = node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{request_doc_id spawned_by_tool_call_doc_id}} }}"#,
-        gents::graphql::escape_graphql_string(tool_doc_id)
+        gents::store::graphql::escape_graphql_string(tool_doc_id)
     )).await;
     assert!(!owner.has_errors(), "spawned owner: {:?}", owner.errors);
     let rows = owner.data.as_ref().unwrap()["AgentToolCall"]
@@ -277,7 +277,7 @@ pub(in crate::commands) async fn complete_canonical_spawned_process_output(
         },
     )
     .await;
-    let response = node.execute(&format!(r#"mutation {{ update_AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(tool_doc_id))).await;
+    let response = node.execute(&format!(r#"mutation {{ update_AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}} }}"#, gents::store::graphql::escape_graphql_string(tool_doc_id))).await;
     assert!(
         !response.has_errors(),
         "live tool completion: {:?}",

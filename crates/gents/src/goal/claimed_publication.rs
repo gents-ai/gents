@@ -1,12 +1,12 @@
 mod wait_observation;
 
 use super::*;
-use crate::config_client::ConfigApplyTxn;
 use crate::request::admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
 use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::request::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::{NodeIdentity, RegisteredIdentity};
 use gents_protocol::row::AgentRequestRow;
 
@@ -22,7 +22,7 @@ pub(crate) async fn publish_claimed_continuation(
     let stopped = std::sync::Mutex::new(None);
     let stopped_ref = &stopped;
     // Preserve the automatic queue writer's node actor; target identity signs
-    let receipt = crate::config_client::ConfigAccess::transact_local_write(
+    let receipt = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.publish_claimed_continuation",
@@ -58,7 +58,7 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
     parent_request_id: &str,
     reason: &str,
 ) -> Result<bool> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.stop_unavailable_claimed_continuation",

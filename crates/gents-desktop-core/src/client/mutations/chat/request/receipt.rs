@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{ConfigAccess, ReceiptWriteError};
+use gents::store::config_client::{ConfigAccess, ReceiptWriteError};
 use gents_protocol::graphql::{escape_graphql_string, GraphqlRequestOptions};
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequestRow;
@@ -203,7 +203,7 @@ async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) 
     );
     let response = match access {
         ConfigAccess::Graphql(endpoint) => {
-            gents::config_client::query_graphql_with_options(
+            gents::store::config_client::query_graphql_with_options(
                 endpoint,
                 &query,
                 GraphqlRequestOptions {
@@ -273,7 +273,7 @@ async fn reconcile_commit_failure(
     pending: UnresolvedSubmission,
     error: ReceiptWriteError,
 ) -> Result<SubmittedRequest> {
-    if gents::graphql::is_storage_full(&error) {
+    if gents::store::graphql::is_storage_full(&error) {
         return Err(pending.outcome_unknown(Some(error.into())));
     }
     // The owner processed the mutation and answered with GraphQL errors; an
@@ -345,7 +345,7 @@ async fn submitted_request_exists(
         escape_graphql_string(session_id)
     );
     let logical = escape_graphql_string(request_id);
-    let response = gents::config_client::query_graphql_with_options(
+    let response = gents::store::config_client::query_graphql_with_options(
         endpoint,
         &format!(
             "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{request_id}}}}"
@@ -386,7 +386,7 @@ pub async fn resolve_unresolved_submission(
 /// Endpoint helper kept private to the tests: a GraphQL access at `url`.
 #[cfg(test)]
 fn test_access(url: &str) -> ConfigAccess {
-    ConfigAccess::Graphql(gents::config_client::GraphqlEndpoint::anonymous(url))
+    ConfigAccess::Graphql(gents::store::config_client::GraphqlEndpoint::anonymous(url))
 }
 
 #[cfg(test)]
@@ -706,7 +706,7 @@ mod tests {
                     unknown.pending.create.admission.signature,
                     pending.create.admission.signature
                 );
-                assert!(gents::graphql::is_storage_full(error.as_ref()));
+                assert!(gents::store::graphql::is_storage_full(error.as_ref()));
                 assert_eq!(
                     server.received_requests().await.unwrap().len(),
                     1,
@@ -819,7 +819,9 @@ mod tests {
         let error = reconcile_commit_failure(
             &access,
             pending.clone(),
-            ReceiptWriteError::Write(gents::config_client::ConfigClientError::StoreClaimHeld),
+            ReceiptWriteError::Write(
+                gents::store::config_client::ConfigClientError::StoreClaimHeld,
+            ),
         )
         .await
         .expect_err("a local post-send failure does not prove rejection");

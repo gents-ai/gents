@@ -48,7 +48,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
             .await
             .unwrap();
         assert_eq!(report.tool_calls_recovered, 0, "{name}");
-        let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#)).await;
         assert!(!response.has_errors(), "{name}: {:?}", response.errors);
         assert_eq!(
@@ -83,8 +83,8 @@ async fn seed_goal_status(
     goal: &crate::goal::GoalDocument,
     fields: &str,
 ) {
-    let doc_id = crate::graphql::escape_graphql_string(&goal.doc_id);
-    let node_did = crate::graphql::escape_graphql_string(&goal.node_did);
+    let doc_id = crate::store::graphql::escape_graphql_string(&goal.doc_id);
+    let node_did = crate::store::graphql::escape_graphql_string(&goal.node_did);
     let response = node.execute(&format!(
         r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     ))
@@ -144,7 +144,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             let session_id = admission.tool.session_id().to_owned();
             let settled = settle(&admission).await;
             assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
-            let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+            let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
             let response = admission
                 .node
                 .execute(&format!(
@@ -192,8 +192,9 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 // observations. The fixture states must be distinct or the
                 // generated witnesses do not exercise the vocabulary.
                 let caused_session_id = {
-                    let doc_id =
-                        crate::graphql::escape_graphql_string(&message.caused_request_doc_id);
+                    let doc_id = crate::store::graphql::escape_graphql_string(
+                        &message.caused_request_doc_id,
+                    );
                     let response = admission.node.execute(&format!(
                         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
                     ))
@@ -208,7 +209,9 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     let response = crate::ConfigAccess::local(admission.node.clone())
                         .execute(&format!(
                             r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{{}}}}}"#,
-                            crate::graphql::escape_graphql_string(&message.caused_request_doc_id),
+                            crate::store::graphql::escape_graphql_string(
+                                &message.caused_request_doc_id
+                            ),
                             crate::request::admission::SIGNED_REQUEST_FIELDS,
                         ))
                         .await
@@ -344,7 +347,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         }
         let settled = settle(admission).await;
         assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
-        let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
             .node
             .execute(&format!(
@@ -478,7 +481,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             process.finish().await;
         }
         assert!(registry.process_record_list().is_empty(), "{name}");
-        let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
             .node
             .execute(&format!(
@@ -585,7 +588,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         .await
         .unwrap();
         assert_eq!(report.tool_calls_terminalized, 0, "{name}");
-        let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission.node.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
         )).await;

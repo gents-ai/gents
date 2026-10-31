@@ -7,7 +7,7 @@ use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
-use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::store::graphql::{escape_graphql_string, response_has_documents};
 
 pub(super) struct RenewalTask {
     task: tokio::task::JoinHandle<()>,
@@ -159,7 +159,7 @@ async fn renew_once_with_time(
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
-    match crate::config_client::ConfigAccess::renew_execution_lease(node, move |txn| {
+    match crate::store::config_client::ConfigAccess::renew_execution_lease(node, move |txn| {
         Box::pin(renew_in_transaction(
             txn,
             request_doc_id,
@@ -180,7 +180,7 @@ async fn renew_once_with_time(
 struct RenewalAdmissionExpired;
 
 pub(crate) async fn renew_in_transaction(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: Option<DateTime<Utc>>,
@@ -192,7 +192,8 @@ pub(crate) async fn renew_in_transaction(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1
             ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#)).await?;
     let snapshot_read_ms = started.elapsed().as_millis() as u64;
-    let Some(row) = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")? else {
+    let Some(row) = crate::store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
+    else {
         return Ok(RenewalAttemptOutcome::Lost);
     };
     let state = row.lifecycle_state.context("missing execution lifecycle")?;

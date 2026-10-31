@@ -16,7 +16,7 @@ use super::{
     clean, context_calls, decode, InvestigationCallsEnvelope, RequestContextObservation,
     SessionInferenceObservation,
 };
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub async fn load_request_context_observation(
     node: &EmbeddedNode,
@@ -129,7 +129,7 @@ pub async fn load_session_inference_observation(
     session_id: &str,
 ) -> Result<SessionInferenceObservation> {
     let ids = load_session_request_doc_ids(
-        &crate::config_client::ConfigAccess::local(Arc::clone(node)),
+        &crate::store::config_client::ConfigAccess::local(Arc::clone(node)),
         node_did,
         requester_did,
         session_id,
@@ -165,7 +165,7 @@ pub async fn load_session_inference_observation(
 }
 
 pub async fn load_session_request_doc_ids(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -187,7 +187,7 @@ pub(super) enum RequestBindings<'a> {
 }
 
 pub(super) async fn load_session_request_bindings(
-    access: &dyn crate::config_client::ConfigRead,
+    access: &dyn crate::store::config_client::ConfigRead,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,

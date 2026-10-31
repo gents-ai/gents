@@ -8,10 +8,10 @@ use gents_protocol::transcript::present_message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
-use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
 use crate::run_timeline::{RunTimelineRows, TimelineToolCallRow};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
 
 #[async_trait::async_trait]
 pub trait ObservationHook: Send + Sync {
@@ -545,9 +545,9 @@ mod tests {
     }
 
     async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
-        let request_id = crate::graphql::escape_graphql_string(request_id);
-        let node_did = crate::graphql::escape_graphql_string(home.did());
-        let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
+        let request_id = crate::store::graphql::escape_graphql_string(request_id);
+        let node_did = crate::store::graphql::escape_graphql_string(home.did());
+        let lifecycle_state = crate::store::graphql::escape_graphql_string(lifecycle_state);
         let mutation = format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
@@ -857,7 +857,7 @@ mod tests {
         .unwrap();
         assert!(observed.interrupted_on_deadline);
         assert_eq!(observed.terminal_state, None);
-        let request_id = crate::graphql::escape_graphql_string("req-stuck");
+        let request_id = crate::store::graphql::escape_graphql_string("req-stuck");
         let query = format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#
         );

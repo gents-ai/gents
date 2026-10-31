@@ -30,7 +30,7 @@ where
 {
     fn on_event(&self, event: &tracing::Event<'_>, _context: LayerContext<'_, S>) {
         if event.metadata().target()
-            != crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
+            != crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
         {
             return;
         }
@@ -133,7 +133,7 @@ async fn request_row(node: &EmbeddedNode, doc_id: &str) -> AgentRequestRow {
         escape_graphql_string(doc_id),
     )).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
-    crate::graphql::first_row(&result, "AgentRequest")
+    crate::store::graphql::first_row(&result, "AgentRequest")
         .unwrap()
         .unwrap()
 }
@@ -147,7 +147,7 @@ async fn request_composite_version(node: &EmbeddedNode, doc_id: &str) -> String 
         .await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let row = &result.data.as_ref().unwrap()["AgentRequest"][0];
-    crate::graphql::document_composite_version(row, "AgentRequest begin replay")
+    crate::store::graphql::document_composite_version(row, "AgentRequest begin replay")
         .unwrap()
         .expect("AgentRequest composite version")
         .cid
@@ -268,7 +268,7 @@ async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
     let (node, _dir) = test_node().await;
     let lifecycle = owner(&node).await;
     let doc_id = lifecycle.request().doc_id.clone();
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         &node,
         "test.expired_owner_drop",
         &format!(
@@ -326,7 +326,7 @@ async fn native_relinquishment_follows_generated_drop_cases() {
         )
         .unwrap();
         let now = DateTime::from_timestamp_millis(case.pre.now.try_into().unwrap()).unwrap();
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             &node,
             "test.generated_drop_case",
             &format!(
@@ -909,7 +909,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let close_doc_id =
-        crate::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+        crate::store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -1354,7 +1354,7 @@ async fn native_doc_id_targeting_preserves_request_update_filters() {
             expiry = escape_graphql_string(expiry),
             next = escape_graphql_string(&next),
         );
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.request_doc_id_filters",
             &mutation,
@@ -1404,7 +1404,7 @@ async fn observed_case_request(
     let doc_id = escape_graphql_string(&lifecycle.request.doc_id);
     let deadline =
         epoch + chrono::Duration::seconds(case.pre.lease.explicit_deadline.unwrap() as i64);
-    crate::config_client::ConfigAccess::write_local(node, "test.observed_lease_seed", &format!(
+    crate::store::config_client::ConfigAccess::write_local(node, "test.observed_lease_seed", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ execution_lease_secs: {}, execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
         case.pre.lease.duration.unwrap(), escape_graphql_string(&deadline.to_rfc3339()),
     )).await.unwrap();
@@ -1431,7 +1431,7 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
     let lifecycle = observed_case_request(&node, case, epoch).await;
     let row = request_row(&node, &lifecycle.request.doc_id).await;
     let request = escape_graphql_string(&lifecycle.request.doc_id);
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let txn = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ execution_generation execution_lease_expires_at }} }}"#)).await.unwrap();
@@ -1476,7 +1476,7 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         .await
         .unwrap();
     let segment_doc_id =
-        crate::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
+        crate::store::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
     let message = TranscriptMessage {
         message_key: message_key.clone(),
         session_id: lifecycle.request.session_id.clone(),
@@ -1532,12 +1532,10 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
     );
     let result = txn.commit().await;
     assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
-    assert!(crate::config_client::is_classified_transaction_conflict(
-        &result.unwrap_err()
-    ));
+    assert!(crate::store::config_client::is_classified_transaction_conflict(&result.unwrap_err()));
     let request = escape_graphql_string(&lifecycle.request.doc_id);
     let key = escape_graphql_string(&message_key);
-    let access = crate::config_client::ConfigAccess::local(Arc::clone(&node));
+    let access = crate::store::config_client::ConfigAccess::local(Arc::clone(&node));
     let published = access
         .execute(
             &format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{key}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID source }} }}"#),
@@ -1571,7 +1569,7 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
     let deadline = DateTime::parse_from_rfc3339(expiry)
         .unwrap()
         .with_timezone(&Utc);
-    let txn = crate::config_client::ConfigApplyTxn::begin_execution_renewal_for_test(&node)
+    let txn = crate::store::config_client::ConfigApplyTxn::begin_execution_renewal_for_test(&node)
         .await
         .unwrap();
     let renewed = crate::request::lifecycle::renew_in_transaction(
@@ -1612,9 +1610,7 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
     ));
     let result = txn.commit().await;
     assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
-    assert!(crate::config_client::is_classified_transaction_conflict(
-        &result.unwrap_err()
-    ));
+    assert!(crate::store::config_client::is_classified_transaction_conflict(&result.unwrap_err()));
     let terminal = request_row(&node, &lifecycle.request.doc_id).await;
     assert_eq!(
         terminal.lifecycle_state,
@@ -1733,14 +1729,14 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
     crate::sign_agent_request_create(&LeaseTestIdentity, &mut pending)
         .await
         .unwrap();
-    let response = crate::config_client::ConfigAccess::write_local(
+    let response = crate::store::config_client::ConfigAccess::write_local(
         &node,
         "test.same_session_pending",
         &pending.graphql_mutation().unwrap(),
     )
     .await
     .unwrap();
-    let pending_doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let pending_doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
 
     assert!(!lifecycle
         .finish_natural_turn(&saved.message_doc_id, &[])
@@ -1841,7 +1837,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         let request_for_attempt = doc_id.clone();
         let generation_for_attempt = generation.clone();
         let mut first_attempt = tokio::spawn(
-            crate::config_client::ConfigApplyTxn::with_native_operation_pause(
+            crate::store::config_client::ConfigApplyTxn::with_native_operation_pause(
                 Arc::clone(&entered),
                 Arc::clone(&release),
                 async move {
@@ -1869,7 +1865,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                 "caller_timed_out" => {
                     tokio::time::pause();
                     tokio::time::advance(
-                        crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                        crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                     )
                     .await;
                     tokio::time::resume();
@@ -1966,7 +1962,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
             .expect("native completion releases the owner")
             .expect_err("the timed-out attempt must not replay or commit");
         assert!(
-            crate::config_client::is_transaction_step_unavailable(&first_error),
+            crate::store::config_client::is_transaction_step_unavailable(&first_error),
             "{}: abandoned native renewal remains an availability failure",
             case.name
         );

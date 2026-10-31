@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use gents::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::tools::native::SessionHistorySnapshot as CanonicalSessionHistorySnapshot;
 use serde::{Deserialize, Serialize};
 

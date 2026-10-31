@@ -1,7 +1,7 @@
 use super::super::session_hydration::HYDRATION_COLLECTIONS;
 use super::{selection::load_canonical_selection_in_txn, *};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::required_rows;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::required_rows;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::enrollment::canonical_domain_payload;
 use gents_protocol::file_image_hydration::FileImageScope;

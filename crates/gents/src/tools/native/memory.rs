@@ -7,7 +7,7 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub const MEMORY_TOOL_NAME: &str = "memory";
 
@@ -260,7 +260,7 @@ async fn write_memory(
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "toolset.write_node_memory",
         &mutation,
@@ -306,7 +306,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         node.add_collection(&old_sdl).await.unwrap();
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.seed_legacy_memory",
             r#"mutation { create_NodeMemory(input: {memory_id: "16:did:key:z-memoryproject", node_did: "did:key:z-memory", key: "project", value: "original", updated_at: "2026-01-01T00:00:00Z"}) { _docID } }"#,
@@ -330,7 +330,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(updated.value.as_deref(), Some("updated"));
-        let response = crate::config_client::ConfigAccess::local(node)
+        let response = crate::store::config_client::ConfigAccess::local(node)
             .execute("{ NodeMemory { value value_text } }")
             .await
             .unwrap();

@@ -133,7 +133,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
                 .unwrap();
         }
         if !facts.profile_names_account {
-            crate::config_client::switch_profile_account(
+            crate::store::config_client::switch_profile_account(
                 &accounts.access,
                 did,
                 PROFILE,

@@ -261,7 +261,7 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
     )
     .await
     .unwrap();
-    let item_id = crate::graphql::created_doc_id(&response, "MailboxItem").unwrap();
+    let item_id = crate::store::graphql::created_doc_id(&response, "MailboxItem").unwrap();
     let controller = source(&db);
     for _ in 0..2 {
         assert!(controller

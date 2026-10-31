@@ -10,7 +10,7 @@ pub(crate) async fn load_bound_profile(
     node_did: &str,
     agent_id: &str,
 ) -> Result<gents::documents::InferenceProfile> {
-    use gents::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
+    use gents::store::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
     use gents::Collection;
     ConfigAccess::transact_local_write(node, None, "codex.bound_profile", |txn| {
         Box::pin(async move {

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config_client::patch::SelfConfigPatch;
 use crate::documents::{Agent, AgentContext, InferenceBackend, InferenceProfile};
+use crate::store::config_client::patch::SelfConfigPatch;
 use anyhow::{ensure, Result};
 
 #[derive(Clone, Debug, Default)]

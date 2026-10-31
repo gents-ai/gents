@@ -9,7 +9,7 @@ pub(super) struct ShimState {
     pub(super) fs_root: Option<PathBuf>,
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) background_execution_registry: gents::BackgroundExecutionRegistry,
-    pub(super) graphql: gents::config_client::GraphqlEndpoint,
+    pub(super) graphql: gents::store::config_client::GraphqlEndpoint,
     pub(super) node_did: Arc<str>,
     pub(super) agent_id: Arc<str>,
     pub(super) id_counter: Arc<AtomicU64>,

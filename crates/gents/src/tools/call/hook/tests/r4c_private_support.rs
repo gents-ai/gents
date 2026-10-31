@@ -41,16 +41,17 @@ pub(super) async fn bind_accepted_request(
         "create canonical R4C parent request: {:?}",
         created.errors
     );
-    let request_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
+    let request_doc_id =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
     let loaded = db.node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ {} }} }}"#, crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&loaded, "AgentRequest")
+        crate::store::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .expect("created R4C request row");
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
@@ -109,8 +110,8 @@ pub(super) async fn assert_accepted_control_rows(
     expected: usize,
 ) {
     let session_id = hook.session_id().await.expect("accepted control session");
-    let session = crate::graphql::escape_graphql_string(&session_id);
-    let name = crate::graphql::escape_graphql_string(tool_name);
+    let session = crate::store::graphql::escape_graphql_string(&session_id);
+    let name = crate::store::graphql::escape_graphql_string(tool_name);
     let response = hook.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_name: {{ _eq: "{name}" }} }}) {{ _docID request_doc_id message_sequence lifecycle_state }} }}"#)).await;
     assert!(
         !response.has_errors(),
@@ -125,7 +126,7 @@ pub(super) async fn assert_accepted_control_rows(
         let tool_doc_id = row["_docID"].as_str().unwrap();
         let request_doc_id = row["request_doc_id"].as_str().unwrap();
         let sequence = row["message_sequence"].as_u64().unwrap();
-        let request_doc = crate::graphql::escape_graphql_string(request_doc_id);
+        let request_doc = crate::store::graphql::escape_graphql_string(request_doc_id);
         let headers = hook.node.execute(&format!(r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{request_doc}" }}, sequence: {{ _eq: {sequence} }} }}) {{ _docID }} }}"#)).await;
         assert!(
             !headers.has_errors(),

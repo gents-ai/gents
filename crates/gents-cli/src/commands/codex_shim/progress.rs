@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents::tools::call::lifecycle::ToolCallState;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};

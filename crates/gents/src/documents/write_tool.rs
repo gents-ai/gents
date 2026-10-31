@@ -53,7 +53,8 @@ impl<'de> serde::Deserialize<'de> for WriteToolFieldFill {
                             "fill object must contain exactly one string source_field",
                         )
                     })?;
-                crate::graphql::validate_graphql_name(field).map_err(serde::de::Error::custom)?;
+                crate::store::graphql::validate_graphql_name(field)
+                    .map_err(serde::de::Error::custom)?;
                 Ok(Self::SourceField(field.to_string()))
             }
             _ => Err(serde::de::Error::custom(
@@ -295,15 +296,15 @@ impl WriteToolDecl {
         if self.tool_name.trim().is_empty() {
             anyhow::bail!("tool_name must be non-empty");
         }
-        crate::graphql::validate_collection_identifier(&self.collection).map_err(|error| {
-            anyhow::anyhow!("invalid collection {:?}: {error}", self.collection)
-        })?;
+        crate::store::graphql::validate_collection_identifier(&self.collection).map_err(
+            |error| anyhow::anyhow!("invalid collection {:?}: {error}", self.collection),
+        )?;
         reject_protected_collection_name(&self.collection)?;
         for (index, field) in self.fields.iter().enumerate() {
             if field.name.trim().is_empty() {
                 anyhow::bail!("invalid field[{index}] name: empty name");
             }
-            crate::graphql::validate_graphql_name(&field.name).map_err(|error| {
+            crate::store::graphql::validate_graphql_name(&field.name).map_err(|error| {
                 anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
             })?;
             if field.name == "requester_did" && field.fill.is_none() {
@@ -390,7 +391,7 @@ pub(crate) fn validate_write_tool_declarations(
                 ));
             }
             if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
-                crate::graphql::validate_graphql_name(source_field).map_err(|error| {
+                crate::store::graphql::validate_graphql_name(source_field).map_err(|error| {
                     anyhow::anyhow!(
                         "write_tools[{i}] (tool {:?}) field[{j}] has invalid source_field {:?}: {error}",
                         decl.tool_name,

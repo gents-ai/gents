@@ -8,7 +8,7 @@ impl PackInstaller {
         distribution: &ConfigPackDistribution,
         commit: bool,
     ) -> anyhow::Result<String> {
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let owner = self.core.node_did();
         let prior = self.installation_status(distribution.manifest()).await?;
         anyhow::ensure!(
@@ -132,7 +132,7 @@ impl PackInstaller {
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
             let sdl = std::str::from_utf8(distribution.0.archive.asset(path)?)?;
-            schemas.push(crate::config_client::preview_schema_install(&access, sdl).await?);
+            schemas.push(crate::store::config_client::preview_schema_install(&access, sdl).await?);
         }
         let dependency_receipts = dependencies.iter().map(|dependency| json!({
             "coordinate": format!("{}/{}", dependency.manifest().metadata.namespace, dependency.manifest().name),

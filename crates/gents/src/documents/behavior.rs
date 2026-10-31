@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::references::ConfigReferences;
 use super::serde_helpers::{
@@ -134,21 +134,21 @@ pub(crate) async fn list_agent_records(
 }
 
 pub async fn upsert_agent(node: &std::sync::Arc<EmbeddedNode>, behavior: &Agent) -> Result<()> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "document_config.agent.upsert",
         |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(behavior)?;
-                let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::config_client::DesiredStateApplyDocument {
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                    crate::store::config_client::DesiredStateApplyDocument {
                         collection: crate::Collection::Agent,
                         add: value.clone(),
                         update: value,
                     },
                 ])?;
-                crate::config_client::apply_desired_state_plan(txn, &plan).await?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
                 Ok(())
             })
         },

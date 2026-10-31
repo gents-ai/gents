@@ -9,9 +9,9 @@ use gents_protocol::job::{
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
 use crate::plugin::job_calls::job_state;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::job::admit::StepChild;
 use crate::tools::background::job::input::{chain_of, derive_children, derive_children_for_jobs};
 use crate::tools::background::job::keys::job_spawn_key;

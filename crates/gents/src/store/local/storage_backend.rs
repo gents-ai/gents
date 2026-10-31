@@ -222,7 +222,7 @@ fn find_insecure_key<'a>(
             })
             .or_else(|| {
                 cause
-                    .downcast_ref::<crate::config_client::ConfigClientError>()?
+                    .downcast_ref::<crate::store::config_client::ConfigClientError>()?
                     .insecure_key()
             })
     })
@@ -319,7 +319,7 @@ mod tests {
             anyhow::Error::new(key()),
             IdentityError::from(key()).into(),
             StoreKeyError::Identity(key().into()).into(),
-            crate::config_client::ConfigClientError::from(IdentityError::from(key())).into(),
+            crate::store::config_client::ConfigClientError::from(IdentityError::from(key())).into(),
         ] {
             assert_eq!(kind(error), insecure);
         }

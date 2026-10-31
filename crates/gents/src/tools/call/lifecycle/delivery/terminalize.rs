@@ -6,7 +6,7 @@ use super::{
     plugin_writes_failed, PluginWritesFailed, RawPresentation, TerminalFields, TerminalJobProgress,
     TerminalizeOptions,
 };
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -144,7 +144,7 @@ impl ToolCallLifecycle {
         .await?;
         #[cfg(test)]
         if take_terminal_failure_for_test(doc_id) {
-            return Err(crate::config_client::classified_conflict_for_test().into());
+            return Err(crate::store::config_client::classified_conflict_for_test().into());
         }
         if let (true, Some(progress)) = (published, job_progress) {
             write_terminal_progress(txn, doc_id, progress).await?;
@@ -358,7 +358,7 @@ impl ToolCallLifecycle {
                     .await?;
                     #[cfg(test)]
                     if take_terminal_failure_for_test(&doc_id) {
-                        return Err(crate::config_client::classified_conflict_for_test().into());
+                        return Err(crate::store::config_client::classified_conflict_for_test().into());
                     }
                     // Applied after the terminal compare so a lost compare
                     // writes nothing; a failure rolls the terminal back too.

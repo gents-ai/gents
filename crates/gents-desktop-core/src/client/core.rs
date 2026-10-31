@@ -25,7 +25,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
 use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};

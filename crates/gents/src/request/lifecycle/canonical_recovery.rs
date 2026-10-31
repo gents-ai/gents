@@ -13,13 +13,13 @@ use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session;
 use crate::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables, OutputSegmentRow,
     TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::graphql::{escape_graphql_string, response_has_documents};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryResult {
@@ -44,7 +44,7 @@ pub(crate) enum RecoverySelectionChoice {
 #[error("recovery terminal selection is not an exact reconstructable owned assistant header")]
 pub(crate) struct RecoverySelectionRejected;
 
-use crate::graphql::created_doc_id;
+use crate::store::graphql::created_doc_id;
 
 pub(in crate::request::lifecycle) async fn request_segments(
     txn: &ConfigApplyTxn<'_>,
@@ -232,7 +232,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 _docID request_id purpose node_did requester_did session_id lifecycle_state interrupt_requested_at
                 execution_generation execution_lease_expires_at terminal_output
             }} }}"#)).await?;
-            let row = crate::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
+            let row = crate::store::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
                 .context("execution request disappeared")?;
             let purpose = row.purpose.context("recovery request purpose missing")?;
             let is_auxiliary = purpose.is_auxiliary();

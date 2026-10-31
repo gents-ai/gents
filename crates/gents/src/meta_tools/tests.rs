@@ -62,7 +62,7 @@ async fn remote_node() -> Arc<defra_node::EmbeddedNode> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for (owner, port) in [("did:test:owner", 8080), ("did:test:foreign", 9090)] {
-        let owner = crate::graphql::escape_graphql_string(owner);
+        let owner = crate::store::graphql::escape_graphql_string(owner);
         let response = node.execute(&format!(r#"mutation {{ create_ToolServiceRegistry(input: {{ node_did: "{owner}", service_id: "shared", hostname: "remote", mcp_port: {port}, enabled: true }}) {{ _docID }} }}"#)).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
     }

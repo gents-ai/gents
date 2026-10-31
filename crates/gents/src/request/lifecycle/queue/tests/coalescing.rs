@@ -210,7 +210,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     )
     .await
     .unwrap();
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &db.node,
         "test.signed_duplicate_wake",
         &duplicate,

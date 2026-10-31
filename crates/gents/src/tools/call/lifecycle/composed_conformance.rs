@@ -1,5 +1,5 @@
 use super::{CancelCause, ToolCallLifecycle};
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
@@ -9,7 +9,7 @@ async fn lifecycle_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state cancel_cause tool_failure_class request_doc_id deadline_at }} }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -25,7 +25,7 @@ async fn request_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state deadline execution_generation }} }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -45,14 +45,14 @@ async fn prepare_expired_composed_boundary(
     let past = (chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339();
     let tool = admission.node.execute(&format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "{}" }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(tool_doc_id),
-        crate::graphql::escape_graphql_string(&past),
+        crate::store::graphql::escape_graphql_string(tool_doc_id),
+        crate::store::graphql::escape_graphql_string(&past),
     )).await;
     assert!(!tool.has_errors(), "{:?}", tool.errors);
     let request = admission.node.execute(&format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "{}" }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(request_doc_id),
-        crate::graphql::escape_graphql_string(&past),
+        crate::store::graphql::escape_graphql_string(request_doc_id),
+        crate::store::graphql::escape_graphql_string(&past),
     )).await;
     assert!(!request.has_errors(), "{:?}", request.errors);
 }
@@ -60,7 +60,7 @@ async fn prepare_expired_composed_boundary(
 async fn interrupt_request(admission: &PublishedAdmission, request_doc_id: &str) {
     let response = admission.node.execute(&format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "interrupted" }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(request_doc_id),
+        crate::store::graphql::escape_graphql_string(request_doc_id),
     )).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 }

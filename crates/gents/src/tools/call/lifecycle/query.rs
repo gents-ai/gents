@@ -16,8 +16,8 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 
 use super::{
     AwaitMode, CancelCause, FailureClass, SelectedToolIdentity, ToolCallLifecycle, ToolCallState,
@@ -174,7 +174,7 @@ impl ToolCallLifecycle {
                 .is_some(),
             "lifecycle query omitted AgentToolCall rows"
         );
-        let mut rows: Vec<ToolCallRow> = crate::graphql::rows(&resp, "AgentToolCall")?;
+        let mut rows: Vec<ToolCallRow> = crate::store::graphql::rows(&resp, "AgentToolCall")?;
         anyhow::ensure!(rows.len() <= 1, "ambiguous tool-call lifecycle identity");
         let Some(row) = rows.pop() else {
             return Ok(None);
@@ -413,19 +413,19 @@ mod tests {
         node_did: &str,
         requester_did: Option<&str>,
     ) -> RequestLifecycle {
-        let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let request_id = crate::graphql::escape_graphql_string(request_id);
-        let session_id = crate::graphql::escape_graphql_string(session_id);
-        let node_did = crate::graphql::escape_graphql_string(node_did);
+        let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let request_id = crate::store::graphql::escape_graphql_string(request_id);
+        let session_id = crate::store::graphql::escape_graphql_string(session_id);
+        let node_did = crate::store::graphql::escape_graphql_string(node_did);
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
-        let row = crate::graphql::graphql_with_transaction_retry(node, &format!(
+        let row = crate::store::graphql::graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ), "test.tool_call.load_request").await.unwrap();
         let row: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&row, "AgentRequest")
+            crate::store::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
         let mut lifecycle = RequestLifecycle::new_with_node_did(

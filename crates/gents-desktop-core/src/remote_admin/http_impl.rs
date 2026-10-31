@@ -28,7 +28,7 @@ pub struct HttpRemoteP2pAdmin {
     api_base_path: String,
     client: Client,
     actor: Option<Arc<PrincipalIdentity>>,
-    node_identity: Option<gents::config_client::GraphqlEndpoint>,
+    node_identity: Option<gents::store::config_client::GraphqlEndpoint>,
     local_resolver: Option<Arc<EmbeddedNode>>,
 }
 
@@ -44,7 +44,10 @@ impl HttpRemoteP2pAdmin {
         Self::new_inner(graphql_url, Some(actor))
     }
 
-    pub fn with_node_identity(mut self, endpoint: gents::config_client::GraphqlEndpoint) -> Self {
+    pub fn with_node_identity(
+        mut self,
+        endpoint: gents::store::config_client::GraphqlEndpoint,
+    ) -> Self {
         self.node_identity = Some(endpoint);
         self
     }

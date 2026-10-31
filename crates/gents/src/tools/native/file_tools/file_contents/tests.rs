@@ -115,7 +115,7 @@ async fn observations_in_one_session_have_separate_file_documents_and_read_back_
             ConfigAccess::transact_local_idempotent(
                 &admission.node,
                 None,
-                crate::config_client::IdempotentTransactionRetry::Standard,
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
                 "test.file_contents.store",
                 |txn| {
                     let (scope, changes) = (scope.clone(), changes.clone());
@@ -244,7 +244,7 @@ async fn concurrent_edits_of_one_path_keep_observation_documents_distinct() {
             ConfigAccess::transact_local_idempotent(
                 &node,
                 None,
-                crate::config_client::IdempotentTransactionRetry::Standard,
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
                 "test.file_contents.concurrent",
                 |txn| {
                     let (scope, changes) = (scope.clone(), changes.clone());
@@ -344,7 +344,7 @@ async fn measure_per_observation_file_history_storage() {
             ConfigAccess::transact_local_idempotent(
                 &node,
                 None,
-                crate::config_client::IdempotentTransactionRetry::Standard,
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
                 "test.file_history.measure_storage",
                 |txn| {
                     let scope = scope.clone();

@@ -30,7 +30,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 

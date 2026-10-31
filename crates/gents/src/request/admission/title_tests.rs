@@ -70,14 +70,14 @@ fn native_input(case: &LeanTitleRequestAdmissionCase) -> RequestInput {
 }
 
 async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -> String {
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "test.title_admission.create_request",
         &create.graphql_mutation().expect("native request mutation"),
     )
     .await
     .expect("create request");
-    crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+    crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
         .expect("create response")
         .expect("created request")["_docID"]
         .as_str()
@@ -87,12 +87,12 @@ async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -
 
 async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &str, value: &str) {
     assert!(matches!(field, "lifecycle_state" | "deadline"));
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
-    let value = crate::graphql::escape_graphql_string(value);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
+    let value = crate::store::graphql::escape_graphql_string(value);
     let mutation = format!(
         "mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: \"{doc_id}\" }} }}, input: {{ {field}: \"{value}\" }}) {{ _docID }} }}"
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "test.title_admission.update_request",
         &mutation,
@@ -100,7 +100,7 @@ async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &st
     .await
     .expect("update request");
     assert!(
-        crate::graphql::single_mutation_document(&response, "update_AgentRequest")
+        crate::store::graphql::single_mutation_document(&response, "update_AgentRequest")
             .expect("update response")
             .is_some(),
         "request update must match the exact document"

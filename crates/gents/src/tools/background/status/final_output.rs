@@ -9,9 +9,9 @@ use gents_protocol::output::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::graphql_string_list_literal;
 use crate::session::TxnCanonicalReader;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::call::lifecycle::CausedRequestTerminal;
 
 pub async fn load_caused_request_terminal(
@@ -51,7 +51,7 @@ pub(crate) async fn load_session_message_terminal(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
                     _docID request_id node_did requester_did session_id agent_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id
                 }} }}"#,
-                crate::graphql::escape_graphql_string(caused_doc_id),
+                crate::store::graphql::escape_graphql_string(caused_doc_id),
             )).await?;
             let rows: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
             let Some(caused) = rows.first() else { return Ok(None); };
@@ -71,7 +71,7 @@ pub(crate) async fn load_session_message_terminal(
                 anyhow::ensure!(head != caused_doc_id, "folded request references itself");
                 let response = txn.execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id node_did requester_did session_id agent_id }} }}"#,
-                    crate::graphql::escape_graphql_string(head),
+                    crate::store::graphql::escape_graphql_string(head),
                 )).await?;
                 let heads: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
                 if heads.is_empty() { return Ok(None); }

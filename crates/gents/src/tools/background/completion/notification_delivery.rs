@@ -133,8 +133,9 @@ async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Resul
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 2) {{ _docID tool_call_id }} }}"#
     );
     let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "load_tool_call_id").await?;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")?;
+        crate::store::graphql::graphql_with_transaction_retry(node, &query, "load_tool_call_id")
+            .await?;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")?;
     anyhow::ensure!(
         rows.len() == 1,
         "background tool notification requires one exact physical lifecycle row"
@@ -210,7 +211,7 @@ async fn mark_background_tool_notification_delivered(
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "mark_background_tool_notification_delivered",
         &mutation,
@@ -232,7 +233,7 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID status lifecycle_state }}
         }}"#
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "mark_background_tool_completion_side_effects_done",
@@ -284,7 +285,7 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "mark_background_completion_side_effects_done",
         &mutation,

@@ -12,8 +12,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::ProcessLifecycleState;
-use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentAdmissionObservation {
@@ -830,7 +830,7 @@ async fn persist_candidate(
 }
 
 fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
-    if crate::graphql::is_storage_full(error.as_ref()) {
+    if crate::store::graphql::is_storage_full(error.as_ref()) {
         return true;
     }
     #[cfg(test)]
@@ -870,7 +870,7 @@ pub(crate) async fn upsert_node_readiness(
         snapshot_json = escape_graphql_string(&snapshot_json),
         updated_at = escape_graphql_string(updated_at),
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "upsert_node_readiness",
         &mutation,

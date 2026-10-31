@@ -29,9 +29,9 @@ pub(crate) async fn count_live_backgrounded_rows_in<R>(
     request_doc_id: &str,
 ) -> anyhow::Result<usize>
 where
-    R: crate::config_client::ConfigRead,
+    R: crate::store::config_client::ConfigRead,
 {
-    let escaped_request_doc_id = crate::graphql::escape_graphql_string(request_doc_id);
+    let escaped_request_doc_id = crate::store::graphql::escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
             AgentToolCall(
@@ -79,7 +79,7 @@ pub(crate) enum BackgroundSlot {
 /// merge, so lease renewal and lifecycle writes, which neither read nor write
 /// this field, never conflict with it.
 pub(crate) async fn reserve_background_slot_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     slot: BackgroundSlot,
     request_fields: &str,
@@ -96,7 +96,7 @@ pub(crate) async fn reserve_background_slot_in_txn(
             return Err(BackgroundCapacityExceeded(admitted).into());
         }
     }
-    let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+    let escaped = crate::store::graphql::escape_graphql_string(request_doc_id);
     let request = txn
         .execute(&format!(
             r#"{{ AgentRequest(docID: "{escaped}") {{ background_admission_sequence {request_fields} }} }}"#

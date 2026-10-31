@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use crate::config_client::ConfigRead;
 use crate::documents::{Agent, AgentContext, Tools};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
 
 /// Check the surviving document graph before retiring plugin files. Pack
 /// removal calls this inside its transaction after proposed document deletions;

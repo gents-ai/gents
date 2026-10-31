@@ -1,8 +1,8 @@
 mod recovery;
 #[cfg(test)]
 mod retained_tests;
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 use anyhow::{ensure, Context, Result};
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 pub(crate) use recovery::recover_outcomes;
@@ -399,7 +399,7 @@ pub async fn request_arrival_order(
         .collect::<Vec<_>>();
     let mut ordered = Vec::<(u64, String)>::new();
     for batch in slot_ids.chunks(DOC_ID_BATCH_SIZE) {
-        let ids = crate::graphql::graphql_string_list_literal(batch.iter().copied());
+        let ids = crate::store::graphql::graphql_string_list_literal(batch.iter().copied());
         let mut cursor = "0".to_owned();
         loop {
             let response = txn.execute(&format!("{{ _documentArrivals(collection: \"AgentRequest\", after: \"{}\", limit: 256, docID: {ids}) {{ head next entries {{ cursor docID }} }} }}", escape_graphql_string(&cursor))).await?;

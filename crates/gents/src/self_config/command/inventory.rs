@@ -6,23 +6,30 @@ impl ConfigCommandTool {
         use crate::inference::auth::credential::backend_account;
         use crate::inference::backends::provider::BackendProviderOauthExt;
         use crate::inference::usage_observation::{read_node_usage, UsageTrigger};
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
         let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;
-        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local_readonly(
-            &self.node,
-            Some(self.core.identity()?),
-            "self_config.account_inventory",
-            |txn| {
-                Box::pin(async move {
-                    Ok::<_, anyhow::Error>((
-                        crate::config_client::list_inference_backends_in_txn(txn, node_did).await?,
-                        crate::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
-                    ))
-                })
-            },
-        )
-        .await?;
+        let (backends, profiles) =
+            crate::store::config_client::ConfigAccess::transact_local_readonly(
+                &self.node,
+                Some(self.core.identity()?),
+                "self_config.account_inventory",
+                |txn| {
+                    Box::pin(async move {
+                        Ok::<_, anyhow::Error>((
+                            crate::store::config_client::list_inference_backends_in_txn(
+                                txn, node_did,
+                            )
+                            .await?,
+                            crate::store::config_client::list_inference_profiles_in_txn(
+                                txn, node_did,
+                            )
+                            .await?,
+                        ))
+                    })
+                },
+            )
+            .await?;
         let profiles_on = |backend_ids: &[&str]| {
             profiles
                 .iter()
@@ -172,7 +179,7 @@ impl ConfigCommandTool {
         let owner = escape_graphql_string(&self.node_did);
         let query =
             format!("{{ {collection}(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{{fields}}} }}");
-        let response = crate::config_client::ConfigAccess::transact_local_readonly(
+        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.inference_inventory",

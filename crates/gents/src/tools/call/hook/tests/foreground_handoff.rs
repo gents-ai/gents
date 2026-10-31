@@ -106,7 +106,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     })
     .await
     .unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     assert!(
         crate::tools::background::status::request_foreground_backgrounding(
             &access,
@@ -210,7 +210,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
             .await
             .unwrap();
     }
-    let receipt_rows = access.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}:background-receipt:{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(&session), crate::graphql::escape_graphql_string(&tool_doc))).await.unwrap();
+    let receipt_rows = access.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}:background-receipt:{}" }} }}) {{ _docID }} }}"#, crate::store::graphql::escape_graphql_string(&session), crate::store::graphql::escape_graphql_string(&tool_doc))).await.unwrap();
     assert_eq!(
         receipt_rows["data"]["AgentMessage"]
             .as_array()
@@ -328,7 +328,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
     });
     let execution_token = observed.await.unwrap();
     let guard = hook.in_flight_lifecycles.lock().await;
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     assert!(
         crate::tools::background::status::request_foreground_backgrounding(
             &access,
@@ -351,7 +351,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
         ForegroundResult::Settled(crate::tools::call::lifecycle::ToolOutcome::Cancelled)
     ));
     assert!(execution_token.is_cancelled());
-    let doc = crate::graphql::escape_graphql_string(&doc);
+    let doc = crate::store::graphql::escape_graphql_string(&doc);
     let state = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ await_mode background_requested_at }} }}"#)).await.unwrap();
     assert_eq!(
         state["data"]["AgentToolCall"][0]["await_mode"],
@@ -379,7 +379,7 @@ async fn refused_foreground_handoff_can_be_retried() {
     )
     .await;
     lifecycle.start_running().await.unwrap();
-    let doc = crate::graphql::escape_graphql_string(lifecycle.doc_id().unwrap());
+    let doc = crate::store::graphql::escape_graphql_string(lifecycle.doc_id().unwrap());
     hook.in_flight_lifecycles
         .lock()
         .await
@@ -410,7 +410,7 @@ async fn refused_foreground_handoff_can_be_retried() {
         .lock()
         .await
         .remove("retry-command");
-    let access = crate::config_client::ConfigAccess::local(node);
+    let access = crate::store::config_client::ConfigAccess::local(node);
     assert!(
         crate::tools::background::status::request_foreground_backgrounding(
             &access,
@@ -700,7 +700,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     let process =
         OwnedTestProcess::spawn(Some(registry.process_recorder("failed-handoff", &doc))).await;
     let (failed, count) =
-        crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+        crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
             hook.handoff_unverified_process(&mut lifecycle, "failed-handoff", &doc),
         )
@@ -714,8 +714,8 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     assert_eq!(row["await_mode"], "foreground");
     assert_eq!(row["lifecycle_state"], modeled.terminal_state);
     let request_doc = hook.active_request_doc_id().await.unwrap();
-    let escaped = crate::graphql::escape_graphql_string(&request_doc);
-    crate::config_client::ConfigAccess::write_local(&node, "test.terminal_parent_with_retained_process", &format!(
+    let escaped = crate::store::graphql::escape_graphql_string(&request_doc);
+    crate::store::config_client::ConfigAccess::write_local(&node, "test.terminal_parent_with_retained_process", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#
     )).await.unwrap();
     let report = crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(&node, &hook.node_did, &registry).await.unwrap();
@@ -749,7 +749,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
             | crate::tools::exec::ProcessStopOutcome::AlreadyExited
     ));
     let (failed, count) =
-        crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+        crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
             settling.cancel_during_run_owned(CancelCause::UserCancelled, "operator requested stop"),
         )

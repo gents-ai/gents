@@ -9,7 +9,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::{escape_graphql_string, graphql_string_list_literal, rows};
+use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal, rows};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DirectoryEntry {
@@ -259,7 +259,7 @@ impl GraphqlDirectoryStore {
 #[async_trait]
 impl DirectoryStore for GraphqlDirectoryStore {
     async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
-        let (fields, _) = crate::config_client::config_projection(
+        let (fields, _) = crate::store::config_client::config_projection(
             crate::store::collection::Collection::Agent,
             None,
         )?;
@@ -267,7 +267,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
             "{{ Node {{ node_did display_name default_agent_id enabled }} NodeReadiness {{ node_did snapshot_json updated_at }} Agent {{ {} }} }}",
             fields.join(" "),
         );
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
             "query directory source snapshot",
@@ -302,7 +302,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
             }}
         }}"#
         );
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
             "query NodeDirectoryEntry",
@@ -338,24 +338,28 @@ impl DirectoryStore for GraphqlDirectoryStore {
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = upsert_directory_entry_mutation(entry, &now);
-        Ok(crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "p2p.upsert_node_directory",
-            &mutation,
+        Ok(
+            crate::store::config_client::ConfigAccess::write_local_response(
+                &self.node,
+                "p2p.upsert_node_directory",
+                &mutation,
+            )
+            .await
+            .map(|_| ())?,
         )
-        .await
-        .map(|_| ())?)
     }
 
     async fn delete_directory_entry(&self, source_did: &str, node_did: &str) -> Result<()> {
         let mutation = delete_directory_entry_mutation(source_did, node_did);
-        Ok(crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "p2p.delete_node_directory",
-            &mutation,
+        Ok(
+            crate::store::config_client::ConfigAccess::write_local_response(
+                &self.node,
+                "p2p.delete_node_directory",
+                &mutation,
+            )
+            .await
+            .map(|_| ())?,
         )
-        .await
-        .map(|_| ())?)
     }
 }
 
@@ -476,7 +480,7 @@ where
     T: serde::de::DeserializeOwned,
 {
     let name = collection.graphql_type();
-    let (fields, _) = crate::config_client::config_projection(collection, None)?;
+    let (fields, _) = crate::store::config_client::config_projection(collection, None)?;
     let source = response
         .data
         .as_ref()
@@ -491,7 +495,8 @@ where
             .clone();
         document.retain(|field, _| fields.contains(&field.as_str()));
         let document = serde_json::Value::Object(document);
-        let (_, normalized) = crate::config_client::config_projection(collection, Some(&document))?;
+        let (_, normalized) =
+            crate::store::config_client::config_projection(collection, Some(&document))?;
         let document = normalized.context("canonical configuration projection missing value")?;
         let owner = document
             .get("node_did")
@@ -617,7 +622,7 @@ mod tests {
                 }}) {{ _docID }}
             }}"#
         );
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.seed_runtime_readiness",
             &seed,
@@ -684,7 +689,7 @@ mod tests {
             foreign_agent: create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
                 display_name: "Foreign", inference_profile_id: "profile", enabled: true }) { _docID }
         }"#;
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.seed_directory",
             seed,
@@ -706,7 +711,7 @@ mod tests {
             reconcile_directory_tick(&store, "did:key:home").await?,
             DirectoryTickOutcome::default()
         );
-        crate::config_client::ConfigAccess::write_local_response(&node, "test.remove_directory_node",
+        crate::store::config_client::ConfigAccess::write_local_response(&node, "test.remove_directory_node",
             r#"mutation { delete_Node(filter: { node_did: { _eq: "did:key:local" } }) { _docID } }"#).await?;
         assert_eq!(
             reconcile_directory_tick(&store, "did:key:home")
@@ -759,7 +764,7 @@ mod source_partition_regression_tests {
                 }}) {{ _docID }}
             }}"#
         );
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.seed_source_partitions",
             &seed,
@@ -782,7 +787,7 @@ mod source_partition_regression_tests {
         let delete = format!(
             r#"mutation {{ delete_Node(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }} }}"#
         );
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.remove_local_source",
             &delete,

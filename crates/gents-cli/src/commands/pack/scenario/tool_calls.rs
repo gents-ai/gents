@@ -1,4 +1,4 @@
-use gents::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};

@@ -2,14 +2,14 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct MeasuredRead<'a> {
-    access: &'a crate::config_client::ConfigAccess,
+    access: &'a crate::store::config_client::ConfigAccess,
     queries: AtomicUsize,
     max_bytes: AtomicUsize,
     total_bytes: AtomicUsize,
 }
 
 impl<'a> MeasuredRead<'a> {
-    fn new(access: &'a crate::config_client::ConfigAccess) -> Self {
+    fn new(access: &'a crate::store::config_client::ConfigAccess) -> Self {
         Self {
             access,
             queries: AtomicUsize::new(0),
@@ -28,11 +28,11 @@ impl<'a> MeasuredRead<'a> {
 }
 
 #[async_trait::async_trait]
-impl crate::config_client::ConfigRead for MeasuredRead<'_> {
+impl crate::store::config_client::ConfigRead for MeasuredRead<'_> {
     async fn execute_read(
         &self,
         document: &str,
-    ) -> Result<Value, crate::config_client::ConfigClientError> {
+    ) -> Result<Value, crate::store::config_client::ConfigClientError> {
         self.queries.fetch_add(1, Ordering::Relaxed);
         self.max_bytes.fetch_max(document.len(), Ordering::Relaxed);
         self.total_bytes
@@ -42,7 +42,7 @@ impl crate::config_client::ConfigRead for MeasuredRead<'_> {
 }
 
 async fn seed_unrelated_completed_requests(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     count: usize,
 ) -> usize {
     let inputs = (0..count).map(|i| json!({
@@ -60,7 +60,7 @@ async fn seed_unrelated_completed_requests(
         )
         .await
         .unwrap();
-    let documents = crate::graphql::mutation_documents(&data, "create_AgentRequest")
+    let documents = crate::store::graphql::mutation_documents(&data, "create_AgentRequest")
         .unwrap()
         .unwrap();
     assert_eq!(documents.len(), count);
@@ -73,7 +73,7 @@ async fn seed_unrelated_completed_requests(
 #[tokio::test]
 async fn query_inputs_do_not_grow_with_unrelated_completed_requests() {
     let db = crate::support::test_db("context-query-input-cost").await;
-    let access = crate::config_client::ConfigAccess::local(db.node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
     let own = request(&access, "session", None, "2026-10-01T00:00:00Z").await;
     for i in 0..CONTEXT_CALL_LIMIT {
         call(

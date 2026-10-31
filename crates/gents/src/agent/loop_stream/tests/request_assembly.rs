@@ -100,7 +100,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
         Arc::new(Vec::new()),
         owned_config(0),
     );
-    let scoped_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+    let scoped_doc_id = crate::store::graphql::escape_graphql_string(&doc_id);
     let query = format!(
         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }} }}) {{ _docID message_key }} }}"#
     );
@@ -1129,7 +1129,7 @@ async fn drive_generated_turn_input(
                 let observed = node
                     .execute(&format!(
                         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}) {{ _docID }} }}"#,
-                        crate::graphql::escape_graphql_string(&request_doc_id)
+                        crate::store::graphql::escape_graphql_string(&request_doc_id)
                     ))
                     .await;
                 *published_before_reduction.lock().unwrap() = observed.data.unwrap()
@@ -1208,7 +1208,7 @@ async fn drive_generated_turn_input(
         );
     }
 
-    let scoped_doc_id = crate::graphql::escape_graphql_string(&head.doc_id);
+    let scoped_doc_id = crate::store::graphql::escape_graphql_string(&head.doc_id);
     let observed = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#
@@ -1249,11 +1249,11 @@ async fn drive_generated_turn_input(
         );
     }
     for doc in docs.values() {
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             &node,
             &format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state superseded_by_request_doc_id }} }}"#,
-                crate::graphql::escape_graphql_string(doc)
+                crate::store::graphql::escape_graphql_string(doc)
             ),
             "folded request",
         )

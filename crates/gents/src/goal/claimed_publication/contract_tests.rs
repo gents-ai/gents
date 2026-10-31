@@ -181,7 +181,7 @@ async fn discharge_completion_obligation(node: &crate::defra_node::EmbeddedNode,
     let response = node
         .execute(&format!(
             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "completed" }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -620,7 +620,7 @@ async fn run_generated_wait_observations() {
             "unavailable" => {
                 let error = result.expect_err(&case.name);
                 assert!(
-                    crate::config_client::is_transaction_step_unavailable(&error),
+                    crate::store::config_client::is_transaction_step_unavailable(&error),
                     "{}: {error:#}",
                     case.name
                 );

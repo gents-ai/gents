@@ -81,7 +81,7 @@ impl Fixture {
     /// is returned and the original begin error stays in the panic.
     async fn post_failure_request_snapshot(&self, request_doc_id: &str) -> String {
         let snapshot_started = chrono::Utc::now();
-        let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(request_doc_id);
         let query_future = async {
             let response = self.node.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
@@ -144,13 +144,13 @@ impl Fixture {
         drop(lifecycle);
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let response = crate::graphql::graphql_with_transaction_retry(
+                let response = crate::store::graphql::graphql_with_transaction_retry(
                     &self.node,
                     &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ execution_lease_expires_at }} }}"#,
-                        crate::graphql::escape_graphql_string(&doc_id)),
+                        crate::store::graphql::escape_graphql_string(&doc_id)),
                     "test.task_hook_relinquishment",
                 ).await.unwrap();
-                let row: serde_json::Value = crate::graphql::first_row(&response, "AgentRequest")
+                let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentRequest")
                     .unwrap().expect("abandoned request");
                 let expiry = chrono::DateTime::parse_from_rfc3339(
                     row["execution_lease_expires_at"].as_str().unwrap(),
@@ -163,17 +163,17 @@ impl Fixture {
     }
 
     async fn request_state(&self, doc_id: &str) -> String {
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             self.node.as_ref(),
             &format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-                crate::graphql::escape_graphql_string(doc_id),
+                crate::store::graphql::escape_graphql_string(doc_id),
             ),
             "test.task_hook_recovery_request",
         )
         .await
         .unwrap();
-        let row: serde_json::Value = crate::graphql::first_row(&response, "AgentRequest")
+        let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("request row");
         row["lifecycle_state"].as_str().unwrap().to_owned()

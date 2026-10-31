@@ -1,11 +1,11 @@
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
-#[cfg(test)]
-use gents::config_client::apply_desired_state_plan;
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::documents::SkillDocument;
 use gents::store::collection::Collection;
+#[cfg(test)]
+use gents::store::config_client::apply_desired_state_plan;
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 #[cfg(test)]
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ pub async fn delete_skill_on(access: &ConfigAccess, node_did: &str, id: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::read_desired_state_record_in_txn;
+    use gents::store::config_client::read_desired_state_record_in_txn;
     use serde_json::json;
 
     #[tokio::test]

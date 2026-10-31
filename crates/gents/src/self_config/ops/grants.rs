@@ -5,9 +5,9 @@ use gents_protocol::job::PluginJobSettings;
 use serde_json::{Map, Value};
 
 use super::{read_owned_doc, SelfConfigCore};
-use crate::config_client::patch::SelfConfigTarget;
-use crate::config_client::ConfigApplyTxn;
 use crate::documents::{IntegrationTools, SelfConfigTools};
+use crate::store::config_client::patch::SelfConfigTarget;
+use crate::store::config_client::ConfigApplyTxn;
 
 /// Operator-managed grants carried by a Tools document (Lean
 /// `SelfConfig.Grants`).

@@ -100,14 +100,14 @@ impl RequestLifecycle {
             cap = TERMINAL_REDRIVE_CAP,
         );
 
-        let resp = crate::graphql::graphql_with_transaction_retry(
+        let resp = crate::store::graphql::graphql_with_transaction_retry(
             node,
             &query,
             "querying terminal requests to re-drive",
         )
         .await?;
 
-        let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
+        let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
 
         let mut candidates: Vec<(String, String, String, RequestLifecycleState, u32)> = Vec::new();
         for row in rows {
@@ -183,7 +183,7 @@ impl RequestLifecycle {
                 }}"#,
             );
 
-            let resp = crate::config_client::ConfigAccess::write_local(
+            let resp = crate::store::config_client::ConfigAccess::write_local(
                 node,
                 "lifecycle.redrive_terminal",
                 &mutation,
@@ -258,13 +258,13 @@ async fn recover_active_requests(
             }}
         }}"#
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "querying active requests for recovery",
     )
     .await?;
-    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     let now = chrono::Utc::now();
     let mut report = ActiveRequestRecoveryReport {
         requests: TerminalRepairReport {

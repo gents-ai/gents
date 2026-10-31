@@ -32,7 +32,10 @@ impl crate::client::ClientCore {
             let Some(graphql) = record.graphql.as_deref() else {
                 return Ok(None);
             };
-            gents::config_client::GraphqlEndpoint::as_principal(graphql, self.node_identity().did())
+            gents::store::config_client::GraphqlEndpoint::as_principal(
+                graphql,
+                self.node_identity().did(),
+            )
         } else {
             return Ok(None);
         };

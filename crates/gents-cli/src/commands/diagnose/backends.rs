@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::documents::{BackendAuth, InferenceBackend};
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;

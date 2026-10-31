@@ -3,10 +3,10 @@ use super::{
     AwaitMode, ToolCallLifecycle,
 };
 use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
-use crate::graphql::escape_graphql_string;
 use crate::lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
 };
+use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};

@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::request::lifecycle::WorkspaceLineage;
 use crate::request::watcher::AgentRequest;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::tools::native::WorkspaceAuthority;
 
 use super::action_plan::{
@@ -409,7 +409,7 @@ pub async fn materialize_workspace_binding(
     let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id node_did workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash}} }}"#,
         escape_graphql_string(request_doc_id)), "bind exact workspace request").await?;
-    let actual = crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+    let actual = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
         &response,
         "AgentRequest",
     )?
@@ -475,10 +475,10 @@ pub async fn release_writer_binding(
         return Ok(());
     };
     let owner = super::overlay::request_workspace_owner(request)?;
-    crate::config_client::ConfigAccess::transact_local_idempotent(
+    crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::IdempotentTransactionRetry::Standard,
         "workspace.release_writer_binding",
         |txn| {
             Box::pin(release_writer_binding_in_txn(
@@ -497,7 +497,7 @@ pub async fn release_writer_binding(
 /// requires the complete binding tuple from the winning update, but absent
 /// provenance must not prevent rejection by physical document ID.
 pub(crate) async fn release_terminal_writer_binding(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &serde_json::Value,
 ) -> Result<()> {
     let string = |field: &str| {
@@ -517,7 +517,7 @@ pub(crate) async fn release_terminal_writer_binding(
 }
 
 async fn release_writer_binding_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     request_id: &str,
     workspace_id: &str,
@@ -593,7 +593,7 @@ async fn load_receipts(
     );
     let response =
         graphql_with_transaction_retry(node, &query, "load WorkspaceReceipt for seal").await?;
-    Ok(crate::graphql::rows(&response, "WorkspaceReceipt")?)
+    Ok(crate::store::graphql::rows(&response, "WorkspaceReceipt")?)
 }
 
 async fn load_isolated_workspace_doc(
@@ -615,7 +615,7 @@ async fn load_isolated_workspace_doc(
         graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace for seal").await?;
     {
         let mut found =
-            crate::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
+            crate::store::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
         anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped IsolatedWorkspace");
         Ok(found.pop())
     }
@@ -640,7 +640,7 @@ async fn load_placement_doc(
         graphql_with_transaction_retry(node, &query, "load WorkspacePlacement for seal").await?;
     {
         let mut found =
-            crate::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
+            crate::store::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
         anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped WorkspacePlacement");
         Ok(found.pop())
     }
@@ -654,7 +654,7 @@ async fn load_repository(
     let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ RepositoryPlacement(filter: {{repository_id: {{_eq:"{}"}},node_did: {{_eq:"{}"}}}},limit:2) {{repository_id node_did host_path enabled}} }}"#,
         escape_graphql_string(repository_id), escape_graphql_string(node_did)), "load scoped RepositoryPlacement").await?;
-    let mut found = crate::graphql::rows::<crate::documents::RepositoryPlacement>(
+    let mut found = crate::store::graphql::rows::<crate::documents::RepositoryPlacement>(
         &response,
         "RepositoryPlacement",
     )?;
@@ -691,7 +691,7 @@ async fn flush_seal_outcome(
         &outcome.receipt,
         &now,
     );
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "workspace.seal_documents",
         &mutation,
@@ -711,7 +711,7 @@ async fn flush_integrate_outcome(
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "workspace.integrate_documents",
         &mutation,
@@ -746,7 +746,7 @@ async fn release_integrate_binding(
         return Ok(());
     }
     let mutation = workspace_integrate_docs_mutation(&released, &outcome.receipt);
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "workspace.release_integrate_binding",
         &mutation,
@@ -773,7 +773,7 @@ async fn flush_cleanup_outcome(
         .cloned()
         .collect();
     let mutation = workspace_cleanup_docs_mutation(&outcome.workspace, &bindings);
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "workspace.cleanup_documents",
         &mutation,

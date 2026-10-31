@@ -62,8 +62,8 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
     );
     let peer = seed.local_peer_id().to_owned();
     let client_did = seed.node_identity().did().to_owned();
-    let did = gents::graphql::escape_graphql_string(&client_did);
-    gents::config_client::ConfigAccess::write_local(
+    let did = gents::store::graphql::escape_graphql_string(&client_did);
+    gents::store::config_client::ConfigAccess::write_local(
         &seed.node_arc(),
         "installation_handoff.seed",
         &format!(
@@ -182,7 +182,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
             .unwrap(),
     );
     assert_eq!(reopened.node_identity().did(), client_did);
-    let data = gents::config_client::ConfigAccess::local(reopened.node_arc())
+    let data = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
         .execute("{ AgentSession { session_id } }")
         .await
         .unwrap();

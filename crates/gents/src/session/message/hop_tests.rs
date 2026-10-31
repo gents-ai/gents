@@ -171,7 +171,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     .await
     .unwrap();
     let (cause, planned) = (&cause, &planned);
-    let enqueued = crate::config_client::ConfigAccess::transact_local_write(
+    let enqueued = crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "session_message.test_stage",
@@ -254,7 +254,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .unwrap();
     assert!(ahead.hop() > planned.hop());
     let (ahead_cause, ahead) = (&ahead_cause, &ahead);
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "session_message.test_ahead_stage",
@@ -265,7 +265,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .await
     .unwrap();
     let (stale_cause, planned) = (&stale_cause, &planned);
-    let error = crate::config_client::ConfigAccess::transact_local_write(
+    let error = crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "session_message.test_stale_stage",

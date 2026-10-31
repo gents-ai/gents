@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Result};
-use gents::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
 use gents::documents::{DatastoreTools, InferenceSampling};
 use gents::eval::runner::embedded::EmbeddedHome;
-use gents::graphql::escape_graphql_string;
 use gents::inference::llm::tool::Tool;
 use gents::p2p_tool::P2pTool;
 use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
+use gents::store::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
+use gents::store::graphql::escape_graphql_string;
 use gents::tools::surface::ToolRuntimeContext;
 use gents::tools::surface::{BashMode, EndpointScope, FileToolMode, ToolPolicySurface};
 use gents::{DocumentRuntimeOptions, ToolCeiling};

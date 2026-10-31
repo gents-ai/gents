@@ -2,10 +2,10 @@ use super::super::graphql::{escape_graphql_string, normalize_required};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::documents::{EventSource, Schedule, Task, Trigger};
 use gents::store::collection::Collection;
+use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::task_session_title;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -257,10 +257,13 @@ pub async fn fire_task_now(
         id = escape_graphql_string(agent_id),
         node_did = escape_graphql_string(node_did),
     );
-    let agent_response =
-        gents::graphql::graphql_with_transaction_retry(node, &agent_query, "fetch task agent")
-            .await
-            .with_context(|| format!("fetch agent for task {task_id}"))?;
+    let agent_response = gents::store::graphql::graphql_with_transaction_retry(
+        node,
+        &agent_query,
+        "fetch task agent",
+    )
+    .await
+    .with_context(|| format!("fetch agent for task {task_id}"))?;
     let agent_row = agent_response
         .data
         .as_ref()
@@ -562,7 +565,7 @@ async fn enqueue_task_now(
 ) -> Result<String> {
     let owner = escape_graphql_string(&task_row.node_did);
     let task_id = escape_graphql_string(&task_row.task_id);
-    let response = gents::graphql::graphql_with_transaction_retry(node, &format!(
+    let response = gents::store::graphql::graphql_with_transaction_retry(node, &format!(
         r#"{{Task(filter: {{node_did: {{_eq: "{owner}"}}, task_id: {{_eq: "{task_id}"}}}}, limit: 2) {{_docID}}}}"#),
         "resolve desktop Task physical identity").await?;
     let rows = response
@@ -637,7 +640,7 @@ pub async fn fire_schedule_now(
         }}"#,
         node_did = escape_graphql_string(node_did),
     );
-    let trigger_response = gents::graphql::graphql_with_transaction_retry(
+    let trigger_response = gents::store::graphql::graphql_with_transaction_retry(
         node,
         &trigger_query,
         "fetch schedule triggers",
@@ -690,10 +693,13 @@ pub async fn fire_schedule_now(
         id = escape_graphql_string(task_id),
         node_did = escape_graphql_string(node_did),
     );
-    let task_response =
-        gents::graphql::graphql_with_transaction_retry(node, &task_query, "fetch schedule task")
-            .await
-            .with_context(|| format!("fetch task for schedule {schedule_id}"))?;
+    let task_response = gents::store::graphql::graphql_with_transaction_retry(
+        node,
+        &task_query,
+        "fetch schedule task",
+    )
+    .await
+    .with_context(|| format!("fetch task for schedule {schedule_id}"))?;
     let task_row_json = task_response
         .data
         .as_ref()
@@ -1009,7 +1015,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "task shared-task is disabled");
-        let response = gents::graphql::graphql_with_transaction_retry(
+        let response = gents::store::graphql::graphql_with_transaction_retry(
             &node,
             "query { AgentRequest { _docID } }",
             "test.schedule_task_scope.requests",

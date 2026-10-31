@@ -20,10 +20,10 @@ use crate::http::prometheus::MetricsRuntimeRow;
 fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
-        graphql: gents::config_client::GraphqlEndpoint::anonymous(
+        graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),
-        p2p_graphql: gents::config_client::GraphqlEndpoint::anonymous(
+        p2p_graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),
         node_name: "amy".to_string(),
@@ -162,7 +162,7 @@ async fn background_control_authenticates_the_owning_operator_before_runtime_acc
 
 #[tokio::test]
 async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_observed_build() {
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::serve_lifecycle::control::{
         RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt, RuntimeOperation,
@@ -362,7 +362,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
 
 #[tokio::test]
 async fn operator_inventory_authenticates_and_replays_native_metadata() {
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::file_inventory::{
         FileInventoryAdmission, FileInventoryPageDemand, FileInventoryRefusalReason,
@@ -401,7 +401,7 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
                     "session": {"session_id": session_id, "node_did": owner, "requester_did": owner,
                         "agent_id": "fixture", "created_at": "2026-10-24T00:00:00Z"},
                 })).await?;
-            gents::graphql::created_doc_id(&result, "AgentSession")
+            gents::store::graphql::created_doc_id(&result, "AgentSession")
         })
     }).await.unwrap();
     let runtime = gents::Gents::builder()

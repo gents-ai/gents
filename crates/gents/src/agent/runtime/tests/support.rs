@@ -8,9 +8,9 @@ use std::thread::JoinHandle;
 
 pub(super) use crate::documents::{default_agent_id_for_node, Tools};
 pub(super) use crate::ensure_runtime_schemas;
-pub(super) use crate::graphql::escape_graphql_string;
 pub(super) use crate::request::watcher::AgentRequest;
 pub(super) use crate::runtime_status::RuntimeStatusHandle;
+pub(super) use crate::store::graphql::escape_graphql_string;
 pub(super) use crate::tools::surface::ToolCeiling;
 pub(super) use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessProcessState,
@@ -435,7 +435,9 @@ pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
     max_concurrent: i64,
     probe_status: &str,
 ) {
-    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     use crate::Collection;
     let mut principal = crate::ensure_node(node, node_did).await.unwrap();
     let agent_id = default_agent_id_for_node(node_did);
@@ -461,7 +463,9 @@ pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
     ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
         let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();

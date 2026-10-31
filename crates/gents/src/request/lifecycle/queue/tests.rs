@@ -236,7 +236,7 @@ async fn insert_raw_queue_request(
         }}"#,
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "test.insert_raw_queue_request",
         &mutation,
@@ -272,7 +272,7 @@ async fn insert_signed_queue_request(
     crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
         .await
         .unwrap();
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &db.node,
         "test.signed_queue_request",
         &create.graphql_mutation().unwrap(),

@@ -12,7 +12,7 @@ use super::super::canonical_rows::{
 use super::super::query::session_scope_filter;
 use super::access::{rows_value, ReadAccess, ReadCache};
 use super::reconstruct::{reconstruct_scoped_message, source_rows};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 /// Resolve one exact header inside an existing authoritative transaction.  This
 /// is deliberately keyed by physical document identity: terminal selection and
@@ -138,19 +138,19 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
     )> {
         let requester = self
             .requester_did
-            .map(|did| format!(r#""{}""#, crate::graphql::escape_graphql_string(did)))
+            .map(|did| format!(r#""{}""#, crate::store::graphql::escape_graphql_string(did)))
             .unwrap_or_else(|| "null".into());
         let scope = format!(
             r#"node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
-            crate::graphql::escape_graphql_string(self.node_did)
+            crate::store::graphql::escape_graphql_string(self.node_did)
         );
         let query = format!(
             r#"{{
             created_output: AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, {scope} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
             created_header: AgentMessage(filter: {{ _docID: {{ _eq: "{}" }}, {scope} }}) {{ {AGENT_MESSAGE_FIELDS} }}
         }}"#,
-            crate::graphql::escape_graphql_string(output_doc_id),
-            crate::graphql::escape_graphql_string(header_doc_id)
+            crate::store::graphql::escape_graphql_string(output_doc_id),
+            crate::store::graphql::escape_graphql_string(header_doc_id)
         );
         let response = ReadAccess::Txn(self.txn)
             .query(&query, "load_created_canonical_message")
@@ -371,7 +371,7 @@ pub(crate) async fn load_request_headers_in_txn(
     let scope = session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{ AgentMessage(filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
-        crate::graphql::escape_graphql_string(request_doc_id)
+        crate::store::graphql::escape_graphql_string(request_doc_id)
     );
     let response = txn.execute(&query).await?;
     let headers = rows_value(&response, "AgentMessage")?

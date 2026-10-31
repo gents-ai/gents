@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{clamp_limit, SessionHistoryParams, SessionHistoryTool};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 
 const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
 const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across nodes and requesters.";

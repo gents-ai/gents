@@ -528,7 +528,7 @@ fn unsendable_reason_follows_the_session_owner() {
 #[tokio::test]
 async fn transcript_payload_page_batches_exact_dependencies_without_reading_other_history() {
     use crate::client::canonical_output::{project_canonical_message, CanonicalMessageProjection};
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
 
     let node = std::sync::Arc::new(
         crate::test_support::node_builder()
@@ -703,7 +703,7 @@ async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
 #[tokio::test]
 async fn running_tool_pages_read_only_their_open_output_source() {
     use crate::client::canonical_output::project_canonical_live;
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::output::{
         live::{LiveView, OwnerLiveness},
         OutputSource, OutputWriter,

@@ -16,8 +16,8 @@ use super::admit::{
 };
 use super::driver::{read_step_row_in_txn, settle_plugin_job_in_txn, Settlement};
 use super::input::chain_of;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::keys::job_spawn_key;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolRowKind};
@@ -684,7 +684,7 @@ pub async fn validate_resume(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graphql::escape_graphql_string;
+    use crate::store::graphql::escape_graphql_string;
     use crate::tools::background::job::admit::StepCall;
     use crate::tools::background::status::{
         observe_canonical_tool_output_with_access, CanonicalToolOutputObservation,

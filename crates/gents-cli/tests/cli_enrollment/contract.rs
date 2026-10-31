@@ -372,7 +372,7 @@ async fn visible_turn(
                             escape_graphql_string(session),
                         );
                         let runtime_segments = graphql_query(graphql, &query).await;
-                        let client_segments = gents::graphql::graphql_with_transaction_retry(
+                        let client_segments = gents::store::graphql::graphql_with_transaction_retry(
                             core.node(), &query, "streaming failure diagnostics",
                         ).await;
                         tracing::error!(
@@ -1104,7 +1104,7 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         let url = format!("http://127.0.0.1:{port}{}", gents::inference_observation::INFERENCE_ACTIVITY_PATH);
         let http = reqwest::Client::new();
         let call = |did: String, key: gents::inference_observation::InferenceKey| {
-            let endpoint = gents::config_client::GraphqlEndpoint::as_principal(&graphql, &did);
+            let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, &did);
             let request = endpoint.authorize(http.post(&url)).unwrap().json(&key);
             async move { request.send().await }
         };

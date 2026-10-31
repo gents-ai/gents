@@ -8,10 +8,10 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 
 use super::*;
-use crate::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::auth::credential::{
     account_failure, account_failure_state, XAI_OAUTH_PRODUCT,
 };
+use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::Collection;
 
 const DID: &str = "did:key:z6MkTestBlockedTurn";
@@ -474,7 +474,7 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
         )
     };
     let (_, original) = backend(A, None, "Claude");
-    crate::config_client::write_inference_backend_document(
+    crate::store::config_client::write_inference_backend_document(
         &access,
         &serde_json::from_value(original).unwrap(),
     )
@@ -506,7 +506,7 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
         .transact_write("test.blocked_turn", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::config_client::apply_desired_state_plan(txn, plan)
+                crate::store::config_client::apply_desired_state_plan(txn, plan)
                     .await
                     .map(|_| ())
             })

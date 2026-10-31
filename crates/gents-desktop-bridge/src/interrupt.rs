@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;

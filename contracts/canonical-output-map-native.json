@@ -172,12 +172,12 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/config_client/txn.rs",
+        "crates/gents/src/store/config_client/txn.rs",
         "crates/gents/src/defra_write/mod.rs",
         "crates/gents/src/request/lifecycle/execution_lease.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/config_client/txn_owner_tests.rs",
+        "crates/gents/src/store/config_client/txn_owner_tests.rs",
         "crates/gents/src/defra_write/tests.rs",
         "crates/gents/src/request/streaming/canonical_tests.rs"
       ],
@@ -196,7 +196,7 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/graphql.rs",
+        "crates/gents/src/store/graphql.rs",
         "crates/gents/src/request/streaming.rs",
         "crates/gents/src/request/lifecycle/execution_lease.rs",
         "crates/gents/src/request/admission.rs"
@@ -235,7 +235,7 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/config_client/txn.rs",
+        "crates/gents/src/store/config_client/txn.rs",
         "crates/gents/src/defra_write/mod.rs"
       ],
       "consumer_paths": [
@@ -288,7 +288,7 @@
         "crates/gents-schemas/src/lib.rs",
         "crates/gents-protocol/src/schemas.rs"
       ],
-      "consumer_paths": ["crates/gents/src/config_client/schema_install.rs"],
+      "consumer_paths": ["crates/gents/src/store/config_client/schema_install.rs"],
       "native_status": "pending",
       "required_cases": [
         "fresh schema registration contains the segment collection and omits retired seal, response and spill collections",
@@ -304,7 +304,7 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": ["crates/gents-migration/src/registry.rs"],
-      "consumer_paths": ["crates/gents/src/config_client/schema_install.rs"],
+      "consumer_paths": ["crates/gents/src/store/config_client/schema_install.rs"],
       "native_status": "pending",
       "required_cases": [
         "remove obsolete response and spill baselines from the catalog",

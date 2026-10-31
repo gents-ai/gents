@@ -6,8 +6,8 @@ use anyhow::{ensure, Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::config_client::{config_projection, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{config_projection, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
 use super::*;

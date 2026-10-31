@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::{TaskCommand, TaskListArgs, TaskShowArgs};

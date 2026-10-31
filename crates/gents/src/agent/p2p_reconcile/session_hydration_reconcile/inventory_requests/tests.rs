@@ -273,7 +273,7 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
         &create.graphql_mutation().map_err(anyhow::Error::msg)?,
     )
     .await?;
-    let request_doc = crate::graphql::created_doc_id(&response, "AgentRequest")?;
+    let request_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
     let admitted =
         crate::request::admission::load_request_for_admission_test(&source_node, &request_doc)
             .await?;
@@ -446,7 +446,7 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
                     let response = txn
                         .execute_local_response(&format!("{{ {collection} {{ _docID }} }}"))
                         .await?;
-                    crate::graphql::required_rows::<Value>(&response, collection)
+                    crate::store::graphql::required_rows::<Value>(&response, collection)
                 })
             },
         )

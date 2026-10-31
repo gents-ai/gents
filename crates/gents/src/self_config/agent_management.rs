@@ -1,9 +1,9 @@
 use super::*;
-use crate::config_client::{
+use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
+use crate::store::config_client::{
     apply_desired_state_plan, validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
 
 fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::AgentCatalogView> {
     let mut view = agent::AgentCatalogView::default();
@@ -208,7 +208,7 @@ async fn agent_apply_access(
 }
 
 async fn agent_apply_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     args: &ConfigureAgentParams,
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
@@ -424,7 +424,7 @@ async fn agent_apply_in_txn(
                 .filter(|(field, _)| field != "system_prompt")
                 .cloned()
                 .collect();
-            merged = crate::config_client::patch::apply_patch(
+            merged = crate::store::config_client::patch::apply_patch(
                 SelfConfigTarget::Agent,
                 &merged,
                 &agent_patch,

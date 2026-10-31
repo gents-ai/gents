@@ -317,14 +317,14 @@ pub(crate) struct ConfigApplyReport {
 }
 
 pub(crate) async fn load_backend_observation(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     backend_id: &str,
 ) -> anyhow::Result<gents::documents::InferenceBackendObservation> {
     let query = format!(
         "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
-        gents::graphql::escape_graphql_string(node_did),
-        gents::graphql::escape_graphql_string(backend_id),
+        gents::store::graphql::escape_graphql_string(node_did),
+        gents::store::graphql::escape_graphql_string(backend_id),
     );
     let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;
     anyhow::ensure!(

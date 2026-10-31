@@ -70,7 +70,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .and_then(|row| row.get("_docID"))
         .and_then(|value| value.as_str())
         .context("created request doc id")?;
-    let request_doc_id = gents::graphql::escape_graphql_string(request_doc_id);
+    let request_doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
     let output = core.node().execute(&format!(r#"mutation {{
         segment: create_AgentOutputSegment(input: {{
             node_did: "did:test:amy", session_id: "session-1",
@@ -94,7 +94,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .and_then(|v| v.get("_docID"))
         .and_then(|v| v.as_str())
         .context("created close doc id")?;
-    let close_doc_id = gents::graphql::escape_graphql_string(close_doc_id);
+    let close_doc_id = gents::store::graphql::escape_graphql_string(close_doc_id);
     let header = core.node().execute(&format!(r#"mutation {{
         create_AgentMessage(input: {{
             message_key: "session-1:2", session_id: "session-1", node_did: "did:test:amy",
@@ -309,7 +309,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         .node()
         .execute(&format!(
             r#"query {{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_id }} }}"#,
-            gents::graphql::escape_graphql_string(NODE_DID)
+            gents::store::graphql::escape_graphql_string(NODE_DID)
         ))
         .await;
     assert!(
@@ -595,7 +595,7 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     })
     .await;
     if observed.is_err() {
-        let durable = gents::graphql::graphql_with_transaction_retry(
+        let durable = gents::store::graphql::graphql_with_transaction_retry(
             core.node(),
             "{ Node { node_did } }",
             "test.scope_timeout",

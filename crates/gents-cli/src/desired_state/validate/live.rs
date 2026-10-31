@@ -20,7 +20,8 @@ pub(crate) async fn validate_manifest_against_live(
         if source_collection.is_empty() || source_id.is_empty() {
             continue;
         }
-        if let Err(error) = gents::graphql::validate_collection_identifier(source_collection) {
+        if let Err(error) = gents::store::graphql::validate_collection_identifier(source_collection)
+        {
             errors.push(format!(
                 "event source {} has invalid source_collection {:?}: {}",
                 source_id, source.source_collection, error
@@ -30,7 +31,7 @@ pub(crate) async fn validate_manifest_against_live(
 
         if let Some(filter) = source.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
-                if let Err(err) = gents::graphql::validate_graphql_filter_fragment(filter) {
+                if let Err(err) = gents::store::graphql::validate_graphql_filter_fragment(filter) {
                     errors.push(format!(
                         "event source {} filter is not a valid filter fragment: {}",
                         source_id, err
@@ -85,7 +86,8 @@ pub(crate) async fn validate_manifest_against_live(
         if source.correlation_field.is_none() && expected_count_field.is_none() {
             let mut walks_templates = false;
             for (trigger, task) in &joined {
-                match gents::config_client::event_trigger_document_field_names(trigger, task) {
+                match gents::store::config_client::event_trigger_document_field_names(trigger, task)
+                {
                     Ok(names) if !names.is_empty() => walks_templates = true,
                     Err(error) => errors.push(format!("{error:#}")),
                     Ok(_) => {}
@@ -129,7 +131,7 @@ pub(crate) async fn validate_manifest_against_live(
             .map(|field| (field.name.clone(), field))
             .collect();
         for (trigger, task) in joined {
-            if let Err(error) = gents::config_client::validate_event_trigger_document_fields(
+            if let Err(error) = gents::store::config_client::validate_event_trigger_document_fields(
                 trigger, task, source, &declared,
             ) {
                 errors.push(format!("{error:#}"));

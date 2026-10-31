@@ -174,7 +174,7 @@ pub(crate) async fn steering_snapshot(
     head: &AgentRequest,
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
 ) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
-    let rows = crate::config_client::ConfigAccess::transact_local_readonly(
+    let rows = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "queue.steering_snapshot",

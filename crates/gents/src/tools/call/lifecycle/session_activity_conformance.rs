@@ -6,7 +6,7 @@ use super::{
     delivery::{RawPresentation, TerminalFields},
     AwaitMode, ToolCallState,
 };
-use crate::{config_client::ConfigAccess, graphql::escape_graphql_string};
+use crate::{store::config_client::ConfigAccess, store::graphql::escape_graphql_string};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use gents_protocol::{output::PayloadPresentation, session::SessionObservation};
 use serde_json::Value;

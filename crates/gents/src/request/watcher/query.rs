@@ -44,8 +44,8 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
 
 impl DefraWatcher {
     pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
-        let escaped_doc_id = crate::graphql::escape_graphql_string(doc_id);
-        let escaped_node_did = crate::graphql::escape_graphql_string(&self.node_did);
+        let escaped_doc_id = crate::store::graphql::escape_graphql_string(doc_id);
+        let escaped_node_did = crate::store::graphql::escape_graphql_string(&self.node_did);
         let query = format!(
             r#"{{
                 AgentRequest(
@@ -66,9 +66,12 @@ impl DefraWatcher {
             fields = AGENT_REQUEST_FIELDS,
         );
 
-        let resp =
-            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "watcher query")
-                .await?;
+        let resp = crate::store::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "watcher query",
+        )
+        .await?;
 
         let (rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
         for row in malformed {
@@ -95,7 +98,7 @@ impl DefraWatcher {
 
     pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
-        let node_did = crate::graphql::escape_graphql_string(&self.node_did);
+        let node_did = crate::store::graphql::escape_graphql_string(&self.node_did);
         let query = format!(
             r#"{{
                 AgentRequest(
@@ -115,7 +118,7 @@ impl DefraWatcher {
             fields = AGENT_REQUEST_FIELDS,
         );
 
-        let resp = crate::graphql::graphql_with_transaction_retry(
+        let resp = crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
             "watcher pending-request query",
@@ -202,7 +205,7 @@ impl DefraWatcher {
             .iter()
             .filter_map(|row| row.doc_id.clone())
             .collect::<Vec<_>>();
-        let order = crate::config_client::ConfigAccess::transact_local_readonly(
+        let order = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             None,
             "watcher.request_arrival_order",
@@ -255,8 +258,8 @@ impl DefraWatcher {
             return Ok(true);
         }
 
-        let session_id = crate::graphql::escape_graphql_string(&request.session_id);
-        let owner = crate::graphql::escape_graphql_string(&request.node_did);
+        let session_id = crate::store::graphql::escape_graphql_string(&request.session_id);
+        let owner = crate::store::graphql::escape_graphql_string(&request.node_did);
         let row_doc_id = request.doc_id.as_str();
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let query = format!(
@@ -279,14 +282,14 @@ impl DefraWatcher {
             session_id = session_id,
             active_runtime_states = active_runtime_states,
         );
-        let resp = crate::graphql::graphql_with_transaction_retry(
+        let resp = crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
             "watcher session queue query",
         )
         .await?;
 
-        let mut rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
+        let mut rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
         self.order_by_native_arrival(&mut rows).await?;
 
         let active_blocker = rows.iter().any(|candidate| {
@@ -353,7 +356,7 @@ pub(crate) fn agent_request_from_mutation_response(
     response: &defra_node::QueryResponse,
     field: &str,
 ) -> anyhow::Result<Option<AgentRequest>> {
-    crate::graphql::single_mutation_document(response, field)?
+    crate::store::graphql::single_mutation_document(response, field)?
         .cloned()
         .map(serde_json::from_value::<AgentRequestRow>)
         .transpose()?

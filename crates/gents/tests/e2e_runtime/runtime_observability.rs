@@ -175,7 +175,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     )
     .await;
 
-    gents::config_client::ConfigAccess::transact_local_write(
+    gents::store::config_client::ConfigAccess::transact_local_write(
         &db.node,
         None,
         "test.update_context",
@@ -183,7 +183,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             let node_did = &node_did;
             let agent_id = &default_agent_id;
             Box::pin(async move {
-                use gents::config_client::{
+                use gents::store::config_client::{
                     read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
@@ -216,7 +216,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
                     })
                     .collect(),
                 )?;
-                gents::config_client::apply_desired_state_plan(txn, &plan).await
+                gents::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
         },
     )

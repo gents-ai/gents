@@ -179,7 +179,7 @@ pub(super) async fn next_steering_request_after(
         .iter()
         .map(|row| row.doc_id.clone().expect("decoded physical identity"))
         .collect::<Vec<_>>();
-    let order = gents::config_client::ConfigAccess::transact_local_write(
+    let order = gents::store::config_client::ConfigAccess::transact_local_write(
         &state.node,
         None,
         "codex.active.steering_order",
@@ -477,7 +477,7 @@ async fn load_thread_request_rows(
         thread_id,
         requester_did,
     ));
-    gents::config_client::ConfigAccess::transact_local_write(&state.node,None,"codex.active.rows",|txn| {
+    gents::store::config_client::ConfigAccess::transact_local_write(&state.node,None,"codex.active.rows",|txn| {
         let scope=&scope;
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
@@ -658,19 +658,19 @@ mod tests {
         let state =
             super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node = state.node.clone();
-        let node_did = gents::graphql::escape_graphql_string(state.node_did.as_ref());
-        let agent_id = gents::graphql::escape_graphql_string(state.agent_id.as_ref());
+        let node_did = gents::store::graphql::escape_graphql_string(state.node_did.as_ref());
+        let agent_id = gents::store::graphql::escape_graphql_string(state.agent_id.as_ref());
         for (id, purpose, created_at) in [
             ("normal-turn", "normal", "2026-09-25T00:00:00Z"),
             ("title-audit", "title-audit", "2026-09-25T00:00:01Z"),
         ] {
-            let id = gents::graphql::escape_graphql_string(id);
-            let purpose = gents::graphql::escape_graphql_string(purpose);
-            let created_at = gents::graphql::escape_graphql_string(created_at);
+            let id = gents::store::graphql::escape_graphql_string(id);
+            let purpose = gents::store::graphql::escape_graphql_string(purpose);
+            let created_at = gents::store::graphql::escape_graphql_string(created_at);
             let mutation = format!(
                 r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
             );
-            gents::config_client::ConfigAccess::write_local(
+            gents::store::config_client::ConfigAccess::write_local(
                 &node,
                 "codex.active.test_request",
                 &mutation,
@@ -749,7 +749,7 @@ mod tests {
                 steering,
             )],
         ] {
-            gents::config_client::ConfigAccess::transact_local_write(
+            gents::store::config_client::ConfigAccess::transact_local_write(
                 &state.node,
                 None,
                 "codex.active.test_history",

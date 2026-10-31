@@ -3,11 +3,11 @@ mod editor;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
 pub use editor::*;
-use gents::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use gents::documents::Node;
 use gents::store::collection::Collection;
+use gents::store::config_client::{
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 #[cfg(test)]
 use std::sync::Arc;
 
@@ -66,12 +66,12 @@ pub async fn set_default_agent(
 }
 
 async fn set_default_agent_in_txn(
-    txn: &gents::config_client::ConfigApplyTxn<'_>,
+    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     agent_id: &str,
 ) -> Result<()> {
     use anyhow::Context;
-    use gents::config_client::read_desired_state_record_in_txn;
+    use gents::store::config_client::read_desired_state_record_in_txn;
     let (_, mut node) = read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
         .await?
         .context("default agent requires an existing node")?;
@@ -106,7 +106,7 @@ pub async fn apply_config_components(
         let plan = &plan;
         let owner = &owner;
         Box::pin(async move {
-            gents::config_client::read_desired_state_record_in_txn(
+            gents::store::config_client::read_desired_state_record_in_txn(
                 txn,
                 Collection::Node,
                 owner,
@@ -132,7 +132,7 @@ pub async fn apply_config_components_on(
             let plan = &plan;
             let owner = &owner;
             Box::pin(async move {
-                gents::config_client::read_desired_state_record_in_txn(
+                gents::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     owner,
@@ -181,9 +181,9 @@ pub async fn patch_config_components_on(
     access: &ConfigAccess,
     node_did: &str,
     patches: &[(
-        gents::config_client::patch::SelfConfigTarget,
+        gents::store::config_client::patch::SelfConfigTarget,
         String,
-        gents::config_client::patch::SelfConfigPatch,
+        gents::store::config_client::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     patch_config_components_with(access, node_did, patches).await
@@ -194,9 +194,9 @@ pub async fn patch_config_components(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     patches: &[(
-        gents::config_client::patch::SelfConfigTarget,
+        gents::store::config_client::patch::SelfConfigTarget,
         String,
-        gents::config_client::patch::SelfConfigPatch,
+        gents::store::config_client::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     ConfigAccess::transact_local_write(node, None, "desktop.config.components.patch", |txn| {
@@ -209,9 +209,9 @@ async fn patch_config_components_with(
     access: &ConfigAccess,
     node_did: &str,
     patches: &[(
-        gents::config_client::patch::SelfConfigTarget,
+        gents::store::config_client::patch::SelfConfigTarget,
         String,
-        gents::config_client::patch::SelfConfigPatch,
+        gents::store::config_client::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     access
@@ -222,16 +222,16 @@ async fn patch_config_components_with(
 }
 
 async fn patch_config_components_in_txn(
-    txn: &gents::config_client::ConfigApplyTxn<'_>,
+    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     patches: &[(
-        gents::config_client::patch::SelfConfigTarget,
+        gents::store::config_client::patch::SelfConfigTarget,
         String,
-        gents::config_client::patch::SelfConfigPatch,
+        gents::store::config_client::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     use anyhow::Context;
-    use gents::config_client::{
+    use gents::store::config_client::{
         patch::{apply_patch, ensure_admissible},
         read_desired_state_record_in_txn,
     };
@@ -284,7 +284,7 @@ async fn patch_config_components_in_txn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::read_desired_state_record_in_txn;
+    use gents::store::config_client::read_desired_state_record_in_txn;
     use serde_json::json;
 
     #[tokio::test]
@@ -509,7 +509,7 @@ mod tests {
     #[tokio::test]
     async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
     {
-        use gents::config_client::patch::SelfConfigTarget;
+        use gents::store::config_client::patch::SelfConfigTarget;
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:patch";

@@ -183,11 +183,11 @@ impl ClientCore {
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
         let request_key = format!("{}:{session_id}", self.local_peer_id());
         let expected_requester_did = self.node_identity.did().to_owned();
-        let requester_did = gents::graphql::escape_graphql_string(&expected_requester_did);
-        let node_did_gql = gents::graphql::escape_graphql_string(node_did);
-        let session_id_gql = gents::graphql::escape_graphql_string(session_id);
-        let request_key_gql = gents::graphql::escape_graphql_string(&request_key);
-        let now = gents::graphql::escape_graphql_string(
+        let requester_did = gents::store::graphql::escape_graphql_string(&expected_requester_did);
+        let node_did_gql = gents::store::graphql::escape_graphql_string(node_did);
+        let session_id_gql = gents::store::graphql::escape_graphql_string(session_id);
+        let request_key_gql = gents::store::graphql::escape_graphql_string(&request_key);
+        let now = gents::store::graphql::escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
         let request_query = hydration_request_admission_query(&request_key_gql);
@@ -235,7 +235,7 @@ impl ClientCore {
             Action::PassiveStart => "desktop.session_hydration.admit_initial",
             Action::ExplicitRetry => "desktop.session_hydration.retry_rejected",
         };
-        gents::config_client::ConfigAccess::transact_local_write(
+        gents::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
             None,
             operation,
@@ -247,7 +247,7 @@ impl ClientCore {
                 let observed_progress = observed_progress.clone();
                 Box::pin(async move {
                     if action == Action::PassiveStart {
-                        gents::graphql::fence_arrivals(txn, "SessionHydrationRequest").await?;
+                        gents::store::graphql::fence_arrivals(txn, "SessionHydrationRequest").await?;
                     }
                     let request_response = txn.execute(&request_query).await?;
                     let requests = transaction_rows::<HydrationAdmissionRequestRow>(
@@ -302,7 +302,7 @@ impl ClientCore {
                         Action::PassiveStart => "create_SessionHydrationRequest",
                         Action::ExplicitRetry => "update_SessionHydrationRequest",
                     };
-                    let rows = gents::graphql::mutation_documents(&response, field)?;
+                    let rows = gents::store::graphql::mutation_documents(&response, field)?;
                     let changed = rows.is_some_and(|rows| !rows.is_empty());
                     if action == Action::PassiveStart {
                         anyhow::ensure!(

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config_client::{
+use crate::store::config_client::{
     desired_state_document_digest, ConfigApplyTxn, DesiredStateApplyDocument,
     DesiredStateApplyPlan, DesiredStateExpectation,
 };
@@ -240,7 +240,8 @@ fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document:
 }
 
 fn comparable(collection: Collection, document: &Value, pack_document: &Value) -> Result<Value> {
-    let (_, projected) = crate::config_client::config_projection(collection, Some(document))?;
+    let (_, projected) =
+        crate::store::config_client::config_projection(collection, Some(document))?;
     let mut projected = projected.context("canonical projection missing")?;
     if let Some(object) = projected.as_object_mut() {
         object.retain(|field, _| !remapped_by_trial(collection, Some(field), pack_document));

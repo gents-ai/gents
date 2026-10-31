@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

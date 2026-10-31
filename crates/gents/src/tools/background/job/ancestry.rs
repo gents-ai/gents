@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use gents_protocol::job::JobPin;
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::graphql_string_list_literal;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::graphql_string_list_literal;
 
 #[cfg(test)]
 tokio::task_local! {
@@ -105,7 +105,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::{started_by_job, ANCESTRY_QUERIES};
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::write_fixture_job_pin;
 
     async fn open() -> Arc<EmbeddedNode> {

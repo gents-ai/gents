@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigRead;
+use crate::store::config_client::ConfigRead;
 
 #[derive(Debug, thiserror::Error)]
 #[error("replacement request does not own its queue position")]
@@ -91,7 +91,8 @@ pub(crate) async fn effective_slots(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let literal = crate::graphql::graphql_string_list_literal(ids.iter().map(String::as_str));
+    let literal =
+        crate::store::graphql::graphql_string_list_literal(ids.iter().map(String::as_str));
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(docIDs: {literal}) {{
@@ -130,8 +131,8 @@ mod tests {
 
     #[tokio::test]
     async fn effective_slot_batch_uses_only_found_physical_requests() {
-        use crate::config_client::ConfigAccess;
         use crate::defra_node::EmbeddedNode;
+        use crate::store::config_client::ConfigAccess;
 
         let dir = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(

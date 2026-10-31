@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use serde_json::Value;
 

@@ -216,8 +216,8 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
             Box::pin(async move {
                 txn.execute(&format!(
                     r#"mutation {{ update_EvalDefinition(filter: {{ definition_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, input: {{ comparability_version: 0 }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(DEFINITION),
-                    crate::graphql::escape_graphql_string(OWNER),
+                    crate::store::graphql::escape_graphql_string(DEFINITION),
+                    crate::store::graphql::escape_graphql_string(OWNER),
                 ))
                 .await
                 .map(|_| ())

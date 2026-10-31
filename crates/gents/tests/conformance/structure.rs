@@ -126,11 +126,11 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "NativeCompletion",
-            WorkspaceTest("crates/gents/src/config_client/txn_native_completion_conformance.rs"),
+            WorkspaceTest("crates/gents/src/store/config_client/txn_native_completion_conformance.rs"),
         ),
         (
             "NativeClaimLifetime",
-            WorkspaceTest("crates/gents/src/config_client/txn_native_claim_lifetime_conformance.rs"),
+            WorkspaceTest("crates/gents/src/store/config_client/txn_native_claim_lifetime_conformance.rs"),
         ),
         (
             "StoreEncryptionUpgrade",

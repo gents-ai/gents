@@ -7,8 +7,8 @@ use super::{
     inference_slot_reference, PackInferenceBindings, PackInferenceSlot, PackManifest,
     INFERENCE_SLOT_REFERENCE_PREFIX,
 };
-use crate::config_client::ConfigAccess;
 use crate::documents::{InferenceBackend, InferenceProfile, PackConfig};
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -271,7 +271,7 @@ pub async fn install_pack_documents_with_expectations(
     pack: &super::PackIdentity,
     config: &PackConfig,
     policy: super::DriftPolicy,
-    expected: Vec<crate::config_client::DesiredStateExpectation>,
+    expected: Vec<crate::store::config_client::DesiredStateExpectation>,
 ) -> Result<super::InstallReport> {
     super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected).await
 }

@@ -1,5 +1,5 @@
-use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
-use crate::graphql::{created_doc_id, escape_graphql_string};
+use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
+use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};

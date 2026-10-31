@@ -13,10 +13,10 @@ use super::driver::{load_lifecycle, read_step_row, JobDriver, StepOutcome};
 use super::input::live_job_settings;
 use super::origin::engine_guard;
 use super::records::read_progress;
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
 use crate::plugin::store::{parse_coordinate, read_record};
 use crate::request::binding::load_agent_request_by_doc_id;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 /// Lean `PluginJobRow` for one job row.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 use super::ToolDispatchRejection;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};

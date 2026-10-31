@@ -70,7 +70,7 @@ async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDo
 }
 
 pub async fn load_canonical_goal_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {

@@ -62,10 +62,10 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
             &survivor.doc_id,
             "coalesced into earlier queued request",
         );
-        crate::config_client::ConfigAccess::transact_local_idempotent(
+        crate::store::config_client::ConfigAccess::transact_local_idempotent(
             node,
             None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
             "reconcile_coalesced_pending_request",
             |txn| {
                 let mutation = &mutation;
@@ -92,7 +92,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
                         .data
                         .as_ref()
                         .and_then(|data| data.get("update_AgentRequest"))
-                        .is_some_and(crate::graphql::response_has_documents)
+                        .is_some_and(crate::store::graphql::response_has_documents)
                     {
                         crate::triggers::engine::durable::publish_request_outcome(
                             txn,
@@ -168,7 +168,7 @@ async fn matching_coalesced_pending_requests(
         ) {{{}}} }}"#,
         crate::request::admission::SIGNED_REQUEST_FIELDS,
     );
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "matching_coalesced_pending_requests",

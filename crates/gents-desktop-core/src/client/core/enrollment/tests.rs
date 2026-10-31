@@ -1113,7 +1113,7 @@ fn signed_enrollment_authority_at(
 }
 
 async fn commit_document(core: &ClientCore, stage: &'static str, mutation: &str) {
-    gents::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
+    gents::store::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
         .await
         .expect("commit enrollment authority document");
 }

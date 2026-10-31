@@ -2133,7 +2133,7 @@ pub(crate) fn render_transcript_rows(
 }
 
 pub(crate) async fn render_transcript_rows_with_provenance(
-    access: &dyn gents::config_client::ConfigRead,
+    access: &dyn gents::store::config_client::ConfigRead,
     store: &ClientStore,
     page: &gents_desktop_core::client::SessionTranscriptQueryPage,
     node_did: &str,

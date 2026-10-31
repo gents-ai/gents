@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::config_client::ConfigAccess;
 use crate::documents::{EvalDefinition, EvalSplit};
 use crate::eval::checks::CheckRegistry;
 use crate::eval::optimization::evidence::{
@@ -41,6 +40,7 @@ use crate::eval::runner::{
     RunRequest, TrialExecutor,
 };
 use crate::eval::{load_run, load_trials, DefinitionRef, RunOrigin, SubjectRef, TrialRecord};
+use crate::store::config_client::ConfigAccess;
 
 #[derive(Clone, Debug)]
 pub struct JobRequest {
@@ -879,7 +879,7 @@ async fn freeze_job(
         )));
     }
     if let Err(error) = baseline_equivalence(
-        &crate::config_client::DesiredStateApplyPlan::from_pack_config(&source.config)?,
+        &crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&source.config)?,
         &closure,
     ) {
         return Err(match error.downcast::<BaselineMismatch>() {

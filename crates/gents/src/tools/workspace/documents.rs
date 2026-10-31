@@ -3,7 +3,7 @@ use rapidhash::RapidHashMap;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 use super::action_plan::{CreationPolicy, WorkspaceAdapterKind};
 use super::executor::RepositoryPlacementRef;

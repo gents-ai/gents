@@ -9,8 +9,8 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::escape_graphql_string;
 use crate::request::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";

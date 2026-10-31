@@ -74,9 +74,9 @@ impl AgentConnection {
             return Ok(Some(self.bootstrap.clone()));
         }
         let agent = profile.unwrap_or(&self.inputs.agent_id).to_owned();
-        let escaped = gents::graphql::escape_graphql_string(&agent);
-        let owner = gents::graphql::escape_graphql_string(&self.inputs.node_did);
-        let response = gents::graphql::graphql_with_transaction_retry(&self.inputs.node, &format!(
+        let escaped = gents::store::graphql::escape_graphql_string(&agent);
+        let owner = gents::store::graphql::escape_graphql_string(&self.inputs.node_did);
+        let response = gents::store::graphql::graphql_with_transaction_retry(&self.inputs.node, &format!(
             "{{Agent(filter:{{agent_id:{{_eq:\"{escaped}\"}},node_did:{{_eq:\"{owner}\"}}}},limit:2){{node_did enabled}}}}"
         ), "select Grok agent").await?;
         let rows = response

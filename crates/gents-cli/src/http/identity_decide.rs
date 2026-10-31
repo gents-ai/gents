@@ -344,7 +344,7 @@ mod tests {
             .post(format!("http://{runtime_addr}/identity/decide"))
             .header(
                 axum::http::header::AUTHORIZATION,
-                gents::config_client::GraphqlEndpoint::as_principal(
+                gents::store::config_client::GraphqlEndpoint::as_principal(
                     format!("http://{runtime_addr}/api/v0/graphql"),
                     owner.did(),
                 )

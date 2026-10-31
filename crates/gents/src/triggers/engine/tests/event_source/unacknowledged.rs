@@ -41,15 +41,15 @@ async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(&snapshot).await;
-    let response = crate::config_client::ConfigAccess::local(node.clone())
+    let response = crate::store::config_client::ConfigAccess::local(node.clone())
         .write(
             "test.cursor_gate_source",
             r#"mutation { create_OutcomePing(input: {message: "ready"}) {_docID} }"#,
         )
         .await
         .unwrap();
-    let doc_id = crate::graphql::created_doc_id(&response, "OutcomePing").unwrap();
-    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let doc_id = crate::store::graphql::created_doc_id(&response, "OutcomePing").unwrap();
+    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
@@ -81,14 +81,14 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
     let writer = node.clone();
     let created = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let response = crate::config_client::ConfigAccess::local(writer)
+        let response = crate::store::config_client::ConfigAccess::local(writer)
             .write(
                 "test.outcome_ping",
                 r#"mutation { create_OutcomePing(input: {message: "train-echo-11"}) { _docID } }"#,
             )
             .await
             .unwrap();
-        crate::graphql::created_doc_id(&response, "OutcomePing").unwrap()
+        crate::store::graphql::created_doc_id(&response, "OutcomePing").unwrap()
     });
     let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
         .await
@@ -115,12 +115,12 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
 impl Delivery {
     async fn cursor(&self) -> String {
         let owner = event_test_behavior().node_did().to_owned();
-        crate::config_client::ConfigAccess::local(self.node.clone())
+        crate::store::config_client::ConfigAccess::local(self.node.clone())
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        crate::config_client::event_source_cursor::load_or_seed_for_source(
+                        crate::store::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
                             owner,
                             &gents_protocol::event_delivery::EventConsumer::Trigger {
@@ -452,7 +452,7 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
     assert_eq!(delivery.drain(Duration::from_secs(1), |_| None).await, 0);
     delivery.trigger_error().await;
 
-    crate::config_client::ConfigAccess::local(delivery.node.clone())
+    crate::store::config_client::ConfigAccess::local(delivery.node.clone())
         .write(
             "test.repair_outcome_ping",
             &format!(
@@ -485,7 +485,7 @@ async fn deleted_refused_document_releases_its_trigger() {
         FireResult::Rejected { .. }
     ));
     assert_eq!(delivery.drain(Duration::from_secs(1), |_| None).await, 0);
-    crate::config_client::ConfigAccess::local(delivery.node.clone())
+    crate::store::config_client::ConfigAccess::local(delivery.node.clone())
         .write(
             "test.delete_outcome_ping",
             &format!(

@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -41,7 +41,7 @@ async fn signed_request(
         )
         .await
         .unwrap();
-    let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     access
         .write(
             "test.retained_fire_terminal",
@@ -64,7 +64,7 @@ async fn goal_document(access: &ConfigAccess, input: Value) -> String {
                     "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
                     &json!({"input":input}),
                 ).await?;
-                crate::graphql::created_doc_id(&response, "Goal")
+                crate::store::graphql::created_doc_id(&response, "Goal")
             })
         })
         .await

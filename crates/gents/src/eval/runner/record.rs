@@ -2,13 +2,13 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::config_client::ConfigAccess;
 use crate::documents::EvalSplit;
 use crate::eval::report::{load_report, EvalReport};
 use crate::eval::{
     append_verdict, complete_trial, create_trial, load_trials, TrialCompletion, TrialIdentity,
     TrialRecord, VerdictDraft,
 };
+use crate::store::config_client::ConfigAccess;
 
 #[async_trait::async_trait]
 pub trait Recorder: Send + Sync {

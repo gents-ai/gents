@@ -98,8 +98,8 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+    crate::store::config_client::write_tools_document(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -120,7 +120,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
 
     let pack = install_fixture_plugin(plugin_home.path());
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &node_did,
         plugin_home.path(),
         &pack.coordinate,
@@ -144,7 +144,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
 
     crate::plugin::store::remove_record(plugin_home.path(), "fixture", "list_files").unwrap();
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &node_did,
         plugin_home.path(),
         &pack.coordinate,
@@ -165,7 +165,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
 
     let pack = install_fixture_plugin(plugin_home.path());
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &node_did,
         plugin_home.path(),
         &pack.coordinate,

@@ -199,7 +199,7 @@ async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> 
             ).await
         })
     }).await?;
-    Ok(crate::graphql::created_doc_id(
+    Ok(crate::store::graphql::created_doc_id(
         &response,
         "FileImageHydrationRequest",
     )?)
@@ -465,7 +465,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
         &create.graphql_mutation().map_err(anyhow::Error::msg)?,
     )
     .await?;
-    let request_doc = crate::graphql::created_doc_id(&response, "AgentRequest")?;
+    let request_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
     let request =
         crate::request::admission::load_request_for_admission_test(&source_node, &request_doc)
             .await?;

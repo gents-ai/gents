@@ -4,18 +4,18 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use crate::defra_node::EmbeddedNode;
 use crate::documents::{InferenceSampling, PackConfig};
 use crate::eval::runner::embedded::home::EmbeddedHome;
 use crate::eval::runner::executor::{InferenceBinding, TrialFixtures, TrialSpec};
-use crate::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::pack::{
     bind_pack_install_config, declared_paths, digest_declared_assets, load_pack_config,
     PackInferenceBindings, PackInstallOptions, PackManifest,
 };
+use crate::store::config_client::{
+    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
+use crate::store::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::{Collection, ConfigAccess};
 
 pub(super) async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Result<()> {
@@ -268,8 +268,8 @@ async fn install_fixtures(
 }
 
 pub(super) async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
-    let plan = crate::config_client::preview_schema_install(access, sdl).await?;
-    crate::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
+    let plan = crate::store::config_client::preview_schema_install(access, sdl).await?;
+    crate::store::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
     Ok(())
 }
 
@@ -308,7 +308,7 @@ pub(super) async fn create_document(
             let (mutation, variables) = (&mutation, &variables);
             Box::pin(async move {
                 let response = txn.execute_with_variables(mutation, variables).await?;
-                crate::graphql::created_doc_id(&response, collection)
+                crate::store::graphql::created_doc_id(&response, collection)
             })
         })
         .await

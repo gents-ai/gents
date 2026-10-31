@@ -669,7 +669,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&result, "AgentRequest")
+        crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
     let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
@@ -752,7 +752,7 @@ async fn artifact_grant_fences_current_lease_and_source_seal() {
     assert!(!fx.grant.root().starts_with(fx.grant.source_root()));
     assert!(fx.grant.root().join("target").is_dir());
     assert!(fx.grant.root().join("tmp").is_dir());
-    let doc = crate::graphql::escape_graphql_string(fx.grant.request_doc_id());
+    let doc = crate::store::graphql::escape_graphql_string(fx.grant.request_doc_id());
     let result = fx.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#)).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     assert!(fx
@@ -777,8 +777,8 @@ async fn artifact_grant_rejects_replaced_output_directory() {
 #[tokio::test]
 async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
     let fx = artifact_test_fixture(&[]).await;
-    let doc = crate::graphql::escape_graphql_string(fx.grant.request_doc_id());
-    let generation = crate::graphql::escape_graphql_string(fx.grant.execution_generation());
+    let doc = crate::store::graphql::escape_graphql_string(fx.grant.request_doc_id());
+    let generation = crate::store::graphql::escape_graphql_string(fx.grant.execution_generation());
     for (input, restore) in [
         (
             "execution_generation: \"foreign-owner\"".to_owned(),
@@ -1129,7 +1129,7 @@ async fn artifact_alternate_owner(
     crate::request::admission::sign_agent_request_create(&identity, &mut create).await?;
     let mutation = fx.node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!mutation.has_errors(), "{:?}", mutation.errors);
-    let id = crate::graphql::escape_graphql_string(name);
+    let id = crate::store::graphql::escape_graphql_string(name);
     let result = fx
         .node
         .execute(&format!(
@@ -1138,7 +1138,7 @@ async fn artifact_alternate_owner(
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&result, "AgentRequest")
+        crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
     let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
@@ -1179,7 +1179,7 @@ async fn artifact_resolver_rejects_missing_or_ready_context_before_binding() {
         }
         let query = format!(
             r#"{{ WorkspaceBinding(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ binding_id lifecycle_state }} }}"#,
-            crate::graphql::escape_graphql_string(name)
+            crate::store::graphql::escape_graphql_string(name)
         );
         let before = fx.node.execute(&query).await;
         assert!(!before.has_errors());

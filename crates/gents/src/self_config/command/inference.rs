@@ -283,7 +283,7 @@ impl ConfigCommandTool {
     async fn require_named_profile_owner(&self, verb: &str) -> Result<()> {
         let owner = escape_graphql_string(&self.node_did);
         let query = format!("{{ Agent(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{agent_id}} }}");
-        let response = crate::config_client::ConfigAccess::transact_local_readonly(
+        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.profile_owners",

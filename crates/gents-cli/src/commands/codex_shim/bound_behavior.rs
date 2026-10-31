@@ -45,7 +45,7 @@ mod tests {
 
     #[tokio::test]
     async fn same_labels_resolve_only_the_selected_node_binding() {
-        use gents::config_client::{
+        use gents::store::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };

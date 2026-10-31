@@ -74,7 +74,7 @@ async fn fixture_with_reference(
         })
     }).await.unwrap();
     let document_id =
-        crate::graphql::created_doc_id(&response, "FileImageHydrationRequest").unwrap();
+        crate::store::graphql::created_doc_id(&response, "FileImageHydrationRequest").unwrap();
     let store = GraphqlHydrationStore {
         node,
         enrollment: crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -103,7 +103,7 @@ async fn receipt_projection_failure_rolls_back_the_immutable_outcome() {
     for failure_at in [1, 2] {
         let (_directory, store, row, _) = fixture().await;
         let (result, writes) =
-            crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
                 Some(failure_at),
                 store.commit(&row, &FileImageSelection::Missing, ""),
             )

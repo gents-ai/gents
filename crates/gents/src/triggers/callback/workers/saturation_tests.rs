@@ -11,12 +11,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{CallbackWorkers, PLUGIN_CALLBACK_CONCURRENCY};
-use crate::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store;
 use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+use crate::store::config_client::{
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use crate::triggers::callback::documents::{load_callback, load_invocation, CallbackInvocationDoc};
 use crate::UpdateSubscriptionSource;
 

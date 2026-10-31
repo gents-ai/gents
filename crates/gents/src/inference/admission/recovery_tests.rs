@@ -22,7 +22,7 @@ async fn seed_call(
     let state = escape_graphql_string(initial_state);
     let owner = escape_graphql_string(node_did);
     let request_doc = escape_graphql_string(request_doc_id);
-    crate::config_client::ConfigAccess::local(node.clone())
+    crate::store::config_client::ConfigAccess::local(node.clone())
         .write(
             "test.recovery_call",
             &format!(
@@ -48,7 +48,7 @@ async fn stored_call(node: &EmbeddedNode) -> Value {
     let response = node.execute(
         r#"{ InferenceCall { call_state failure_reason ended_at prompt_tokens completion_tokens } }"#,
     ).await;
-    crate::graphql::rows::<Value>(&response, "InferenceCall")
+    crate::store::graphql::rows::<Value>(&response, "InferenceCall")
         .unwrap()
         .remove(0)
 }
@@ -206,7 +206,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
             .await
             .is_err()
     );
-    let response = crate::config_client::ConfigAccess::local(node)
+    let response = crate::store::config_client::ConfigAccess::local(node)
         .execute("{ InferenceCall { call_id call_state } }")
         .await
         .unwrap();
@@ -311,7 +311,7 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
     let response = node
         .execute(r#"{ InferenceCall(filter: {call_id: {_eq: "waiting-call"}}) {call_state} }"#)
         .await;
-    let rows = crate::graphql::rows::<Value>(&response, "InferenceCall").unwrap();
+    let rows = crate::store::graphql::rows::<Value>(&response, "InferenceCall").unwrap();
     assert_eq!(rows[0]["call_state"], "cancelled");
 }
 
@@ -393,7 +393,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     let blocker_entered = gate_entered.clone();
     let blocker_release = release_gate.clone();
     let blocker = tokio::spawn(async move {
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &blocker_node,
             None,
             "test.admission.abort_finalizer_gate_blocker",
@@ -456,7 +456,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
                     r#"{ InferenceCall(filter: {call_id: {_eq: "aborted-finalizer-call"}}) {call_state} }"#,
                 )
                 .await;
-            let rows = crate::graphql::rows::<Value>(&response, "InferenceCall").unwrap();
+            let rows = crate::store::graphql::rows::<Value>(&response, "InferenceCall").unwrap();
             if rows.first().is_some_and(|row| row["call_state"] == "completed") {
                 break rows;
             }
@@ -506,12 +506,12 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     crate::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let response = access
         .write("test.recovery_parent", &create.graphql_mutation().unwrap())
         .await
         .unwrap();
-    let parent_doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let parent_doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc_id)
         .await
         .unwrap();

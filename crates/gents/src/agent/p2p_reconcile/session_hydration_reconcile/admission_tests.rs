@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn generated_hydration_routes_require_current_enrollment_materialization() -> Result<()> {
     use crate::agent::p2p_reconcile::enrollment_reconcile::test_enrollment_authority;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::store::identity::KeyIdentity;
     use crate::tools::call::lifecycle::admission_fixture::ensure_fixture_session;
     use serde_json::Value;

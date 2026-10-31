@@ -11,8 +11,8 @@ use super::enrollment_store::GraphqlEnrollmentStore;
 #[cfg(test)]
 use super::session_commands::run_session_command_reconciler;
 use super::session_commands::{CommandRow, FIELDS};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
 pub(super) async fn verified_receipt(
@@ -96,7 +96,7 @@ async fn authority_rejection(
             ));
         }
     }
-    crate::graphql::fence_arrivals(txn, "AgentSession").await?;
+    crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
     let response = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ requester_did }} }}"#,
         escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id))).await?;
     let sessions = response["data"]["AgentSession"]
@@ -168,7 +168,7 @@ pub(crate) async fn process_command(
                 && row.requester_did == command.requester_did && row.requester_peer_id == command.requester_peer_id
                 && row.session_id == command.session_id, "edit immutable scope disagrees with signed intent");
             if verified_receipt(identity.as_ref(), &command, row.receipt_json.as_deref()).await?.is_some() { return Ok(None); }
-            crate::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
+            crate::store::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
             let twins = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
                 escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
             let twins = twins["data"]["AgentSessionInputEdit"].as_array().context("missing command identity query")?;

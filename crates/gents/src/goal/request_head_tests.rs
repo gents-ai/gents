@@ -570,7 +570,7 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
 
 #[tokio::test]
 async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
     let node = std::sync::Arc::new(

@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents::CancelBackgroundToolCallOutcome;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
@@ -392,7 +392,7 @@ mod tests {
             "segment seed: {:?}",
             response.errors
         );
-        gents::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+        gents::store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -444,7 +444,9 @@ mod tests {
             fs_root: None,
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
             node_did: Arc::from("did:test:background-watcher"),
             agent_id: Arc::from("did:test:background-watcher:default"),
             id_counter: Arc::new(AtomicU64::new(1)),
@@ -505,7 +507,7 @@ mod tests {
             "seed AgentToolCall failed: {:?}",
             response.errors
         );
-        gents::graphql::single_mutation_document(&response, "create_AgentToolCall")
+        gents::store::graphql::single_mutation_document(&response, "create_AgentToolCall")
             .expect("tool mutation envelope")
             .expect("created tool row")["_docID"]
             .as_str()

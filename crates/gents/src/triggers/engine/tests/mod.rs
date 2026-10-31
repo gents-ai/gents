@@ -14,7 +14,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::ensure_runtime_schemas;
-use crate::graphql::escape_graphql_string;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::lean_vocab_test::{
     assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
@@ -25,6 +24,7 @@ use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
     ResolvedSchedule, ResolvedTask, ScheduleCadence,
 };
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
 use crate::triggers::engine::event_source::EventSource;

@@ -29,13 +29,13 @@ pub(crate) async fn settle_running_session_message_rows(
         r#"{{ AgentToolCall(filter: {{ {} }}) {{ {SESSION_MESSAGE_ROW_FIELDS} }} }}"#,
         running_session_message_filter(local_did)
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node.as_ref(),
         &query,
         "load running session-message rows",
     )
     .await?;
-    let rows = crate::graphql::rows::<SessionMessageRow>(&response, "AgentToolCall")?;
+    let rows = crate::store::graphql::rows::<SessionMessageRow>(&response, "AgentToolCall")?;
     let mut settled = 0;
     for row in rows {
         match settle_row(node, &row).await {
@@ -62,13 +62,14 @@ pub(super) async fn settle_rows_after_request_update(
         }} }}"#,
         escape_graphql_string(request_doc_id)
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node.as_ref(),
         &query,
         "load updated request for session-message settlement",
     )
     .await?;
-    let Some(request) = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+    let Some(request) =
+        crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
     else {
         return Ok(0);
     };
@@ -86,14 +87,14 @@ pub(super) async fn settle_rows_after_request_update(
         escape_graphql_string(&tool_doc_id),
         running_session_message_filter(local_did)
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node.as_ref(),
         &query,
         "load the session-message row a terminal request names",
     )
     .await?;
     let mut settled = 0;
-    for row in crate::graphql::rows::<SessionMessageRow>(&response, "AgentToolCall")? {
+    for row in crate::store::graphql::rows::<SessionMessageRow>(&response, "AgentToolCall")? {
         settled += usize::from(settle_row(node, &row).await?);
     }
     Ok(settled)
@@ -495,11 +496,14 @@ mod turn_assignment_tests {
             escape_graphql_string(&session),
             escape_graphql_string(&now)
         );
-        let created =
-            crate::config_client::ConfigAccess::write_local(node, "test.folded_head", &create)
-                .await
-                .unwrap();
-        let head_doc = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+        let created = crate::store::config_client::ConfigAccess::write_local(
+            node,
+            "test.folded_head",
+            &create,
+        )
+        .await
+        .unwrap();
+        let head_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
         let foreign_create = create
             .replace(
                 &format!("request_id: \"{}\"", head_id),
@@ -509,14 +513,14 @@ mod turn_assignment_tests {
                 &format!("requester_did: \"{}\"", escape_graphql_string(did)),
                 "requester_did: \"did:test:foreign\"",
             );
-        let foreign = crate::config_client::ConfigAccess::write_local(
+        let foreign = crate::store::config_client::ConfigAccess::write_local(
             node,
             "test.foreign_head",
             &foreign_create,
         )
         .await
         .unwrap();
-        let foreign_doc = crate::graphql::created_doc_id(&foreign, "AgentRequest").unwrap();
+        let foreign_doc = crate::store::graphql::created_doc_id(&foreign, "AgentRequest").unwrap();
         let foreign_fold = format!(
             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
             lifecycle_state: "superseded", superseded_by_request: "foreign-head", superseded_by_request_doc_id: "{}",
@@ -526,9 +530,13 @@ mod turn_assignment_tests {
             escape_graphql_string(&foreign_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::config_client::ConfigAccess::write_local(node, "test.foreign_fold", &foreign_fold)
-            .await
-            .unwrap();
+        crate::store::config_client::ConfigAccess::write_local(
+            node,
+            "test.foreign_fold",
+            &foreign_fold,
+        )
+        .await
+        .unwrap();
         let binding_cases =
             &crate::lean_vocab_test::lean_contract_snapshot().agent_folded_binding_cases;
         let foreign_model = binding_cases
@@ -561,7 +569,7 @@ mod turn_assignment_tests {
                 "request_id: \"foreign-agent-head\"",
             )
             .replace("agent_id: \"general\"", "agent_id: \"foreign-agent\"");
-        let foreign_agent = crate::config_client::ConfigAccess::write_local(
+        let foreign_agent = crate::store::config_client::ConfigAccess::write_local(
             node,
             "test.foreign_agent_head",
             &foreign_agent_create,
@@ -569,7 +577,7 @@ mod turn_assignment_tests {
         .await
         .unwrap();
         let foreign_agent_doc =
-            crate::graphql::created_doc_id(&foreign_agent, "AgentRequest").unwrap();
+            crate::store::graphql::created_doc_id(&foreign_agent, "AgentRequest").unwrap();
         let foreign_agent_fold = format!(
             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
             lifecycle_state: "superseded", superseded_by_request: "foreign-agent-head", superseded_by_request_doc_id: "{}",
@@ -579,7 +587,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&foreign_agent_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             node,
             "test.foreign_agent_fold",
             &foreign_agent_fold,
@@ -617,7 +625,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&head_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             node,
             "test.mismatched_fold",
             &mismatched_fold,
@@ -647,7 +655,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&head_doc),
             escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
-        crate::config_client::ConfigAccess::write_local(node, "test.folded_cause", &fold)
+        crate::store::config_client::ConfigAccess::write_local(node, "test.folded_cause", &fold)
             .await
             .unwrap();
         let matching_model = binding_cases
@@ -1098,7 +1106,7 @@ mod turn_assignment_tests {
             .await
             .unwrap()
             .unwrap();
-        crate::config_client::ConfigAccess::local(node.clone()).write("test.bind_caused_assignment",
+        crate::store::config_client::ConfigAccess::local(node.clone()).write("test.bind_caused_assignment",
             &format!("mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
                 escape_graphql_string(&goal.doc_id), escape_graphql_string(request_doc))).await.unwrap();
     }

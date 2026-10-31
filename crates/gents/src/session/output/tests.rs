@@ -114,7 +114,7 @@ async fn create_doc(
         .execute_request(defra_node::QueryRequest::new(mutation).with_variables(variables))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    crate::graphql::single_mutation_document(&response, field)
+    crate::store::graphql::single_mutation_document(&response, field)
         .unwrap()
         .unwrap()["_docID"]
         .as_str()

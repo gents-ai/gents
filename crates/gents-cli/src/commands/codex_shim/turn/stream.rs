@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
@@ -733,7 +733,7 @@ async fn canonical_output_started_at_ms(
                 filter: {{ request_doc_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{ source writer created_at }} }}"#,
-            gents::graphql::escape_graphql_string(&selected.request_doc_id),
+            gents::store::graphql::escape_graphql_string(&selected.request_doc_id),
         ),
     )
     .await
@@ -1205,7 +1205,7 @@ async fn announce_consumed_inputs(
     current: &SubmittedRequest,
     announced: &mut BTreeSet<String>,
 ) -> Result<()> {
-    use gents::graphql::escape_graphql_string;
+    use gents::store::graphql::escape_graphql_string;
     let query = format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, superseded_by_request_doc_id: {{_eq:"{}"}}, lifecycle_state: {{_eq:"superseded"}}, failure_reason: {{_eq:"{}"}} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id content created_at }} }}"#,
         escape_graphql_string(&current.node_did),
@@ -1316,9 +1316,9 @@ async fn steering_input_for_request(
     if let Some(input) = connection.take_steering_input(request_id).await {
         return Ok(input);
     }
-    let physical = gents::graphql::escape_graphql_string(request_doc_id);
-    let owner = gents::graphql::escape_graphql_string(state.node_did.as_ref());
-    let logical = gents::graphql::escape_graphql_string(request_id);
+    let physical = gents::store::graphql::escape_graphql_string(request_doc_id);
+    let owner = gents::store::graphql::escape_graphql_string(state.node_did.as_ref());
+    let logical = gents::store::graphql::escape_graphql_string(request_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, node_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content input}} }}"#
     );
@@ -1397,7 +1397,9 @@ mod tests {
             fs_root: None,
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
             node_did: Arc::from("did:test:reasoning"),
             agent_id: Arc::from("reasoning"),
             id_counter: Arc::new(AtomicU64::new(1)),

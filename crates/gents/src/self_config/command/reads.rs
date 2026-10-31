@@ -51,7 +51,7 @@ impl ConfigCommandTool {
     ) -> Result<Value> {
         let owner = self.node_did.clone();
         let backend_id = backend_id.to_owned();
-        let observation = crate::config_client::ConfigAccess::transact_local_readonly(
+        let observation = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.backend_observation",
@@ -96,7 +96,7 @@ impl ConfigCommandTool {
         let id = id.to_owned();
         let lookup_id = id.clone();
         let owner = self.node_did.clone();
-        let mut document = crate::config_client::ConfigAccess::transact_local_readonly(
+        let mut document = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.command_read",

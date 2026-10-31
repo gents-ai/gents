@@ -81,11 +81,11 @@ fn nested_fork_keeps_automated_input_origin_without_child_turn_membership() {
 
 #[tokio::test]
 async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
-    use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents::store::config_client::ConfigAccess;
     let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
     gents::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
@@ -104,7 +104,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
             input:{queue:{source:"goal",policy:"coalesce",key:"goal:source"},goal_continuation:{sequence:3,wrapup:false}},
             created_at:"2026-10-26T00:00:00Z"}) { _docID }
     }"#).await.unwrap();
-    let request_doc = gents::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let request_doc = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let mut rows = ClientStoreRows::default();
     push_canonical_text_message(
         &mut rows,
@@ -127,7 +127,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
                     &output_segment_create_variables(&segment)?,
                 )
                 .await?;
-            let close = gents::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+            let close = gents::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
             if let gents_protocol::output::MessageBlock::Text { text } = &mut header.blocks[0] {
                 text.output.close_doc_id = close;
             }

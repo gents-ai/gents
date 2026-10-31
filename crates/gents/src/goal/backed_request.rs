@@ -45,7 +45,7 @@ fn resolve_ambiguous_goal_submission_commit(
 }
 
 async fn stage_goal_backed_request(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -148,7 +148,7 @@ async fn stage_goal_backed_request(
             "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
         ))
         .await?;
-    let request_doc_id = crate::graphql::created_doc_id(&created, "AgentRequest")?;
+    let request_doc_id = crate::store::graphql::created_doc_id(&created, "AgentRequest")?;
     bind_goal_first_request_in_txn(
         txn,
         &staged_goal.goal,
@@ -210,7 +210,7 @@ pub async fn submit_goal_backed_request(
 }
 
 pub(crate) async fn stage_goal_backed_request_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -230,7 +230,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
 }
 
 pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -286,7 +286,7 @@ pub async fn submit_goal_backed_request_local(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
-    let staged = crate::config_client::ConfigAccess::transact_local_write(
+    let staged = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "goal.submit_backed_request_local",

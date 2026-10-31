@@ -1,8 +1,8 @@
-use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
-use crate::graphql::{created_doc_id, escape_graphql_string};
 use crate::session::canonical_rows::{
     output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
+use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::pack::{InstalledPackPlugin, PackKind, RemoveReport};
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;

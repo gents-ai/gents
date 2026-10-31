@@ -294,7 +294,7 @@ impl ConfigCommandTool {
             return self.target_core(agent, "automation").await;
         }
         let owner = &self.node_did;
-        let task = crate::config_client::ConfigAccess::transact_local_readonly(
+        let task = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.automation_owner",
@@ -356,7 +356,7 @@ impl ConfigCommandTool {
 
     async fn document_agent(&self, target: SelfConfigTarget, id: &str) -> Result<Option<String>> {
         let owner = &self.node_did;
-        crate::config_client::ConfigAccess::transact_local_readonly(
+        crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.document_agent",
@@ -437,7 +437,7 @@ pub(super) struct BatchFailure {
 }
 
 async fn document_referrers(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
     owner: &str,
     id: &str,
@@ -456,7 +456,7 @@ async fn document_referrers(
 }
 
 async fn document_agent_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
     owner: &str,
     id: &str,

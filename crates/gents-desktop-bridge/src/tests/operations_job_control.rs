@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::{
     JobBudget, JobControlKind, JobControlOutcome, JobProgress, JobReadError, JobState,

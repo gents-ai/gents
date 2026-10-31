@@ -1,13 +1,13 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::config_client::ConfigAccess;
 use crate::eval::optimization::driver::{decide_runs, definition_ref, load_definition};
 use crate::eval::optimization::job::{
     checkpoint, derive_state, load_job, rounds_used, Checkpoint, JobRecord, JobState, JournalEntry,
 };
 use crate::eval::optimization::policy::{Decision, Mode};
 use crate::eval::runner::freeze_refused;
+use crate::store::config_client::ConfigAccess;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DecisionView {

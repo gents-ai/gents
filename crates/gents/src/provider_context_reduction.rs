@@ -3,8 +3,8 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::inference::llm::message::Message;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_loop::claude_messages_body::{prepare_replay_checkpoint, ReplayTag, TaggedAssistantRow};
 use gents_loop::loop_stream::TaggedMessage;
 
@@ -261,7 +261,7 @@ pub async fn capture_source_boundary(
                 .get("sequence")
                 .and_then(Value::as_i64)
                 .with_context(|| format!("AgentMessage {doc_id} has no sequence"))?;
-            let commit = crate::graphql::newest_document_composite_commit(
+            let commit = crate::store::graphql::newest_document_composite_commit(
                 node,
                 doc_id,
                 &format!("AgentMessage {doc_id} source boundary"),
@@ -358,7 +358,7 @@ pub(crate) async fn persist(
         .unwrap_or_else(|| "null".to_string());
     let parent_reduction_key = graphql_optional_string(input.parent_reduction_key);
     let requester_did = graphql_optional_string(input.requester_did);
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "provider_context.create_reduction",
@@ -1821,7 +1821,7 @@ mod tests {
             assert_eq!(loaded[0].retained_suffix_json, first.retained_suffix_json);
         }
 
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.delete_reduction_block",
             &format!(

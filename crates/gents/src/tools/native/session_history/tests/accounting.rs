@@ -36,7 +36,7 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     let inserted = node.execute(&mutation).await;
     assert!(!inserted.has_errors(), "{:?}", inserted.errors);
     let details = load_session_context_details(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         PIN_FIXED_DID,
         Some(PIN_FIXED_DID),
         "session-a",
@@ -58,7 +58,7 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
         (PIN_FIXED_DID, Some(PIN_FIXED_DID), "session-b"),
     ] {
         assert!(load_session_context_details(
-            &crate::config_client::ConfigAccess::local(node.clone()),
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
             agent,
             requester,
             session,
@@ -111,7 +111,7 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     let inserted = node.execute(&mutation).await;
     assert!(!inserted.has_errors(), "{:?}", inserted.errors);
     assert!(load_session_context_details(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         Some(PIN_FIXED_DID),
         "session-a",
@@ -153,7 +153,7 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
         let inserted = node.execute(&mutation).await;
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
         assert!(load_session_context_details(
-            &crate::config_client::ConfigAccess::local(node.clone()),
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some(PIN_FIXED_DID),
             "session-a",
@@ -165,7 +165,7 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     }
     context.call_id = "foreign-call".into();
     assert!(load_session_context_details(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         Some(PIN_FIXED_DID),
         "session-a",
@@ -201,7 +201,7 @@ async fn ui_accounting_separates_compaction_usage_from_current_context() {
                 request_doc_id: "{}", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", queued_at: "2026-06-04T12:00:00Z",
                 prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, usage_completeness: "complete", context_accounting_json: "{encoded}"
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
-        crate::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
+        crate::store::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
         let observed = load_session_inference_observation(
             &node,
             PIN_FIXED_DID,
@@ -303,14 +303,14 @@ async fn ui_accounting_uses_exact_requester_and_physical_request_ownership() {
     crate::sign_agent_request_create(&foreign_identity, &mut foreign_request)
         .await
         .unwrap();
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "test.session_history.foreign_request",
         &foreign_request.graphql_mutation().unwrap(),
     )
     .await
     .unwrap();
-    crate::graphql::ensure_no_errors(&response, "foreign requester fixture").unwrap();
+    crate::store::graphql::ensure_no_errors(&response, "foreign requester fixture").unwrap();
     let response = node
         .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "foreign-requester"}}) {_docID} }"#)
         .await;
@@ -322,7 +322,7 @@ async fn ui_accounting_uses_exact_requester_and_physical_request_ownership() {
             request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0, usage_completeness: "complete",
             queued_at: "2026-06-04T12:00:00Z"
         }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
-    crate::graphql::ensure_no_errors(&response, "foreign usage fixture").unwrap();
+    crate::store::graphql::ensure_no_errors(&response, "foreign usage fixture").unwrap();
     assert_eq!(
         load_session_inference_observation(&node, PIN_FIXED_DID, Some(PIN_FIXED_DID), "session-a")
             .await

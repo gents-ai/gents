@@ -10,8 +10,8 @@ use gents_protocol::goal_control::{
 use super::enrollment_store::GraphqlEnrollmentStore;
 use super::session_command_authority::{current_admission, AuthorScope};
 use super::session_commands::{CommandRow, FIELDS};
-use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
 pub(super) async fn has_verified_receipt(
@@ -113,7 +113,7 @@ async fn process_command_with_clock(
             anyhow::ensure!(row.command_id == command.command_id && row.requester_did == command.requester_did
                 && row.requester_peer_id == command.requester_peer_id && row.node_did == command.node_did
                 && row.session_id == command.session_id, "goal control immutable scope disagrees with signed intent");
-            crate::graphql::fence_arrivals(txn, "AgentSessionGoalControl").await?;
+            crate::store::graphql::fence_arrivals(txn, "AgentSessionGoalControl").await?;
             let twins = txn.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
                 escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
             let twins = twins["data"]["AgentSessionGoalControl"].as_array().context("missing goal command identity query")?;

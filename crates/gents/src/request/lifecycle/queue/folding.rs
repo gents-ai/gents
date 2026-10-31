@@ -152,7 +152,7 @@ pub(crate) async fn fold_candidates(
     if !heads_user_turn(head) {
         return Ok(Vec::new());
     }
-    let rows = crate::config_client::ConfigAccess::transact_local_readonly(
+    let rows = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "queue.fold_candidates",
@@ -390,17 +390,17 @@ pub(crate) async fn load_consumed_folded_inputs(
         escape_graphql_string(&head.doc_id),
         escape_graphql_string(FOLDED_REASON),
     );
-    let observed = crate::graphql::graphql_with_transaction_retry(
+    let observed = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load the messages a claim folded",
     )
     .await?;
-    if crate::graphql::rows::<AgentRequestRow>(&observed, "AgentRequest")?.is_empty() {
+    if crate::store::graphql::rows::<AgentRequestRow>(&observed, "AgentRequest")?.is_empty() {
         return Ok(Vec::new());
     }
     let query = &query;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "lifecycle.load_folded_inputs",

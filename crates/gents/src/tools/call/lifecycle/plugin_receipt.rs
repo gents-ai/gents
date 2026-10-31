@@ -103,8 +103,8 @@ mod tests {
 #[cfg(test)]
 mod persistence_tests {
     use super::super::*;
-    use crate::config_client::ConfigAccess;
-    use crate::graphql::escape_graphql_string;
+    use crate::store::config_client::ConfigAccess;
+    use crate::store::graphql::escape_graphql_string;
     use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
     fn receipt() -> PluginExecutionReceipt {

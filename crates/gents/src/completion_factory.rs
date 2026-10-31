@@ -5,7 +5,6 @@ use serde::Deserialize;
 
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
-use crate::graphql::escape_graphql_string;
 use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::rendered_request::CaptureScopeKind;
@@ -14,6 +13,7 @@ use crate::openai_wire::OpenAiWireApi;
 use crate::provider_usage;
 use crate::request::lifecycle::ExecutionOrigin;
 use crate::request::watcher::AgentRequest;
+use crate::store::graphql::escape_graphql_string;
 
 pub(crate) fn effective_max_tokens(
     max_output_tokens: usize,
@@ -282,9 +282,12 @@ async fn load_prior_charged_tokens(
         }}"#,
         escape_graphql_string(request_doc_id)
     );
-    let resp =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "load_prior_charged_tokens")
-            .await?;
+    let resp = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_prior_charged_tokens",
+    )
+    .await?;
     let rows = prior_usage_rows_from_response(
         resp.data
             .as_ref()
@@ -412,7 +415,7 @@ async fn load_session_calibration_rows(
         escape_graphql_string(session_id),
         escape_graphql_string(model_name),
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load_session_calibration_rows",

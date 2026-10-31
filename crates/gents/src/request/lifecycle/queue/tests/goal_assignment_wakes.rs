@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -95,7 +95,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                         Ok(doc)
                     } else {
                         let result = txn.execute_with_variables("mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}", &json!({"input":value})).await?;
-                        crate::graphql::created_doc_id(&result,"Goal")
+                        crate::store::graphql::created_doc_id(&result,"Goal")
                     }
                 })
             }).await.unwrap();

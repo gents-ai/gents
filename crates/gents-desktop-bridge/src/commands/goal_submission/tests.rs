@@ -1,6 +1,6 @@
 use super::*;
 use crate::host::protocol::ClientCommand;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 #[test]

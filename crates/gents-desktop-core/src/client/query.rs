@@ -144,7 +144,7 @@ pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
 pub async fn load_chat_patch(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     request_id: Option<&str>,
@@ -248,7 +248,7 @@ async fn load_chat_patch_with<'a>(
 }
 
 pub(crate) async fn load_request_documents_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     doc_ids: &[String],
 ) -> Result<Vec<AgentRequestRow>> {
     let (rows, expected) = session_transcript::read_request_documents(
@@ -566,7 +566,8 @@ pub(super) async fn execute_local_graphql_query(
     query: &str,
     operation: &str,
 ) -> Result<Value> {
-    let response = gents::graphql::graphql_with_transaction_retry(node, query, operation).await?;
+    let response =
+        gents::store::graphql::graphql_with_transaction_retry(node, query, operation).await?;
     response
         .data
         .with_context(|| format!("{operation} returned no data"))
@@ -577,7 +578,8 @@ where
     T: DeserializeOwned,
 {
     let operation = format!("query for {root}");
-    let response = gents::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
+    let response =
+        gents::store::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
 
     let data = response
         .data
@@ -586,7 +588,7 @@ where
 }
 
 pub(super) async fn execute_access_graphql_query(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     query: &str,
     operation: &str,
 ) -> Result<Value> {

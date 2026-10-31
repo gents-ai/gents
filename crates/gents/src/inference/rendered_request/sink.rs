@@ -12,7 +12,7 @@ use super::{
     canonical_json, canonical_json_string, RenderedCompletionRequest,
     RenderedRequestCaptureFactory, RenderedRequestCaptureSink, RenderedRequestContext,
 };
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Clone)]
 pub struct DefraRenderedRequestSink {
@@ -54,7 +54,7 @@ impl DefraRenderedRequestSink {
             collection = RENDERED_REQUEST_COLLECTION,
             capture_key = escape_graphql_string(capture_key),
         );
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
             "rendered_request::lookup",
@@ -79,7 +79,7 @@ impl DefraRenderedRequestSink {
     }
 
     async fn create_in_txn(
-        txn: &crate::config_client::ConfigApplyTxn<'_>,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
         rendered: &RenderedCompletionRequest,
         request_json: &str,
         provenance_json: &str,
@@ -140,7 +140,7 @@ impl DefraRenderedRequestSink {
         if !response
             .get("data")
             .and_then(single_mutation_result)
-            .is_some_and(crate::graphql::response_has_documents)
+            .is_some_and(crate::store::graphql::response_has_documents)
         {
             return Err(anyhow!(
                 "creating RenderedRequest returned no document; the capture is not durable"
@@ -170,7 +170,7 @@ impl DefraRenderedRequestSink {
     }
 
     async fn persist_inference_call_context_accounting_in_txn(
-        txn: &crate::config_client::ConfigApplyTxn<'_>,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
         call_id: &str,
         accounting_json: &str,
     ) -> Result<()> {
@@ -232,7 +232,7 @@ impl DefraRenderedRequestSink {
         if !response
             .get("data")
             .and_then(single_mutation_result)
-            .is_some_and(crate::graphql::response_has_documents)
+            .is_some_and(crate::store::graphql::response_has_documents)
         {
             anyhow::bail!("updating InferenceCall context accounting returned no document");
         }
@@ -246,7 +246,7 @@ impl DefraRenderedRequestSink {
         request_json: &str,
     ) -> Result<()> {
         let provenance_json = canonical_json_string(&rendered.provenance_json)?;
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
             None,
             "rendered_request.create_stored_for_test",
@@ -281,7 +281,7 @@ impl DefraRenderedRequestSink {
         let provenance_chunks = super::encoding::chunk_capture_layout(&provenance_payload_layout);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
-        let capture_container = crate::config_client::ConfigAccess::transact_local_write(
+        let capture_container = crate::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
             None,
             "rendered_request.capture",
@@ -329,7 +329,7 @@ impl DefraRenderedRequestSink {
                     let Some((call_id, accounting_json)) = context_accounting.as_ref() else {
                         return Ok(());
                     };
-                    crate::config_client::ConfigAccess::transact_local_write(
+                    crate::store::config_client::ConfigAccess::transact_local_write(
                         &self.node,
                         None,
                         "rendered_request.reconcile_context_accounting",
@@ -407,7 +407,7 @@ impl DefraRenderedRequestSink {
             .and_then(Value::as_str)
             .context("stored RenderedRequest request_json was not a string")?
             .to_owned();
-        let access = crate::config_client::ConfigAccess::local(Arc::clone(&self.node));
+        let access = crate::store::config_client::ConfigAccess::local(Arc::clone(&self.node));
         let decoded_pair = if version == 1 {
             None
         } else {
@@ -503,7 +503,7 @@ const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
 const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
 async fn stored_block_doc_ids_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     keys: &[&str],
 ) -> Result<std::collections::BTreeMap<String, String>> {
     let mut stored = std::collections::BTreeMap::new();
@@ -544,7 +544,7 @@ async fn stored_block_doc_ids_in_txn(
 /// Unique content-key conflicts resolve on a fresh transaction snapshot,
 /// where the existence read decides the winner.
 async fn create_blocks_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     blocks: &[&super::encoding::ChunkedBlock],
 ) -> Result<std::collections::BTreeMap<String, String>> {
     let mut created = std::collections::BTreeMap::new();
@@ -604,7 +604,7 @@ async fn create_blocks_in_txn(
 }
 
 async fn pin_blocks_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     blocks: &[&super::encoding::ChunkedBlock],
 ) -> Result<std::collections::BTreeMap<String, BlockPin>> {
     let mut pins = std::collections::BTreeMap::new();
@@ -661,7 +661,7 @@ fn payload_entries(
 }
 
 async fn encode_payload_tree(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     chunks: &[super::encoding::ChunkedBlock],
     pins: &mut std::collections::BTreeMap<String, BlockPin>,
 ) -> Result<super::encoding::EncodedJson> {
@@ -701,7 +701,7 @@ async fn encode_payload_tree(
 }
 
 pub(crate) async fn store_shared_json_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     json: &str,
 ) -> Result<String> {
     if json.len() < super::encoding::MIN_COMPRESSION_BYTES {

@@ -43,7 +43,7 @@ pub(crate) async fn seed_canonical_tool_call(
                 r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{
                     request_doc_id node_did requester_did session_id tool_name message_sequence
                 }} }}"#,
-                gents::graphql::escape_graphql_string(parent_doc_id)
+                gents::store::graphql::escape_graphql_string(parent_doc_id)
             ))
             .await;
         assert!(!parent.has_errors(), "spawn parent: {:?}", parent.errors);
@@ -66,10 +66,10 @@ pub(crate) async fn seed_canonical_tool_call(
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let requester = requester_did
         .as_deref()
-        .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
+        .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let spawned_by = spawned_by_tool_call_doc_id
-        .map(|id| format!("\"{}\"", gents::graphql::escape_graphql_string(id)))
+        .map(|id| format!("\"{}\"", gents::store::graphql::escape_graphql_string(id)))
         .unwrap_or_else(|| "null".into());
     let tool_mutation = format!(
         r#"mutation {{ create_AgentToolCall(input: {{
@@ -78,16 +78,16 @@ pub(crate) async fn seed_canonical_tool_call(
         tool_call_id: "{}", tool_name: "{}", message_sequence: {sequence},
         lifecycle_state: "{}", spawned_by_tool_call_doc_id: {spawned_by}, started_at: "{}"
     }}) {{_docID}} }}"#,
-        gents::graphql::escape_graphql_string(request_doc_id),
-        gents::graphql::escape_graphql_string(tool_call_id),
-        gents::graphql::escape_graphql_string(&request.request_id),
-        gents::graphql::escape_graphql_string(request_doc_id),
-        gents::graphql::escape_graphql_string(node_did),
-        gents::graphql::escape_graphql_string(session_id),
-        gents::graphql::escape_graphql_string(tool_call_id),
-        gents::graphql::escape_graphql_string(tool_name),
-        gents::graphql::escape_graphql_string(lifecycle_state),
-        gents::graphql::escape_graphql_string(&created_at),
+        gents::store::graphql::escape_graphql_string(request_doc_id),
+        gents::store::graphql::escape_graphql_string(tool_call_id),
+        gents::store::graphql::escape_graphql_string(&request.request_id),
+        gents::store::graphql::escape_graphql_string(request_doc_id),
+        gents::store::graphql::escape_graphql_string(node_did),
+        gents::store::graphql::escape_graphql_string(session_id),
+        gents::store::graphql::escape_graphql_string(tool_call_id),
+        gents::store::graphql::escape_graphql_string(tool_name),
+        gents::store::graphql::escape_graphql_string(lifecycle_state),
+        gents::store::graphql::escape_graphql_string(&created_at),
     );
     let is_spawned_child = spawned_by_tool_call_doc_id.is_some();
     if is_spawned_child {
@@ -144,7 +144,7 @@ pub(crate) async fn seed_canonical_tool_call(
     let tool_name_for_header = tool_name.to_owned();
     let created_at_for_header = created_at.clone();
     let message_key = format!("accepted:{request_doc_id}:{sequence}");
-    let tool_doc_id = gents::config_client::ConfigAccess::transact_local_write(
+    let tool_doc_id = gents::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "grok.seed_canonical_tool_call",

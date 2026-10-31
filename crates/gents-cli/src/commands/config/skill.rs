@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gents::documents::SkillDocument;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::*;

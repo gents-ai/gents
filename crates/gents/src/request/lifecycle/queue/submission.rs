@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use gents_protocol::request_input::QueueDelivery;
 
 pub async fn prepare_user_message_input(

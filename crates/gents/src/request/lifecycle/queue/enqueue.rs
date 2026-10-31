@@ -42,7 +42,7 @@ pub(crate) async fn enqueue_steering_request(
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (agent_id, content, input, request_id, now) =
         (&agent_id, content, &input, &request_id, &now);
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "lifecycle.enqueue_steering",

@@ -2,8 +2,8 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gents::config_client::ConfigAccess;
 use gents::session::canonical_rows::TranscriptMessageRow;
+use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,

@@ -505,7 +505,7 @@ impl ClientRouteManager {
                         profiles: null, updated_at: "{now}" }}
                 ) {{ _docID }} }}"#
         );
-        gents::config_client::ConfigAccess::write_local(
+        gents::store::config_client::ConfigAccess::write_local(
             &self.node,
             "desktop.pairing_desired.upsert",
             &mutation,
@@ -569,7 +569,7 @@ impl ClientRouteManager {
                     applied: delete_PeerPairingApplied(filter: {{ peer_id: {{ _in: [{ids}] }} }}) {{ _docID }}
                 }}"#
         );
-        let response = gents::config_client::ConfigAccess::write_local(
+        let response = gents::store::config_client::ConfigAccess::write_local(
             &self.node,
             "desktop.pairing_state.delete",
             &mutation,

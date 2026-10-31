@@ -35,7 +35,7 @@ async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> se
 async fn assert_background_rows(node: &EmbeddedNode, request: &str, count: usize, state: &str) {
     let response = node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}} }}) {{ _docID lifecycle_state tool_name }} }}"#,
-        crate::graphql::escape_graphql_string(request),
+        crate::store::graphql::escape_graphql_string(request),
     )).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
@@ -186,7 +186,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     assert_eq!(rejected, batch.iter().filter(|case| !case.legal).count());
     let data = crate::ConfigAccess::local(node.clone()).execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
-        crate::graphql::escape_graphql_string(&request_id),
+        crate::store::graphql::escape_graphql_string(&request_id),
     )).await.unwrap();
     assert_eq!(
         data["data"]["AgentToolCall"].as_array().unwrap().len(),
@@ -397,7 +397,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     {
-        use crate::config_client::{
+        use crate::store::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
@@ -471,7 +471,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     );
 
     {
-        use crate::config_client::{
+        use crate::store::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };

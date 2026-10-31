@@ -504,7 +504,7 @@ async fn spawn_event_source_runner(
     mpsc::Receiver<String>,
     watch::Sender<Arc<ActiveRuntimeSnapshot>>,
 ) {
-    let access = gents::config_client::ConfigAccess::local(node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(node.clone());
     let trigger_doc_id = install_event_delivery_config(&access).await;
     let mut snapshot = active_snapshot_with_event_trigger();
     Arc::make_mut(&mut snapshot)
@@ -544,8 +544,10 @@ async fn spawn_event_source_runner(
     (runner, rx, snapshot_tx)
 }
 
-async fn install_event_delivery_config(access: &gents::config_client::ConfigAccess) -> String {
-    use gents::config_client::{
+async fn install_event_delivery_config(
+    access: &gents::store::config_client::ConfigAccess,
+) -> String {
+    use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;
@@ -576,7 +578,7 @@ async fn install_event_delivery_config(access: &gents::config_client::ConfigAcce
 }
 
 async fn admit_event_delivery(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     intent: &mut gents::FireIntent,
     trigger_doc_id: &str,
     doc_id: &str,

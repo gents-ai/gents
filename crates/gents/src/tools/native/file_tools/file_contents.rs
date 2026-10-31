@@ -7,9 +7,11 @@ use gents_protocol::file_changes::{
 use gents_protocol::schemas::TOOL_FILE_CONTENT_NAME;
 use serde_json::{json, Value};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::{document_composite_version, escape_graphql_string, mutation_documents};
 use crate::session::origin::SessionScope;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::{
+    document_composite_version, escape_graphql_string, mutation_documents,
+};
 
 use super::content_hash;
 

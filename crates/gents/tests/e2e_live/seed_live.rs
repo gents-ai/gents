@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::documents::{AgentContext, CompactionConfig, InferenceSampling};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
 use serde::Deserialize;
 
@@ -139,7 +139,7 @@ async fn configure_seed_and_compaction(
     agent_id: &str,
     profile_id: &str,
 ) {
-    use gents::config_client::{
+    use gents::store::config_client::{
         apply_desired_state_plan, read_desired_state_record_in_txn as read,
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };

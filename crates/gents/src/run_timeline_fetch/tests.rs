@@ -319,7 +319,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
         ))
         .await;
     let request: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&request_response, "AgentRequest")
+        crate::store::graphql::first_row(&request_response, "AgentRequest")
             .unwrap()
             .expect("pending fixture request");
     let mut lifecycle = RequestLifecycle::new_with_node_did(

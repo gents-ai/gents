@@ -1,7 +1,7 @@
 use super::*;
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
 use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_input::GoalAssignmentInput;
@@ -223,7 +223,8 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         caller_session_id: "caller-session".to_owned(),
         caller_requester_did: None,
         caller_request_id: "delivery-caller".into(),
-        caller_request_doc_id: crate::graphql::created_doc_id(&caller, "AgentRequest").unwrap(),
+        caller_request_doc_id: crate::store::graphql::created_doc_id(&caller, "AgentRequest")
+            .unwrap(),
         caller_hop: 0,
         tool_call_id: "delivery-call".into(),
         tool_call_doc_id: "delivery-call-doc".into(),
@@ -288,7 +289,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             crate::sign_agent_request_create(target, &mut opening)
                 .await
                 .unwrap();
-            *root = crate::graphql::created_doc_id(
+            *root = crate::store::graphql::created_doc_id(
                 &write(&node, &opening.graphql_mutation().unwrap()).await,
                 "AgentRequest",
             )

@@ -4,9 +4,9 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::defra_query::{CollectionScope, DefraQueryParams};
 use crate::inference::llm::tool::{Tool, ToolDefinition};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 mod plugin_writes;
 pub use plugin_writes::apply_plugin_writes_in_txn;
@@ -141,7 +141,7 @@ impl WriteTool {
             .collection
             .as_deref()
             .context("collection is required; discover fields with query argv:[fields]")?;
-        crate::graphql::validate_collection_identifier(collection)?;
+        crate::store::graphql::validate_collection_identifier(collection)?;
         let managed = crate::store::schema::migration::DEFAULT_REGISTRY
             .managed_names()
             .any(|name| name == collection);
@@ -283,7 +283,7 @@ impl WriteTool {
         let mut input = input;
         if let Some(input) = &mut input {
             for (name, value) in input.iter_mut() {
-                crate::graphql::validate_graphql_name(name)?;
+                crate::store::graphql::validate_graphql_name(name)?;
                 ensure!(
                     !name.starts_with('_'),
                     "internal field {name:?} cannot be written"
@@ -386,7 +386,7 @@ impl WriteTool {
                         .context("write preview row missing physical document ID")
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let rendered = crate::graphql::graphql_string_list_literal(ids);
+            let rendered = crate::store::graphql::graphql_string_list_literal(ids);
             format!("docIDs: {rendered}")
         };
         let native_operation = if operation == "create" {

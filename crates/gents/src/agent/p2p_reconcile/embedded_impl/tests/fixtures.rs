@@ -114,7 +114,7 @@ pub(in crate::agent::p2p_reconcile) async fn runtime_http_test_node_with_schema(
     }
     ensure_runtime_schemas(&test.node).await.unwrap();
     let endpoint = format!("http://{address}/api/v0/graphql");
-    let access = crate::config_client::ConfigAccess::graphql(&endpoint);
+    let access = crate::store::config_client::ConfigAccess::graphql(&endpoint);
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if access.execute("{ AgentRequest { _docID } }").await.is_ok() {

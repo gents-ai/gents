@@ -482,7 +482,7 @@ async fn spawned_target_rejection_case(
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}} }}) {{ tool_name lifecycle_state started_at tool_failure_class spawned_by_tool_call_doc_id }} }}"#,
-            crate::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(&request_id),
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -595,7 +595,7 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
         let response = node
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}} }}) {{ tool_name lifecycle_state tool_failure_class spawned_by_tool_call_doc_id }} }}"#,
-                crate::graphql::escape_graphql_string(&request_id),
+                crate::store::graphql::escape_graphql_string(&request_id),
             ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);

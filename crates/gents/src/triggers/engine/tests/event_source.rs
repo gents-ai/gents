@@ -416,7 +416,7 @@ async fn persist_event_bindings(
     node: &Arc<defra_node::EmbeddedNode>,
     snapshot: &ActiveRuntimeSnapshot,
 ) {
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for trigger in snapshot.active_event_triggers().values() {
         let behavior = snapshot.agent(&trigger.task.agent_id).unwrap();
         let owner = behavior.node_did();
@@ -472,7 +472,7 @@ async fn admit_observed_event(
     };
     let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_id: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
         escape_graphql_string(&fire.request_id), escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id));
-    crate::config_client::ConfigAccess::local(node.clone())
+    crate::store::config_client::ConfigAccess::local(node.clone())
         .transact_write("test.event_admission", |txn| {
             let fire = &fire;
             let mutation = &mutation;
@@ -1482,7 +1482,7 @@ async fn create_event_trigger_doc(
     source_collection: &str,
 ) {
     let input = serde_json::json!({"node_did":event_test_behavior().node_did(),"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":source_collection},"enabled":true,"concurrency":"serial","fire_count":0});
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.trigger_fixture",
@@ -1535,7 +1535,7 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
         match update.await.unwrap() {
             Ok(()) => committed += 1,
             Err(error) => assert!(
-                crate::config_client::is_classified_transaction_conflict(&error),
+                crate::store::config_client::is_classified_transaction_conflict(&error),
                 "only bounded conflict exhaustion may refuse a concurrent update: {error:#}"
             ),
         }
@@ -1552,7 +1552,7 @@ async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_js
         escape_graphql_string(id)
     );
     let response = node.execute(&query).await;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
     assert_eq!(rows.len(), 1, "scoped trigger disappeared or is ambiguous");
     rows[0].clone()
 }

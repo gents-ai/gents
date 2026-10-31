@@ -36,7 +36,7 @@ pub(super) async fn persist_command(
     }}) {{ _docID }} }}"#, escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did),
         escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id),
         escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-    crate::graphql::created_doc_id(&response, "AgentSessionGoalControl").unwrap()
+    crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl").unwrap()
 }
 
 pub(super) async fn receipt(
@@ -86,7 +86,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             .await
             .unwrap()
             .unwrap();
-        let revision = crate::graphql::newest_document_composite_commit(
+        let revision = crate::store::graphql::newest_document_composite_commit(
             &fixture.node,
             &fixture.goal.doc_id,
             "test.goal_revision",
@@ -209,7 +209,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
                     case.name
                 );
                 assert_eq!(
-                    crate::graphql::newest_document_composite_commit(
+                    crate::store::graphql::newest_document_composite_commit(
                         &fixture.node,
                         &fixture.goal.doc_id,
                         "test.unchanged_goal_revision"

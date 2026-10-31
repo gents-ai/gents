@@ -798,7 +798,7 @@ async fn reconcile_data_plane(
     store: &GraphqlEnrollmentStore,
     projection: &EnrollmentProjection,
 ) -> Result<()> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         r#"{
                 PeerPairingDesired {
@@ -875,7 +875,7 @@ async fn reconcile_data_plane(
             &client_collections,
             &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         );
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             node,
             "p2p.upsert_enrollment_route",
             &mutation,
@@ -887,7 +887,7 @@ async fn reconcile_data_plane(
             continue;
         }
         let mutation = delete_enrollment_route_mutation(peer_id);
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             node,
             "p2p.retract_enrollment_route",
             &mutation,
@@ -911,13 +911,15 @@ fn enrollment_route_matches_fence(
 
 async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &str) -> Result<()> {
     let mutation = delete_enrollment_route_mutation(peer_id);
-    Ok(crate::config_client::ConfigAccess::write_local_response(
-        node,
-        "p2p.retract_enrollment_route_fenced",
-        &mutation,
+    Ok(
+        crate::store::config_client::ConfigAccess::write_local_response(
+            node,
+            "p2p.retract_enrollment_route_fenced",
+            &mutation,
+        )
+        .await
+        .map(|_| ())?,
     )
-    .await
-    .map(|_| ())?)
 }
 
 fn upsert_enrollment_route_mutation(
@@ -926,7 +928,7 @@ fn upsert_enrollment_route_mutation(
     collections: &BTreeSet<String>,
     now: &str,
 ) -> String {
-    let escape = crate::graphql::escape_graphql_string;
+    let escape = crate::store::graphql::escape_graphql_string;
     let peer_id = escape(&route.peer_id);
     let local_did = escape(local_did);
     let address = graphql_string_list_literal([route.address.as_str()]);
@@ -960,7 +962,7 @@ fn upsert_enrollment_route_mutation(
 }
 
 fn delete_enrollment_route_mutation(peer_id: &str) -> String {
-    let peer_id = crate::graphql::escape_graphql_string(peer_id);
+    let peer_id = crate::store::graphql::escape_graphql_string(peer_id);
     format!(
         r#"mutation {{
             delete_PeerPairingDesired(
@@ -1518,7 +1520,7 @@ mod tests {
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     lifecycle_state claimed_at failure_reason
                 }} }}"#,
-                crate::graphql::escape_graphql_string(&revoked_request_id),
+                crate::store::graphql::escape_graphql_string(&revoked_request_id),
             ))
             .await;
         assert!(
@@ -1526,7 +1528,7 @@ mod tests {
             "query rejected request: {:?}",
             response.errors
         );
-        let rejected_row: RejectedRow = crate::graphql::first_row(&response, "AgentRequest")
+        let rejected_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("rejected request row");
         assert_eq!(rejected_row.lifecycle_state, RequestLifecycleState::Failed);
@@ -1607,10 +1609,10 @@ mod tests {
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     lifecycle_state claimed_at failure_reason
                 }} }}"#,
-                crate::graphql::escape_graphql_string(&replacement_request_id),
+                crate::store::graphql::escape_graphql_string(&replacement_request_id),
             ))
             .await;
-        let pending_row: RejectedRow = crate::graphql::first_row(&response, "AgentRequest")
+        let pending_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("temporarily unavailable request row");
         assert_eq!(pending_row.lifecycle_state, RequestLifecycleState::Pending);

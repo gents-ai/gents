@@ -1892,24 +1892,24 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     crate::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
-    let created = crate::config_client::ConfigAccess::write_local_response(
+    let created = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "test.compaction.capture_scope_request",
         &create.graphql_mutation().unwrap(),
     )
     .await
     .unwrap();
-    let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+    let doc_id = crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
         .unwrap()
         .unwrap()["_docID"]
         .as_str()
         .unwrap()
         .to_owned();
-    let loaded = crate::graphql::graphql_with_transaction_retry(
+    let loaded = crate::store::graphql::graphql_with_transaction_retry(
         node.as_ref(),
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(&doc_id),
+            crate::store::graphql::escape_graphql_string(&doc_id),
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ),
         "load compaction capture fixture",
@@ -1917,7 +1917,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     .await
     .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&loaded, "AgentRequest")
+        crate::store::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
@@ -2792,10 +2792,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
 
     let node_did = "did:test:test";
     let mut lifecycle = {
-        let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let request_id = crate::graphql::escape_graphql_string("request-compaction-test");
-        let session_id = crate::graphql::escape_graphql_string("session-1");
-        let node_did = crate::graphql::escape_graphql_string(node_did);
+        let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let request_id = crate::store::graphql::escape_graphql_string("request-compaction-test");
+        let session_id = crate::store::graphql::escape_graphql_string("session-1");
+        let node_did = crate::store::graphql::escape_graphql_string(node_did);
         let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", request_hop: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
@@ -2804,7 +2804,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         ))
         .await;
         let row: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&row, "AgentRequest")
+            crate::store::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(

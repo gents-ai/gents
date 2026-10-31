@@ -1,7 +1,7 @@
 use super::intake::pending_in_txn;
 use super::*;
-use crate::config_client::ConfigAccess;
 use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, WorkspaceLineage};
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -599,7 +599,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
     edit: &PendingQueueEdit,
     creates: &[AgentRequestCreate],
 ) -> Result<std::result::Result<ValidatedPendingEdit, String>> {
-    crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
+    crate::store::graphql::fence_arrivals(txn, "AgentRequest").await?;
     let current = pending_in_txn(txn, node_did, session_id).await?;
     let checked = (|| -> Result<ValidatedPendingEdit> {
         let selected = selected_group(&current, edit, requester_did)?;
@@ -771,7 +771,7 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
         let response = txn
             .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
             .await?;
-        let id = crate::graphql::created_doc_id(&response, "AgentRequest")?;
+        let id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
         receipt.request_doc_ids.push(id);
         receipt.request_ids.push(create.request_id.clone());
     }

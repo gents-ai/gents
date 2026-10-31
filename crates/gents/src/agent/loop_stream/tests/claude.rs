@@ -109,7 +109,7 @@ async fn signed_claude_tool_round_trip_with_scope(
     let tool_doc_id = echo["_docID"].as_str().expect("_docID").to_string();
     let session_id = lifecycle.request().session_id.clone();
 
-    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let accepted = tokio::time::timeout(
@@ -153,7 +153,7 @@ async fn signed_claude_tool_round_trip_with_scope(
     );
 
     let native = crate::session::load_tool_call_result(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tool_doc_id,
         "did:test:test",
         &session_id,
@@ -219,11 +219,11 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     let request = lifecycle.request();
-    let headers = crate::graphql::graphql_with_transaction_retry(
+    let headers = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "assistant" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&request.doc_id),
+            crate::store::graphql::escape_graphql_string(&request.doc_id),
         ),
         "Claude fixture provider messages",
     )
@@ -528,7 +528,7 @@ async fn captured_claude_sends(
     let captures = node
         .execute(&format!(
             r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ turn_index: ASC }}) {{ turn_index capture_scope source request_commit_cid capture_version request_json }} }}"#,
-            crate::graphql::escape_graphql_string(request_doc_id),
+            crate::store::graphql::escape_graphql_string(request_doc_id),
         ))
         .await;
     assert!(
@@ -555,7 +555,7 @@ async fn captured_claude_sends(
         assert_eq!(row["source"], expected_source, "Claude origin is physical");
         assert_eq!(row["request_commit_cid"].as_str(), Some(request_commit_cid));
         let (body, _) = crate::inference::rendered_request::decode_capture_pair(
-            &crate::config_client::ConfigAccess::local(node.clone()),
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
             u32::try_from(row["capture_version"].as_u64().expect("capture version"))
                 .expect("version fits u32"),
             row["request_json"].as_str().expect("encoded request JSON"),

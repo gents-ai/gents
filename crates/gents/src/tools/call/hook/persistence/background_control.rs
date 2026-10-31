@@ -195,7 +195,7 @@ impl DefraSessionHook {
             .await?
         } else {
             let message = load_tool_call_result(
-                &crate::config_client::ConfigAccess::local(self.node.clone()),
+                &crate::store::config_client::ConfigAccess::local(self.node.clone()),
                 tool_doc_id,
                 lifecycle.node_did(),
                 lifecycle.session_id(),

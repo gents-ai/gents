@@ -571,19 +571,19 @@ async fn load_auxiliary_parent(
         .caused_by_parent_request_doc_id
         .as_deref()
         .context("auxiliary request lacks parent document")?;
-    let escaped = crate::graphql::escape_graphql_string(parent_doc_id);
+    let escaped = crate::store::graphql::escape_graphql_string(parent_doc_id);
     let query = format!(
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
         crate::request::admission::SIGNED_REQUEST_FIELDS
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load auxiliary parent receipt",
     )
     .await?;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&response, "AgentRequest")?
+        crate::store::graphql::first_row(&response, "AgentRequest")?
             .context("request parent request disappeared")?;
     crate::request::admission::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;

@@ -6,7 +6,7 @@ use serde::Deserialize;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
 
@@ -1058,7 +1058,7 @@ async fn load_running_tool_call_rows_with_filter(
     }}"#
     );
 
-    let resp = crate::graphql::graphql_with_transaction_retry(
+    let resp = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load_running_tool_call_rows_with_filter",
@@ -1122,7 +1122,7 @@ async fn load_pending_background_completion_rows(
             }}
         }}"#
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load_pending_background_completion_rows",
@@ -1211,9 +1211,12 @@ async fn lookup_parent_request(
         }} }}"#
     );
 
-    let resp =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "lookup_parent_request")
-            .await?;
+    let resp = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "lookup_parent_request",
+    )
+    .await?;
 
     let value = resp
         .data
@@ -1390,7 +1393,7 @@ async fn owner_task_deleted(
     };
     let node_did = escape_graphql_string(node_did);
     let trigger_id = escape_graphql_string(trigger_id);
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }}, trigger_id: {{ _eq: "{trigger_id}" }} }}, showDeleted: true) {{ _deleted task_id }} }}"#
@@ -1413,7 +1416,7 @@ async fn owner_task_deleted(
         return Ok(false);
     };
     let task_id = escape_graphql_string(task_id);
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ Task(filter: {{ node_did: {{ _eq: "{node_did}" }}, task_id: {{ _eq: "{task_id}" }} }}, showDeleted: true) {{ _deleted }} }}"#

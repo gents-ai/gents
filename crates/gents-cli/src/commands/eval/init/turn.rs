@@ -14,7 +14,7 @@ pub(crate) trait Turn {
 }
 
 pub(crate) struct LiveTurn {
-    pub(crate) graphql: gents::config_client::GraphqlEndpoint,
+    pub(crate) graphql: gents::store::config_client::GraphqlEndpoint,
     pub(crate) node_did: String,
     pub(crate) agent_id: String,
     pub(crate) session_id: String,

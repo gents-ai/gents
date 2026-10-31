@@ -35,7 +35,7 @@ async fn pending_request(
     )
     .await
     .unwrap();
-    let doc_id = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    let doc_id = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
     let request = crate::request::admission::load_request_for_admission_test(node, &doc_id)
         .await
         .unwrap();

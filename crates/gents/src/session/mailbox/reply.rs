@@ -1,7 +1,7 @@
 use super::{MailboxAction, MailboxItem, MailboxStatus};
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::{escape_graphql_string, rows, single_mutation_document};
 use crate::request::watcher::AgentRequest;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::{escape_graphql_string, rows, single_mutation_document};
 use anyhow::{ensure, Context, Result};
 
 pub(crate) async fn claim_reply_in_txn(

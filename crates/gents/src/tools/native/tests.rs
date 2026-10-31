@@ -2656,7 +2656,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
             Some(fx.grant.clone())
         };
         if case["binding"]["incarnation_matches"] == false {
-            let doc = crate::graphql::escape_graphql_string(fx.grant.request_doc_id());
+            let doc = crate::store::graphql::escape_graphql_string(fx.grant.request_doc_id());
             let mutation = format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#
             );

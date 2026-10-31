@@ -593,7 +593,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
         .unwrap();
     gents::ensure_runtime_schemas(&node).await.unwrap();
     let unsafe_query = r#"query @explain { AgentRequest(filter: {request_id: {_eq: "probe"}, content: {_eq: "probe"}}, order: {request_id: ASC}, limit: 1) {_docID} }"#;
-    let unsafe_plan = gents::graphql::graphql_with_transaction_retry(
+    let unsafe_plan = gents::store::graphql::graphql_with_transaction_retry(
         &node,
         unsafe_query,
         "checking query screen discrimination",
@@ -649,7 +649,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
                 screen.read
             );
             let query = format!("query @explain {{ {collection}({arguments}) {{ _docID }} }}");
-            let response = gents::graphql::graphql_with_transaction_retry(
+            let response = gents::store::graphql::graphql_with_transaction_retry(
                 &node,
                 &query,
                 "screening ordered read plans",

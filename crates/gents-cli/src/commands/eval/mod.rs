@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::{EvalCommand, EvalScopeArgs};
 
 pub(crate) struct EvalContext {
-    pub(crate) access: gents::config_client::ConfigAccess,
+    pub(crate) access: gents::store::config_client::ConfigAccess,
     pub(crate) home_dir: PathBuf,
     pub(crate) owner: String,
     pub(crate) runtime: tokio::runtime::Handle,

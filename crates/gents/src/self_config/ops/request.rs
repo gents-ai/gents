@@ -2,8 +2,8 @@ use anyhow::{bail, Result};
 use serde_json::{Map, Value};
 
 use super::AgentAnchor;
-use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
-use crate::config_client::ConfigApplyTxn;
+use crate::store::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
+use crate::store::config_client::ConfigApplyTxn;
 
 pub(crate) struct ApplyRequest<'a> {
     pub(crate) target: SelfConfigTarget,

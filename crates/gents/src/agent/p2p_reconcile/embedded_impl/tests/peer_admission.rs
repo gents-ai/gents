@@ -291,21 +291,22 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     .unwrap()
     .unwrap();
     let requests_before = collection_values(&coordinator, "AgentRequest", "request_id").await;
-    let aborted: anyhow::Result<()> = crate::config_client::ConfigAccess::transact_local_write(
-        &coordinator,
-        None,
-        "test.abort_remote_message_interrupt",
-        |txn| {
-            let (cause, plan) = (&cause, &plan);
-            Box::pin(async move {
-                crate::session::message::stage_planned_write_in_txn(txn, cause, plan)
-                    .await
-                    .map_err(anyhow::Error::from)?;
-                anyhow::bail!("abort staged message and interrupt")
-            })
-        },
-    )
-    .await;
+    let aborted: anyhow::Result<()> =
+        crate::store::config_client::ConfigAccess::transact_local_write(
+            &coordinator,
+            None,
+            "test.abort_remote_message_interrupt",
+            |txn| {
+                let (cause, plan) = (&cause, &plan);
+                Box::pin(async move {
+                    crate::session::message::stage_planned_write_in_txn(txn, cause, plan)
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    anyhow::bail!("abort staged message and interrupt")
+                })
+            },
+        )
+        .await;
     assert!(aborted.is_err());
     assert_eq!(
         collection_values(&coordinator, "AgentRequest", "request_id").await,

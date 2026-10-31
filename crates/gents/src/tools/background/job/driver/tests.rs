@@ -1,6 +1,6 @@
 use super::*;
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::job::records::read_progress;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
@@ -663,7 +663,7 @@ fn step_settings(targets: &[&str]) -> PluginJobSettings {
 /// The inference chain the job fixture's Agent names, so its Tools can be
 /// rewritten under reference validation.
 async fn write_inference(job: &Job) {
-    use crate::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let documents = [
         (
             crate::Collection::InferenceProfile,
@@ -687,7 +687,9 @@ async fn write_inference(job: &Job) {
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
     ConfigAccess::transact_local_write(&job.node, None, "test.driver.inference", |txn| {
         let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();
@@ -701,7 +703,7 @@ pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSetti
         "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
     }))
     .unwrap();
-    crate::config_client::write_tools_document(&job.access, &tools)
+    crate::store::config_client::write_tools_document(&job.access, &tools)
         .await
         .unwrap();
 }

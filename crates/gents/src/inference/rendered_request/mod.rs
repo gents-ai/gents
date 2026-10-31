@@ -202,8 +202,8 @@ mod tests {
 
     #[tokio::test]
     async fn batched_base_read_decodes_through_local_and_embedded_access() {
-        use crate::config_client::ConfigAccess;
-        use crate::graphql::escape_graphql_string;
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::graphql::escape_graphql_string;
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
@@ -255,8 +255,8 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_block_batch_reads_only_requested_physical_documents() {
-        use crate::config_client::ConfigAccess;
-        use crate::graphql::escape_graphql_string;
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::graphql::escape_graphql_string;
 
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -774,7 +774,7 @@ pub(crate) trait CaptureBaseReader {
 }
 
 #[async_trait::async_trait]
-impl CaptureBaseReader for crate::config_client::ConfigAccess {
+impl CaptureBaseReader for crate::store::config_client::ConfigAccess {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
         Ok(self.execute(query).await?)
     }
@@ -783,13 +783,16 @@ impl CaptureBaseReader for crate::config_client::ConfigAccess {
 #[async_trait::async_trait]
 impl CaptureBaseReader for defra_node::EmbeddedNode {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             self,
             query,
             "reading rendered-request capture dependency",
         )
         .await?;
-        crate::graphql::ensure_no_errors(&response, "reading rendered-request capture dependency")?;
+        crate::store::graphql::ensure_no_errors(
+            &response,
+            "reading rendered-request capture dependency",
+        )?;
         Ok(serde_json::json!({"data": response.data}))
     }
 }
@@ -866,7 +869,7 @@ where
                         }}
                         _commits(docID: "{doc_id}") {{ cid height fieldName }}
                         }}"#,
-                        doc_id = crate::graphql::escape_graphql_string(&base.doc_id),
+                        doc_id = crate::store::graphql::escape_graphql_string(&base.doc_id),
                     );
                     let response = reader
                         .execute_capture_query(&query)
@@ -1036,7 +1039,12 @@ where
     }
     let doc_ids = unread
         .keys()
-        .map(|doc_id| format!("\"{}\"", crate::graphql::escape_graphql_string(doc_id)))
+        .map(|doc_id| {
+            format!(
+                "\"{}\"",
+                crate::store::graphql::escape_graphql_string(doc_id)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
@@ -1301,7 +1309,7 @@ where
 }
 
 pub async fn decode_capture_pair(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     capture_version: u32,
     stored: &str,
 ) -> Result<(Value, Value)> {
@@ -1309,7 +1317,7 @@ pub async fn decode_capture_pair(
 }
 
 pub async fn decode_capture_json(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,

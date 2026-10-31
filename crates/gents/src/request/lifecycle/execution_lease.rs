@@ -56,7 +56,7 @@ async fn relinquish_execution_lease(
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
     ]);
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         node,
         "lifecycle.relinquish_execution_lease",
         &format!(r#"mutation {{ update_AgentRequest(
@@ -457,10 +457,10 @@ async fn terminalize_execution_with_time(
         });
     let fresh_generation = &fresh_generation;
     let spec = &spec;
-    crate::config_client::ConfigAccess::transact_local_idempotent(
+    crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.terminalize_execution",
         move |txn| Box::pin(terminalize_execution_in_txn(txn, spec, fresh_generation)),
     )
@@ -468,7 +468,7 @@ async fn terminalize_execution_with_time(
 }
 
 pub(super) async fn stage_revoke_execution_preserving_output(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -500,7 +500,7 @@ pub(super) async fn stage_revoke_execution_preserving_output(
 }
 
 async fn terminalize_execution_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     spec: &TerminalizeSpec<'_>,
     fresh_generation: &ExecutionGeneration,
 ) -> Result<TerminalizeResult> {
@@ -517,7 +517,7 @@ async fn terminalize_execution_in_txn(
     use gents_protocol::output::{MessagePublication, MessageRole};
 
     if pending_fence.is_some() {
-        crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
+        crate::store::graphql::fence_arrivals(txn, "AgentRequest").await?;
     }
     let doc_id = escape_graphql_string(request_doc_id);
     let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
@@ -525,7 +525,7 @@ async fn terminalize_execution_in_txn(
                 _docID request_id purpose node_did requester_did session_id lifecycle_state
                 execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
             }} }}"#)).await?;
-    let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
+    let row = crate::store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
         .context("execution request disappeared")?;
     let purpose = row.purpose.context("execution request purpose missing")?;
     let auxiliary = purpose.is_auxiliary();

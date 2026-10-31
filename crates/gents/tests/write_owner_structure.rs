@@ -5,17 +5,17 @@ use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, ItemConst, ItemFn, ItemImpl, ItemMod};
 
 const OWNER_FILES: &[&str] = &[
-    "crates/gents/src/config_client/graphql.rs",
-    "crates/gents/src/config_client/retry.rs",
-    "crates/gents/src/config_client/txn/auto_commit.rs",
-    "crates/gents/src/config_client/txn/execute.rs",
-    "crates/gents/src/config_client/txn/transact_entry.rs",
+    "crates/gents/src/store/config_client/graphql.rs",
+    "crates/gents/src/store/config_client/retry.rs",
+    "crates/gents/src/store/config_client/txn/auto_commit.rs",
+    "crates/gents/src/store/config_client/txn/execute.rs",
+    "crates/gents/src/store/config_client/txn/transact_entry.rs",
     "crates/gents-protocol/src/graphql/transport.rs",
 ];
 
 const READ_OWNER_FILES: &[&str] = &[
-    "crates/gents/src/config_client/txn/auto_commit.rs",
-    "crates/gents/src/graphql.rs",
+    "crates/gents/src/store/config_client/txn/auto_commit.rs",
+    "crates/gents/src/store/graphql.rs",
 ];
 
 #[rustfmt::skip]
@@ -1468,7 +1468,7 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 2, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/inference/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-    ("crates/gents/src/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
+    ("crates/gents/src/store/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
     ("crates/gents/src/tools/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
@@ -1580,18 +1580,18 @@ const OWNER_MODULES: &[&str] = &[
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
     "crates/gents-migration/src",
-    "crates/gents/src/config_client/common.rs",
-    "crates/gents/src/config_client/error.rs",
-    "crates/gents/src/config_client/graphql.rs",
-    "crates/gents/src/config_client/mod.rs",
-    "crates/gents/src/config_client/patch.rs",
-    "crates/gents/src/config_client/retry.rs",
-    "crates/gents/src/config_client/schema_contract.rs",
-    "crates/gents/src/config_client/schema_install.rs",
-    "crates/gents/src/config_client/schema_management.rs",
-    "crates/gents/src/config_client/txn",
-    "crates/gents/src/config_client/write_telemetry.rs",
-    "crates/gents/src/graphql",
+    "crates/gents/src/store/config_client/common.rs",
+    "crates/gents/src/store/config_client/error.rs",
+    "crates/gents/src/store/config_client/graphql.rs",
+    "crates/gents/src/store/config_client/mod.rs",
+    "crates/gents/src/store/config_client/patch.rs",
+    "crates/gents/src/store/config_client/retry.rs",
+    "crates/gents/src/store/config_client/schema_contract.rs",
+    "crates/gents/src/store/config_client/schema_install.rs",
+    "crates/gents/src/store/config_client/schema_management.rs",
+    "crates/gents/src/store/config_client/txn",
+    "crates/gents/src/store/config_client/write_telemetry.rs",
+    "crates/gents/src/store/graphql",
     "crates/gents/src/store/local/home",
     "crates/gents/src/store/identity",
     "crates/gents/src/store/schema/migration",
@@ -1790,9 +1790,9 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/agent/reconcile.rs", 1),
     ("crates/gents/src/plugin/application_write/mod.rs", 1),
     ("crates/gents/src/tools/background/status/final_output.rs", 1),
-    ("crates/gents/src/config_client/desired_state/plan.rs", 1),
-    ("crates/gents/src/config_client/retry.rs", 2),
-    ("crates/gents/src/config_client/schema_install.rs", 2),
+    ("crates/gents/src/store/config_client/desired_state/plan.rs", 1),
+    ("crates/gents/src/store/config_client/retry.rs", 2),
+    ("crates/gents/src/store/config_client/schema_install.rs", 2),
     ("crates/gents/src/defra_query/mod.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),
     ("crates/gents/src/eval/report/mod.rs", 1),
@@ -1801,7 +1801,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/eval/runner/mod.rs", 1),
     ("crates/gents/src/file_inventory/operator.rs", 1),
     ("crates/gents/src/goal/creation.rs", 2),
-    ("crates/gents/src/graphql.rs", 1),
+    ("crates/gents/src/store/graphql.rs", 1),
     ("crates/gents/src/store/local/home.rs", 3),
     ("crates/gents/src/tools/call/hook/persistence/background_tools.rs", 1),
     ("crates/gents/src/tools/call/hook/persistence/session_message.rs", 1),
@@ -1987,7 +1987,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
     // DefraDB HTTP 409 commit body
-    ("crates/gents/src/config_client/retry.rs", 3),
+    ("crates/gents/src/store/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording
     // persisted AgentRequest failure_reason
     ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),

@@ -17,7 +17,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::config_client::ConfigAccess;
 use crate::defra_query::bounded::BoundedQueryParams;
 use crate::defra_query::BoundedQueryTool;
 use crate::defra_write::{BoundedWriteParams, BoundedWriteTool};
@@ -26,6 +25,7 @@ use crate::documents::{
 };
 use crate::inference::llm::tool::Tool;
 use crate::plugin::ux::UxListing;
+use crate::store::config_client::ConfigAccess;
 
 /// One call from a page, as `desktop_ux_data_call` receives it.
 #[derive(Debug, Clone, Deserialize)]

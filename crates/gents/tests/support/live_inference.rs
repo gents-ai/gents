@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::DesiredStateApplyPlan;
 use gents::defra_node::EmbeddedNode;
 use gents::documents::{
     Agent, BackendAuth, ConfigReferences, InferenceBackend, InferenceProfile, Node,
 };
-use gents::graphql::escape_graphql_string;
 use gents::pack::{decode_pack_config, PackInstallOptions};
+use gents::store::config_client::DesiredStateApplyPlan;
+use gents::store::graphql::escape_graphql_string;
 use gents::{
     default_agent_id_for_node, default_inference_profile_id_for_agent, ensure_node,
     BackendProviderKind, Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling,
@@ -303,7 +303,7 @@ async fn apply_live_backend_documents(
     profile: InferenceProfile,
     agent: Agent,
 ) {
-    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyDocument};
+    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyDocument};
     let plan = DesiredStateApplyPlan::new(
         [
             (Collection::Node, serde_json::to_value(node_doc)),

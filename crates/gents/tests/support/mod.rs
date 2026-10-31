@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{request::watcher::AgentRequest, NodeIdentity};
 use serde::Deserialize;
 
@@ -734,13 +734,15 @@ pub async fn create_agent_message_in_scope(
         "create_AgentOutputSegment failed: {:?}",
         segment_response.errors
     );
-    let close_doc_id =
-        gents::graphql::single_mutation_document(&segment_response, "create_AgentOutputSegment")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+    let close_doc_id = gents::store::graphql::single_mutation_document(
+        &segment_response,
+        "create_AgentOutputSegment",
+    )
+    .unwrap()
+    .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let message = TranscriptMessage {
         message_key: gents::session::sequence_message_key(
@@ -824,7 +826,7 @@ pub async fn create_agent_tool_call(
         "create_AgentToolCall failed: {:?}",
         resp.errors
     );
-    gents::graphql::single_mutation_document(&resp, "create_AgentToolCall")
+    gents::store::graphql::single_mutation_document(&resp, "create_AgentToolCall")
         .expect("mutation envelope")
         .expect("created call")["_docID"]
         .as_str()

@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_list_literal};
 use super::templates::resolve_template;
@@ -289,7 +289,7 @@ async fn tick_registry(
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "p2p.upsert_registry_heartbeat",
         &mutation,

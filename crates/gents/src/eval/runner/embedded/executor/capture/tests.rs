@@ -1,8 +1,8 @@
 use super::*;
-use crate::config_client::DesiredStateApplyPlan;
 use crate::eval::runner::embedded::executor::install::{apply, desired};
 use crate::eval::runner::embedded::home::EmbeddedHome;
 use crate::eval::OutcomeKind;
+use crate::store::config_client::DesiredStateApplyPlan;
 use crate::{Collection, ConfigAccess};
 use serde_json::json;
 

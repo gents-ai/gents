@@ -42,7 +42,7 @@ pub(crate) async fn load_configured_task(
     caller_node_did: &str,
     task_id: &str,
 ) -> Result<Option<crate::documents::Task>> {
-    let loaded = crate::config_client::ConfigAccess::transact_local_readonly(
+    let loaded = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "session_message.load_task",
@@ -53,7 +53,7 @@ pub(crate) async fn load_configured_task(
                 let owner = owner.clone();
                 let task_id = task_id.clone();
                 Box::pin(async move {
-                    crate::config_client::read_desired_state_document_in_txn(
+                    crate::store::config_client::read_desired_state_document_in_txn(
                         txn,
                         crate::store::collection::Collection::Task,
                         &owner,

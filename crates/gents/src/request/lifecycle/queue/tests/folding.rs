@@ -8,7 +8,7 @@ const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
 const OTHER_CWD: &str = "/tmp/gents-fold-other-context";
 
 async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> String {
-    crate::config_client::ConfigAccess::transact_local_write(node, None, "test.fold.insert", |txn| {
+    crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.fold.insert", |txn| {
         let input = input.clone();
         Box::pin(async move {
             let result = txn
@@ -128,7 +128,7 @@ async fn enqueue_signed(
     crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
         .await
         .unwrap();
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &db.node,
         "test.fold.signed",
         &create.graphql_mutation().unwrap(),
@@ -151,7 +151,7 @@ struct FoldRow {
 }
 
 async fn fold_rows(node: &EmbeddedNode, session_id: &str) -> Vec<FoldRow> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
@@ -163,7 +163,7 @@ async fn fold_rows(node: &EmbeddedNode, session_id: &str) -> Vec<FoldRow> {
     )
     .await
     .unwrap();
-    crate::graphql::rows(&response, "AgentRequest").unwrap()
+    crate::store::graphql::rows(&response, "AgentRequest").unwrap()
 }
 
 fn modeled_id(row: &FoldRow) -> u64 {
@@ -441,7 +441,7 @@ async fn generated_handover_fold_claims_bind_to_native_claims() {
 }
 
 async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ sequence: ASC }}) {{ message_key }} }}"#,
@@ -461,7 +461,7 @@ async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String>
 
 async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
     let session = escape_graphql_string(session_id);
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key sequence }}
@@ -632,7 +632,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                 Step::Recover { expected, fresh } => {
                     let mut request = generations[expected].lifecycle.request().clone();
                     request.deadline = None;
-                    crate::config_client::ConfigAccess::write_local_response(
+                    crate::store::config_client::ConfigAccess::write_local_response(
                         &db.node,
                         "test.fold_publication_reclaim",
                         &format!(
@@ -740,7 +740,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     }
                 }
                 Step::CancelFirstPending => {
-                    let access = crate::config_client::ConfigAccess::local(db.node.clone());
+                    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
                     let snapshot =
                         pending_user_queue(&access, db.node_did(), &session_id, db.node_did())
                             .await

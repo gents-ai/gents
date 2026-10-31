@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use defra_node::EmbeddedNode;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
@@ -303,13 +303,15 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     current: delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }}
                 }}"#
             );
-            return Ok(crate::config_client::ConfigAccess::write_local_response(
-                &self.node,
-                "p2p.delete_pairing_applied",
-                &mutation,
-            )
-            .await
-            .map(|_| ())?);
+            return Ok(
+                crate::store::config_client::ConfigAccess::write_local_response(
+                    &self.node,
+                    "p2p.delete_pairing_applied",
+                    &mutation,
+                )
+                .await
+                .map(|_| ())?,
+            );
         }
 
         let peer_id = escape_graphql_string(peer_id);
@@ -363,13 +365,15 @@ impl PairingStateStore for GraphqlPairingStateStore {
             )
         };
         let mutation = format!("mutation {{ {delete_duplicates} {save} }}");
-        Ok(crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "p2p.save_pairing_applied",
-            &mutation,
+        Ok(
+            crate::store::config_client::ConfigAccess::write_local_response(
+                &self.node,
+                "p2p.save_pairing_applied",
+                &mutation,
+            )
+            .await
+            .map(|_| ())?,
         )
-        .await
-        .map(|_| ())?)
     }
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {

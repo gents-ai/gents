@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 
-use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::store::graphql::{escape_graphql_string, response_has_documents};
 use crate::tools::native::CommandPolicyDenial;
 
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};

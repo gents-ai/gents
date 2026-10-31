@@ -894,7 +894,7 @@ async fn pin_default_tools_root(
         &graphql,
         &format!(
             r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags }} }}"#,
-            gents::graphql::escape_graphql_string(node_did)
+            gents::store::graphql::escape_graphql_string(node_did)
         ),
     )
     .await?;
@@ -1202,7 +1202,7 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
         &graphql,
         &format!(
             r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id host }} }}"#,
-            gents::graphql::escape_graphql_string(&node_did)
+            gents::store::graphql::escape_graphql_string(&node_did)
         ),
     )
     .await?;

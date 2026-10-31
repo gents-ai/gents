@@ -139,7 +139,8 @@ fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
     });
     let validate = |value| {
         let config = serde_json::from_value::<super::super::PackConfig>(value).unwrap();
-        let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+        let plan =
+            crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
         ConfigReferences::from_documents(
             "owner",
             plan.documents()
@@ -195,7 +196,7 @@ fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
 
 #[tokio::test]
 async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
-    use crate::config_client::{
+    use crate::store::config_client::{
         apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
         DesiredStateApplyPlan,
     };

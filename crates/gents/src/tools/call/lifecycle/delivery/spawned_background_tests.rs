@@ -1,10 +1,10 @@
 use super::presentation::{diagnostic_replay_matches, terminal_diagnostic_presentation};
 use super::*;
-use crate::graphql::escape_graphql_string;
 use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, published_background_bridge, published_spawn_parent,
     PublishedAdmission, PublishedAdmissionOptions,
@@ -87,7 +87,7 @@ async fn tool_delivery_rows(
     node: &EmbeddedNode,
     session_id: &str,
 ) -> Vec<crate::session::canonical_rows::TranscriptMessageRow> {
-    let session = crate::graphql::escape_graphql_string(session_id);
+    let session = crate::store::graphql::escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ {} }} }}"#,
@@ -142,7 +142,7 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
         let doc_id = escape_graphql_string(tool.doc_id().unwrap());
         let before = tool_delivery_rows(&node, &tool.session_id).await.len();
         let escaped_value = escape_graphql_string(changed_value);
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             &node,
             "test.change_tool_compare",
             &format!(
@@ -163,7 +163,7 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
             !matches!(result, Ok(true)),
             "changed comparison must not publish"
         );
-        let row = crate::config_client::ConfigAccess::local(node.clone())
+        let row = crate::store::config_client::ConfigAccess::local(node.clone())
             .execute(&format!(
                 r#"{{ AgentToolCall(docID: "{doc_id}") {{ lifecycle_state tool_name }} }}"#,
             ))
@@ -233,7 +233,7 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         rendered
     );
     let observed = crate::tools::call::lifecycle::load_tool_call_presentation(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tool_doc_id,
         &tool.node_did,
         &tool.session_id,
@@ -394,7 +394,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
         .unwrap();
         assert_eq!(raw, "stdout-before-terminal\n");
         let presentation = crate::tools::call::lifecycle::load_tool_call_presentation(
-            &crate::config_client::ConfigAccess::local(node.clone()),
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
             &tool_doc_id,
             &tool.node_did,
             &tool.session_id,
@@ -486,7 +486,7 @@ async fn configure_bash_output_budget(
     owner: &str,
     budget: i64,
 ) {
-    use crate::config_client::{
+    use crate::store::config_client::{
         apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let tools = serde_json::json!({"node_did": owner, "tools_id": "general:tools",
@@ -510,7 +510,7 @@ async fn interrupted_presentation(
     tool: &ToolCallLifecycle,
 ) -> String {
     crate::tools::call::lifecycle::load_tool_call_presentation(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         tool.doc_id().unwrap(),
         &tool.node_did,
         &tool.session_id,
@@ -735,7 +735,7 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
     let segments = node
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(child.request_doc_id.as_deref().unwrap()),
+            crate::store::graphql::escape_graphql_string(child.request_doc_id.as_deref().unwrap()),
             AGENT_OUTPUT_SEGMENT_FIELDS,
         ))
         .await;
@@ -791,14 +791,14 @@ async fn spawned_background_admission_rejects_a_stale_parent_generation() {
     let deadline = parent.deadline_at;
     let changed = node.execute(&format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "stale-generation" }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(&request_doc_id),
+        crate::store::graphql::escape_graphql_string(&request_doc_id),
     )).await;
     assert!(!changed.has_errors(), "{:#?}", changed.errors);
     assert!(parent
         .admit_spawned_background(admission(deadline), "receipt")
         .await
         .is_err());
-    let parent_doc_id = crate::graphql::escape_graphql_string(parent.doc_id().unwrap());
+    let parent_doc_id = crate::store::graphql::escape_graphql_string(parent.doc_id().unwrap());
     let children = node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ spawned_by_tool_call_doc_id: {{ _eq: "{parent_doc_id}" }} }}) {{ _docID }} }}"#,
     )).await;
@@ -834,7 +834,7 @@ async fn background_bridge_receipt_is_authored_once_and_keeps_bridge_running() {
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
-            crate::graphql::escape_graphql_string(&tool_doc_id)
+            crate::store::graphql::escape_graphql_string(&tool_doc_id)
         ))
         .await;
     assert_eq!(
@@ -891,7 +891,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
-            crate::graphql::escape_graphql_string(&tool_doc_id)
+            crate::store::graphql::escape_graphql_string(&tool_doc_id)
         ))
         .await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
@@ -903,7 +903,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     let segments = node
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(bridge.request_doc_id.as_deref().unwrap()),
+            crate::store::graphql::escape_graphql_string(bridge.request_doc_id.as_deref().unwrap()),
             AGENT_OUTPUT_SEGMENT_FIELDS,
         ))
         .await;
@@ -1032,7 +1032,7 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     let response = node
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(request_doc_id),
+            crate::store::graphql::escape_graphql_string(request_doc_id),
             AGENT_OUTPUT_SEGMENT_FIELDS,
         ))
         .await;

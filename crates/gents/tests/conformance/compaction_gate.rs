@@ -101,15 +101,15 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
 }
 
 async fn tool_call_count(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> usize {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
-    let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+    let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{ _docID }} }}"#
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    gents::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")
+    gents::store::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")
         .expect("AgentToolCall rows")
         .len()
 }
@@ -191,7 +191,7 @@ async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
 }
 
 async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> LifecycleStateRow {
-    let doc_id = gents::graphql::escape_graphql_string(request_doc_id);
+    let doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
     let started = std::time::Instant::now();
     loop {
         let response = node

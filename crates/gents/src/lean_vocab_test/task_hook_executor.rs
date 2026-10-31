@@ -125,12 +125,12 @@ struct RevokingExec<'a> {
 impl TaskHookExec for RevokingExec<'_> {
     async fn attempt(&self, hook: &crate::documents::TaskHook) -> HookAttempt {
         if self.revoked.contains(&hook.hook_id) {
-            crate::config_client::ConfigAccess::write_local(
+            crate::store::config_client::ConfigAccess::write_local(
                 self.node,
                 "test.task_hook_launch_revocation",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "revoked-generation" }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(self.request_doc_id),
+                    crate::store::graphql::escape_graphql_string(self.request_doc_id),
                 ),
             ).await.unwrap();
         }

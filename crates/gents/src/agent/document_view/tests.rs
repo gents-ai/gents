@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::*;
 use crate::agent::DocumentResolveContext;
 use crate::ensure_runtime_schemas;
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::tools::surface::ToolCeiling;
 
@@ -54,7 +54,7 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner = "did:key:runtime-view-reader";
     let principal = crate::documents::ensure_node(&node, owner).await.unwrap();
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "test.runtime_view_skill",
         &format!(
@@ -68,7 +68,7 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
     .await
     .unwrap();
     let skill_doc_id = created_skill_doc_id(response.data.as_ref()).unwrap();
-    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let view = tokio::time::timeout(
@@ -146,8 +146,8 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         mode: crate::tools::surface::FileToolMode::ReadOnly,
         ..Default::default()
     });
-    crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+    crate::store::config_client::write_tools_document(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tools_doc,
     )
     .await
@@ -540,7 +540,7 @@ async fn seed_automation(
     node: &Arc<defra_node::EmbeddedNode>,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
-    crate::config_client::ConfigAccess::transact_local_write(node, None, "test.replicated_automation", |txn| {
+    crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.replicated_automation", |txn| {
         let documents = &documents;
         Box::pin(async move {
             for (collection, input) in documents {
@@ -1322,7 +1322,7 @@ async fn bind_subscription_backend(
     endpoint: &str,
     model: &str,
 ) {
-    use crate::config_client::{
+    use crate::store::config_client::{
         apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -1600,8 +1600,8 @@ async fn readiness_follows_the_backend_account_reference() {
 
 #[tokio::test]
 async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
-    use crate::config_client::ConfigAccess;
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use crate::store::config_client::ConfigAccess;
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-lifecycle"));
@@ -1682,8 +1682,8 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 
 #[tokio::test]
 async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
-    use crate::config_client::ConfigAccess;
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use crate::store::config_client::ConfigAccess;
     use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let node = test_node().await;

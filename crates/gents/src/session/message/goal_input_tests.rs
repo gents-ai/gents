@@ -60,7 +60,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
         .await
         .unwrap();
     let calling = write(&node, &calling.graphql_mutation().unwrap()).await;
-    let calling_doc = crate::graphql::created_doc_id(&calling, "AgentRequest").unwrap();
+    let calling_doc = crate::store::graphql::created_doc_id(&calling, "AgentRequest").unwrap();
     for (index, case) in cases.iter().enumerate() {
         let name = case["name"].as_str().unwrap();
         let identity = &identities[case["owner"].as_u64().unwrap() as usize - 1];
@@ -100,7 +100,8 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 .await
                 .unwrap();
             let created = write(&node, &opening.graphql_mutation().unwrap()).await;
-            let opening_doc = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+            let opening_doc =
+                crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
             let goal = crate::goal::set_goal(
                 &node,
                 identity.did(),

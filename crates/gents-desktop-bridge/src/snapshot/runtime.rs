@@ -28,10 +28,13 @@ static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
 /// Where lineage for `node_did` is read. The desktop's node holds a session's
 /// requests only once that session has been opened, so the runtime it
 /// operates is read when there is one.
-pub(crate) fn node_reads(core: &ClientCore, node_did: &str) -> gents::config_client::ConfigAccess {
+pub(crate) fn node_reads(
+    core: &ClientCore,
+    node_did: &str,
+) -> gents::store::config_client::ConfigAccess {
     core.operator_observation_graphql(node_did)
-        .map(gents::config_client::ConfigAccess::Graphql)
-        .unwrap_or_else(|| gents::config_client::ConfigAccess::local(core.node_arc()))
+        .map(gents::store::config_client::ConfigAccess::Graphql)
+        .unwrap_or_else(|| gents::store::config_client::ConfigAccess::local(core.node_arc()))
 }
 
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {

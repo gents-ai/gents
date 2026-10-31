@@ -10,8 +10,8 @@ use gents_protocol::plugin::PluginExecutionReceipt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::config_client::{ConfigApplyTxn, ConfigRead};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{ConfigApplyTxn, ConfigRead};
+use crate::store::graphql::escape_graphql_string;
 
 /// A record refusal a caller can tell from a storage failure.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -274,8 +274,8 @@ fn truncate(mut text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_client::ConfigAccess;
-    use crate::graphql::escape_graphql_string;
+    use crate::store::config_client::ConfigAccess;
+    use crate::store::graphql::escape_graphql_string;
     use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, published_admission, PublishedAdmission, PublishedAdmissionOptions,
     };

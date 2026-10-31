@@ -7,8 +7,10 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
-use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 use crate::request::watcher::AgentRequest;
+use crate::store::graphql::{
+    escape_graphql_string, first_row, graphql_with_transaction_retry, rows,
+};
 use crate::tools::native::{workspace_write_sandbox_enforced, WorkspaceAuthority};
 use crate::tools::surface::{resolve_configured_tool_root, FileToolMode};
 
@@ -634,17 +636,21 @@ pub(super) async fn persist_workspace_binding_docs(
     } else {
         workspace_bindings_upsert_mutation(docs)
     };
-    crate::config_client::ConfigAccess::write_local(node, "workspace.upsert_binding", &mutation)
-        .await
-        .with_context(|| {
-            format!(
-                "persist WorkspaceBinding {}",
-                docs.iter()
-                    .map(|doc| doc.binding_id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        })?;
+    crate::store::config_client::ConfigAccess::write_local(
+        node,
+        "workspace.upsert_binding",
+        &mutation,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "persist WorkspaceBinding {}",
+            docs.iter()
+                .map(|doc| doc.binding_id.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    })?;
     Ok(())
 }
 

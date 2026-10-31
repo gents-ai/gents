@@ -196,7 +196,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
 
 async fn target_access(
     target: &AccountsTargetArgs,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let (access, home_dir) =
         resolve_config_access(target.home.as_deref(), target.graphql.as_deref()).await?;
     let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
@@ -215,8 +215,10 @@ pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Sn
         .transact_write("accounts.config", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>((
-                    gents::config_client::list_inference_backends_in_txn(txn, node_did).await?,
-                    gents::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
+                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
+                        .await?,
+                    gents::store::config_client::list_inference_profiles_in_txn(txn, node_did)
+                        .await?,
                 ))
             })
         })
@@ -370,7 +372,7 @@ pub(crate) async fn account_rows(
 /// indefinitely after the signed command has been sent.
 pub async fn request_usage_reads(
     identity: &dyn gents::NodeIdentity,
-    graphql: &gents::config_client::GraphqlEndpoint,
+    graphql: &gents::store::config_client::GraphqlEndpoint,
     trigger: UsageTrigger,
     provider: Option<&str>,
 ) -> Result<UsageReads> {
@@ -704,9 +706,10 @@ pub async fn remove_account(
                 )
                 .await?;
                 let profiles =
-                    gents::config_client::list_inference_profiles_in_txn(txn, node_did).await?;
+                    gents::store::config_client::list_inference_profiles_in_txn(txn, node_did)
+                        .await?;
                 let (kept, deleted): (Vec<_>, Vec<_>) =
-                    gents::config_client::list_inference_backends_in_txn(txn, node_did)
+                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
                         .await?
                         .into_iter()
                         .filter(|backend| {

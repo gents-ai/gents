@@ -48,7 +48,7 @@ pub(crate) fn visible_reply_preview(message: &gents_protocol::message::Message) 
 }
 
 pub(crate) async fn request_preview_in_txn<'a>(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &'a crate::AgentRequest,
 ) -> Result<&'a str> {
     let Some(parent_id) = request.caused_by_parent_request_doc_id.as_deref() else {
@@ -80,11 +80,13 @@ pub(crate) async fn request_preview_in_txn<'a>(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
         _docID request_id node_did agent_id session_id
     }} }}"#,
-        crate::graphql::escape_graphql_string(parent_id)
+        crate::store::graphql::escape_graphql_string(parent_id)
     );
     let response = txn.execute_local_response(&query).await?;
-    let parents =
-        crate::graphql::rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")?;
+    let parents = crate::store::graphql::rows::<gents_protocol::row::AgentRequestRow>(
+        &response,
+        "AgentRequest",
+    )?;
     let [parent] = parents.as_slice() else {
         return Ok(&request.content);
     };
@@ -179,7 +181,7 @@ mod tests {
                 agent_id: "did:test:sender:engineer", session_id: "source", content: "Parent request",
                 created_at: "2030-01-01T00:00:00Z", lifecycle_state: "completed" }) { _docID }
         }"#).await.unwrap();
-        let parent = crate::graphql::mutation_documents(&response, "create_AgentRequest")
+        let parent = crate::store::graphql::mutation_documents(&response, "create_AgentRequest")
             .unwrap()
             .unwrap()[0]["_docID"]
             .as_str()

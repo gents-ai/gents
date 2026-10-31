@@ -6,11 +6,11 @@ use identity::Did;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::config_client::{
+use crate::documents::PackConfig;
+use crate::store::config_client::{
     ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::documents::PackConfig;
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
 mod dependencies;
@@ -94,7 +94,7 @@ struct Record {
 #[derive(Debug, Default, Serialize)]
 pub struct InstallReport {
     #[serde(flatten)]
-    pub applied: crate::config_client::DesiredStateApplyCounts,
+    pub applied: crate::store::config_client::DesiredStateApplyCounts,
     pub created: Vec<String>,
     pub replaced: Vec<String>,
     pub adopted: Vec<String>,
@@ -204,9 +204,10 @@ async fn live_digests<'a>(
     let mut out = BTreeMap::new();
     for (collection, ids) in grouped {
         let ids: Vec<&str> = ids.into_iter().collect();
-        let records =
-            crate::config_client::read_desired_state_records_in_txn(txn, collection, owner, &ids)
-                .await?;
+        let records = crate::store::config_client::read_desired_state_records_in_txn(
+            txn, collection, owner, &ids,
+        )
+        .await?;
         for (id, (_, live)) in records {
             out.insert(
                 (collection, id),
@@ -260,7 +261,7 @@ async fn write_record_in_txn(
         // A remove immediately followed by a reinstall must not regenerate
         // the just-tombstoned record's content-addressed docID (see
         // `mint_recreate_identity_timestamp`).
-        "installed_at": crate::config_client::mint_recreate_identity_timestamp(),
+        "installed_at": crate::store::config_client::mint_recreate_identity_timestamp(),
         "required_by": if required_by.is_empty() { Value::Null } else { json!(required_by) },
         "explicit": prior.explicit || explicit,
         "plugin_store": plugin_store,
@@ -426,8 +427,8 @@ pub(crate) async fn install_in_txn(
     let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;
-    crate::config_client::validate_desired_state_plan(txn, &plan).await?;
-    report.applied = crate::config_client::apply_desired_state_plan(txn, &plan).await?;
+    crate::store::config_client::validate_desired_state_plan(txn, &plan).await?;
+    report.applied = crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
     report.plugins = pack.plugins.clone();
     let written: Vec<(Collection, &str)> = recorded
         .iter()
@@ -509,18 +510,18 @@ pub enum PluginStoreChangeError {
     Unconfirmed(#[from] anyhow::Error),
 }
 
-impl From<crate::config_client::ConfigClientError> for PluginStoreChangeError {
-    fn from(error: crate::config_client::ConfigClientError) -> Self {
+impl From<crate::store::config_client::ConfigClientError> for PluginStoreChangeError {
+    fn from(error: crate::store::config_client::ConfigClientError) -> Self {
         Self::Unconfirmed(error.into())
     }
 }
 
-impl crate::config_client::TransactionFailure for PluginStoreChangeError {
-    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+impl crate::store::config_client::TransactionFailure for PluginStoreChangeError {
+    fn config_client_error(&self) -> Option<&crate::store::config_client::ConfigClientError> {
         match self {
             Self::PinConflict(_) => None,
             Self::Rejected(error) | Self::Unconfirmed(error) => {
-                crate::config_client::TransactionFailure::config_client_error(error)
+                crate::store::config_client::TransactionFailure::config_client_error(error)
             }
         }
     }
@@ -740,8 +741,9 @@ async fn remove_record_in_txn(
     }
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
-    crate::config_client::validate_desired_state_plan(txn, &plan).await?;
-    report.documents.applied = crate::config_client::apply_desired_state_plan(txn, &plan).await?;
+    crate::store::config_client::validate_desired_state_plan(txn, &plan).await?;
+    report.documents.applied =
+        crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
 
     txn.execute(&format!(
         r#"mutation {{ delete_{RECORD}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,

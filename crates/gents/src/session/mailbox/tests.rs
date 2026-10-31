@@ -230,13 +230,16 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         ))
         .await;
     let request = crate::request::watcher::AgentRequest::try_from(
-        crate::graphql::rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")
-            .unwrap()
-            .remove(0),
+        crate::store::graphql::rows::<gents_protocol::row::AgentRequestRow>(
+            &response,
+            "AgentRequest",
+        )
+        .unwrap()
+        .remove(0),
     )
     .unwrap();
     let request = &request;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.mailbox_event",

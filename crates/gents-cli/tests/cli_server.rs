@@ -552,7 +552,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         let mutation = format!(
             r#"mutation {{ create_CompactionEntry(input: {{ compaction_key: "nac-{phase}", node_did: "did:test:nac", session_id: "nac-session", sequence: 1, original_tokens: 2, compacted_tokens: 1, created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         );
-        let refused = gents::config_client::ConfigAccess::graphql(graphql.clone())
+        let refused = gents::store::config_client::ConfigAccess::graphql(graphql.clone())
             .write("test.nac.anonymous", &mutation)
             .await
             .expect_err("anonymous HTTP writes must be refused");
@@ -560,14 +560,16 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             refused.to_string().contains("not authorized"),
             "{phase}: unexpected refusal: {refused:#}"
         );
-        gents::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(&graphql))
-            .write("test.nac.signed", &mutation)
-            .await
-            .with_context(|| format!("{phase}: principal-signed HTTP write"))?;
+        gents::store::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
+            &graphql,
+        ))
+        .write("test.nac.signed", &mutation)
+        .await
+        .with_context(|| format!("{phase}: principal-signed HTTP write"))?;
         let replicators = run_cli_json(&home_dir, &["p2p", "admin", "replicators", "list"])
             .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
-        let anonymous_rows = gents::config_client::ConfigAccess::graphql(graphql.clone())
+        let anonymous_rows = gents::store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
             .with_context(|| format!("{phase}: anonymous HTTP read"))?;
@@ -578,7 +580,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
                 .is_none_or(Vec::is_empty),
             "{phase}: anonymous HTTP read exposed the owner's row: {anonymous_rows}"
         );
-        let owner_rows = gents::config_client::ConfigAccess::Graphql(
+        let owner_rows = gents::store::config_client::ConfigAccess::Graphql(
             support::graphql::served_endpoint(&graphql),
         )
         .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
@@ -981,7 +983,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let request_doc_id = first_graphql_row(&request, "AgentRequest")?["_docID"]
         .as_str()
         .context("self-budget request physical ID")?;
-    let access = gents::config_client::ConfigAccess::Graphql(
+    let access = gents::store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
     let segment = OutputSegment {
@@ -2380,7 +2382,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-    let access = gents::config_client::ConfigAccess::Graphql(
+    let access = gents::store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
     let segment = OutputSegment {
@@ -2573,9 +2575,9 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         "completed"
     );
     let output = gents::session::observe_request_output(
-        &gents::config_client::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(
-            &graphql,
-        )),
+        &gents::store::config_client::ConfigAccess::Graphql(
+            crate::support::graphql::served_endpoint(&graphql),
+        ),
         &request_row,
     )
     .await?;
@@ -2915,7 +2917,8 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         "anonymous MCP write must fail"
     );
     let _identity = identity_from_init(&init)?;
-    let access = gents::config_client::ConfigAccess::graphql_as(graphql.clone(), node_did.clone());
+    let access =
+        gents::store::config_client::ConfigAccess::graphql_as(graphql.clone(), node_did.clone());
     access
         .add_collection("type McpParcel { reference: String status: String }")
         .await?;
@@ -2974,9 +2977,9 @@ async fn owner_reads_job_fields() -> Result<()> {
     use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
 
     let served = McpHome::start("owner-job-fields", &[]).await?;
-    let access = gents::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
-        &graphql_url(served.port),
-    ));
+    let access = gents::store::config_client::ConfigAccess::Graphql(
+        support::graphql::served_endpoint(&graphql_url(served.port)),
+    );
     let did = served.owner_did.as_str();
 
     let pin = JobPin {

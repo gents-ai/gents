@@ -4,13 +4,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::documents::EvalSplit;
 use crate::eval::optimization::policy::{Decision, Mode, PolicyV2};
 use crate::eval::optimization::target::{FrozenDocument, Target};
 use crate::eval::runner::Capture;
 use crate::eval::{DefinitionRef, SubjectRef};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budgets {

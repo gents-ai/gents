@@ -86,10 +86,10 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
     let agent_id = &agent_id;
     let queue = &queue;
 
-    let mut enqueued = crate::config_client::ConfigAccess::transact_local_idempotent(
+    let mut enqueued = crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.enqueue_background_completion",
         move |txn| {
             Box::pin(async move {
@@ -179,7 +179,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
     };
     let tool_key = format!("fixture:{message_key}");
     let (tool_call_doc_id, close_doc_id) =
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             node,
             None,
             "test.canonical_background_notification_authority",
@@ -242,7 +242,8 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                             escape_graphql_string(&parent.session_id)
                         ))
                         .await?;
-                    let tool_doc = crate::graphql::created_doc_id(&created, "AgentToolCall")?;
+                    let tool_doc =
+                        crate::store::graphql::created_doc_id(&created, "AgentToolCall")?;
                     let segment = OutputSegment {
                         node_did: parent.node_did.clone(),
                         requester_did: parent.requester_did.clone(),
@@ -282,7 +283,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                         .await?;
                     Ok((
                         tool_doc,
-                        crate::graphql::created_doc_id(&created, "AgentOutputSegment")?,
+                        crate::store::graphql::created_doc_id(&created, "AgentOutputSegment")?,
                     ))
                 })
             },
@@ -575,7 +576,7 @@ async fn background_completion_transaction_attempt(
                 if superseded
                     .get("data")
                     .and_then(|data| data.get("update_AgentRequest"))
-                    .is_some_and(crate::graphql::response_has_documents)
+                    .is_some_and(crate::store::graphql::response_has_documents)
                 {
                     crate::triggers::engine::durable::publish_request_outcome(
                         txn,
@@ -813,5 +814,5 @@ pub(super) fn append_sequence_query(node_did: &str, session_id: &str) -> String 
 }
 
 pub(super) fn transaction_created_doc_id(response: &Value, collection: &str) -> Result<String> {
-    Ok(crate::graphql::created_doc_id(response, collection)?)
+    Ok(crate::store::graphql::created_doc_id(response, collection)?)
 }

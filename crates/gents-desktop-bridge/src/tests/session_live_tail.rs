@@ -22,7 +22,7 @@ async fn create(
         "seed {collection}: {:?}",
         response.errors
     );
-    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+    gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
         .expect("created")
         .and_then(|document| document["_docID"].as_str())
         .expect("doc id")

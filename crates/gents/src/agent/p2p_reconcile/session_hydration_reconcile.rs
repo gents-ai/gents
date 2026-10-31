@@ -26,11 +26,11 @@ use super::session_hydration_closure::{
     ToolEffectRow,
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::NodeIdentity;
 
 mod file_images;
@@ -624,7 +624,7 @@ struct SessionRow {
 }
 
 async fn observe_session_reader(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &HydrationRequest,
     physical_root: &str,
     rows: Vec<SessionRow>,
@@ -746,7 +746,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             .collect::<Vec<_>>();
         let receipt = self.signed_receipt(request, "served", "", manifest).await?;
         let mutation = terminal_mutation(request, &receipt)?;
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &self.node,
             "p2p.mark_hydration_served",
             &mutation,
@@ -764,7 +764,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             .signed_receipt(request, "rejected", detail, Vec::new())
             .await?;
         let mutation = terminal_mutation(request, &receipt)?;
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &self.node,
             "p2p.mark_hydration_rejected",
             &mutation,
@@ -803,7 +803,7 @@ impl GraphqlHydrationStore {
         let query = hydration_admission_query(&session_id, &peer_id);
         let (response, session_reads, exact_root) = if let Some(physical_root) = physical_root {
             let authenticated = authorization.is_some();
-            crate::config_client::ConfigAccess::transact_local_readonly(
+            crate::store::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
                 None,
                 "hydration.reader_admission",
@@ -1025,7 +1025,7 @@ mod tests {
     use super::*;
     include!("session_hydration_reconcile/admission_tests.rs");
     use crate::agent::p2p_reconcile::templates::{combine_filters, equality_filter};
-    use crate::graphql::ensure_no_errors;
+    use crate::store::graphql::ensure_no_errors;
 
     struct MemoryStore {
         pending: Vec<HydrationRequestRow>,
@@ -1495,7 +1495,7 @@ mod tests {
             ))
             .await;
         ensure_no_errors(&forged, "create forged plugin child").unwrap();
-        let forged_doc = crate::graphql::created_doc_id(
+        let forged_doc = crate::store::graphql::created_doc_id(
             &serde_json::json!({ "data": forged.data }),
             "AgentToolCall",
         )
@@ -1609,7 +1609,7 @@ mod tests {
             .iter()
             .any(|row| row.doc_id == terminal.output.close_doc_id));
 
-        let effects = crate::config_client::ConfigAccess::transact_local_readonly(
+        let effects = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &node,
             None,
             "test.hydration.effect_children",

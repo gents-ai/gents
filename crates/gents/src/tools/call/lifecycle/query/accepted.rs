@@ -3,12 +3,12 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
-#[cfg(test)]
-use crate::config_client::ConfigAccess;
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
 use crate::request::streaming::AcceptedToolCall;
 use crate::session::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
+#[cfg(test)]
+use crate::store::config_client::ConfigAccess;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 
 use super::ToolCallLifecycle;
 

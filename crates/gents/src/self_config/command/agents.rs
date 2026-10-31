@@ -198,7 +198,7 @@ impl ConfigCommandTool {
             None => {
                 let owner = self.node_did.clone();
                 let target_id = target_id.to_owned();
-                crate::config_client::ConfigAccess::transact_local_readonly(
+                crate::store::config_client::ConfigAccess::transact_local_readonly(
                     &self.node,
                     Some(self.core.identity()?),
                     "self_config.agent_target_owner",
@@ -253,7 +253,7 @@ impl ConfigCommandTool {
             "{{ Agent(filter: {{node_did: {{_eq: \"{}\"}}}}) {{agent_id display_name}} }}",
             escape_graphql_string(&owner)
         );
-        let found = crate::config_client::ConfigAccess::transact_local_readonly(
+        let found = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.resolve_agent",

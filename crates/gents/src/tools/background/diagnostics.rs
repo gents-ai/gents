@@ -6,8 +6,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 const WAKE_SCAN_LIMIT: usize = 1024;
 const NOTIFICATION_SCAN_LIMIT: usize = 4096;
@@ -818,7 +818,10 @@ mod tests {
                 )
                 .await?;
             if value["request_id"] == "wake" {
-                wake_doc_id = Some(crate::graphql::created_doc_id(&created, "AgentRequest")?);
+                wake_doc_id = Some(crate::store::graphql::created_doc_id(
+                    &created,
+                    "AgentRequest",
+                )?);
             }
         }
         access.write("test.diagnostic.notification", &format!("mutation {{ create_AgentMessage(input:{}){{_docID}} }}", gents_protocol::graphql::graphql_input_literal(&serde_json::json!({

@@ -18,7 +18,7 @@ impl ToolCallLifecycle {
                 )
             })
             .unwrap_or_default();
-        crate::config_client::ConfigAccess::write_local_response(&self.node,
+        crate::store::config_client::ConfigAccess::write_local_response(&self.node,
             "tool.clear_background_request", &format!(r#"mutation {{ update_AgentToolCall(
                 docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, await_mode: {{ _eq: "foreground" }}{expected} }},
                 input: {{ background_requested_at: null, started_at: "{started}", deadline_at: "{deadline}" }}
@@ -62,8 +62,8 @@ impl ToolCallLifecycle {
             self.session_id,
             self.doc_id().unwrap()
         ));
-        crate::config_client::ConfigAccess::transact_local_idempotent(
-            &self.node, None, crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::ConfigAccess::transact_local_idempotent(
+            &self.node, None, crate::store::config_client::IdempotentTransactionRetry::Standard,
             "tool.background_handoff", move |txn| {
                 let binding = binding.clone();
                 let receipt_key = receipt_key.clone();
@@ -96,10 +96,10 @@ impl ToolCallLifecycle {
             return Err(IllegalToolCallTransition::ModeAlreadyBackground.into());
         }
         let original = self.clone();
-        let adopted = crate::config_client::ConfigAccess::transact_local_idempotent(
+        let adopted = crate::store::config_client::ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
             "tool.background",
             move |txn| {
                 let original = original.clone();
@@ -130,7 +130,7 @@ impl ToolCallLifecycle {
     /// longer a running foreground call.
     async fn background_in_txn(
         &self,
-        txn: &crate::config_client::ConfigApplyTxn<'_>,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
         deadline_at: chrono::DateTime<chrono::Utc>,
         slot: crate::tools::call::hook::persistence::BackgroundSlot,
     ) -> Result<Option<Self>> {
@@ -189,7 +189,7 @@ impl ToolCallLifecycle {
 
     pub(crate) async fn adopt_plugin_job_in_txn(
         &self,
-        txn: &crate::config_client::ConfigApplyTxn<'_>,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
         deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<Self>> {
         let Some(mut adopted) = self
@@ -245,7 +245,7 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &self.node,
             "foreground",
             &mutation,

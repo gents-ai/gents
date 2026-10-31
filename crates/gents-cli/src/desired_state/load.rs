@@ -82,7 +82,7 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     if let Some(manifest) = pack_manifest(root)? {
         gents::pack::pin_pack_plugins(&manifest, &|path| read_pack_asset(root, path), &mut config)?;
     }
-    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
+    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
     gents::documents::ConfigReferences::from_documents(
         &config.node.node_did,
         plan.documents()

@@ -136,7 +136,7 @@ fn decode_workspace_root_rows(value: &serde_json::Value) -> Result<Vec<Workspace
 }
 
 pub(crate) async fn load_workspace_root_policy_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
     let response = txn
@@ -153,7 +153,7 @@ pub async fn load_workspace_root_policy(
     node: &defra_node::EmbeddedNode,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         "{ WorkspaceRoot { root_path enabled } }",
         "querying WorkspaceRoot policy",

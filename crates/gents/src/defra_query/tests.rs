@@ -16,13 +16,13 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
         ("Inspect engine maintenance", "Commander"),
         ("Plan the cargo manifest", "Captain"),
     ] {
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             &node,
             "seed_keyword_query",
             &format!(
                 "mutation {{ add_Reports(input: {{duty: \"{}\", rank: \"{}\"}}) {{_docID}} }}",
-                crate::graphql::escape_graphql_string(duty),
-                crate::graphql::escape_graphql_string(rank)
+                crate::store::graphql::escape_graphql_string(duty),
+                crate::store::graphql::escape_graphql_string(rank)
             ),
         )
         .await
@@ -569,7 +569,7 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
         .await
         .unwrap();
     for n in 0..73 {
-        crate::config_client::ConfigAccess::write_local(&node,"seed_query_count",&format!("mutation {{ create_Ticket(input:{{name:\"T{n:03}\",priority:{n},status:\"open\"}}){{_docID}} }}")).await.unwrap();
+        crate::store::config_client::ConfigAccess::write_local(&node,"seed_query_count",&format!("mutation {{ create_Ticket(input:{{name:\"T{n:03}\",priority:{n},status:\"open\"}}){{_docID}} }}")).await.unwrap();
     }
     let tool = DefraQueryTool::new(
         node.clone(),
@@ -610,16 +610,16 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_collection(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
-        crate::graphql::escape_graphql_string(&policy)
+        crate::store::graphql::escape_graphql_string(&policy)
     ))
     .await
     .unwrap();
     for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
         let mutation = format!(
             "mutation {{ add_PrivateRecord(input: {{label: \"{}\"}}) {{_docID}} }}",
-            crate::graphql::escape_graphql_string(label)
+            crate::store::graphql::escape_graphql_string(label)
         );
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             Some(::identity::Did::new(did).unwrap()),
             "seed_private_query",
@@ -631,7 +631,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let mut ids = rapidhash::RapidHashMap::default();
     for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
         let actor = ::identity::Did::new(did).unwrap();
-        let rows = crate::config_client::ConfigAccess::transact_local_write(
+        let rows = crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             Some(actor),
             "test.private_field_ids",
@@ -681,7 +681,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         assert_eq!(result["ranking"], "bm25");
 
         let bounded = BoundedQueryTool::new(
-            crate::config_client::ConfigAccess::local(node.clone()),
+            crate::store::config_client::ConfigAccess::local(node.clone()),
             crate::documents::QueryToolDecl {
                 tool_name: "private_records".into(),
                 collection: "PrivateRecord".into(),
@@ -721,14 +721,14 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     node.add_collection("type PlanTicket { reference: String status: String @index }")
         .await
         .unwrap();
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         &node,
         "seed_plan",
         r#"mutation { add_PlanTicket(input:{reference:"P1",status:"open"}){_docID} }"#,
     )
     .await
     .unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let scope = CollectionScope::restricted(vec!["PlanTicket".into()]);
     let args: QueryParams = serde_json::from_value(json!({"argv":["explain"],"collection":"PlanTicket","options":{"fields":["reference"],"filter":{"status":{"_eq":"closed"}},"limit":5}})).unwrap();
     let result = execute_command(&access, &args, &scope).await.unwrap();

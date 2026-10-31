@@ -3,8 +3,8 @@ use defra_node::EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::config_client::ConfigAccess;
 use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
+use crate::store::config_client::ConfigAccess;
 
 use super::{AgentMessageDelivery, Delivery, RenderedBody};
 

@@ -90,7 +90,7 @@ impl ConfigCommandTool {
             .iter()
             .map(|(_, target, id)| (target.collection(), owner.clone(), id.clone()))
             .collect::<Vec<_>>();
-        let plan = crate::config_client::DesiredStateApplyPlan::new(Vec::new())?
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())?
             .with_removals(removals)?;
         let preview = verb == "preview";
         if !preview {
@@ -103,7 +103,7 @@ impl ConfigCommandTool {
         };
         let identity = Some(self.core.identity()?);
         let (receipt_targets, plan_digest) = if preview {
-            crate::config_client::ConfigAccess::transact_local_readonly(
+            crate::store::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
                 identity,
                 operation,
@@ -120,7 +120,7 @@ impl ConfigCommandTool {
             )
             .await?
         } else {
-            crate::config_client::ConfigAccess::transact_local_write(
+            crate::store::config_client::ConfigAccess::transact_local_write(
                 &self.node,
                 identity,
                 operation,
@@ -169,11 +169,11 @@ fn cleanup_plan_digest(owner: &str, targets: &[Value]) -> Result<String> {
 }
 
 async fn cleanup_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     targets: &[(String, SelfConfigTarget, String)],
     expected_digest: Option<&str>,
-    plan: &crate::config_client::DesiredStateApplyPlan,
+    plan: &crate::store::config_client::DesiredStateApplyPlan,
     preview: bool,
 ) -> Result<(Vec<Value>, String)> {
     let mut receipt = Vec::with_capacity(targets.len());
@@ -204,7 +204,7 @@ async fn cleanup_in_txn(
             "resource": resource,
             "collection": target.collection_name(),
             "id": id,
-            "content_digest": crate::config_client::desired_state_document_digest(&Value::Object(document))?,
+            "content_digest": crate::store::config_client::desired_state_document_digest(&Value::Object(document))?,
         }));
     }
     let plan_digest = cleanup_plan_digest(owner, &receipt)?;
@@ -214,9 +214,9 @@ async fn cleanup_in_txn(
             "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
         );
     }
-    crate::config_client::validate_desired_state_plan(txn, plan).await?;
+    crate::store::config_client::validate_desired_state_plan(txn, plan).await?;
     if !preview {
-        crate::config_client::apply_desired_state_plan(txn, plan).await?;
+        crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
         for (_, target, id) in targets {
             anyhow::ensure!(
                 ops::read_owned_doc(txn, *target, owner, id)

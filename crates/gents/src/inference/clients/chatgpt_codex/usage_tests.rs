@@ -18,7 +18,7 @@ async fn seed_codex_account(
     )
     .await;
     let mut row = crate::inference::auth::credential::resolve_oauth_credential(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         node_did,
         CHATGPT_CODEX_PROVIDER,
         crate::inference::auth::credential::AccountPick::Reference(None),
@@ -111,7 +111,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     .unwrap();
     let stored = crate::inference::usage_observation::usage_for_backend(
         &cache,
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         did,
         &backend,
     )

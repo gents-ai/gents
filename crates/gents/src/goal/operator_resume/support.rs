@@ -1,11 +1,11 @@
 use super::*;
-use crate::config_client::{
-    apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::auth::credential::{preset_account_backend, store_sign_in};
 use crate::request::admission::verify_runtime_local_control_receipt;
+use crate::store::config_client::{
+    apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use crate::store::identity::KeyIdentity;
 use crate::Collection;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
@@ -484,5 +484,5 @@ pub(crate) async fn execute(node: &EmbeddedNode, query: &str) {
 pub(crate) async fn request_rows(node: &EmbeddedNode) -> Vec<AgentRequestRow> {
     let response=node.execute(&format!("{{ AgentRequest(order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    crate::graphql::rows(&response, "AgentRequest").unwrap()
+    crate::store::graphql::rows(&response, "AgentRequest").unwrap()
 }

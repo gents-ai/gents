@@ -96,7 +96,7 @@ async fn capture_and_context_accounting_commit_together() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "test.create_accounting_call",
         r#"mutation { create_InferenceCall(input: {
@@ -150,7 +150,7 @@ async fn capture_and_context_accounting_commit_together() {
     let first = with_accounting(0, "accounting", 1);
     sink.capture(first.clone()).await.unwrap();
     sink.capture(first.clone()).await.unwrap();
-    let call = crate::graphql::graphql_with_transaction_retry(
+    let call = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         r#"{ InferenceCall(filter: {call_id: {_eq: "accounting"}}) {
             context_accounting_json
@@ -175,7 +175,7 @@ async fn capture_and_context_accounting_commit_together() {
         with_accounting(2, "missing", 1),
     ] {
         assert!(sink.capture(rejected).await.is_err());
-        let captures = crate::graphql::graphql_with_transaction_retry(
+        let captures = crate::store::graphql::graphql_with_transaction_retry(
             &node,
             "{ RenderedRequest { _docID } }",
             "test.read_captures",
@@ -457,7 +457,7 @@ async fn deleted_blocks_never_publish_dangling_references() {
         .await
         .unwrap();
     let id = escape_graphql_string(&leaves[0].doc_id);
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         &node,
         "test.delete_capture_block",
         &format!(r#"mutation {{ delete_RenderedRequestBlock(docID: "{id}") {{ _docID }} }}"#),
@@ -839,10 +839,10 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
 
 #[test]
 fn the_collection_names_are_valid_graphql_identifiers() {
-    crate::graphql::validate_collection_identifier(RENDERED_REQUEST_COLLECTION)
+    crate::store::graphql::validate_collection_identifier(RENDERED_REQUEST_COLLECTION)
         .expect("RenderedRequest must be a valid GraphQL identifier");
     assert_eq!(RENDERED_REQUEST_COLLECTION, "RenderedRequest");
-    crate::graphql::validate_collection_identifier(RENDERED_REQUEST_BLOCK_COLLECTION)
+    crate::store::graphql::validate_collection_identifier(RENDERED_REQUEST_BLOCK_COLLECTION)
         .expect("RenderedRequestBlock must be a valid GraphQL identifier");
     assert_eq!(RENDERED_REQUEST_BLOCK_COLLECTION, "RenderedRequestBlock");
 }

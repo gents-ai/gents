@@ -24,7 +24,7 @@ async fn execute_fixture_write(node: &crate::defra_node::EmbeddedNode, mutation:
 }
 
 pub(super) async fn update(node: &crate::defra_node::EmbeddedNode, doc_id: &str, fields: &str) {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     execute_fixture_write(node, &format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     ))
@@ -36,7 +36,7 @@ pub(super) async fn update_request(
     doc_id: &str,
     fields: &str,
 ) {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     execute_fixture_write(node, &format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     ))
@@ -44,7 +44,7 @@ pub(super) async fn update_request(
 }
 
 pub(super) async fn remove_parent(node: &crate::defra_node::EmbeddedNode, doc_id: &str) {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let result = node
         .execute(&format!(
             r#"mutation {{ delete_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#
@@ -58,7 +58,7 @@ pub(super) async fn completion_obligations(
     session_id: &str,
     node_did: &str,
 ) -> (Vec<String>, Vec<serde_json::Value>) {
-    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ input }} }}"#

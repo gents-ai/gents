@@ -6,7 +6,7 @@ use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditUsageTokens {
@@ -230,7 +230,7 @@ fn project_goal_catalog(
 /// Review charges follow their signed physical parent in the same snapshot as
 /// the goal baseline. Title overhead is excluded from this product budget.
 pub(crate) async fn load_session_goal_usage(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<crate::goal::SessionTokenUsage> {

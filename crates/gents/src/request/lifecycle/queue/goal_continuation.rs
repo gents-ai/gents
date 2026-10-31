@@ -117,7 +117,7 @@ pub(crate) fn prepare_goal_continuation(
 }
 
 pub(crate) async fn goal_continuation_agent(
-    _txn: &crate::config_client::ConfigApplyTxn<'_>,
+    _txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequest,
 ) -> Result<String> {
     parent_agent_id(parent)

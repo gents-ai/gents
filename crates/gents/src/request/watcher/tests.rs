@@ -79,7 +79,7 @@ async fn insert_incoherent_agent_request(
     node_did: &str,
     request_id: &str,
 ) -> String {
-    use crate::graphql::escape_graphql_string;
+    use crate::store::graphql::escape_graphql_string;
 
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_node_did = escape_graphql_string(node_did);
@@ -140,11 +140,11 @@ async fn insert_agent_request_row(
     lifecycle_state: &str,
     created_at: &str,
 ) -> String {
-    let request_id = crate::graphql::escape_graphql_string(request_id);
-    let node_did = crate::graphql::escape_graphql_string(node_did);
-    let session_id = crate::graphql::escape_graphql_string(session_id);
-    let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
-    let created_at = crate::graphql::escape_graphql_string(created_at);
+    let request_id = crate::store::graphql::escape_graphql_string(request_id);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
+    let lifecycle_state = crate::store::graphql::escape_graphql_string(lifecycle_state);
+    let created_at = crate::store::graphql::escape_graphql_string(created_at);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -204,8 +204,8 @@ async fn insert_malformed_agent_request_without_request_id(
         lifecycle_state: "pending",
         execution_origin: "interactive", created_at: "2026-03-12T00:00:00Z"
     }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(node_did),
-        crate::graphql::escape_graphql_string(session_id)
+        crate::store::graphql::escape_graphql_string(node_did),
+        crate::store::graphql::escape_graphql_string(session_id)
     );
     let response = node.execute(&mutation).await;
     assert!(
@@ -215,8 +215,8 @@ async fn insert_malformed_agent_request_without_request_id(
     );
     let lookup = format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(node_did),
-        crate::graphql::escape_graphql_string(session_id)
+        crate::store::graphql::escape_graphql_string(node_did),
+        crate::store::graphql::escape_graphql_string(session_id)
     );
     let response = node.execute(&lookup).await;
     response
@@ -240,7 +240,7 @@ async fn request_terminal_fields_by_doc_id(
             r#"{{ AgentRequest(
         filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1
     ) {{ lifecycle_state failure_reason claimed_at }} }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ))
         .await;
     assert!(
@@ -259,7 +259,7 @@ async fn request_terminal_fields_by_doc_id(
 }
 
 async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id: &str) {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -279,7 +279,7 @@ async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id:
 }
 
 async fn set_request_processing(node: &defra_node::EmbeddedNode, doc_id: &str) {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -301,8 +301,8 @@ async fn set_request_interrupt_requested_at(
     doc_id: &str,
     at: &str,
 ) {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
-    let at = crate::graphql::escape_graphql_string(at);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
+    let at = crate::store::graphql::escape_graphql_string(at);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -323,7 +323,7 @@ async fn request_terminal_fields(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
 ) -> serde_json::Value {
-    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(
@@ -466,7 +466,7 @@ async fn native_arrival_head_is_delivered_despite_reverse_lexical_timestamp_tie(
     )
     .await;
     let watcher = DefraWatcher::new(node.clone(), owner).expect("request watcher");
-    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let pending = tokio::time::timeout(Duration::from_secs(5), watcher.pending_requests())

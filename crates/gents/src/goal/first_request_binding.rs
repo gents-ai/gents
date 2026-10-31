@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigApplyTxn;
+use crate::store::config_client::ConfigApplyTxn;
 use gents_protocol::request_input::GoalAssignmentInput;
 
 pub(super) fn continuation_reference_matches(

@@ -340,7 +340,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     )
     .await
     .unwrap();
-    let reply_doc = gents::graphql::mutation_documents(&response, "create_AgentRequest")
+    let reply_doc = gents::store::graphql::mutation_documents(&response, "create_AgentRequest")
         .unwrap()
         .unwrap()[0]["_docID"]
         .as_str()

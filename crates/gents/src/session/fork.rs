@@ -19,8 +19,8 @@ use super::query::session_scope_filter;
 use super::sessions::{
     ensure_session_in_txn, load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
 };
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::session::origin::SessionScope;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditForkBinding {
@@ -115,7 +115,7 @@ pub async fn fork(
 }
 
 pub async fn fork_via_http(
-    endpoint: &crate::config_client::GraphqlEndpoint,
+    endpoint: &crate::store::config_client::GraphqlEndpoint,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
     fork_on(&ConfigAccess::Graphql(endpoint.clone()), params).await
@@ -345,7 +345,7 @@ async fn create_compaction(txn: &ConfigApplyTxn<'_>, row: Value) -> Result<()> {
             &json!({ "input": row }),
         )
         .await?;
-    crate::graphql::created_doc_id(&response, "CompactionEntry")?;
+    crate::store::graphql::created_doc_id(&response, "CompactionEntry")?;
     Ok(())
 }
 
@@ -370,7 +370,7 @@ async fn fork_in_txn(
         ForkError::ForkNotSameAgent
     );
     let agent = params.target_agent_id.unwrap_or(&parent.agent_id);
-    let agent_document = crate::config_client::read_desired_state_document_in_txn(
+    let agent_document = crate::store::config_client::read_desired_state_document_in_txn(
         txn,
         crate::store::collection::Collection::Agent,
         params.caller_node_did,
@@ -508,7 +508,7 @@ async fn fork_in_txn(
                 &transcript_message_create_variables(&child_header)?,
             )
             .await?;
-        crate::graphql::created_doc_id(&response, "AgentMessage")?;
+        crate::store::graphql::created_doc_id(&response, "AgentMessage")?;
     }
 
     let mut copied_compactions = 0u32;

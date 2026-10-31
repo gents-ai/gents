@@ -6,8 +6,8 @@ use serde::Deserialize;
 use tokio::sync::{oneshot, Mutex};
 
 use super::StreamGuardLifecycle;
-use crate::config_client::ConfigAccess;
 use crate::inference::llm::rig_compat::hold_stream_guard;
+use crate::store::config_client::ConfigAccess;
 
 #[derive(Deserialize)]
 struct Case {
@@ -180,7 +180,7 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
         Some(Ok(rig::streaming::StreamedAssistantContent::Final(_)))
     ));
     let response = node.execute("{ StreamGateFact { value } }").await;
-    crate::graphql::ensure_no_errors(&response, "read stream gate facts").unwrap();
+    crate::store::graphql::ensure_no_errors(&response, "read stream gate facts").unwrap();
     let data = response.data.unwrap();
     let mut values: Vec<_> = data["StreamGateFact"]
         .as_array()

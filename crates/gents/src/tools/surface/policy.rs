@@ -349,7 +349,7 @@ impl ToolPolicySurface {
         } else {
             match &selection.self_config_categories {
                 None => EndpointScope::<String, ()>::only_units(
-                    crate::config_client::patch::DEFAULT_SELF_CONFIG_CATEGORIES
+                    crate::store::config_client::patch::DEFAULT_SELF_CONFIG_CATEGORIES
                         .iter()
                         .map(|category| category.to_string()),
                 ),
@@ -530,7 +530,7 @@ impl ToolPolicySurface {
 
     pub fn self_config_category_set(&self) -> std::collections::BTreeSet<String> {
         match &self.self_config_categories {
-            EndpointScope::All => crate::config_client::patch::SELF_CONFIG_CATEGORIES
+            EndpointScope::All => crate::store::config_client::patch::SELF_CONFIG_CATEGORIES
                 .iter()
                 .map(|category| category.to_string())
                 .collect(),

@@ -3,8 +3,8 @@ use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 
 use super::enrollment_store::GraphqlEnrollmentStore;
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 
 pub(super) struct AuthorScope<'a> {
     pub requester_did: &'a str,
@@ -49,7 +49,7 @@ pub(super) async fn current_admission(
                 fence.authorization_expires_at,
             );
         for collection in ["PeerPairingDesired", "PeerPairingApplied"] {
-            crate::graphql::fence_arrivals(txn, collection).await?;
+            crate::store::graphql::fence_arrivals(txn, collection).await?;
         }
         let peer = escape_graphql_string(peer);
         let response = txn.execute(&format!(r#"{{

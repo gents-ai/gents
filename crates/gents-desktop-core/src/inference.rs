@@ -230,7 +230,7 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
 }
 
 pub async fn load_inference_setup_state(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> anyhow::Result<InferenceSetupState> {
     let store = crate::client::load_inference_configuration(access, node_did).await?;
@@ -317,7 +317,7 @@ async fn read_inference_setup_state_from(
     client_did: &str,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
-    use gents::config_client::GraphqlEndpoint;
+    use gents::store::config_client::GraphqlEndpoint;
     let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https")
@@ -571,7 +571,7 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let access = gents::config_client::ConfigAccess::graphql(format!(
+            let access = gents::store::config_client::ConfigAccess::graphql(format!(
                 "{}/api/v0/graphql",
                 server.uri()
             ));

@@ -1,6 +1,6 @@
 use super::TerminalJobProgress;
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 
 /// Retained images share the accepted tool's DID and request binding and commit
@@ -78,7 +78,7 @@ pub(super) async fn retain_file_changes(
             "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
             &serde_json::json!({"input": input}),
         ).await?;
-        let rows = crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
+        let rows = crate::store::graphql::mutation_documents(&result, "create_ToolFileChange")?
             .context("file change observation was not retained")?;
         anyhow::ensure!(
             rows.len() == 1,

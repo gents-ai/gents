@@ -765,7 +765,7 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
     }))?;
     gents::ensure_node(&node, &backend.node_did).await?;
     let access = gents::ConfigAccess::local(node.clone());
-    gents::config_client::write_inference_backend_document(&access, &backend).await?;
+    gents::store::config_client::write_inference_backend_document(&access, &backend).await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
         let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({

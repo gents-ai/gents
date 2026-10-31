@@ -6,7 +6,7 @@ use gents_protocol::file_image_hydration::{
     FileImageDemand, FileImageHydrationReceipt, FileImageSelection,
 };
 
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::NodeIdentity;
 
 /// A selected receipt delegates a local read of its exact observation to the
@@ -74,7 +74,7 @@ impl VerifiedFileImageReceipt {
         let access = ConfigAccess::local(node);
         let response = access.execute(&format!(
             r#"{{ToolFileChange(docID: "{}") {{_docID request_doc_id tool_call_doc_id node_did session_id requester_did file_changes}}}}"#,
-            crate::graphql::escape_graphql_string(document),
+            crate::store::graphql::escape_graphql_string(document),
         )).await?;
         let rows = response["data"]["ToolFileChange"]
             .as_array()
@@ -168,7 +168,7 @@ async fn observation_contents(
         .execute(&format!(
             r#"{{ {}(docID: "{}") {{ file_changes }} }}"#,
             gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-            crate::graphql::escape_graphql_string(document)
+            crate::store::graphql::escape_graphql_string(document)
         ))
         .await?;
     let rows = response["data"][gents_protocol::schemas::TOOL_FILE_CHANGE_NAME]

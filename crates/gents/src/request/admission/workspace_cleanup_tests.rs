@@ -6,8 +6,8 @@ use gents_protocol::request_admission::{
 };
 use serde_json::Value;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::tools::workspace::WorkspaceBindingDoc;
 
@@ -61,7 +61,7 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         let request = super::load_request_for_admission_test(&node, &doc_id)
             .await
             .unwrap();
@@ -166,7 +166,8 @@ async fn malformed_pending_request_still_rejects_without_cleanup_provenance() {
         )
         .await
         .unwrap();
-        fixture.request.doc_id = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+        fixture.request.doc_id =
+            crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
         fixture.binding.binding_id = "malformed-binding".to_string();
         fixture.binding.request_id = fixture.request.request_id.clone();
         fixture.binding.request_doc_id = fixture.request.doc_id.clone();

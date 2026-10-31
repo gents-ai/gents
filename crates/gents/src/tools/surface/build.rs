@@ -393,7 +393,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
         return Ok(Vec::new());
     }
     let query = mcp_health_query(node_did);
-    let response = crate::config_client::ConfigAccess::transact_local_readonly(
+    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "tools.measured_availability",
@@ -411,7 +411,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
 
 /// A remote server's loopback endpoint is never inferred from the CLI host.
 pub async fn measured_mcp_services_for_access(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     services: &[crate::documents::ToolServiceRegistry],
 ) -> Result<Vec<String>> {
@@ -420,10 +420,10 @@ pub async fn measured_mcp_services_for_access(
     }
     let response = access.execute(&mcp_health_query(node_did)).await?;
     let hostname = match access {
-        crate::config_client::ConfigAccess::Local(_) => hostname::get()
+        crate::store::config_client::ConfigAccess::Local(_) => hostname::get()
             .ok()
             .and_then(|value| value.into_string().ok()),
-        crate::config_client::ConfigAccess::Graphql(_) => None,
+        crate::store::config_client::ConfigAccess::Graphql(_) => None,
     };
     project_measured_mcp_services(node_did, services, &response, hostname.as_deref())
 }
@@ -431,7 +431,7 @@ pub async fn measured_mcp_services_for_access(
 fn mcp_health_query(node_did: &str) -> String {
     format!(
         r#"{{ ToolServiceHealthState(filter: {{node_did: {{_eq: "{}"}}}}) {{ service_id endpoint status }} }}"#,
-        crate::graphql::escape_graphql_string(node_did)
+        crate::store::graphql::escape_graphql_string(node_did)
     )
 }
 

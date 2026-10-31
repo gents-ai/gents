@@ -222,8 +222,8 @@ async fn step0(output: Value, options: Options) -> Step0 {
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": options.settings}]},
     }))
     .unwrap();
-    crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+    crate::store::config_client::write_tools_document(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -306,8 +306,8 @@ async fn bind_request_at_hop(
     if let Some((request_doc_id, call_doc_id)) = cause {
         let response = crate::ConfigAccess::local(node.clone()).execute(&format!(
             r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{request_id}} AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{tool_call_id}}}}"#,
-            crate::graphql::escape_graphql_string(&request_doc_id),
-            crate::graphql::escape_graphql_string(&call_doc_id),
+            crate::store::graphql::escape_graphql_string(&request_doc_id),
+            crate::store::graphql::escape_graphql_string(&call_doc_id),
         )).await.unwrap();
         create.caused_by_parent_request_id = Some(
             response["data"]["AgentRequest"][0]["request_id"]
@@ -417,8 +417,8 @@ impl Step0 {
         rows[0].clone()
     }
 
-    fn access(&self) -> crate::config_client::ConfigAccess {
-        crate::config_client::ConfigAccess::local(self.node.clone())
+    fn access(&self) -> crate::store::config_client::ConfigAccess {
+        crate::store::config_client::ConfigAccess::local(self.node.clone())
     }
 
     async fn pin_of(&self, row: &Value) -> JobPin {
@@ -874,7 +874,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
         .and_then(|state| state.evidence)
         .expect("the finished root row keeps its last step's evidence");
     let guest = json!({"phase": "verify", "groups": 2});
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &step.node,
         None,
         "test.guest",
@@ -1271,7 +1271,7 @@ impl Step0 {
             .access()
             .execute(&format!(
                 r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&key),
+                crate::store::graphql::escape_graphql_string(&key),
             ))
             .await
             .unwrap();
@@ -1603,10 +1603,15 @@ async fn non_job_control_on_another_plugin_or_out_of_scope_row_is_refused() {
         plugin_ref: "team/plugin".to_owned(),
         ..fixture_job_pin()
     };
-    crate::config_client::ConfigAccess::transact_local_write(&step.node, None, "test.pin", |txn| {
-        let (doc, pin) = (&out_of_scope, &pin);
-        Box::pin(async move { write_pin_in_txn(txn, doc, pin).await })
-    })
+    crate::store::config_client::ConfigAccess::transact_local_write(
+        &step.node,
+        None,
+        "test.pin",
+        |txn| {
+            let (doc, pin) = (&out_of_scope, &pin);
+            Box::pin(async move { write_pin_in_txn(txn, doc, pin).await })
+        },
+    )
     .await
     .unwrap();
     for (n, target) in [

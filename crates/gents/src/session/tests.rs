@@ -884,13 +884,13 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
         caller_requester_did: None,
         target_agent_id: None,
     };
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     drop(
         fork_edit_on(&access, params.clone(), CHILD, "native-client")
             .await
             .unwrap(),
     );
-    crate::config_client::ConfigAccess::write_local(&node, "test.disable_fork_agent",
+    crate::store::config_client::ConfigAccess::write_local(&node, "test.disable_fork_agent",
         r#"mutation { update_Agent(filter: {node_did: {_eq: "did:test:retained-edit-fork"}, agent_id: {_eq: "retained-fork"}}, input: {enabled: false}) { _docID } }"#).await.unwrap();
     let before = session_rewrite_rows(&node).await;
     let history = load_history(&node, CHILD, NODE, None).await.unwrap();
@@ -901,7 +901,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
 
     let node = std::sync::Arc::new(builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     assert_eq!(
         fork_edit_on(&access, params.clone(), CHILD, "native-client")
             .await
@@ -1016,11 +1016,12 @@ async fn fork_rolls_back_at_every_mutation_position() {
         target_agent_id: None,
     };
 
-    let (outcome, writes) = crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
-        || fork(&node, params.clone()),
-        || session_rewrite_rows(&node),
-    )
-    .await;
+    let (outcome, writes) =
+        crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+            || fork(&node, params.clone()),
+            || session_rewrite_rows(&node),
+        )
+        .await;
     assert_eq!(outcome.copied_messages, 3);
     assert_eq!(outcome.copied_compaction_entries, 2);
     assert!(
@@ -1070,7 +1071,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     let (_, before) = chain().await;
     let files = ["/tmp/b.rs".to_string()];
 
-    let (saved, _) = crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+    let (saved, _) = crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
         || {
             save_compaction_entry_with_requester_did(
                 &node,
@@ -1169,9 +1170,10 @@ pub(crate) async fn import_history_observation(
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = crate::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
-        .unwrap()
-        .unwrap();
+    let row =
+        crate::store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+            .unwrap()
+            .unwrap();
     let header = TranscriptMessage {
         message_key: message_key_suffix.into(),
         session_id: session_id.into(),
@@ -1217,7 +1219,7 @@ pub(crate) async fn import_history_observation(
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = crate::graphql::single_mutation_document(&response, "create_AgentMessage")
+    let row = crate::store::graphql::single_mutation_document(&response, "create_AgentMessage")
         .unwrap()
         .unwrap();
     let (_, reconstructed) = load_canonical_message_from_node(
@@ -1404,10 +1406,10 @@ async fn claimed_authored_request(
     session_id: &str,
 ) -> crate::request::lifecycle::RequestLifecycle {
     use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-    let request_id = crate::graphql::escape_graphql_string(request_id);
-    let escaped_agent = crate::graphql::escape_graphql_string(node_did);
-    let session_id = crate::graphql::escape_graphql_string(session_id);
-    let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let request_id = crate::store::graphql::escape_graphql_string(request_id);
+    let escaped_agent = crate::store::graphql::escape_graphql_string(node_did);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
+    let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let created = node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
@@ -1426,7 +1428,7 @@ async fn claimed_authored_request(
         ))
         .await;
     let request: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&response, "AgentRequest")
+        crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
@@ -1497,7 +1499,7 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
 
 #[tokio::test]
 async fn single_header_transaction_matches_bulk_coordinate_validation() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use canonical_rows::{
         decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
         CREATE_AGENT_MESSAGE_MUTATION,
@@ -1579,11 +1581,12 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                             )
                             .await?;
                         assert_ne!(
-                            crate::graphql::created_doc_id(&created, "AgentMessage")?,
+                            crate::store::graphql::created_doc_id(&created, "AgentMessage")?,
                             original.doc_id,
                         );
                         if case == "fork" {
-                            target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
+                            target =
+                                crate::store::graphql::created_doc_id(&created, "AgentMessage")?;
                         }
                     }
                     let single = output::reader::load_canonical_message_in_txn(
@@ -1624,12 +1627,12 @@ async fn retry_frontier_matches_lean_admission() {
         mutation: &str,
         field: &str,
     ) -> String {
-        let response = crate::config_client::ConfigAccess::local(node.clone())
+        let response = crate::store::config_client::ConfigAccess::local(node.clone())
             .write("test.retry_frontier", mutation)
             .await
             .unwrap();
         let response: defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-        crate::graphql::single_mutation_document(&response, field)
+        crate::store::graphql::single_mutation_document(&response, field)
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -1763,7 +1766,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
     ensure_runtime_schemas(&node).await.unwrap();
     for provenance in [session.provenance.clone(), None] {
         let session = &session;
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.session_starter",
@@ -1787,7 +1790,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .await
         .unwrap();
     }
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let child_scope = crate::session::origin::SessionScope::from(&session);
     assert!(
         crate::session::origin::started_by(&access, &child_scope)

@@ -169,7 +169,7 @@ async fn create_signed_fixture_request(
         crate::request::lifecycle::RequestSigner::Identity(identity),
     )
     .await?;
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "test.native_execution.create_signed_request",
         &create
@@ -265,7 +265,7 @@ impl NativeCanonicalExecution {
             outcome == "dead",
             "modeled corrupt revocation outcome changed"
         );
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
             crate::request::watcher::AGENT_REQUEST_FIELDS,
@@ -275,8 +275,9 @@ impl NativeCanonicalExecution {
             "read revocation request: {:?}",
             response.errors
         );
-        let observed = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native revocation request disappeared")?;
+        let observed =
+            crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+                .context("native revocation request disappeared")?;
         let result = crate::request::lifecycle::revoke_execution_preserving_output_at(
             &self.node,
             &observed,
@@ -299,8 +300,9 @@ impl NativeCanonicalExecution {
             "read revoked request: {:?}",
             response.errors
         );
-        let persisted = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native revoked request disappeared")?;
+        let persisted =
+            crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+                .context("native revoked request disappeared")?;
         let expected_selection = match selection {
             LeanTerminalSelection::NoMessage => gents_protocol::output::TerminalOutput::NoMessage,
             LeanTerminalSelection::Message { id } => {
@@ -404,7 +406,7 @@ impl NativeCanonicalExecution {
         if !accepted {
             return self.observe(false).await;
         }
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let segments = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -488,7 +490,7 @@ impl NativeCanonicalExecution {
             )
             .await?;
         }
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
             crate::request::watcher::AGENT_REQUEST_FIELDS,
@@ -498,8 +500,9 @@ impl NativeCanonicalExecution {
             "read recovery request: {:?}",
             response.errors
         );
-        let observed = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native recovery request disappeared")?;
+        let observed =
+            crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+                .context("native recovery request disappeared")?;
         let expiry = observed
             .execution_lease_expires_at
             .as_deref()
@@ -657,7 +660,7 @@ impl NativeCanonicalExecution {
     }
 
     async fn refresh_output(&mut self) -> Result<()> {
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let segments = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -1118,7 +1121,7 @@ impl NativeCanonicalExecution {
             .node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} terminal_output }} }}"#,
-                crate::graphql::escape_graphql_string(&self.request_doc_id),
+                crate::store::graphql::escape_graphql_string(&self.request_doc_id),
                 crate::request::admission::SIGNED_REQUEST_FIELDS,
             ))
             .await;
@@ -1127,11 +1130,11 @@ impl NativeCanonicalExecution {
             "observe native request: {:?}",
             response.errors
         );
-        let row: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
+        let row: AgentRequestRow = crate::store::graphql::first_row(&response, "AgentRequest")?
             .context("native request disappeared")?;
         if let Some((_, parent_doc_id)) = &self.title_parent {
-            let parent = crate::graphql::escape_graphql_string(parent_doc_id);
-            let response = crate::graphql::graphql_with_transaction_retry(
+            let parent = crate::store::graphql::escape_graphql_string(parent_doc_id);
+            let response = crate::store::graphql::graphql_with_transaction_retry(
                 &self.node,
                 &format!(r#"{{
                     AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 1) {{ {} }}
@@ -1140,8 +1143,9 @@ impl NativeCanonicalExecution {
                 }}"#, crate::request::admission::SIGNED_REQUEST_FIELDS),
                 "test.native_execution.title_parent",
             ).await?;
-            let parent: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
-                .context("title parent disappeared")?;
+            let parent: AgentRequestRow =
+                crate::store::graphql::first_row(&response, "AgentRequest")?
+                    .context("title parent disappeared")?;
             crate::request::admission::verify_historical_auxiliary_receipt(&row, &parent)?;
             anyhow::ensure!(
                 parent.lifecycle_state == Some(RequestLifecycleState::Completed),
@@ -1179,7 +1183,7 @@ impl NativeCanonicalExecution {
             .as_deref()
             .map(|deadline| self.modeled_time(deadline))
             .transpose()?;
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let tools = self.node.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID request_doc_id lifecycle_state message_sequence await_mode stuck_since }} }}"#,
         )).await;
@@ -1479,13 +1483,13 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             let fixture_epoch_seconds = FIXTURE_EPOCH_SECONDS;
             let now = fixture_time_at(fixture_epoch_seconds, seed.lease.now)?;
             let expiry = fixture_time_at(fixture_epoch_seconds, seed.lease.effective_expiry)?;
-            let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
+            let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
             anyhow::ensure!(
                 !lookup.has_errors(),
                 "read native pending request: {:?}",
                 lookup.errors
             );
-            let row = crate::graphql::first_row::<AgentRequestRow>(&lookup, "AgentRequest")?
+            let row = crate::store::graphql::first_row::<AgentRequestRow>(&lookup, "AgentRequest")?
                 .context("native signed request disappeared")?;
             anyhow::ensure!(
                 row.lifecycle_state == Some(RequestLifecycleState::Pending),
@@ -1523,14 +1527,15 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 seed.lease.request == RequestLifecycleState::Processing,
             )
             .await?;
-            let claimed = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
+            let claimed = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
             anyhow::ensure!(
                 !claimed.has_errors(),
                 "read native owned request: {:?}",
                 claimed.errors
             );
-            let claimed = crate::graphql::first_row::<AgentRequestRow>(&claimed, "AgentRequest")?
-                .context("native owned request disappeared")?;
+            let claimed =
+                crate::store::graphql::first_row::<AgentRequestRow>(&claimed, "AgentRequest")?
+                    .context("native owned request disappeared")?;
             anyhow::ensure!(
                 claimed.lifecycle_state == Some(seed.lease.request)
                     && claimed.execution_generation.as_deref()
@@ -1554,9 +1559,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             }
             let scoped_session = node.execute(&format!(
                 r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id node_did requester_did agent_id created_at observation }} }}"#,
-                crate::graphql::escape_graphql_string(&session_id),
-                crate::graphql::escape_graphql_string(&node_did),
-                crate::graphql::escape_graphql_string(&node_did),
+                crate::store::graphql::escape_graphql_string(&session_id),
+                crate::store::graphql::escape_graphql_string(&node_did),
+                crate::store::graphql::escape_graphql_string(&node_did),
             )).await;
             anyhow::ensure!(
                 !scoped_session.has_errors(),
@@ -1564,7 +1569,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 scoped_session.errors
             );
             let sessions: Vec<gents_protocol::session::AgentSession> =
-                crate::graphql::rows(&scoped_session, "AgentSession")?;
+                crate::store::graphql::rows(&scoped_session, "AgentSession")?;
             let [session] = sessions.as_slice() else {
                 anyhow::bail!("real claim did not create one exact requester-scoped session")
             };
@@ -1739,7 +1744,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let nested_node = Arc::clone(&node);
                     let generation = symbolic_generation(*generation);
                     let now = native.fixture_time(*now)?;
-                    let attempted = crate::config_client::ConfigAccess::transact_local_write(
+                    let attempted = crate::store::config_client::ConfigAccess::transact_local_write(
                         &node,
                         None,
                         "lean.same_task_holder",
@@ -1763,8 +1768,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     match attempted {
                         Err(error)
                             if matches!(
-                                error.downcast_ref::<crate::config_client::ConfigClientError>(),
-                                Some(crate::config_client::ConfigClientError::Reentrant(_))
+                                error
+                                    .downcast_ref::<crate::store::config_client::ConfigClientError>(
+                                    ),
+                                Some(crate::store::config_client::ConfigClientError::Reentrant(_))
                             ) =>
                         {
                             native.observe(false).await
@@ -2018,7 +2025,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         "replicate native segment: {:?}",
                         response.errors
                     );
-                    let doc_id = crate::graphql::created_doc_id(
+                    let doc_id = crate::store::graphql::created_doc_id(
                         &serde_json::json!({ "data": response.data }),
                         "AgentOutputSegment",
                     )?;
@@ -2122,8 +2129,8 @@ impl NativeCanonicalExecution {
             }
             Err(error) => return Err(error.context("native CloseAuxiliary owner failed")),
         }
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
-        let response = crate::config_client::ConfigAccess::local(self.node.clone())
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
+        let response = crate::store::config_client::ConfigAccess::local(self.node.clone())
             .execute(&format!(
                 r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
                 crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -2235,7 +2242,7 @@ impl NativeCanonicalExecution {
             Err(error) => return Err(error.context("native ClosePartial owner failed")),
         };
 
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -2482,7 +2489,7 @@ impl NativeCanonicalExecution {
                 .node
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode }} }}"#,
-                    crate::graphql::escape_graphql_string(&accepted.tool_call_doc_id),
+                    crate::store::graphql::escape_graphql_string(&accepted.tool_call_doc_id),
                 ))
                 .await;
             anyhow::ensure!(
@@ -3048,15 +3055,20 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
     .unwrap()
     .expect("dispatched generated tool has a physical lifecycle");
     let binding = tool.tool_output_binding().unwrap();
-    let physical = crate::graphql::escape_graphql_string(&physical);
+    let physical = crate::store::graphql::escape_graphql_string(&physical);
     for (label, deadline_value) in [("missing", None), ("malformed", Some("not-a-deadline"))] {
         let deadline_field = deadline_value
-            .map(|value| format!("\"{}\"", crate::graphql::escape_graphql_string(value)))
+            .map(|value| {
+                format!(
+                    "\"{}\"",
+                    crate::store::graphql::escape_graphql_string(value)
+                )
+            })
             .unwrap_or_else(|| "null".to_owned());
         let mutation = format!(
             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{physical}" }} }}, input: {{ deadline_at: {deadline_field} }}) {{ _docID }} }}"#
         );
-        let changed = crate::config_client::ConfigAccess::write_local(
+        let changed = crate::store::config_client::ConfigAccess::write_local(
             &native.node,
             "test.generated_tool_append_invalid_deadline",
             &mutation,
@@ -3111,10 +3123,10 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
 
 #[tokio::test]
 async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
-    use crate::config_client::ConfigApplyTxn;
     use crate::request::lifecycle::{
         RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome,
     };
+    use crate::store::config_client::ConfigApplyTxn;
 
     let case = crate::lean_vocab_test::lean_contract_snapshot()
         .canonical_execution_gate_cases
@@ -3183,19 +3195,19 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     native.query_document = *query_document;
     let node = Arc::clone(&native.node);
     let request_doc_id = native.request_doc_id.clone();
-    let request = crate::graphql::escape_graphql_string(&request_doc_id);
+    let request = crate::store::graphql::escape_graphql_string(&request_doc_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} }} }}"#,
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
-    let row = crate::graphql::graphql_with_transaction_retry(
+    let row = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &query,
         "test.generated_renewal_gate_stale_request",
     )
     .await
     .unwrap();
-    let stale: AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
+    let stale: AgentRequestRow = crate::store::graphql::first_row(&row, "AgentRequest")
         .unwrap()
         .expect("generated native request");
     let stale_expiry = stale.execution_lease_expires_at.as_deref().unwrap();
@@ -3336,13 +3348,13 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     assert!(before.in_flight);
     assert_eq!(before.tool_stuck_since, None);
 
-    let doc_id = crate::graphql::escape_graphql_string(&native.request_doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(&native.request_doc_id);
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(
         filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
         input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#
     );
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         &native.node,
         "test.native_in_flight_negative_control",
         &mutation,

@@ -229,13 +229,14 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                         else {
                             return Ok::<_, anyhow::Error>(None);
                         };
-                        let commit = crate::graphql::newest_document_composite_commit_in_txn(
-                            txn,
-                            &goal.doc_id,
-                            "test.current_goal_revision",
-                        )
-                        .await?
-                        .unwrap();
+                        let commit =
+                            crate::store::graphql::newest_document_composite_commit_in_txn(
+                                txn,
+                                &goal.doc_id,
+                                "test.current_goal_revision",
+                            )
+                            .await?
+                            .unwrap();
                         Ok(Some(GoalRevision {
                             document: goal.doc_id,
                             composite: commit.cid,

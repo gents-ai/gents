@@ -24,7 +24,7 @@ pub(super) async fn agent_tool_call_datetime_update_fragment(
             }}
         }}"#
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "agent_tool_call_datetime_update_fragment",

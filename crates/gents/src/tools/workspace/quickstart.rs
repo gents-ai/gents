@@ -12,7 +12,7 @@ use super::{
     HostExecutorContext, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind,
     CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
 };
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 
 fn repository_id(path: &Path, principal_did: &str) -> String {
     let mut hasher = Sha256::new();

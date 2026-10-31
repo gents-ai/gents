@@ -61,7 +61,7 @@ impl DefraQueryMcp {
             collection: args.collection,
             options: args.options,
         };
-        let access = gents::config_client::ConfigAccess::graphql(self.graphql.clone());
+        let access = gents::store::config_client::ConfigAccess::graphql(self.graphql.clone());
         let value=gents::defra_query::execute_command(&access,&params,&self.options.scope).await
             .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
         gents::defra_query::render_result(value)
@@ -82,13 +82,13 @@ impl DefraQueryMcp {
                 ErrorData::invalid_request("write requires HTTP caller authorization", None)
             })?;
         let authorization=parts.headers.get(axum::http::header::AUTHORIZATION).and_then(|h|h.to_str().ok()).ok_or_else(||ErrorData::invalid_request("write requires a caller-signed DefraDB Bearer authorization; query remains anonymous",None))?;
-        let endpoint = gents::config_client::GraphqlEndpoint::with_delegated_authorization(
+        let endpoint = gents::store::config_client::GraphqlEndpoint::with_delegated_authorization(
             self.graphql.clone(),
             authorization,
         )
         .map_err(|e| ErrorData::invalid_request(e.to_string(), None))?;
         let tool = gents::plugin::application_write::WriteTool::new(
-            gents::config_client::ConfigAccess::Graphql(endpoint),
+            gents::store::config_client::ConfigAccess::Graphql(endpoint),
             self.options.write_collections.clone(),
             None,
         );

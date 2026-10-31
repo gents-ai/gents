@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::graphql_with_transaction_retry;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::graphql_with_transaction_retry;
 use serde_json::{json, Value};
 
 pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {

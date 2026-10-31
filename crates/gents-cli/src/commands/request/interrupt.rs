@@ -1,8 +1,10 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::{graphql::escape_graphql_string, tools::call::lifecycle::CancelCause, ConfigAccess};
+use gents::{
+    store::graphql::escape_graphql_string, tools::call::lifecycle::CancelCause, ConfigAccess,
+};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};

@@ -6,8 +6,8 @@ use gents_protocol::job::{
 };
 
 use super::super::admit::Refusal;
-use crate::config_client::ConfigApplyTxn;
 use crate::plugin::job_calls::job_state;
+use crate::store::config_client::ConfigApplyTxn;
 use crate::tools::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
 
 /// How a job row ends: the guest's terminal output, a host refusal, or a control.

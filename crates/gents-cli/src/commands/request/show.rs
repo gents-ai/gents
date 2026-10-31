@@ -1,8 +1,8 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use gents::{graphql::escape_graphql_string, ConfigAccess};
+use gents::{store::graphql::escape_graphql_string, ConfigAccess};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 

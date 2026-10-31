@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// Complete selectable inference preset; multiple profiles may select different
 /// models or efforts through the same backend without duplicating credentials.
@@ -107,13 +107,13 @@ pub(crate) async fn load_inference_profile_record(
     node_did: &str,
     profile_id: &str,
 ) -> Result<Option<(String, InferenceProfile)>> {
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "document_config.inference_profile.read",
         |txn| {
             Box::pin(async move {
-                crate::config_client::read_desired_state_record_in_txn(
+                crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::store::collection::Collection::InferenceProfile,
                     node_did,
@@ -133,7 +133,7 @@ pub async fn list_inference_profile_records(
     node_did: &str,
 ) -> Result<Vec<(String, InferenceProfile)>> {
     let escaped_node_did = escape_graphql_string(node_did);
-    let (fields, _) = crate::config_client::config_projection(
+    let (fields, _) = crate::store::config_client::config_projection(
         crate::store::collection::Collection::InferenceProfile,
         None,
     )?;
@@ -188,21 +188,21 @@ pub async fn upsert_inference_profile(
 ) -> Result<()> {
     profile.validate()?;
     let value = serde_json::to_value(profile)?;
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::store::collection::Collection::InferenceProfile,
             add: value.clone(),
             update: value,
         },
     ])?;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "document_config.inference_profile.upsert",
         |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::config_client::apply_desired_state_plan(txn, plan)
+                crate::store::config_client::apply_desired_state_plan(txn, plan)
                     .await
                     .map(|_| ())
             })

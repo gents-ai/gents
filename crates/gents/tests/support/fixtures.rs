@@ -137,10 +137,10 @@ pub async fn configure_child_agent(
     targets: Vec<gents::AgentTargetDocument>,
     enabled: bool,
 ) {
-    use gents::config_client::{
+    use gents::documents::{AgentContext, AgentTools, Tools};
+    use gents::store::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::documents::{AgentContext, AgentTools, Tools};
     use gents::Collection;
 
     gents::ConfigAccess::transact_local_write(node, None, "test.configure_child_agent", |txn| {
@@ -270,7 +270,7 @@ pub async fn configure_child_agent(
                     })
                     .collect(),
             )?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
+            gents::store::config_client::apply_desired_state_plan(txn, &plan)
                 .await
                 .map(|_| ())
         })
@@ -287,10 +287,10 @@ pub async fn configure_agent_tools(
     tools: gents::documents::Tools,
     referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
-    use gents::config_client::{
+    use gents::documents::AgentContext;
+    use gents::store::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::documents::AgentContext;
     use gents::Collection;
 
     assert_eq!(tools.node_did, node_did);
@@ -344,7 +344,7 @@ pub async fn configure_agent_tools(
                     })
                     .collect(),
             )?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
+            gents::store::config_client::apply_desired_state_plan(txn, &plan)
                 .await
                 .map(|_| ())
         })
@@ -408,13 +408,13 @@ async fn bind_agent_backend_chain(
     model_name: &str,
 ) {
     ensure_node(node, node_did).await.unwrap();
-    gents::config_client::ConfigAccess::transact_local_write(
+    gents::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.bind_behavior_inference",
         |txn| {
             Box::pin(async move {
-                use gents::config_client::{
+                use gents::store::config_client::{
                     read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
@@ -491,7 +491,7 @@ async fn bind_agent_backend_chain(
                     })
                     .collect(),
                 )?;
-                gents::config_client::apply_desired_state_plan(txn, &plan).await
+                gents::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
         },
     )

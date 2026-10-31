@@ -730,7 +730,9 @@ async fn boot_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> BootedAgent
 }
 
 async fn install_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) {
-    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     gents::ensure_node(node, owner).await.unwrap();
     let profile_id = format!("{AGENT_ID}:inference");
     let documents = [
@@ -765,7 +767,9 @@ async fn install_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) 
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.install_budget_backend", |txn| {
         let plan = &plan;
-        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();

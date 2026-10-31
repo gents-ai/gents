@@ -2,7 +2,7 @@ use gents_protocol::job::{JobPauseReason, JobState};
 
 use super::super::delivery::{TerminalFields, TerminalJobProgress};
 use super::*;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::tools::background::job::records::{read_progress, read_step_state, HostProgressFacts};
 
 /// A plugin job terminal written in a caller's transaction, applied to the

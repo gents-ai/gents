@@ -6,13 +6,13 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::documents::{ConfigReferences, InferenceBackend};
-use crate::graphql::escape_graphql_string;
 use crate::inference::auth::credential::{
     account_failure_state, backend_account, list_accounts, serving_account, AccountState,
     AccountSummary, ServingAccount,
 };
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
 #[derive(Debug, Clone, Default, Deserialize)]

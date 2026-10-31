@@ -140,7 +140,7 @@ impl DefraSessionHook {
         }
         if lifecycle.kind() == crate::tools::call::lifecycle::ToolRowKind::PluginJob {
             let result = match crate::tools::background::job::control::control_by_doc_id(
-                &crate::config_client::ConfigAccess::local(self.node.clone()),
+                &crate::store::config_client::ConfigAccess::local(self.node.clone()),
                 &caller,
                 lifecycle
                     .doc_id()

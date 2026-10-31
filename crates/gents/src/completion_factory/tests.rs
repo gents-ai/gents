@@ -706,11 +706,11 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         crate::sign_agent_request_create(agent.node.identity.as_ref(), &mut create)
             .await
             .unwrap();
-        let response = crate::config_client::ConfigAccess::local(node.clone())
+        let response = crate::store::config_client::ConfigAccess::local(node.clone())
             .write("test.budget_parent", &create.graphql_mutation().unwrap())
             .await
             .unwrap();
-        let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         let parent = crate::request::admission::load_request_for_admission_test(&node, &doc_id)
             .await
             .unwrap();
@@ -731,7 +731,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         let mut request = lifecycle.request().clone();
         if case.pinned_limit == Some(0) {
             let doc_id = escape_graphql_string(&request.doc_id);
-            crate::config_client::ConfigAccess::local(node.clone())
+            crate::store::config_client::ConfigAccess::local(node.clone())
                 .write(
                     "test.observed_zero_budget",
                     &format!("mutation {{ update_AgentRequest(docID: \"{doc_id}\", input: {{ max_total_tokens: 0 }}) {{ _docID }} }}"),
@@ -777,7 +777,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 }}) {{ _docID }}
             }}"#
             );
-            crate::config_client::ConfigAccess::local(node.clone())
+            crate::store::config_client::ConfigAccess::local(node.clone())
                 .write("test.budget_call", &seed)
                 .await
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
@@ -1247,7 +1247,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
             model = escape_graphql_string(&agent.model_name),
             did = escape_graphql_string(&did),
         );
-        crate::config_client::ConfigAccess::local(node.clone())
+        crate::store::config_client::ConfigAccess::local(node.clone())
             .write("test.calibration_call", &seed)
             .await
             .unwrap();

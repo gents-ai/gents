@@ -182,8 +182,8 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
             crate::tools::background::completion::background_completion_notification_message_key(
                 &doc, "tool",
             );
-        let escaped = crate::graphql::escape_graphql_string(&key);
-        let result = crate::config_client::ConfigAccess::local(node.clone()).execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#)).await.unwrap();
+        let escaped = crate::store::graphql::escape_graphql_string(&key);
+        let result = crate::store::config_client::ConfigAccess::local(node.clone()).execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#)).await.unwrap();
         assert_eq!(result["data"]["AgentMessage"].as_array().unwrap().len(), 1);
         process.finish().await;
         drop(request_owner);
@@ -223,18 +223,19 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         .unwrap();
     let _recorder = registry.process_recorder(&call, &doc);
     registry.set_cancellation_reason(&call, &doc, "explicit stop", false);
-    let (_, count) = crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
-        Some(1),
-        finish_background_execution(
-            tool,
-            node.clone(),
-            registry.live_outputs.clone(),
-            registry.clone(),
-            reservation,
-            Ok(crate::tools::call::lifecycle::ToolOutcome::Cancelled),
-        ),
-    )
-    .await;
+    let (_, count) =
+        crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            finish_background_execution(
+                tool,
+                node.clone(),
+                registry.live_outputs.clone(),
+                registry.clone(),
+                reservation,
+                Ok(crate::tools::call::lifecycle::ToolOutcome::Cancelled),
+            ),
+        )
+        .await;
     assert_eq!(count, 1);
     assert!(registry.contains(&call, &doc).await);
     let before_retry = ToolCallLifecycle::load_by_doc_id(
@@ -294,8 +295,8 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
     let key = crate::tools::background::completion::background_completion_notification_message_key(
         &doc, "tool",
     );
-    let escaped = crate::graphql::escape_graphql_string(&key);
-    let result = crate::config_client::ConfigAccess::local(node.clone())
+    let escaped = crate::store::graphql::escape_graphql_string(&key);
+    let result = crate::store::config_client::ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
         ))
@@ -638,18 +639,19 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
         .reserve(call.clone(), doc.clone(), CancellationToken::new())
         .unwrap();
     let _recorder = registry.process_recorder(&call, &doc);
-    let (_, count) = crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
-        Some(1),
-        finish_background_execution(
-            tool,
-            node.clone(),
-            registry.live_outputs.clone(),
-            registry.clone(),
-            reservation,
-            Ok(crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(result)),
-        ),
-    )
-    .await;
+    let (_, count) =
+        crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            finish_background_execution(
+                tool,
+                node.clone(),
+                registry.live_outputs.clone(),
+                registry.clone(),
+                reservation,
+                Ok(crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(result)),
+            ),
+        )
+        .await;
     assert_eq!(count, 1);
     assert!(registry.contains(&call, &doc).await);
     assert_eq!(
@@ -671,7 +673,7 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
         .unwrap()
         .is_none());
     let shown = crate::tools::call::lifecycle::query::load_tool_call_presentation(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &doc,
         &admission.node_did,
         &session,
@@ -683,8 +685,8 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
     let key = crate::tools::background::completion::background_completion_notification_message_key(
         &doc, "tool",
     );
-    let escaped = crate::graphql::escape_graphql_string(&key);
-    let notification = crate::config_client::ConfigAccess::local(node.clone())
+    let escaped = crate::store::graphql::escape_graphql_string(&key);
+    let notification = crate::store::config_client::ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
         ))
@@ -747,8 +749,8 @@ async fn completed_background_call_resolves_parent_from_physical_request() {
     let key = crate::tools::background::completion::background_completion_notification_message_key(
         &doc, "tool",
     );
-    let escaped = crate::graphql::escape_graphql_string(&key);
-    let result = crate::config_client::ConfigAccess::local(node.clone())
+    let escaped = crate::store::graphql::escape_graphql_string(&key);
+    let result = crate::store::config_client::ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
         ))

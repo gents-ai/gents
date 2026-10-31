@@ -54,7 +54,7 @@ pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<()> 
             ),
         }
         for (field, pointer) in &step.seed_fields {
-            gents::graphql::validate_graphql_name(field).with_context(|| {
+            gents::store::graphql::validate_graphql_name(field).with_context(|| {
                 format!(
                     "prepare step for plugin {} seed field {field:?}",
                     step.plugin

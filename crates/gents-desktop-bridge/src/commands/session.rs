@@ -25,7 +25,7 @@ pub async fn session_snapshot(
         {
             return Ok(build_session_snapshot_for_node_with_transcript(
                 core.as_ref(),
-                &gents::config_client::ConfigAccess::local(core.node_arc()),
+                &gents::store::config_client::ConfigAccess::local(core.node_arc()),
                 Some(node_did),
                 &session_id,
                 request_id.as_deref(),
@@ -243,7 +243,7 @@ pub async fn session_snapshot(
     let transcript_page_tip_ms = transcript_started.elapsed().as_millis() as u64;
     let projection_started = std::time::Instant::now();
     let context_store = context_store.map(|tip| transcript_page.store.merge_snapshot(tip));
-    let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
+    let local_access = gents::store::config_client::ConfigAccess::local(core.node_arc());
     let session_access = operator_access.as_ref().unwrap_or(&local_access);
     let mut snapshot = build_session_snapshot_for_node_with_transcript(
         core.as_ref(),
@@ -336,7 +336,7 @@ fn resolve_session_node(
 }
 
 struct TranscriptReadScope {
-    operator_access: Option<gents::config_client::ConfigAccess>,
+    operator_access: Option<gents::store::config_client::ConfigAccess>,
     requester_scope: Option<String>,
 }
 
@@ -351,7 +351,7 @@ fn transcript_read_scope(
     let node_scope = core.transcript_node_scope(node_did);
     let operator_access = core
         .operator_observation_graphql(node_did)
-        .map(gents::config_client::ConfigAccess::Graphql);
+        .map(gents::store::config_client::ConfigAccess::Graphql);
     let store = core.store().snapshot();
     let session = store
         .sessions
@@ -381,8 +381,8 @@ pub async fn message_attachments(
     let scope = transcript_read_scope(core, session_id, node_did);
     let access = scope
         .operator_access
-        .unwrap_or_else(|| gents::config_client::ConfigAccess::local(core.node_arc()));
-    let escape = gents::graphql::escape_graphql_string;
+        .unwrap_or_else(|| gents::store::config_client::ConfigAccess::local(core.node_arc()));
+    let escape = gents::store::graphql::escape_graphql_string;
     let requester = scope
         .requester_scope
         .as_deref()
@@ -488,7 +488,7 @@ pub async fn session_rows(
         Err(error) => BridgeError::untyped(format!("{error:#}")),
     };
     let store = core.store().snapshot();
-    let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
+    let local_access = gents::store::config_client::ConfigAccess::local(core.node_arc());
     let provenance_access = operator_access.as_ref().unwrap_or(&local_access);
     let mut view = empty(None);
     let mut messages = Vec::new();
@@ -601,7 +601,7 @@ pub async fn session_context_details(
     }
     let operator_access = core
         .operator_observation_graphql(&request.node_did)
-        .map(gents::config_client::ConfigAccess::Graphql);
+        .map(gents::store::config_client::ConfigAccess::Graphql);
     let node_scope = core.transcript_node_scope(&request.node_did);
     let requester =
         {
@@ -618,7 +618,7 @@ pub async fn session_context_details(
                 operator_access.is_some(),
             )
         };
-    let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
+    let local_access = gents::store::config_client::ConfigAccess::local(core.node_arc());
     crate::snapshot::load_session_context_details(
         core,
         operator_access.as_ref().unwrap_or(&local_access),

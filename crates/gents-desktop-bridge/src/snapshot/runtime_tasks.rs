@@ -383,7 +383,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
     cache: &StarterCache,
     summaries: impl IntoIterator<Item = &'a mut SessionSummary>,
 ) where
-    R: gents::config_client::ConfigRead + ?Sized,
+    R: gents::store::config_client::ConfigRead + ?Sized,
 {
     let mut started = Vec::new();
     for summary in summaries {

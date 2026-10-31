@@ -34,7 +34,7 @@ use crate::tools::workspace::{ActionJournalEntry, ActionJournalState};
 /// A plugin writes only a pack's own collections: never the runtime's
 /// documents and never a protected collection.
 pub(crate) fn writable_output_collection(collection: &str) -> Result<()> {
-    crate::graphql::validate_collection_identifier(collection)?;
+    crate::store::graphql::validate_collection_identifier(collection)?;
     anyhow::ensure!(
         !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection),
         "a plugin cannot write {collection}, which belongs to the runtime"
@@ -55,12 +55,12 @@ pub fn validate_handler(
         "callback plugin {plugin} pins {digest:?}, which is not sha256:<64 hex>"
     );
     if let Some(field) = correlation_field {
-        crate::graphql::validate_graphql_name(field)?;
+        crate::store::graphql::validate_graphql_name(field)?;
     }
     let mut names = std::collections::BTreeSet::new();
     for output in outputs {
         writable_output_collection(&output.collection)?;
-        crate::graphql::validate_graphql_name(&output.correlation_field)?;
+        crate::store::graphql::validate_graphql_name(&output.correlation_field)?;
         anyhow::ensure!(
             names.insert(output.name.as_str()),
             "callback plugin {plugin} declares output {:?} twice",
@@ -294,7 +294,7 @@ async fn commit_success(
     let creates = documents
         .iter()
         .map(|(collection, document)| {
-            crate::graphql::validate_collection_identifier(collection)?;
+            crate::store::graphql::validate_collection_identifier(collection)?;
             let input = gents_protocol::graphql::graphql_input_literal(document)?;
             Ok(format!(
                 "mutation {{ create_{collection}(input: {input}) {{ _docID }} }}"
@@ -305,7 +305,7 @@ async fn commit_success(
     let stamps = StampContext::Callback {
         node_did: invocation.owner_node_did.clone(),
     };
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "callback.plugin_result",
@@ -535,7 +535,7 @@ mod tests {
     }
 
     async fn rows(node: &EmbeddedNode, query: &str, collection: &str) -> Vec<Value> {
-        crate::graphql::rows::<Value>(&node.execute(query).await, collection).unwrap()
+        crate::store::graphql::rows::<Value>(&node.execute(query).await, collection).unwrap()
     }
 
     #[tokio::test]

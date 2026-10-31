@@ -9,7 +9,6 @@ pub mod adapter_projection;
 pub mod agent;
 pub mod codex_shim_binding;
 pub(crate) mod completion_factory;
-pub mod config_client;
 pub mod configuration_discovery;
 pub mod defra_query;
 pub mod defra_write;
@@ -22,7 +21,6 @@ pub mod failure_text;
 pub mod file_inventory;
 pub mod file_lock;
 pub mod goal;
-pub mod graphql;
 pub mod health_checker;
 pub mod inference;
 pub mod inference_observation;
@@ -74,7 +72,7 @@ pub(crate) mod test_support {
     }
 
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
-        crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
+        crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
         crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
         crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
     ];
@@ -175,7 +173,7 @@ pub(crate) mod test_support {
         owner: &str,
         agent_id: &str,
     ) {
-        use crate::config_client::{
+        use crate::store::config_client::{
             ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         use crate::Collection;
@@ -195,7 +193,9 @@ pub(crate) mod test_support {
         let plan = DesiredStateApplyPlan::new(documents).unwrap();
         ConfigAccess::transact_local_write(node, None, "test.install_agent", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         })
         .await
         .unwrap();
@@ -325,7 +325,6 @@ pub use agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
-pub use config_client::ConfigAccess;
 pub use defra_node;
 pub use documents::template::{
     check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
@@ -420,6 +419,7 @@ pub use runtime_snapshot::{
 pub use session::load_history;
 pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
 pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};
+pub use store::config_client::ConfigAccess;
 pub use store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -469,11 +469,11 @@ pub use truncation::{TruncationLimits, TruncationMode};
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::AgentBuildError;
-    pub use crate::config_client::TXN_TRACING_TARGET;
     pub use crate::request::lifecycle::activate_workspace_bound_request;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::request::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::request::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
+    pub use crate::store::config_client::TXN_TRACING_TARGET;
 }
 
 pub(crate) mod tool_output;

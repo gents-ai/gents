@@ -8,7 +8,7 @@ mod contract_tests;
 mod receipt_tests;
 #[cfg(test)]
 mod start_tests;
-use crate::config_client::ConfigApplyTxn;
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 
 pub(crate) enum PreparedGoalControl {
@@ -37,10 +37,10 @@ pub(crate) async fn prepare_goal_control(
     txn: &ConfigApplyTxn<'_>,
     command: &SessionGoalControl,
 ) -> Result<Result<PreparedGoalControl, String>> {
-    crate::graphql::fence_arrivals(txn, "AgentSession").await?;
-    crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
-    crate::graphql::fence_arrivals(txn, "Goal").await?;
-    crate::graphql::fence_arrivals(txn, "GoalCreationClaim").await?;
+    crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
+    crate::store::graphql::fence_arrivals(txn, "AgentRequest").await?;
+    crate::store::graphql::fence_arrivals(txn, "Goal").await?;
+    crate::store::graphql::fence_arrivals(txn, "GoalCreationClaim").await?;
     let session = crate::session::load_agent_session_owner_in_txn(
         txn,
         &command.node_did,
@@ -83,7 +83,7 @@ pub(crate) async fn prepare_goal_control(
                         "only a completed or removed goal can be replaced".into()
                     ));
                 }
-                let current = crate::graphql::newest_document_composite_commit_in_txn(
+                let current = crate::store::graphql::newest_document_composite_commit_in_txn(
                     txn,
                     &goal.doc_id,
                     "goal.replace_preflight",
@@ -213,7 +213,7 @@ pub(crate) async fn prepare_goal_control(
     let Some(expected) = command.expected.as_ref() else {
         return Ok(Err("goal control lacks its observed revision".into()));
     };
-    let current = crate::graphql::newest_document_composite_commit_in_txn(
+    let current = crate::store::graphql::newest_document_composite_commit_in_txn(
         txn,
         &goal.doc_id,
         "goal.control_preflight",

@@ -265,7 +265,7 @@ async fn signed_image_receipts_commit_only_to_the_exact_pending_demand() {
         create_FileImageHydrationRequest(input: {{ {fields}, status: "pending", created_at: "2026-10-20T00:00:00Z" }}) {{ _docID }}
     }}"#)).await.unwrap();
     store.demand.document_id =
-        crate::graphql::created_doc_id(&response, "FileImageHydrationRequest").unwrap();
+        crate::store::graphql::created_doc_id(&response, "FileImageHydrationRequest").unwrap();
     let mut receipt = FileImageHydrationReceipt {
         version: FILE_IMAGE_RECEIPT_VERSION,
         demand: store.demand.demand.clone(),

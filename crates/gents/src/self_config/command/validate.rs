@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::{
+use crate::store::config_client::{
     validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 
@@ -44,7 +44,7 @@ impl ConfigCommandTool {
                         collection: *collection, add: value.clone(), update: value.clone(),
                     }).collect())?;
                     if let Err(error) = validate_desired_state_plan(txn, &plan).await {
-                        if crate::config_client::is_transaction_step_unavailable(&error) {
+                        if crate::store::config_client::is_transaction_step_unavailable(&error) {
                             return Err(error);
                         }
                         errors.push(json!({"error":format!("{error:#}")}));
@@ -67,21 +67,22 @@ impl ConfigCommandTool {
                 use crate::documents::SurfaceToolDecl;
                 let (tool_name, collection, result) = match entry {
                     SurfaceToolDecl::Create(decl) => {
-                        let result =
-                            if decl.collection == crate::session::mailbox::MAILBOX_COLLECTION {
-                                crate::session::mailbox::validate_mailbox_write_decl(&decl)
-                            } else {
-                                crate::defra_write::BoundedWriteTool::new(
-                                    crate::config_client::ConfigAccess::local(self.node.clone()),
-                                    decl.clone(),
-                                )
-                                .ensure_well_formed()
-                            };
+                        let result = if decl.collection
+                            == crate::session::mailbox::MAILBOX_COLLECTION
+                        {
+                            crate::session::mailbox::validate_mailbox_write_decl(&decl)
+                        } else {
+                            crate::defra_write::BoundedWriteTool::new(
+                                crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                                decl.clone(),
+                            )
+                            .ensure_well_formed()
+                        };
                         (decl.tool_name, decl.collection, result)
                     }
                     SurfaceToolDecl::Query(decl) => {
                         let result = crate::defra_query::BoundedQueryTool::new(
-                            crate::config_client::ConfigAccess::local(self.node.clone()),
+                            crate::store::config_client::ConfigAccess::local(self.node.clone()),
                             decl.clone(),
                         )
                         .validate_schema()

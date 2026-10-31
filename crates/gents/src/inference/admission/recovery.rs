@@ -5,7 +5,7 @@ use serde::Deserialize;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct InferenceCallRecoveryReport {
@@ -136,7 +136,7 @@ async fn lookup_parent_request(
         format!("querying parent request for inference recovery request_id={request_id}")
     })?;
 
-    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
+    let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
     Ok(rows.into_iter().next())
 }
 
@@ -187,14 +187,17 @@ async fn recover_inference_call_row(
         }}"#,
     );
 
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "recover_inference_call",
         &mutation,
     )
     .await
     .context("recover inference call mutation")?;
-    Ok(!crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty())
+    Ok(
+        !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
+            .is_empty(),
+    )
 }
 
 fn request_is_interrupted(parent: &AgentRequestRow) -> bool {

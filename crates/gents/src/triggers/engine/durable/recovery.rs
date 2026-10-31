@@ -10,7 +10,7 @@ pub(crate) async fn recover_outcomes(
     node: &std::sync::Arc<EmbeddedNode>,
     owner: &str,
 ) -> Result<usize> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "trigger.recover_outcomes",
@@ -20,14 +20,14 @@ pub(crate) async fn recover_outcomes(
 }
 
 pub(crate) async fn recover_outcomes_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
 ) -> Result<usize> {
     let response = txn.execute_local_response(&format!(
         r#"{{TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, emit_outcome: {{_eq: true}}}}) {{{FIRE_FIELDS}}}}}"#,
-        crate::graphql::escape_graphql_string(owner)
+        crate::store::graphql::escape_graphql_string(owner)
     )).await?;
-    let fires: Vec<TriggerFire> = crate::graphql::rows(&response, "TriggerFire")?;
+    let fires: Vec<TriggerFire> = crate::store::graphql::rows(&response, "TriggerFire")?;
     let now = chrono::Utc::now().to_rfc3339();
     let mut recovered = 0;
     for fire in fires {
@@ -39,12 +39,12 @@ pub(crate) async fn recover_outcomes_in_txn(
                 r#"{{AgentRequest(filter: {{
             node_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
         }}) {{request_id lifecycle_state failure_reason}}}}"#,
-                crate::graphql::escape_graphql_string(owner),
-                crate::graphql::escape_graphql_string(&fire.request_id)
+                crate::store::graphql::escape_graphql_string(owner),
+                crate::store::graphql::escape_graphql_string(&fire.request_id)
             ))
             .await?;
         let requests: Vec<gents_protocol::row::AgentRequestRow> =
-            crate::graphql::rows(&response, "AgentRequest")?;
+            crate::store::graphql::rows(&response, "AgentRequest")?;
         anyhow::ensure!(
             requests.len() == 1,
             "Task fire has no unique admitted request during outcome recovery"
@@ -90,7 +90,7 @@ pub(crate) async fn recover_outcomes_in_txn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::triggers::engine::durable::{fire_key, stage_fire_request};
 
     #[tokio::test]
@@ -148,9 +148,9 @@ mod tests {
                 request_id: "{}", node_did: "{}", session_id: "{}", agent_id: "behavior",
                 purpose: "normal", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z"
             }}) {{_docID}} }}"#,
-                crate::graphql::escape_graphql_string(&fire.request_id),
-                crate::graphql::escape_graphql_string(&fire.identity.owner_did),
-                crate::graphql::escape_graphql_string(&session)
+                crate::store::graphql::escape_graphql_string(&fire.request_id),
+                crate::store::graphql::escape_graphql_string(&fire.identity.owner_did),
+                crate::store::graphql::escape_graphql_string(&session)
             );
             ConfigAccess::transact_local_write(&node, None, "test.seed_terminal_outcome_boundary", |txn| {
                 let fire = &fire;
@@ -158,7 +158,7 @@ mod tests {
                 Box::pin(async move {
                     stage_fire_request(txn, fire, request_mutation).await?;
                     if goal_backed {
-                        let response = txn.execute(&format!("{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}}}}", crate::graphql::escape_graphql_string(&fire.request_id))).await?;
+                        let response = txn.execute(&format!("{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}}}}", crate::store::graphql::escape_graphql_string(&fire.request_id))).await?;
                         let root = response["data"]["AgentRequest"][0]["_docID"].as_str().unwrap();
                         txn.execute_with_variables("mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
                             &serde_json::json!({"input": {
@@ -201,7 +201,7 @@ mod tests {
                 0,
                 "{name}"
             );
-            let response = crate::graphql::graphql_with_transaction_retry(
+            let response = crate::store::graphql::graphql_with_transaction_retry(
                 &node,
                 "{ FireOutcome { handoff_id } }",
                 "verify recovered outcome uniqueness",
@@ -209,7 +209,7 @@ mod tests {
             .await
             .unwrap();
             let outcomes: Vec<serde_json::Value> =
-                crate::graphql::rows(&response, "FireOutcome").unwrap();
+                crate::store::graphql::rows(&response, "FireOutcome").unwrap();
             assert_eq!(outcomes.len(), expected, "{name}");
             node.shutdown().await;
         }

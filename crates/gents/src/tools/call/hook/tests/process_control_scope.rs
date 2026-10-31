@@ -102,7 +102,7 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
     let session_id = hook.session_id().await.expect("owned session");
     let node_did = hook.node_did.clone();
     let requester_did = hook.active_requester_did().await;
-    let headers = crate::config_client::ConfigAccess::transact_local_write(
+    let headers = crate::store::config_client::ConfigAccess::transact_local_write(
         &hook.node,
         None,
         "test.process_control_scope.headers",
@@ -238,7 +238,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     let wait_row = fetch_tool_call_row(&node, &session_id, wait_id).await;
     assert_eq!(wait_row["lifecycle_state"], case.terminal_state);
     let persisted = crate::tools::call::lifecycle::query::load_tool_call_result(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         wait_row["_docID"].as_str().expect("physical wait call"),
         &hook.node_did,
         &session_id,
@@ -503,7 +503,7 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
 
 mod job_control {
     use super::*;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::background::job::admit::Refusal;
     use crate::tools::background::job::control::control;
     use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
@@ -609,7 +609,7 @@ mod job_control {
             self.access()
                 .execute(&format!(
                     r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
-                    crate::graphql::escape_graphql_string(&doc_id),
+                    crate::store::graphql::escape_graphql_string(&doc_id),
                 ))
                 .await
                 .unwrap()["data"]["AgentToolCall"][0]

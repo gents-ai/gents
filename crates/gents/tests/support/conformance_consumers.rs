@@ -107,7 +107,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "config_client::txn::owner_tests::tracked_transaction_finality_distinguishes_rejection_from_lost_receipt",
             package: "gents",
-            source_path: "crates/gents/src/config_client/txn_owner_tests.rs",
+            source_path: "crates/gents/src/store/config_client/txn_owner_tests.rs",
             module_path: "config_client::txn::owner_tests",
             function: "tracked_transaction_finality_distinguishes_rejection_from_lost_receipt",
         },
@@ -835,14 +835,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "config_client::desired_state::tests::guarded_publication_matches_lean_publish_if_cases",
             package: "gents",
-            source_path: "crates/gents/src/config_client/desired_state/tests.rs",
+            source_path: "crates/gents/src/store/config_client/desired_state/tests.rs",
             module_path: "config_client::desired_state::tests",
             function: "guarded_publication_matches_lean_publish_if_cases",
         },
         ConformanceConsumer::RustTest {
             id: "config_client::desired_state::tests::generated_default_replacements_preserve_runtime_startup_selection",
             package: "gents",
-            source_path: "crates/gents/src/config_client/desired_state/tests.rs",
+            source_path: "crates/gents/src/store/config_client/desired_state/tests.rs",
             module_path: "config_client::desired_state::tests",
             function: "generated_default_replacements_preserve_runtime_startup_selection",
         },

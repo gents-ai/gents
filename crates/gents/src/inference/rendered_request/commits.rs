@@ -7,8 +7,8 @@
 
 use anyhow::{Context, Result};
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestJsonCommit {
@@ -93,7 +93,7 @@ where
 }
 
 pub(crate) async fn field_commits_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     doc_ids: &[String],
     field_name: &str,
 ) -> Result<Vec<Option<RequestJsonCommit>>> {

@@ -374,7 +374,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         gents_protocol::request_input::QueueDelivery::Steer
     );
     let (node_did, session_id) = (&caused.node_did, &caused.session_id);
-    let snapshot = crate::config_client::ConfigAccess::transact_local_readonly(
+    let snapshot = crate::store::config_client::ConfigAccess::transact_local_readonly(
         &node,
         None,
         "test.steer.predecessor_order",

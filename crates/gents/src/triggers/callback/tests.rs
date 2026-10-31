@@ -667,7 +667,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     let response = node.execute(binding_mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let source = tokio::time::timeout(
@@ -696,7 +696,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     }"#;
     let created = node.execute(create).await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let doc_id = crate::graphql::single_mutation_document(&created, "create_WorkUnit")
+    let doc_id = crate::store::graphql::single_mutation_document(&created, "create_WorkUnit")
         .unwrap()
         .and_then(|row| row.get("_docID"))
         .and_then(serde_json::Value::as_str)
@@ -767,7 +767,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
                 origin
             }}
         }}"#,
-        owner = crate::graphql::escape_graphql_string(&owner_node_did),
+        owner = crate::store::graphql::escape_graphql_string(&owner_node_did),
     );
     let response = node.execute(&query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -786,7 +786,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     engine.deliver_arrivals(Some("WorkUnit")).await;
     let repeated = node.execute(&query).await;
     assert_eq!(
-        crate::graphql::rows::<serde_json::Value>(&repeated, "CallbackInvocation")
+        crate::store::graphql::rows::<serde_json::Value>(&repeated, "CallbackInvocation")
             .unwrap()
             .len(),
         1
@@ -1267,7 +1267,7 @@ struct Backlog {
     _identity: crate::store::identity::KeyIdentity,
     _home: TempDir,
     node: Arc<defra_node::EmbeddedNode>,
-    access: crate::config_client::ConfigAccess,
+    access: crate::store::config_client::ConfigAccess,
     history: String,
 }
 
@@ -1275,7 +1275,7 @@ const BACKLOG_OWNER: &str = crate::request::lifecycle::test_support::PIN_FIXED_D
 
 impl Backlog {
     async fn registered() -> Self {
-        use crate::config_client::{
+        use crate::store::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
@@ -1336,7 +1336,7 @@ impl Backlog {
     }
 
     async fn add_binding(&self, binding_id: &str) {
-        use crate::config_client::{
+        use crate::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let value = json!({"binding_id":binding_id,"event_source_id":"backlog","callback_id":"cb-backlog",
@@ -1367,7 +1367,7 @@ impl Backlog {
             )
             .await
             .unwrap();
-        crate::graphql::created_doc_id(&response, "BacklogWork").unwrap()
+        crate::store::graphql::created_doc_id(&response, "BacklogWork").unwrap()
     }
 
     fn engine(&self) -> super::CallbackEngine {
@@ -1389,11 +1389,12 @@ impl Backlog {
 
     async fn invoked(&self) -> Vec<String> {
         let response = self.node.execute("{ CallbackInvocation { origin } }").await;
-        let mut docs = crate::graphql::rows::<serde_json::Value>(&response, "CallbackInvocation")
-            .unwrap()
-            .into_iter()
-            .map(|row| row["origin"]["source_doc_id"].as_str().unwrap().to_owned())
-            .collect::<Vec<_>>();
+        let mut docs =
+            crate::store::graphql::rows::<serde_json::Value>(&response, "CallbackInvocation")
+                .unwrap()
+                .into_iter()
+                .map(|row| row["origin"]["source_doc_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
         docs.sort();
         docs
     }
@@ -1403,7 +1404,7 @@ impl Backlog {
             .transact_write("test.backlog_cursor", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        crate::config_client::event_source_cursor::load_or_seed(
+                        crate::store::config_client::event_source_cursor::load_or_seed(
                             txn,
                             BACKLOG_OWNER,
                             &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
@@ -1473,7 +1474,7 @@ async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
             "test.backlog_edit",
             &format!(
                 "mutation {{ update_BacklogWork(docID: \"{}\", input: {{label: \"edited\"}}) {{ _docID }} }}",
-                crate::graphql::escape_graphql_string(&pending)
+                crate::store::graphql::escape_graphql_string(&pending)
             ),
         )
         .await

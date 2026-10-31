@@ -54,13 +54,13 @@ use anyhow::Result;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::config_client::ConfigAccess;
 use crate::eval::checks::CheckRegistry;
 use crate::eval::runner::freeze::thaw;
 use crate::eval::runner::liveness::{cancel_requested, clear_cancel, marker_poll, refuse_if_held};
 use crate::eval::runner::progress::ProgressWriter;
 use crate::eval::runner::trial::{execute_trial, Slot, ViewWriter};
 use crate::eval::TrialRecord;
+use crate::store::config_client::ConfigAccess;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutcome {

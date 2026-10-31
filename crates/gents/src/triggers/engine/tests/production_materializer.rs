@@ -72,7 +72,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         )
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let rows = access
         .execute(&format!(
             "{{AgentRequest {{{}}}}}",
@@ -90,7 +90,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             .unwrap()
     );
     let session_request = request.clone();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.task_session",
@@ -231,7 +231,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         escape_graphql_string(&owner), escape_graphql_string(&scope.session_id)
     )).await.unwrap();
     let original_request = request.clone();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.wrong_requester_session",
@@ -329,7 +329,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     ] {
         let session = test_session.to_owned();
         let node_did = owner.clone();
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.bad_opening_session",
@@ -427,7 +427,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     );
 
     let (first, mutation_count) =
-        crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+        crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
             || async {
                 materializer
                     .materialize(
@@ -447,7 +447,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
                     .await
             },
             || async {
-                crate::config_client::ConfigAccess::local(node.clone())
+                crate::store::config_client::ConfigAccess::local(node.clone())
                     .execute(
                         "{ Goal {_docID assignment_root_request_doc_id} GoalCreationClaim {_docID} AgentRequest {_docID input} }",
                     )
@@ -622,7 +622,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
     .unwrap();
     let initial = crate::goal::deterministic_goal_id(&owner, session);
     let selected = crate::goal::replacement_goal_identity(&owner, session, "first-replacement");
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     access
         .write(
             "test.replay_current_goal",
@@ -1531,7 +1531,7 @@ async fn claimed_trigger_request(
         .await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&result, "AgentRequest")
+        crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
@@ -1717,7 +1717,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
+    crate::store::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
         let fire = fire.clone();
         Box::pin(async move {
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
@@ -1746,7 +1746,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     assert!(
         matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node.as_ref(),
         &format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
@@ -1795,7 +1795,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
+    crate::store::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
         let fire = fire.clone();
         Box::pin(async move {
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
@@ -1824,7 +1824,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     assert!(
         matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node.as_ref(),
         &format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
@@ -1928,7 +1928,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 engine.dispatch(queued).await,
                 FireResult::Fired { .. }
             ));
-            let response = crate::graphql::graphql_with_transaction_retry(
+            let response = crate::store::graphql::graphql_with_transaction_retry(
                 &node,
                 &format!(
                     "{{ AgentRequest {{ {} }} }}",

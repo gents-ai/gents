@@ -101,7 +101,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             ))
             .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
-        crate::graphql::rows::<AgentRequestRow>(&result, "AgentRequest")
+        crate::store::graphql::rows::<AgentRequestRow>(&result, "AgentRequest")
             .unwrap()
             .into_iter()
             .map(|row| AgentRequest::try_from(row).unwrap())

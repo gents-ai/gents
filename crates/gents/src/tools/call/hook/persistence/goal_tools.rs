@@ -7,8 +7,8 @@ use crate::goal::{
     GoalEdit, GoalStatus, RequestAssignmentObservation, BLOCKED_AUDIT_THRESHOLD,
     CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
 };
-use crate::graphql::escape_graphql_string;
 use crate::inference::llm::ToolCallHookAction;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::native::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 
 use super::DefraSessionHook;

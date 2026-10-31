@@ -21,9 +21,9 @@ use super::admit::{Refusal, StepRow};
 use super::control::{
     kill_as, kill_decision, observe_live_children, KillCause, KillObservation, KillOutcome,
 };
-use crate::config_client::ConfigAccess;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
+use crate::store::config_client::ConfigAccess;
 
 pub(super) use context::step_context_for;
 pub(super) use output::{guest_state_of, progress_of, scratch_of, settlement_of, writes_of};

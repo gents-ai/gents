@@ -4,9 +4,9 @@ use std::{sync::Arc, time::Duration};
 
 async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -> RequestLifecycle {
     let now = chrono::Utc::now().to_rfc3339();
-    let request_id = crate::graphql::escape_graphql_string(request_id);
-    let session_id = crate::graphql::escape_graphql_string(session_id);
-    let now = crate::graphql::escape_graphql_string(&now);
+    let request_id = crate::store::graphql::escape_graphql_string(request_id);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
+    let now = crate::store::graphql::escape_graphql_string(&now);
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let response = node
@@ -16,7 +16,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&response, "AgentRequest")
+        crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
@@ -57,7 +57,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
         .unwrap();
     assert_eq!(first, replay);
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &first,
         "did:test:test",
         None,
@@ -308,10 +308,10 @@ fn provider_segment_for_message(
 #[tokio::test]
 #[ignore = "manual persistent provider publication benchmark"]
 async fn provider_publication_request_size_benchmark() {
-    use crate::config_client::ConfigAccess;
     use crate::session::canonical_rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use crate::store::config_client::ConfigAccess;
     use gents_protocol::output::{OutputSource, SourceClose};
     let mut measurements = Vec::new();
     for sources in [1_usize, 32, 128] {
@@ -426,8 +426,8 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
     let rows = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
-            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+            crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+            crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         ))
         .await;
     assert!(rows.data.as_ref().unwrap()["AgentMessage"]
@@ -501,7 +501,7 @@ async fn publication_and_replay_read_only_the_selected_source() {
         },
     )
     .unwrap();
-    let explained = crate::config_client::ConfigAccess::local(node.clone())
+    let explained = crate::store::config_client::ConfigAccess::local(node.clone())
         .execute(&format!("query @explain(type: execute) {query}"))
         .await
         .unwrap();
@@ -551,7 +551,7 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
         })],
     };
     let (node, path, lifecycle, _writer) = fixture("mutation-rollback").await;
-    let request_doc_id = crate::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    let request_doc_id = crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
     let rows = || async {
         let response = node.execute(&format!(
             r#"{{
@@ -567,11 +567,12 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
         assert!(!response.has_errors(), "{:?}", response.errors);
         response.data.unwrap()
     };
-    let (_, writes) = crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
-        || publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
-        rows,
-    )
-    .await;
+    let (_, writes) =
+        crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+            || publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+            rows,
+        )
+        .await;
     assert!(
         writes >= 3,
         "tool-bearing publication must have multiple writes"
@@ -592,7 +593,7 @@ async fn recovery_receipt_fixture(
 ) {
     let (node, path, lifecycle, writer) = fixture(name).await;
     let request = lifecycle.request();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.recovery_session_observation",
@@ -651,14 +652,14 @@ async fn recovery_receipt_fixture(
         )
         .await
         .unwrap();
-    let escaped = crate::graphql::escape_graphql_string(doc_id);
+    let escaped = crate::store::graphql::escape_graphql_string(doc_id);
     let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let expire = crate::config_client::ConfigAccess::write_local(
+    let expire = crate::store::config_client::ConfigAccess::write_local(
         &node,
         "test.expire_recovery_receipt_fixture",
         &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&expiry),
+            crate::store::graphql::escape_graphql_string(&expiry),
         ),
     )
     .await
@@ -674,14 +675,14 @@ async fn recovery_receipt_fixture(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }} }}"#,
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &query,
         "test.read_recovery_receipt_fixture",
     )
     .await
     .unwrap();
-    let observed = crate::graphql::first_row(&response, "AgentRequest")
+    let observed = crate::store::graphql::first_row(&response, "AgentRequest")
         .unwrap()
         .unwrap();
     (node, path, lifecycle, writer, observed, expiry)
@@ -689,13 +690,13 @@ async fn recovery_receipt_fixture(
 
 #[tokio::test]
 async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mutations() {
-    use crate::config_client::ConfigApplyTxn;
     use crate::request::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
+    use crate::store::config_client::ConfigApplyTxn;
 
     let (node, path, _lifecycle, _writer, observed, expiry) =
         recovery_receipt_fixture("recovery-mutation-rollback").await;
     let doc_id = observed.doc_id.as_deref().unwrap();
-    let escaped = crate::graphql::escape_graphql_string(doc_id);
+    let escaped = crate::store::graphql::escape_graphql_string(doc_id);
     let snapshot = || async {
         let response = node.execute(&format!(
             r#"{{
@@ -749,8 +750,8 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
 
 #[tokio::test]
 async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selection() {
-    use crate::config_client::ConfigApplyTxn;
     use crate::request::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
+    use crate::store::config_client::ConfigApplyTxn;
     use gents_protocol::output::{MessagePublication, TerminalOutput};
 
     let (node, path, _lifecycle, _writer, observed, expiry) =
@@ -760,7 +761,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
     let fresh_generation = "recovery-receipt-loss-generation";
     assert_ne!(old_generation, fresh_generation);
     let observed_now = chrono::Utc::now();
-    let request = crate::graphql::escape_graphql_string(request_doc_id);
+    let request = crate::store::graphql::escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
             AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal source writer runs payload close created_at }}
@@ -772,7 +773,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
     let snapshot = || async {
-        crate::graphql::graphql_with_transaction_retry(
+        crate::store::graphql::graphql_with_transaction_retry(
             &node,
             &query,
             "test.recovery_receipt_snapshot",
@@ -915,8 +916,8 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
     assert!(format!("{error:#}").contains("closure timestamp precedes"));
     let rows = node.execute(&format!(
         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID close }} }}"#,
-        crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
-        crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+        crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+        crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
     )).await;
     assert!(rows.data.as_ref().unwrap()["AgentMessage"]
         .as_array()
@@ -939,7 +940,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
     let (node, path, lifecycle, writer) = fixture("multi-flush").await;
     let lease_query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state execution_generation execution_lease_expires_at }} }}"#,
-        crate::graphql::escape_graphql_string(&lifecycle.request().doc_id)
+        crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id)
     );
     let before_flushes = node.execute(&lease_query).await;
     assert!(!before_flushes.has_errors(), "{:?}", before_flushes.errors);
@@ -977,7 +978,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         .await
         .unwrap();
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &published.message_doc_id,
         "did:test:test",
         None,
@@ -985,7 +986,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
     .await
     .unwrap();
     assert_eq!(reconstructed, expected);
-    let rows = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ ordinal close }} }}"#, crate::graphql::escape_graphql_string(&lifecycle.request().doc_id))).await;
+    let rows = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ ordinal close }} }}"#, crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id))).await;
     let rows = rows.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap();
@@ -1016,17 +1017,18 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
     let expected = gents_protocol::message::Message::assistant("published answer");
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} lifecycle_state terminal_output }} }}"#,
-        crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+        crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     writer
         .flush_native_partial(&lifecycle, &expected)
         .await
         .unwrap();
-    let live_request = crate::graphql::first_row(&node.execute(&query).await, "AgentRequest")
-        .unwrap()
-        .unwrap();
+    let live_request =
+        crate::store::graphql::first_row(&node.execute(&query).await, "AgentRequest")
+            .unwrap()
+            .unwrap();
     let CanonicalRequestOutput::Live(live) = observe_request_output(&access, &live_request)
         .await
         .unwrap()
@@ -1057,7 +1059,7 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
             );
         }
         let row: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&node.execute(&query).await, "AgentRequest")
+            crate::store::graphql::first_row(&node.execute(&query).await, "AgentRequest")
                 .unwrap()
                 .unwrap();
         assert_eq!(row.is_terminal(), terminal);
@@ -1127,7 +1129,7 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             .unwrap();
         let query = format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal payload close }} }}"#,
-            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+            crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         );
         let before = node.execute(&query).await;
         assert!(!before.has_errors(), "{:?}", before.errors);
@@ -1150,7 +1152,7 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             })
         );
         let (_, reconstructed) = crate::session::load_canonical_message(
-            &crate::config_client::ConfigAccess::local(node.clone()),
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
             &published.message_doc_id,
             "did:test:test",
             None,
@@ -1224,7 +1226,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
         .await
         .expect("publication must timestamp after the earlier flusher");
     let (_, observed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &published.message_doc_id,
         &request.node_did,
         request.requester_did.as_deref(),
@@ -1266,7 +1268,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
     let response = node
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+            crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
         ))
         .await;
@@ -1307,7 +1309,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         panic!("a retained text prefix must publish a selectable partial header")
     };
     let (header, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &message_doc_id,
         "did:test:test",
         None,
@@ -1374,7 +1376,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
     let replay = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID sequence }} }}"#,
-            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id)
+            crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id)
         ))
         .await;
     assert!(!replay.has_errors(), "{:?}", replay.errors);
@@ -1386,7 +1388,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         1,
         "partial close replay must not allocate another header or sequence"
     );
-    let escaped_message = crate::graphql::escape_graphql_string(&message_doc_id);
+    let escaped_message = crate::store::graphql::escape_graphql_string(&message_doc_id);
     let deleted = node
         .execute(&format!(
             r#"mutation {{ delete_AgentMessage(filter: {{ _docID: {{ _eq: "{escaped_message}" }} }}) {{ _docID }} }}"#
@@ -1397,7 +1399,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         "remove imported header: {:?}",
         deleted.errors
     );
-    let escaped_request = crate::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    let escaped_request = crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
     let expired = node.execute(&format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request}" }} }}, input: {{ execution_lease_expires_at: "2020-01-01T00:00:00Z" }}) {{ _docID }} }}"#
     )).await;
@@ -1491,7 +1493,7 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
     let tool_rows = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id }} }}"#,
-            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+            crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         ))
         .await;
     assert!(!tool_rows.has_errors(), "{:?}", tool_rows.errors);
@@ -1549,13 +1551,14 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
             additional_params: None,
         })],
     };
-    let (first, fault_fired) = crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
-        writer.publish_native_turn(&lifecycle, 0, 0, &message),
-    )
-    .await;
+    let (first, fault_fired) =
+        crate::store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
+            writer.publish_native_turn(&lifecycle, 0, 0, &message),
+        )
+        .await;
     let first = first.expect("idempotent owner must reconstruct the lost receipt");
     assert!(fault_fired, "post-commit receipt-loss fault must fire");
-    let request = crate::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    let request = crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
     let query = format!(
         r#"{{
             AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID sequence }}
@@ -1563,7 +1566,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
             AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID lifecycle_state }}
         }}"#
     );
-    let before = crate::graphql::graphql_with_transaction_retry(
+    let before = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &query,
         "receipt_loss_before_external_replay",
@@ -1574,7 +1577,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         .publish_native_turn(&lifecycle, 0, 0, &message)
         .await
         .expect("external replay resolves committed publication");
-    let replayed = crate::graphql::graphql_with_transaction_retry(
+    let replayed = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &query,
         "receipt_loss_after_external_replay",
@@ -1650,7 +1653,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         format!("{loser_error:#}").contains("no longer pending"),
         "the losing handle must be rejected by the physical pending-row fence: {loser_error:#}"
     );
-    let dispatched = crate::graphql::graphql_with_transaction_retry(
+    let dispatched = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &query,
         "receipt_loss_after_dispatch_race",
@@ -1673,7 +1676,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         .complete("one receipt-loss dispatch result")
         .await
         .unwrap();
-    let completed = crate::graphql::graphql_with_transaction_retry(
+    let completed = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &query,
         "receipt_loss_after_single_completion",
@@ -1714,7 +1717,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
     let mut lifecycle = claimed(&node, "captured-documents", SESSION).await;
     let writer = DefraStreamWriter::new(node.clone(), OWNER, Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let mut expected = Vec::new();
     for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
         .request_input_cases
@@ -1802,8 +1805,8 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
 
 #[tokio::test]
 async fn cancelled_flush_replays_before_inference_close_or_publication() {
-    use crate::config_client::{ConfigAccess, ConfigApplyTxn};
     use crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
+    use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
     use gents_protocol::message::Message;
     use gents_protocol::output::TerminalOutput;
 
@@ -1836,7 +1839,7 @@ async fn cancelled_flush_replays_before_inference_close_or_publication() {
         let access = ConfigAccess::local(node.clone());
         let query = format!(
             "{{AgentOutputSegment(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{{AGENT_OUTPUT_SEGMENT_FIELDS}}}}}",
-            crate::graphql::escape_graphql_string(&request.doc_id),
+            crate::store::graphql::escape_graphql_string(&request.doc_id),
         );
         let before = access.execute(&query).await.unwrap();
         let originals = before["data"]["AgentOutputSegment"].as_array().unwrap();

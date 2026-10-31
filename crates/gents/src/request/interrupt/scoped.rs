@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::graphql::graphql_with_transaction_retry;
+use crate::store::graphql::graphql_with_transaction_retry;
 
 /// The physical identity scopes live invalidations only; authority remains in
 /// the native scoped read, and feed overflow still requires a durable reread.

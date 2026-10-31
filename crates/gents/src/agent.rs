@@ -237,7 +237,7 @@ pub struct Gents {
 
 pub(crate) fn plugin_executor(
     home: Option<PathBuf>,
-    models: crate::plugin::model_calls::AccessModels<crate::config_client::ConfigAccess>,
+    models: crate::plugin::model_calls::AccessModels<crate::store::config_client::ConfigAccess>,
 ) -> crate::plugin::executor::PluginExecutor {
     crate::plugin::executor::PluginExecutor::new(home).with_models(Arc::new(models))
 }
@@ -260,7 +260,7 @@ impl Gents {
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = crate::plugin::model_calls::AccessModels(
-            crate::config_client::ConfigAccess::local(node.clone()),
+            crate::store::config_client::ConfigAccess::local(node.clone()),
         );
         let plugins = Arc::new(plugin_executor(options.plugin_home, plugin_models));
         let document_runtime_context = DocumentResolveContext {
@@ -482,7 +482,7 @@ impl Gents {
         request: &gents_protocol::job::OperatorJobControlRequest,
     ) -> Result<gents_protocol::job::JobControlOutcome, gents_protocol::job::JobReadError> {
         crate::tools::background::job::control::operator_control(
-            &crate::config_client::ConfigAccess::local(self.node.clone()),
+            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
             actor,
             request,
         )

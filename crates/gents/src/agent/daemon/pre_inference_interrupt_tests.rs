@@ -158,7 +158,7 @@ async fn seed_titled_session(
         text: "pre-inference interrupt".into(),
         source: gents_protocol::session::SessionTitleSource::Task,
     };
-    let created = crate::config_client::ConfigAccess::transact_local_write(
+    let created = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.create",
@@ -190,8 +190,8 @@ async fn request_terminal_row(
 ) -> anyhow::Result<serde_json::Value> {
     use anyhow::Context;
 
-    let doc_id = crate::graphql::escape_graphql_string(request_doc_id);
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let doc_id = crate::store::graphql::escape_graphql_string(request_doc_id);
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
@@ -552,7 +552,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     let reached = Arc::new(tokio::sync::Notify::new());
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let capture = InterruptionCapture::default();
-    let process = crate::config_client::ConfigApplyTxn::with_read_pause(
+    let process = crate::store::config_client::ConfigApplyTxn::with_read_pause(
         "reduction_index: ASC",
         reached.clone(),
         daemon.process_request(request, shutdown_rx),

@@ -1464,7 +1464,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     let response = gents::ConfigAccess::local(core.node_arc())
         .execute(&format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id}} }}",
-            gents::graphql::escape_graphql_string(&submitted.request_id),
+            gents::store::graphql::escape_graphql_string(&submitted.request_id),
         ))
         .await?;
     assert_eq!(
@@ -1490,9 +1490,10 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         "retain signed enrollment admission"
     );
     let local = gents::ConfigAccess::local(core.node_arc());
-    let escaped_owner = gents::graphql::escape_graphql_string(owner.did());
-    let escaped_requester = gents::graphql::escape_graphql_string(core.node_identity().did());
-    let created_at = gents::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let escaped_owner = gents::store::graphql::escape_graphql_string(owner.did());
+    let escaped_requester =
+        gents::store::graphql::escape_graphql_string(core.node_identity().did());
+    let created_at = gents::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let stale = local
         .write(
             "seed_stale_request",
@@ -1524,7 +1525,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             last_activity_at: chrono::Utc::now().to_rfc3339(),
             preview: None,
             latest_request: Some(gents_protocol::session::SessionRequestObservation {
-                request_doc_id: gents::graphql::created_doc_id(&stale, "AgentRequest")?,
+                request_doc_id: gents::store::graphql::created_doc_id(&stale, "AgentRequest")?,
                 request_id: "stale-seed".into(),
                 lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Dead,
             }),
@@ -1552,7 +1553,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     let response = local
         .execute(&format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id}} }}",
-            gents::graphql::escape_graphql_string(&resent.request_id),
+            gents::store::graphql::escape_graphql_string(&resent.request_id),
         ))
         .await?;
     assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
@@ -1650,7 +1651,10 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
                 &format!("mutation {{ create_AgentRequest(input:{input}) {{_docID}} }}"),
             )
             .await?;
-        docs.push(gents::graphql::created_doc_id(&result, "AgentRequest")?);
+        docs.push(gents::store::graphql::created_doc_id(
+            &result,
+            "AgentRequest",
+        )?);
     }
     let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
         "session_id":"terminal-page","node_did":owner,"agent_id":"agent",

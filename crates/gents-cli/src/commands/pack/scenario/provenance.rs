@@ -1,4 +1,4 @@
-use gents::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
@@ -8,7 +8,7 @@ use super::manifest::SourceEdgeExpectation;
 use super::results::graphql_rows;
 use super::stages::StageResult;
 use super::tool_calls::canonical_stage_tool_rows;
-use gents::graphql::{escape_graphql_string, validate_collection_identifier};
+use gents::store::graphql::{escape_graphql_string, validate_collection_identifier};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::row::AgentRequestRow;

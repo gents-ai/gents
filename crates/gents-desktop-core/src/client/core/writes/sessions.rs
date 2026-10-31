@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 
 use super::super::bootstrap::normalize_required;
 use super::{ensure_peer_chat_ready_at, ClientCore};

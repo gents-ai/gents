@@ -102,7 +102,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     let tool = BoundedWriteTool::new(
-        crate::config_client::ConfigAccess::local(node.clone()),
+        crate::store::config_client::ConfigAccess::local(node.clone()),
         WriteToolDecl {
             notification: None,
             tool_name: "write_resumed_output".into(),

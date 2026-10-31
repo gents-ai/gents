@@ -53,7 +53,7 @@ pub fn awaiting_question_ids(
 }
 
 pub(crate) async fn required_question_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequestRow,
 ) -> anyhow::Result<bool> {
     if parent.lifecycle_state != Some(RequestLifecycleState::Completed) {
@@ -61,12 +61,13 @@ pub(crate) async fn required_question_in_txn(
     }
     let query = format!(
         "{{ MailboxItem(filter: {{ node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}, status: {{_eq: \"open\"}} }}) {{ {} }} }}",
-        crate::graphql::escape_graphql_string(parent.node_did.as_deref().unwrap_or_default()),
-        crate::graphql::escape_graphql_string(&parent.request_id),
+        crate::store::graphql::escape_graphql_string(parent.node_did.as_deref().unwrap_or_default()),
+        crate::store::graphql::escape_graphql_string(&parent.request_id),
         super::MAILBOX_FIELDS,
     );
     let response = txn.execute_local_response(&query).await?;
-    let items = crate::graphql::rows::<MailboxItemRow>(&response, super::MAILBOX_COLLECTION)?;
+    let items =
+        crate::store::graphql::rows::<MailboxItemRow>(&response, super::MAILBOX_COLLECTION)?;
     Ok(!awaiting_question_ids(&items, parent, Utc::now()).is_empty())
 }
 

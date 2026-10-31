@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::documents::Agent;
-use gents::graphql::escape_graphql_string;
 use gents::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
+use gents::store::graphql::escape_graphql_string;
 use gents::tools::surface::presets;
 use gents::{default_agent_id_for_node, Collection, NodeIdentity};
 use serde_json::{json, Value};
@@ -367,7 +367,7 @@ mod tests {
         let owner = identity.did();
         let actor = identity::Did::new(owner.to_string()).expect("valid test ACP actor");
         gents::ensure_node(&node, owner).await?;
-        use gents::config_client::{
+        use gents::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let documents = [

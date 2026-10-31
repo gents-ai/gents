@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::config_client::ConfigAccess;
 use gents::goal::{
     delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument, GoalStatus,
     GOAL_FIELDS,
 };
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
@@ -189,7 +189,7 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
 
 async fn access_and_did(
     scope: &GoalScopeArgs,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let node_did = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())
         .context("resolving goal owner node_did")?;
     let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref())

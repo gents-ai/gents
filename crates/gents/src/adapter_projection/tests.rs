@@ -1295,7 +1295,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     .request_id;
     let tool_call_id = message.admission.tool.tool_call_id().to_owned();
     let rows = crate::run_timeline_fetch::load_run_timeline_rows(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &caller_request_id,
     )
     .await

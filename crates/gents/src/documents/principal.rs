@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::serde_helpers::first_row_with_doc_id;
 
@@ -126,7 +126,7 @@ pub(crate) async fn upsert_node(
         }}"#
     );
 
-    crate::config_client::ConfigAccess::write_local(node, "document.upsert_node", &mutation)
+    crate::store::config_client::ConfigAccess::write_local(node, "document.upsert_node", &mutation)
         .await?;
     Ok(())
 }

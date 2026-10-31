@@ -39,7 +39,7 @@ async fn load_command_output_limits(
 ) -> anyhow::Result<CommandOutputLimits> {
     let owner = node_did.to_owned();
     let agent_id = agent_id.to_owned();
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "tool_surface.output_budget",

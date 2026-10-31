@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 
 use super::event_source::SourceSchemaCache;
 use crate::documents::{CallbackBinding, EventGroupCount, EventSource};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
@@ -137,7 +137,7 @@ impl Delivery<'_> {
         let field = self
             .correlation_field()
             .context("group requires correlation field")?;
-        crate::graphql::validate_graphql_name(field)?;
+        crate::store::graphql::validate_graphql_name(field)?;
         let minimum = self.minimum_count()?;
         let expected = self.expected()?;
         anyhow::ensure!(
@@ -150,7 +150,7 @@ impl Delivery<'_> {
                 "fixed expected count is outside group bounds"
             ),
             Some(EventGroupCount::SourceField { source_field }) => {
-                crate::graphql::validate_graphql_name(&source_field)?
+                crate::store::graphql::validate_graphql_name(&source_field)?
             }
             None => {}
         }
@@ -193,11 +193,11 @@ pub(crate) fn selection_filter(
 ) -> Result<String> {
     let mut clauses = Vec::new();
     if let Some(filter) = filter.map(str::trim).filter(|s| !s.is_empty()) {
-        crate::graphql::validate_graphql_filter_fragment(filter)?;
+        crate::store::graphql::validate_graphql_filter_fragment(filter)?;
         clauses.push(filter.to_owned());
     }
     if let Some((field, value)) = equality {
-        crate::graphql::validate_graphql_name(field)?;
+        crate::store::graphql::validate_graphql_name(field)?;
         clauses.push(format!(
             "{{ {field}: {{_eq:\"{}\"}} }}",
             escape_graphql_string(value)
@@ -216,7 +216,7 @@ pub(crate) async fn probe_document(
     id: &str,
     filter: Option<&str>,
 ) -> Result<Option<String>> {
-    crate::graphql::validate_collection_identifier(collection)?;
+    crate::store::graphql::validate_collection_identifier(collection)?;
     let filter = selection_filter(filter, Some(("_docID", id)))?;
     let response = graphql_with_transaction_retry(
         node,
@@ -226,10 +226,10 @@ pub(crate) async fn probe_document(
         "event selection probe",
     )
     .await?;
-    let rows = crate::graphql::rows::<Value>(&response, collection)?;
+    let rows = crate::store::graphql::rows::<Value>(&response, collection)?;
     rows.first()
         .map(|row| {
-            crate::graphql::document_composite_version(row, "event selection probe")?
+            crate::store::graphql::document_composite_version(row, "event selection probe")?
                 .context("event source lacks composite version")
                 .map(|v| v.cid)
         })
@@ -287,7 +287,7 @@ pub(crate) async fn load_or_create_group(
         !correlation.trim().is_empty(),
         "group correlation is missing"
     );
-    crate::config_client::ConfigAccess::transact_local_write(node,None,"event.group_clock",|txn| Box::pin(async move {
+    crate::store::config_client::ConfigAccess::transact_local_write(node,None,"event.group_clock",|txn| Box::pin(async move {
         let query=group_query(delivery,correlation);
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
         let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
@@ -304,7 +304,7 @@ pub(crate) async fn quiesce_group(
     if record.state.quiesced_at.is_some() {
         return Ok(());
     }
-    Ok(crate::config_client::ConfigAccess::write_local(node,"event.quiesce_group",&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ())?)
+    Ok(crate::store::config_client::ConfigAccess::write_local(node,"event.quiesce_group",&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ())?)
 }
 
 pub(crate) enum GroupOutcome {
@@ -329,7 +329,7 @@ pub(crate) async fn evaluate_group(
     correlation: &str,
 ) -> Result<GroupOutcome> {
     delivery.validate_group()?;
-    crate::graphql::validate_collection_identifier(delivery.collection())?;
+    crate::store::graphql::validate_collection_identifier(delivery.collection())?;
     let fields = cache.fields_for(delivery.collection(), node).await?;
     let filter = selection_filter(
         delivery.filter(),
@@ -347,7 +347,7 @@ pub(crate) async fn evaluate_group(
         fields.join(" ")
     );
     let response = graphql_with_transaction_retry(node, &query, "group membership query").await?;
-    let docs = crate::graphql::rows::<Value>(&response, delivery.collection())?;
+    let docs = crate::store::graphql::rows::<Value>(&response, delivery.collection())?;
     if docs.is_empty() {
         return Ok(GroupOutcome::Empty);
     }
@@ -421,9 +421,11 @@ pub(crate) fn expected_group_count(
                 let value = doc
                     .get(source_field)
                     .context("group member missing expected-count field")?;
-                let n =
-                    crate::graphql::canonical_positive_count(value, MAX_EVENT_TRIGGER_GROUP_DOCS)
-                        .context("expected count must be a canonical positive bounded integer")?;
+                let n = crate::store::graphql::canonical_positive_count(
+                    value,
+                    MAX_EVENT_TRIGGER_GROUP_DOCS,
+                )
+                .context("expected count must be a canonical positive bounded integer")?;
                 anyhow::ensure!(
                     resolved.is_none_or(|prior| prior == n),
                     "group members disagree on expected count"
@@ -444,7 +446,7 @@ pub(crate) async fn group_correlation_page(
     let field = delivery
         .correlation_field()
         .context("group correlation field missing")?;
-    crate::graphql::validate_collection_identifier(delivery.collection())?;
+    crate::store::graphql::validate_collection_identifier(delivery.collection())?;
     let base = selection_filter(delivery.filter(), None)?;
     let filter = cursor.map_or(base.clone(), |cursor| {
         format!(
@@ -461,7 +463,7 @@ pub(crate) async fn group_correlation_page(
         "event group recovery page",
     )
     .await?;
-    let rows = crate::graphql::rows::<Value>(&response, delivery.collection())?;
+    let rows = crate::store::graphql::rows::<Value>(&response, delivery.collection())?;
     let cursor = rows
         .last()
         .and_then(|row| row.get("_docID"))

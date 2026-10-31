@@ -777,7 +777,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
     let before = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -821,7 +821,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .unwrap();
 
     let after = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::local(node),
+        &crate::store::config_client::ConfigAccess::local(node),
         db.node_did(),
     )
     .await
@@ -894,7 +894,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
     let unpublished_terminal = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -934,7 +934,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap();
     assert_eq!(first_repair.repaired, 0);
     let first = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -948,7 +948,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap();
     assert_eq!(second_repair.repaired, 0);
     let second = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::local(node),
+        &crate::store::config_client::ConfigAccess::local(node),
         db.node_did(),
     )
     .await
@@ -1021,7 +1021,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             "{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{}\" }} }}) {{ retry_key }} }}",
@@ -1103,11 +1103,11 @@ async fn append_sequence_index_fetches_only_latest_header() {
     let db = test_db("sequence-index").await;
     let session = "sequence-index-session";
     let query = super::super::atomic_inputs::append_sequence_query(db.node_did(), session);
-    let access = crate::config_client::ConfigAccess::local(db.node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
     let empty = access.execute(&query).await.unwrap();
     assert!(empty["data"]["AgentMessage"].as_array().unwrap().is_empty());
     for sequence in 1..=49 {
-        let response = crate::config_client::ConfigAccess::write_local(
+        let response = crate::store::config_client::ConfigAccess::write_local(
             &db.node,
             "test.sequence_index",
             &format!(
@@ -1116,13 +1116,13 @@ async fn append_sequence_index_fetches_only_latest_header() {
                 escape_graphql_string(session),
             ),
         ).await.unwrap();
-        crate::graphql::created_doc_id(&response, "AgentMessage").unwrap();
+        crate::store::graphql::created_doc_id(&response, "AgentMessage").unwrap();
     }
     for (owner, other_session) in [
         ("did:key:foreign", session),
         (db.node_did(), "another-session"),
     ] {
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             &db.node,
             "test.sequence_index",
             &format!(
@@ -1157,7 +1157,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
         (session, "null", "null-sequence"),
         ("only-null-sequence", "null", "only-null"),
     ] {
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             &db.node,
             "test.sequence_index",
             &format!(
@@ -1168,7 +1168,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
             ),
         ).await.unwrap();
     }
-    let duplicate = crate::config_client::ConfigAccess::write_local(
+    let duplicate = crate::store::config_client::ConfigAccess::write_local(
         &db.node,
         "test.sequence_index_duplicate",
         &format!(

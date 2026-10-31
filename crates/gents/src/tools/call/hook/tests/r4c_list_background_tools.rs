@@ -1,9 +1,9 @@
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::inference::llm::tool::BoxFuture;
 use gents::inference::llm::tool::ToolDefinition;
 use gents::inference::llm::tool::{ToolDyn, ToolError};
 use gents::inference::llm::ToolCallHookAction;
+use gents::store::graphql::escape_graphql_string;
 use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
@@ -298,7 +298,7 @@ async fn read_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
 /// with unexpected bytes.
 async fn persisted_row_snapshot(hook: &DefraSessionHook, handle_tool_call_id: &str) -> Value {
     let session_id = hook.session_id().await.expect("session id");
-    let session = crate::graphql::escape_graphql_string(&session_id);
+    let session = crate::store::graphql::escape_graphql_string(&session_id);
     let response = hook
         .node
         .execute(&format!(

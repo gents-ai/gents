@@ -1,4 +1,4 @@
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ async fn tool_state(node: &crate::defra_node::EmbeddedNode, tool_id: &str) -> Op
     let tool_id = escape_graphql_string(tool_id);
     let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let row: serde_json::Value = crate::graphql::first_row(&response, "AgentToolCall")
+    let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentToolCall")
         .unwrap()
         .unwrap();
     row["lifecycle_state"].as_str().map(str::to_owned)
@@ -185,7 +185,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         .to_owned();
     let row = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, limit: 1) {{ requester_did }} }}"#, escape_graphql_string(&handle))).await;
     assert!(!row.has_errors(), "{:?}", row.errors);
-    let row: serde_json::Value = crate::graphql::first_row(&row, "AgentToolCall")
+    let row: serde_json::Value = crate::store::graphql::first_row(&row, "AgentToolCall")
         .unwrap()
         .unwrap();
     assert!(row
@@ -320,7 +320,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let escaped_handle = escape_graphql_string(&handle);
     let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped_handle}" }} }}, limit: 1) {{ cancel_cause }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let row: serde_json::Value = crate::graphql::first_row(&response, "AgentToolCall")
+    let row: serde_json::Value = crate::store::graphql::first_row(&response, "AgentToolCall")
         .unwrap()
         .unwrap();
     assert!(

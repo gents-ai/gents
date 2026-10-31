@@ -416,7 +416,7 @@ impl ToolSurface {
         }
         if !self.application_write_collections.is_empty() {
             tools.push(Box::new(crate::plugin::application_write::WriteTool::new(
-                crate::config_client::ConfigAccess::local(runtime.node.clone()),
+                crate::store::config_client::ConfigAccess::local(runtime.node.clone()),
                 self.application_write_collections.iter().cloned().collect(),
                 datastore_actor.clone(),
             )));
@@ -463,7 +463,7 @@ impl ToolSurface {
                 )) as Box<dyn ToolDyn>);
             } else {
                 let tool = BoundedWriteTool::new(
-                    crate::config_client::ConfigAccess::local(runtime.node.clone()),
+                    crate::store::config_client::ConfigAccess::local(runtime.node.clone()),
                     decl.clone(),
                 )
                 .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
@@ -478,7 +478,7 @@ impl ToolSurface {
         }
         for decl in &self.query_tools {
             let tool = BoundedQueryTool::new(
-                crate::config_client::ConfigAccess::local(runtime.node.clone()),
+                crate::store::config_client::ConfigAccess::local(runtime.node.clone()),
                 decl.clone(),
             )
             .with_actor(datastore_actor.clone().expect("query actor was validated"))

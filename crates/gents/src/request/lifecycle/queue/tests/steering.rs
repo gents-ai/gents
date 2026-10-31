@@ -109,7 +109,7 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
         )
         .await
         .unwrap();
-        let doc_id = crate::graphql::escape_graphql_string(&enqueued.doc_id);
+        let doc_id = crate::store::graphql::escape_graphql_string(&enqueued.doc_id);
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ _docID lifecycle_state content input admission_signature }} }}"#
         );
@@ -277,7 +277,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         )
         .await
         .unwrap();
-        let physical = crate::graphql::escape_graphql_string(&enqueued.doc_id);
+        let physical = crate::store::graphql::escape_graphql_string(&enqueued.doc_id);
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }} }}, limit: 1) {{ lifecycle_state content input admission_signature terminal_output }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{physical}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{physical}" }} }}) {{ _docID }} }}"#
         );

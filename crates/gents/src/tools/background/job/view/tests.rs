@@ -11,8 +11,8 @@ use gents_protocol::job::{
 use serde_json::{json, Value};
 
 use super::{list_jobs, load_job_view, JobFilter, JobKey, StateFilter};
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::job::admit::Refusal;
 use crate::tools::background::job::driver::tests::{pinned_job_row, settle_row, start_running};
 use crate::tools::background::job::driver::{load_lifecycle, settle_plugin_job, Settlement};
@@ -79,7 +79,7 @@ async fn child(job: &Job, row: &str, request_id: &str, slot: &str, attempt: u32,
 async fn write_job_pin_json(job: &Job, row: &str, value: Value) {
     let mutation = format!(
         r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(row),
+        crate::store::graphql::escape_graphql_string(row),
     );
     let variables = json!({ "job_pin": value });
     ConfigAccess::transact_local_write(&job.node, None, "test.view.job_pin", |txn| {

@@ -6,7 +6,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::documents::OutputObligationDecision;
-use crate::graphql::{
+use crate::store::graphql::{
     canonical_positive_count, escape_graphql_string, graphql_with_transaction_retry,
 };
 
@@ -155,7 +155,7 @@ impl OutputObligationGate {
                 .cloned()
                 .context("completed output query omitted AgentToolCall rows")?,
         )?;
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let mut requests = RapidHashMap::new();
         let mut writes = RapidHashMap::<String, Vec<CompletedWriteRow>>::new();
         let mut scoped_rows = RapidHashMap::<(String, String, Option<String>), Vec<_>>::new();

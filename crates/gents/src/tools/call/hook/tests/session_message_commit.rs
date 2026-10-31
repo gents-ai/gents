@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigApplyTxn;
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 
 async fn write_config<T>(node: &Arc<EmbeddedNode>, collection: crate::Collection, document: &T)
@@ -7,21 +7,23 @@ where
     T: serde::Serialize,
 {
     let value = serde_json::to_value(document).unwrap();
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.write_config",
         |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         },
     )
     .await
@@ -264,7 +266,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         "session_message.commit_request",
     ).await;
     assert_eq!(second["input"]["queue"]["delivery"], "steer");
-    let ordered = crate::config_client::ConfigAccess::transact_local_readonly(
+    let ordered = crate::store::config_client::ConfigAccess::transact_local_readonly(
         &node,
         None,
         "test.steer_order",
@@ -316,7 +318,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         .execute(&incompatible.graphql_mutation().unwrap())
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let incompatible_doc = crate::graphql::created_doc_id(
+    let incompatible_doc = crate::store::graphql::created_doc_id(
         &serde_json::json!({"data": created.data.unwrap()}),
         "AgentRequest",
     )

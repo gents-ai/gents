@@ -12,7 +12,7 @@ use super::{
     InvestigationEnvelope, SessionCompactionEvent, SessionInvestigationSnapshot,
     SessionRequestEvent, SessionToolCallStats,
 };
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub async fn load_session_investigation(
     node: &EmbeddedNode,

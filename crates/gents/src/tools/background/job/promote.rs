@@ -11,10 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::config_client::ConfigAccess;
 use crate::pack::authoring::scaffold::{scaffold, ScaffoldInput};
 use crate::pack::authoring::template::Template;
 use crate::plugin::{PluginBudget, PluginVerdict};
+use crate::store::config_client::ConfigAccess;
 use crate::tools::background::job::view::{load_job_view, JobKey};
 
 /// The namespace every promoted pack lives under.

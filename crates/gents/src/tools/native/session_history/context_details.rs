@@ -17,7 +17,7 @@ pub struct SessionContextDetails {
 }
 
 pub async fn load_session_context_details(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     agent: &str,
     requester: Option<&str>,
     session: &str,

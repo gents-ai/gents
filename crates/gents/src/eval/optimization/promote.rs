@@ -1,8 +1,5 @@
 use anyhow::Result;
 
-use crate::config_client::{
-    apply_desired_state_plan, stale_expectation, ConfigAccess, DesiredStateApplyPlan,
-};
 use crate::eval::optimization::driver::verified_checkpoint;
 use crate::eval::optimization::job::{
     append, append_in_txn, checkpoint, derive_state, load_job, DriftedRef, JobOrigin, JobRecord,
@@ -12,6 +9,9 @@ use crate::eval::optimization::subject::{baseline_text, materialize_pack};
 use crate::eval::optimization::target::{
     apply_text, capture_closure, closure_digests, current_text, target_digest, target_plan,
     Closure, FrozenDocument,
+};
+use crate::store::config_client::{
+    apply_desired_state_plan, stale_expectation, ConfigAccess, DesiredStateApplyPlan,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -337,7 +337,6 @@ pub async fn revert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_client::DesiredStateApplyPlan;
     use crate::eval::optimization::driver::job_dir;
     use crate::eval::optimization::driver::matrix::fixtures::{BASELINE_PROMPT, CANDIDATE_PROMPT};
     use crate::eval::optimization::driver::matrix::{
@@ -347,6 +346,7 @@ mod tests {
     use crate::eval::optimization::subject::tests::FIXTURE_TEMPLATE;
     use crate::eval::optimization::target::TargetField;
     use crate::eval::runner::freeze::tests::OWNER;
+    use crate::store::config_client::DesiredStateApplyPlan;
     use crate::Collection;
     use serde_json::json;
 

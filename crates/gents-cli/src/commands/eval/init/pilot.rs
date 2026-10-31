@@ -168,12 +168,14 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
     let expected = config
         .eval_definitions
         .iter()
-        .map(|definition| gents::config_client::DesiredStateExpectation {
-            collection: gents::Collection::EvalDefinition,
-            owner: ctx.owner.clone(),
-            id: definition.definition_id.clone(),
-            digest: None,
-        })
+        .map(
+            |definition| gents::store::config_client::DesiredStateExpectation {
+                collection: gents::Collection::EvalDefinition,
+                owner: ctx.owner.clone(),
+                id: definition.definition_id.clone(),
+                digest: None,
+            },
+        )
         .collect();
     gents::pack::install_pack_documents_with_expectations(
         &ctx.access,
@@ -535,8 +537,8 @@ mod tests {
         let mut existing =
             serde_json::to_value(&drafted.assembled.as_ref().unwrap().definition).unwrap();
         existing["title"] = json!("Existing instrument");
-        let plan = gents::config_client::DesiredStateApplyPlan::new(vec![
-            gents::config_client::DesiredStateApplyDocument {
+        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
+            gents::store::config_client::DesiredStateApplyDocument {
                 collection: gents::Collection::EvalDefinition,
                 add: existing.clone(),
                 update: existing,
@@ -548,9 +550,9 @@ mod tests {
             .access
             .transact_write("eval.pilot.existing_definition_fixture", |txn| {
                 let plan = &plan;
-                Box::pin(
-                    async move { gents::config_client::apply_desired_state_plan(txn, plan).await },
-                )
+                Box::pin(async move {
+                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
             })
             .await
             .unwrap();
@@ -558,7 +560,7 @@ mod tests {
         let before = fixture.ctx.access.execute(query).await.unwrap();
         let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
         assert!(
-            gents::config_client::stale_expectation(&error).is_some(),
+            gents::store::config_client::stale_expectation(&error).is_some(),
             "{error:#}"
         );
         let after = fixture.ctx.access.execute(query).await.unwrap();
@@ -581,7 +583,7 @@ mod tests {
         assert_ne!(left.is_ok(), right.is_ok());
         let error = left.err().or_else(|| right.err()).unwrap();
         assert!(
-            gents::config_client::stale_expectation(&error).is_some(),
+            gents::store::config_client::stale_expectation(&error).is_some(),
             "{error:#}"
         );
     }

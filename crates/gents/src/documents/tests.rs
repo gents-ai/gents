@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::write_tools_document;
+use crate::store::config_client::write_tools_document;
 
 #[test]
 fn tools_document_accepts_empty_string_arrays_and_null_groups() {
@@ -492,7 +492,7 @@ async fn tools_document_round_trips_defra_query_fields() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::local(node);
+    let access = crate::store::config_client::ConfigAccess::local(node);
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the defra_query fields");
@@ -501,7 +501,7 @@ async fn tools_document_round_trips_defra_query_fields() {
         .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
-                crate::config_client::read_desired_state_record_in_txn(
+                crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &doc.node_did,
@@ -543,7 +543,7 @@ async fn tools_update_can_clear_lsp_config() {
     let node = crate::test_support::node_builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let lsp = |config: Option<String>| Tools {
         tools_id: "lsp-config-clear".to_string(),
         node_did: "did:key:z-lsp-config-clear".to_string(),
@@ -559,11 +559,13 @@ async fn tools_update_can_clear_lsp_config() {
 
     let doc = lsp(Some(r#"{"idle_timeout_ms":1000}"#.to_string()));
     write_tools_document(&access, &doc).await.unwrap();
-    async fn read(access: &crate::config_client::ConfigAccess) -> anyhow::Result<Option<Tools>> {
+    async fn read(
+        access: &crate::store::config_client::ConfigAccess,
+    ) -> anyhow::Result<Option<Tools>> {
         access
             .transact_write("test.tools.read", |txn| {
                 Box::pin(async move {
-                    crate::config_client::read_desired_state_record_in_txn(
+                    crate::store::config_client::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Tools,
                         "did:key:z-lsp-config-clear",
@@ -624,7 +626,7 @@ async fn tools_document_round_trips_read_only_commands() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the read_only_commands field");
@@ -633,7 +635,7 @@ async fn tools_document_round_trips_read_only_commands() {
         .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
-                crate::config_client::read_desired_state_record_in_txn(
+                crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &doc.node_did,
@@ -706,14 +708,14 @@ async fn tools_document_round_trips_write_tools() {
         "entries": decls,
     }))
     .unwrap();
-    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::DatastoreToolSurface,
             add: serde_json::to_value(&surface).unwrap(),
             update: serde_json::to_value(&surface).unwrap(),
         },
-        crate::config_client::DesiredStateApplyDocument {
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::Tools,
             add: serde_json::to_value(&tools).unwrap(),
             update: serde_json::to_value(&tools).unwrap(),
@@ -727,7 +729,7 @@ async fn tools_document_round_trips_write_tools() {
             let surface = &surface;
             let decls = &decls;
             Box::pin(async move {
-                crate::config_client::apply_desired_state_plan(txn, plan).await?;
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
                 let merged = super::merge_datastore_tool_surfaces(tools, [surface])?;
                 assert_eq!(
                     merged.write_tools, *decls,
@@ -754,7 +756,7 @@ async fn tools_document_round_trips_session_message_enablement() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the session-message enablement");
@@ -763,7 +765,7 @@ async fn tools_document_round_trips_session_message_enablement() {
         .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
-                crate::config_client::read_desired_state_record_in_txn(
+                crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &doc.node_did,
@@ -849,7 +851,7 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
 }
 
 fn access_node(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
 ) -> &std::sync::Arc<defra_node::EmbeddedNode> {
     access.local_node().expect("test helpers use local access")
 }
@@ -896,24 +898,24 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
 
-    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
             add: serde_json::to_value(&backend).unwrap(),
             update: serde_json::to_value(&backend).unwrap(),
         },
-        crate::config_client::DesiredStateApplyDocument {
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceRetryPolicy,
             add: serde_json::to_value(&retry).unwrap(),
             update: serde_json::to_value(&retry).unwrap(),
         },
-        crate::config_client::DesiredStateApplyDocument {
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceExecution,
             add: serde_json::to_value(&execution).unwrap(),
             update: serde_json::to_value(&execution).unwrap(),
         },
-        crate::config_client::DesiredStateApplyDocument {
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceProfile,
             add: serde_json::to_value(&profile).unwrap(),
             update: serde_json::to_value(&profile).unwrap(),
@@ -923,7 +925,9 @@ async fn inference_retry_policy_fields_round_trip() {
     access
         .transact_write("test.retry_chain.write", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         })
         .await
         .expect("apply should persist the retry chain");
@@ -1207,7 +1211,7 @@ async fn oauth_account_scope_matches_lean() {
         };
         upsert_oauth_credential(&node, &credential).await.unwrap();
     }
-    let access = crate::config_client::ConfigAccess::local(node);
+    let access = crate::store::config_client::ConfigAccess::local(node);
 
     let cases = lean["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 6);
@@ -1320,13 +1324,13 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
         ("owner", "good", "unauthenticated"),
         ("foreign", "bad", "invalid-auth"),
     ] {
-        let owner = crate::graphql::escape_graphql_string(owner);
-        let id = crate::graphql::escape_graphql_string(id);
-        let auth = crate::graphql::escape_graphql_string(auth);
+        let owner = crate::store::graphql::escape_graphql_string(owner);
+        let id = crate::store::graphql::escape_graphql_string(id);
+        let auth = crate::store::graphql::escape_graphql_string(auth);
         let result = node.execute(&format!(r#"mutation {{ create_InferenceBackend(input: {{node_did: "{owner}", backend_id: "{id}", name: "fixture", provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000/v1", auth: {{kind: "{auth}"}}, enabled: true}}) {{_docID}} }}"#)).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.reference_owner_isolation",
@@ -1346,7 +1350,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
     .unwrap();
     let result = node.execute(r#"mutation { update_InferenceBackend(filter: {node_did: {_eq: "owner"}, backend_id: {_eq: "good"}}, input: {auth: {kind: "invalid-auth"}}) {_docID} }"#).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
-    let result = crate::config_client::ConfigAccess::transact_local_write(
+    let result = crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.reference_owned_corruption",

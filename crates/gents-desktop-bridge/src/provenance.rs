@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::graphql_string_list_literal;
 use gents::session::origin::{
     group_caused, lineage, single_caused, starting_request, SessionLink, SessionScope,
 };
 use gents::session::{public_request_filter, session_scope_filter};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::graphql_string_list_literal;
 use gents::tools::native::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
@@ -302,7 +302,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use gents::graphql::escape_graphql_string;
+    use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
     async fn run(
@@ -312,7 +312,7 @@ mod tests {
     ) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")

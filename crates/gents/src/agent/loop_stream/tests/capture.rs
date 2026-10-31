@@ -526,7 +526,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 
 #[tokio::test]
 async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
-    use crate::graphql::escape_graphql_string;
+    use crate::store::graphql::escape_graphql_string;
     use crate::inference::rendered_request::capture_key as derive_capture_key;
     use crate::inference::rendered_request::{
         DefraRenderedRequestSink, ProvenanceManifest, RenderedRequestSource, CAPTURE_VERSION,

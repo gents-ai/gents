@@ -242,23 +242,24 @@ async fn seeded_node() -> Arc<EmbeddedNode> {
         crate::sign_agent_request_create(signer, &mut create)
             .await
             .unwrap();
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.session_history.signed_request",
             &create.graphql_mutation().unwrap(),
         )
         .await
         .unwrap();
-        let doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap();
+        let doc_id =
+            crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
+                .unwrap()
+                .unwrap()["_docID"]
+                .as_str()
+                .unwrap();
         let request_doc_id = escape_graphql_string(doc_id);
         let transition = format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#
         );
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.session_history.request_state",
             &transition,
@@ -266,7 +267,7 @@ async fn seeded_node() -> Arc<EmbeddedNode> {
         .await
         .unwrap();
         assert!(
-            crate::graphql::single_mutation_document(&response, "update_AgentRequest")
+            crate::store::graphql::single_mutation_document(&response, "update_AgentRequest")
                 .unwrap()
                 .is_some()
         );
@@ -286,18 +287,19 @@ async fn seeded_node() -> Arc<EmbeddedNode> {
                 escape_graphql_string(request_id),
                 state
             );
-            let response = crate::config_client::ConfigAccess::write_local_response(
+            let response = crate::store::config_client::ConfigAccess::write_local_response(
                 &node,
                 "test.session_history.session_observation",
                 &observation,
             )
             .await
             .unwrap();
-            assert!(
-                crate::graphql::single_mutation_document(&response, "update_AgentSession")
-                    .unwrap()
-                    .is_some()
-            );
+            assert!(crate::store::graphql::single_mutation_document(
+                &response,
+                "update_AgentSession"
+            )
+            .unwrap()
+            .is_some());
         }
     }
 

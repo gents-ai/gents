@@ -1,6 +1,6 @@
 use super::*;
-use crate::config_client::ConfigAccess;
 use crate::lean_vocab_test::LeanQueueManagementOperation;
+use crate::store::config_client::ConfigAccess;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 async fn queue_image(

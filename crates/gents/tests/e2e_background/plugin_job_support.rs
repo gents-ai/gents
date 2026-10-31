@@ -431,7 +431,7 @@ async fn scripted_job_adopts_one_child_and_completes() {
     let response = ConfigAccess::local(h.db.node.clone())
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
-            gents::graphql::escape_graphql_string(&row_doc_id),
+            gents::store::graphql::escape_graphql_string(&row_doc_id),
         ))
         .await
         .expect("read the job row");

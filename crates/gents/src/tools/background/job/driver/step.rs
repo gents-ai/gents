@@ -23,13 +23,13 @@ use super::output::{guest_state_of, progress_of, scratch_of, settlement_of, writ
 use super::rows::{load_lifecycle, read_lifecycle_state, read_step_row, read_step_row_in_txn};
 use super::settle::settle_plugin_job_in_txn;
 use super::{step_failure, JobRuntime, StepFailure};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
 use crate::plugin::GuestTrap;
 use crate::request::lifecycle::SessionMessageCause;
 use crate::session::origin::SessionScope;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
 

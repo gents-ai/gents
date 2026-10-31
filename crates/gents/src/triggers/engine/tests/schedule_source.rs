@@ -34,7 +34,7 @@ async fn create_schedule_cadence_doc(
         "schedule_id": schedule_id,
         "cadence": cadence,
     });
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.schedule_cadence_fixture",
@@ -89,7 +89,7 @@ async fn create_schedule_with_next_run_at(
     if let Some(next_run_at) = next_run_at {
         input["next_run_at"] = serde_json::Value::String(next_run_at.to_owned());
     }
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.schedule_trigger_fixture",
@@ -114,7 +114,7 @@ async fn create_schedule_with_next_run_at(
         escape_graphql_string(trigger_id),
     );
     let response = node.execute(&query).await;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "Trigger")
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "Trigger")
         .expect("query seeded Trigger");
     assert_eq!(
         rows.len(),
@@ -138,7 +138,7 @@ async fn observed_trigger(
         escape_graphql_string(trigger_id),
     );
     let response = node.execute(&query).await;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "Trigger")
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "Trigger")
         .expect("query Trigger observations");
     assert_eq!(
         rows.len(),
@@ -159,7 +159,7 @@ async fn observed_schedule_cadence(
         escape_graphql_string(schedule_id),
     );
     let response = node.execute(&query).await;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "Schedule")
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "Schedule")
         .expect("query Schedule cadence");
     assert_eq!(
         rows.len(),

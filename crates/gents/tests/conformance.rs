@@ -4,12 +4,12 @@ use std::time::Duration;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
 use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
+use gents::store::graphql::escape_graphql_string;
 use gents::triggers::event_delivery::{
     runtime_event_delivery_source_contracts, EventDeliverySourceContract,
 };

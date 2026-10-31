@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::target::session_target_allowed;
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
 use crate::session::origin::{SessionLineage, SessionScope};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
 
 const PAGE_SIZE: usize = 100;

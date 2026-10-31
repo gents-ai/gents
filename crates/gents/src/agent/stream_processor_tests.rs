@@ -256,7 +256,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
         .unwrap();
     processor.process_item(text_item("first")).await.unwrap();
     async fn count(node: &defra_node::EmbeddedNode, doc: &str) -> usize {
-        let response = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(doc))).await;
+        let response = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::store::graphql::escape_graphql_string(doc))).await;
         response.data.as_ref().unwrap()["AgentOutputSegment"]
             .as_array()
             .unwrap()
@@ -403,7 +403,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
     }
     drop(processor);
 
-    let request_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+    let request_doc_id = crate::store::graphql::escape_graphql_string(&doc_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#
@@ -636,7 +636,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
     let result = node.execute(&format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-        crate::graphql::escape_graphql_string(&response_doc_id)
+        crate::store::graphql::escape_graphql_string(&response_doc_id)
     )).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let records = result.data.as_ref().unwrap()["AgentOutputSegment"]
@@ -712,9 +712,9 @@ async fn create_pending_request_with_input(
     session_id: &str,
     input: Option<&gents_protocol::request_input::RequestInput>,
 ) -> String {
-    let request_id = crate::graphql::escape_graphql_string(request_id);
-    let session_id = crate::graphql::escape_graphql_string(session_id);
-    let created_at = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let request_id = crate::store::graphql::escape_graphql_string(request_id);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
+    let created_at = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let input =
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
@@ -794,12 +794,12 @@ async fn load_message_shapes_in_scope(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Vec<PersistedMessageShape> {
-    let scope_node_did = crate::graphql::escape_graphql_string(node_did);
+    let scope_node_did = crate::store::graphql::escape_graphql_string(node_did);
     let scope_requester = requester_did.map_or_else(
         || "null".to_owned(),
-        |did| format!("\"{}\"", crate::graphql::escape_graphql_string(did)),
+        |did| format!("\"{}\"", crate::store::graphql::escape_graphql_string(did)),
     );
-    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -809,7 +809,7 @@ async fn load_message_shapes_in_scope(
             ) {{ _docID }}
         }}"#
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "test.stream_processor.message_shapes",
@@ -1087,7 +1087,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(model_result_id),
+            crate::store::graphql::escape_graphql_string(model_result_id),
         ))
         .await;
     let tool_doc_id = response
@@ -1100,7 +1100,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .and_then(serde_json::Value::as_str)
         .expect("physical tool call identity");
     let native = crate::session::load_tool_call_result(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         tool_doc_id,
         "did:test:test",
         &session_id,
@@ -1252,7 +1252,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     crate::sign_agent_request_create(&identity, &mut wake)
         .await
         .unwrap();
-    crate::config_client::ConfigAccess::local(node.clone())
+    crate::store::config_client::ConfigAccess::local(node.clone())
         .write(
             "test.stream_processor.pending_wake",
             &wake.graphql_mutation().unwrap(),
@@ -1815,7 +1815,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     use gents_protocol::output::{OutputSource, SourceClose};
     let result = node.execute(&format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-        crate::graphql::escape_graphql_string(&response_doc_id)
+        crate::store::graphql::escape_graphql_string(&response_doc_id)
     )).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let records = result.data.as_ref().unwrap()["AgentOutputSegment"]

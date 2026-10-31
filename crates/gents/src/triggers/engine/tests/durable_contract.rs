@@ -244,7 +244,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                 fire.fire_key = fire.identity.fire_key();
                 fire.request_id = fire.identity.request_id();
                 fire.task_id = task.task_id.clone();
-                crate::config_client::ConfigAccess::transact_local_write(
+                crate::store::config_client::ConfigAccess::transact_local_write(
                 &node, None, "test.seed_latest_delivery", |txn| {
                     let fire = &fire;
                     let owner = &owner;
@@ -300,7 +300,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                 allowed,
                 "{case}: {result:?}"
             );
-            let response = crate::graphql::graphql_with_transaction_retry(
+            let response = crate::store::graphql::graphql_with_transaction_retry(
                 &node,
                 "{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }",
                 "test.latest_delivery_state",
@@ -348,7 +348,7 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
         for (index, request) in pre.requests.iter().enumerate() {
             let fire = receipt(&request.fire, index);
             let mutation = request_mutation(&fire);
-            crate::config_client::ConfigAccess::transact_local_write(
+            crate::store::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "test.seed_fire",
@@ -361,7 +361,7 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
         let fire = receipt(&f, pre.requests.len());
         let mutation = request_mutation(&fire);
         let commit = case["commit"].as_bool().unwrap();
-        let result = crate::config_client::ConfigAccess::transact_local_write(
+        let result = crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.fire_crash_boundary",
@@ -379,7 +379,7 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
         } else {
             assert!(result.is_err(), "outcome chaining must reject admission");
         }
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             &node,
             "{ TriggerFire { fire_key } AgentRequest { request_id } }",
             "test.fire_receipts",
@@ -428,7 +428,7 @@ enum OutcomeAction {
 }
 
 async fn persisted_outcome_requests(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
 ) -> Vec<gents_protocol::row::AgentRequestRow> {
     let response = access
         .execute(&format!(
@@ -442,7 +442,7 @@ async fn persisted_outcome_requests(
 
 #[tokio::test]
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     for trace in contract()["outcome_traces"].as_array().unwrap() {
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
@@ -653,7 +653,7 @@ struct Arrival {
 }
 
 async fn create_arrival_source(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     label: &str,
     eligible: bool,
 ) -> String {
@@ -667,7 +667,7 @@ async fn create_arrival_source(
         )
         .await
         .unwrap();
-    crate::graphql::created_doc_id(&response, "Work").unwrap()
+    crate::store::graphql::created_doc_id(&response, "Work").unwrap()
 }
 
 fn handoff_consumer() -> gents_protocol::event_delivery::EventConsumer {
@@ -676,12 +676,12 @@ fn handoff_consumer() -> gents_protocol::event_delivery::EventConsumer {
     }
 }
 
-async fn saved_arrival_cursor(access: &crate::config_client::ConfigAccess) -> String {
+async fn saved_arrival_cursor(access: &crate::store::config_client::ConfigAccess) -> String {
     access
         .transact_write("test.read_arrival_cursor", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    crate::config_client::event_source_cursor::load_or_seed(
+                    crate::store::config_client::event_source_cursor::load_or_seed(
                         txn,
                         "owner-a",
                         &handoff_consumer(),
@@ -698,7 +698,7 @@ async fn saved_arrival_cursor(access: &crate::config_client::ConfigAccess) -> St
 
 #[tokio::test]
 async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashes() {
-    use crate::config_client::{event_source_cursor, ConfigAccess};
+    use crate::store::config_client::{event_source_cursor, ConfigAccess};
     for case in contract()["cursors"].as_array().unwrap() {
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
@@ -954,7 +954,7 @@ async fn admit_callback_arrival(
 
 #[tokio::test]
 async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
-    use crate::config_client::{event_source_cursor, ConfigAccess};
+    use crate::store::config_client::{event_source_cursor, ConfigAccess};
     for case in contract()["callback_cursors"].as_array().unwrap() {
         let name = &case["name"];
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());

@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-use gents::config_client::{
-    apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use gents::documents::{BackendAuth, BackendModelCatalog};
 use gents::inference::backends::registry::{
     list_enabled_backends_for_agent, lookup_backend_observation, lookup_backend_observation_in_txn,
+};
+use gents::store::config_client::{
+    apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::{
     list_agents, list_inference_profile_records, load_inference_profile, Collection,

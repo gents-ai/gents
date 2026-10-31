@@ -8,13 +8,13 @@ use gents_protocol::output::{
     TranscriptMessage,
 };
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::created_doc_id;
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables, OutputSegmentRow,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::graphql::created_doc_id;
 
 use super::{
     partial_message_key,

@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{
+use gents::store::config_client::{
     patch::{SelfConfigPatch, SelfConfigTarget},
     read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn,
 };
@@ -61,7 +61,7 @@ async fn read_in_txn(
         read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
             .await?
             .context("This configuration no longer exists. Reopen Runtime Settings.")?;
-    let composite = gents::graphql::newest_document_composite_commit_in_txn(
+    let composite = gents::store::graphql::newest_document_composite_commit_in_txn(
         txn,
         &document_id,
         "client.settings.read",
@@ -202,7 +202,7 @@ pub async fn save_config_editor_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
     use serde_json::json;
     use std::sync::Arc;
 

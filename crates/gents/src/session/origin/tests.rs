@@ -6,7 +6,7 @@ use serde_json::json;
 async fn create(node: &EmbeddedNode, mutation: String, collection: &str) -> String {
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    crate::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+    crate::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
         .unwrap()
         .and_then(|document| document["_docID"].as_str())
         .unwrap()

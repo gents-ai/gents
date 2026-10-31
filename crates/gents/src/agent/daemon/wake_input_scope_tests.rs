@@ -32,7 +32,7 @@ async fn write_request(
         )
         .await
         .unwrap();
-    let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let response = access
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",

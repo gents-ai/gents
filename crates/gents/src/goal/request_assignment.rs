@@ -261,7 +261,7 @@ pub(crate) async fn load_request_assignment(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "goal.assignment_requests",
@@ -271,7 +271,7 @@ pub(crate) async fn load_request_assignment(
 }
 
 pub(crate) async fn load_request_assignment_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
     let snapshot = assignment_snapshot_for_request(txn, request).await?;
@@ -279,7 +279,7 @@ pub(crate) async fn load_request_assignment_in_txn(
 }
 
 async fn assignment_snapshot_for_request(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignments> {
     use anyhow::Context;
@@ -387,7 +387,7 @@ impl RequestAssignments {
 }
 
 pub(crate) async fn load_request_assignments_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     session: &str,
 ) -> anyhow::Result<RequestAssignments> {
@@ -426,7 +426,7 @@ fn request_assignments(
 
 pub(crate) struct RequestAssignmentScopes<'a, R>
 where
-    R: crate::config_client::ConfigRead,
+    R: crate::store::config_client::ConfigRead,
 {
     access: &'a R,
     requests: RequestAssignments,
@@ -436,7 +436,7 @@ where
 
 impl<R> RequestAssignmentScopes<'_, R>
 where
-    R: crate::config_client::ConfigRead,
+    R: crate::store::config_client::ConfigRead,
 {
     pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         self.requests.request(doc)
@@ -517,7 +517,7 @@ pub(crate) async fn load_request_assignment_scopes<'a, R>(
     session: &str,
 ) -> anyhow::Result<RequestAssignmentScopes<'a, R>>
 where
-    R: crate::config_client::ConfigRead,
+    R: crate::store::config_client::ConfigRead,
 {
     let rows = super::request_head::load_session_requests(access, owner, session).await?;
     Ok(RequestAssignmentScopes {

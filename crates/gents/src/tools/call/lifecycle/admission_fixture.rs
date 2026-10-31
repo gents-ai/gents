@@ -71,10 +71,10 @@ pub(crate) async fn write_fixture_job_pin(
 ) -> anyhow::Result<()> {
     let mutation = format!(
         r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(tool_doc_id),
+        crate::store::graphql::escape_graphql_string(tool_doc_id),
     );
     let variables = serde_json::json!({ "job_pin": fixture_job_pin() });
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.admission_fixture.job_pin",
@@ -169,13 +169,13 @@ pub(crate) async fn complete_child(
     node_did: &str,
     text: &str,
 ) {
-    let child_id_escaped = crate::graphql::escape_graphql_string(child_id);
+    let child_id_escaped = crate::store::graphql::escape_graphql_string(child_id);
     let response = node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_id_escaped}" }} }}) {{ {} }} }}"#,
         crate::request::watcher::AGENT_REQUEST_FIELDS,
     )).await;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&response, "AgentRequest")
+        crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
     let mut request = RequestLifecycle::new_with_node_did(
@@ -228,7 +228,7 @@ pub(crate) async fn ensure_fixture_session(
     requester_did: Option<&str>,
     created_at: &str,
 ) {
-    let session = crate::graphql::escape_graphql_string(session_id);
+    let session = crate::store::graphql::escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID node_did requester_did }} }}"#
@@ -245,12 +245,12 @@ pub(crate) async fn ensure_fixture_session(
         assert_eq!(row["requester_did"].as_str(), requester_did);
         return;
     }
-    let agent = crate::graphql::escape_graphql_string(node_did);
+    let agent = crate::store::graphql::escape_graphql_string(node_did);
     let requester = requester_did.map_or_else(
         || "null".to_owned(),
-        |did| format!("\"{}\"", crate::graphql::escape_graphql_string(did)),
+        |did| format!("\"{}\"", crate::store::graphql::escape_graphql_string(did)),
     );
-    let created = crate::graphql::escape_graphql_string(created_at);
+    let created = crate::store::graphql::escape_graphql_string(created_at);
     let response = node.execute(&format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{agent}", requester_did: {requester}, agent_id: "general", created_at: "{created}" }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
 }
@@ -263,10 +263,10 @@ pub async fn claimed_request(
 ) -> RequestLifecycle {
     let now = chrono::Utc::now().to_rfc3339();
     ensure_fixture_session(node, session_id, node_did, None, &now).await;
-    let now = crate::graphql::escape_graphql_string(&now);
-    let request_id = crate::graphql::escape_graphql_string(request_id);
-    let session_id = crate::graphql::escape_graphql_string(session_id);
-    let node_did = crate::graphql::escape_graphql_string(node_did);
+    let now = crate::store::graphql::escape_graphql_string(&now);
+    let request_id = crate::store::graphql::escape_graphql_string(request_id);
+    let session_id = crate::store::graphql::escape_graphql_string(session_id);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
     let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "spawn", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!created.has_errors(), "{:#?}", created.errors);
     let row = node
@@ -275,9 +275,10 @@ pub async fn claimed_request(
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
-    let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
-        .unwrap()
-        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::store::graphql::first_row(&row, "AgentRequest")
+            .unwrap()
+            .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
@@ -364,16 +365,17 @@ pub(crate) async fn claimed_signed_request_create(
         .expect("sign canonical admission fixture request");
     let created = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!created.has_errors(), "{:#?}", created.errors);
-    let request_id = crate::graphql::escape_graphql_string(&create.request_id);
+    let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
     let row = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
-    let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
-        .unwrap()
-        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::store::graphql::first_row(&row, "AgentRequest")
+            .unwrap()
+            .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
@@ -420,16 +422,17 @@ async fn claimed_paired_client_request(
         .expect("sign paired client request");
     let created = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!created.has_errors(), "{:#?}", created.errors);
-    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let row = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
-    let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
-        .unwrap()
-        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::store::graphql::first_row(&row, "AgentRequest")
+            .unwrap()
+            .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
@@ -734,7 +737,7 @@ mod lifecycle_tests {
     use crate::tools::call::lifecycle::{CancelCause, FailureClass};
 
     async fn row(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
-        let session = crate::graphql::escape_graphql_string(session_id);
+        let session = crate::store::graphql::escape_graphql_string(session_id);
         let response = node
             .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode }} }}"#))
             .await;
@@ -903,7 +906,7 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn timeout_adopts_terminal_written_by_terminal_parent_sweep() {
         let (node, path, mut tool) = published_spawn_parent("timeout-cas").await;
-        let request = crate::graphql::escape_graphql_string("request-timeout-cas");
+        let request = crate::store::graphql::escape_graphql_string("request-timeout-cas");
         let response = node
             .execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "interrupted" }}) {{ _docID }} }}"#))
             .await;

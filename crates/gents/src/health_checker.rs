@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use gents_protocol::tool_service_health::ToolServiceHealthProjection;
 
-use crate::graphql::escape_graphql_string;
 use crate::mcp_pool::{resolve_mcp_url, McpPool};
+use crate::store::graphql::escape_graphql_string;
 
 /// Node-local service observation settings; these do not change an agent's
 /// remote-tool call deadlines.
@@ -914,7 +914,7 @@ async fn upsert_persisted_health_state(
             ) {{ _docID }}
         }}"#,
     );
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         persistence.node,
         "health_checker.upsert_service_state",
         &mutation,
@@ -939,7 +939,7 @@ async fn collapse_health_state_twins(
             order: [{{ updated_at: DESC }}, {{ _docID: ASC }}]
         ) {{ _docID }} }}"#
     );
-    let twins = match crate::graphql::graphql_with_transaction_retry(
+    let twins = match crate::store::graphql::graphql_with_transaction_retry(
         persistence.node,
         &query,
         "load_service_health_twins",
@@ -969,7 +969,7 @@ async fn collapse_health_state_twins(
         r#"mutation {{ delete_ToolServiceHealthState(filter: {{ _docID: {{ _in: [{}] }} }}) {{ _docID }} }}"#,
         twins.join(", ")
     );
-    match crate::config_client::ConfigAccess::write_local_response(
+    match crate::store::config_client::ConfigAccess::write_local_response(
         persistence.node,
         "health_checker.collapse_service_state_twins",
         &mutation,
@@ -1000,7 +1000,7 @@ async fn delete_persisted_health_state(
             ) {{ _docID }}
         }}"#
     );
-    let resp = crate::config_client::ConfigAccess::write_local_response(
+    let resp = crate::store::config_client::ConfigAccess::write_local_response(
         persistence.node,
         "health_checker.delete_stale_service_state",
         &mutation,
@@ -1028,7 +1028,7 @@ async fn load_persisted_service_ids(
             }}
         }}"#
     );
-    let resp = crate::graphql::graphql_with_transaction_retry(
+    let resp = crate::store::graphql::graphql_with_transaction_retry(
         persistence.node,
         &query,
         "load_persisted_service_ids",
@@ -1128,7 +1128,7 @@ mod tests {
             let doc_id = rows.data.as_ref().unwrap()["ToolServiceHealthState"][0]["_docID"]
                 .as_str()
                 .unwrap();
-            let doc_id = crate::graphql::escape_graphql_string(doc_id);
+            let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
             let response = node
                 .execute(&format!(
                     r#"{{ _commits(docID: "{doc_id}") {{ fieldName }} }}"#
@@ -1207,7 +1207,7 @@ mod tests {
         super::persist_health_snapshot(&failed_context, &map, &[entry.clone()], later).await;
         assert!(map.persisted.lock().await.is_empty());
         unavailable.shutdown().await;
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             &node,
             "test.health_repair",
             r#"mutation { update_ToolServiceHealthState(input: {endpoint: "http://stale.invalid/mcp"}) { _docID } }"#,
@@ -1508,7 +1508,7 @@ mod tests {
         let did_a = "did:key:zHealthA";
         let did_b = "did:key:zHealthB";
         for did in [did_a, did_b] {
-            let did = crate::graphql::escape_graphql_string(did);
+            let did = crate::store::graphql::escape_graphql_string(did);
             let response = node
                 .execute(&format!(
                     r#"mutation {{ create_ToolServiceRegistry(input: {{
@@ -1647,7 +1647,7 @@ mod tests {
             ("tied", "2026-01-01T00:00:00Z", "a"),
             ("tied", "2026-01-01T00:00:00Z", "b"),
         ] {
-            let response = crate::config_client::ConfigAccess::write_local_response(
+            let response = crate::store::config_client::ConfigAccess::write_local_response(
                 &node,
                 "test.health_twin",
                 &format!(

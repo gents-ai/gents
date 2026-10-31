@@ -1,5 +1,4 @@
 use super::*;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::lean_vocab_test::{
     LeanInterruptQueueCase, LeanInterruptQueueEntry, LeanInterruptQueueInput,
 };
@@ -9,6 +8,7 @@ use crate::request::lifecycle::queue::{
 };
 use crate::request::lifecycle::ExecutionOrigin;
 use crate::request::watcher::AgentRequest;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::{json, Value};
@@ -134,7 +134,7 @@ async fn fixture_with_http(
         )
         .await
         .unwrap();
-    let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     access
         .write(
             "test.interrupt_queue.processing",

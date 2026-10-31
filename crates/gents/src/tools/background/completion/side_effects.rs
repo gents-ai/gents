@@ -25,10 +25,13 @@ async fn existing_notification(
             }}
         }}"#
     );
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "existing_notification")
-            .await?;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentMessage")?;
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "existing_notification",
+    )
+    .await?;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "AgentMessage")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "canonical notification key {message_key} is ambiguous"

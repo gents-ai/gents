@@ -39,7 +39,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
             let response = node
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state cancel_cause }} }}"#,
-                    crate::graphql::escape_graphql_string(&tool_doc_id)
+                    crate::store::graphql::escape_graphql_string(&tool_doc_id)
                 ))
                 .await;
             assert!(!response.has_errors(), "{:?}", response.errors);
@@ -103,7 +103,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let response = node
         .execute(&format!(
             r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&did)
+            crate::store::graphql::escape_graphql_string(&did)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -120,7 +120,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         let response = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }}, lifecycle_state: {{ _eq: "pending" }} }}) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&session)
+                crate::store::graphql::escape_graphql_string(&session)
             ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
@@ -150,7 +150,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
             let row = node
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop lifecycle_state failure_reason }} }}"#,
-                    crate::graphql::escape_graphql_string(&doc_id)
+                    crate::store::graphql::escape_graphql_string(&doc_id)
                 ))
                 .await
                 .data
@@ -254,7 +254,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&session_id)
+            crate::store::graphql::escape_graphql_string(&session_id)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);

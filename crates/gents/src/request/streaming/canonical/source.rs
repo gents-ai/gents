@@ -7,9 +7,9 @@ use gents_protocol::output::{
 };
 use gents_protocol::row::AgentRequestRow;
 
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
 use crate::session::canonical_rows::OutputSegmentRow;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 
 pub(crate) fn retained_partial_blocks(
     records: &[ObservedSegment<'_>],
@@ -176,7 +176,7 @@ pub(super) async fn load_request_in_txn(
     }} }}"#
         ))
         .await?;
-    let mut rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let mut rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         rows.len() == 1,
         "provider output request is missing or ambiguous"

@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::request::lifecycle::queue::drain_automated_wakeups_in_txn;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 mod scoped;
 pub use scoped::fetch_interrupt_requested_at_scoped;
@@ -97,7 +97,7 @@ fn scoped_request_filter(
 }
 
 pub async fn interrupt_request_by_doc_id_with_access(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -115,7 +115,7 @@ pub async fn interrupt_request_by_doc_id_with_access(
 /// Latch the exact scoped request inside the caller's transaction, so a job's
 /// terminal decision and child interrupts share one commit and rollback boundary.
 pub(crate) async fn interrupt_request_by_doc_id_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -130,7 +130,7 @@ async fn interrupt_request_matching(
     node: &std::sync::Arc<EmbeddedNode>,
     filter: String,
 ) -> Result<Vec<String>> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "interrupt.latch_request",
@@ -143,7 +143,7 @@ async fn interrupt_request_matching(
 }
 
 async fn interrupt_request_matching_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     filter: &str,
 ) -> Result<Vec<String>> {
     let lookup = txn.execute(&format!(r#"{{AgentRequest(filter: {{{filter}}}, limit: 2) {{_docID request_id session_id node_did requester_did interrupt_requested_at}}}}"#)).await?;
@@ -198,7 +198,7 @@ async fn interrupt_request_matching_in_txn(
 }
 
 pub(crate) async fn interrupt_active_session_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -256,7 +256,7 @@ pub(crate) async fn active_session_request(
         "active request query omitted rows"
     );
     let mut rows: Vec<gents_protocol::row::AgentRequestRow> =
-        crate::graphql::rows(&response, "AgentRequest")?;
+        crate::store::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "multiple active physical requests in exact session scope"

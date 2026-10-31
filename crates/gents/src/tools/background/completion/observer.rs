@@ -97,7 +97,7 @@ impl BackgroundCompletionObserver {
 
                 if let Err(error) =
                     crate::tools::background::job::recovery::wake_jobs_after_request_update(
-                        &crate::config_client::ConfigAccess::local(self.node.clone()),
+                        &crate::store::config_client::ConfigAccess::local(self.node.clone()),
                         &self.job_driver,
                         &change.doc_id,
                     )

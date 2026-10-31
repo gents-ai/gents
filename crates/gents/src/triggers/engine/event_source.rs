@@ -280,12 +280,12 @@ impl SourceSchemaCache {
         collection: &str,
         node: &EmbeddedNode,
     ) -> anyhow::Result<Vec<String>> {
-        crate::graphql::validate_collection_identifier(collection)?;
+        crate::store::graphql::validate_collection_identifier(collection)?;
         let mut guard = self.by_collection.lock().await;
         if let Some(fields) = guard.get(collection) {
             return Ok(fields.clone());
         }
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             node,
             &source_fields_query(collection)?,
             "introspect",
@@ -302,14 +302,14 @@ impl SourceSchemaCache {
 /// a live document collection, not an arbitrary string, so it is validated
 /// before being spliced in and escaped as the string literal it fills.
 pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
-    crate::graphql::validate_collection_identifier(collection)?;
+    crate::store::graphql::validate_collection_identifier(collection)?;
     Ok(format!(
         r#"query {{
             __type(name: "{}") {{
                 fields {{ name }}
             }}
         }}"#,
-        crate::graphql::escape_graphql_string(collection)
+        crate::store::graphql::escape_graphql_string(collection)
     ))
 }
 
@@ -444,8 +444,8 @@ impl EventSource {
             .active_event_triggers()
             .values()
             .map(|t| t.source_collection.clone())
-            .filter(
-                |collection| match crate::graphql::validate_collection_identifier(collection) {
+            .filter(|collection| {
+                match crate::store::graphql::validate_collection_identifier(collection) {
                     Ok(()) => true,
                     Err(error) => {
                         tracing::warn!(
@@ -457,8 +457,8 @@ impl EventSource {
                         );
                         false
                     }
-                },
-            )
+                }
+            })
             .collect();
 
         let added: Vec<String> = desired
@@ -491,14 +491,14 @@ impl EventSource {
             };
             let owner = delivery.owner();
             let consumer = delivery.consumer();
-            if let Err(error) = crate::config_client::ConfigAccess::transact_local_write(
+            if let Err(error) = crate::store::config_client::ConfigAccess::transact_local_write(
                 &self.node,
                 None,
                 "trigger.seed_arrival_cursor",
                 |txn| {
                     let consumer = &consumer;
                     Box::pin(async move {
-                        crate::config_client::event_source_cursor::load_or_seed_for_source(
+                        crate::store::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
                             owner,
                             consumer,
@@ -646,7 +646,7 @@ impl EventSource {
         collection: &str,
         snapshot: &ActiveRuntimeSnapshot,
     ) -> anyhow::Result<()> {
-        crate::graphql::validate_collection_identifier(collection)?;
+        crate::store::graphql::validate_collection_identifier(collection)?;
         let trigger_ids = snapshot
             .active_event_triggers()
             .values()
@@ -674,7 +674,7 @@ impl EventSource {
                 .push(trigger.trigger_id.clone());
         }
         for (_, field) in correlation_probes.keys() {
-            crate::graphql::validate_graphql_name(field)?;
+            crate::store::graphql::validate_graphql_name(field)?;
         }
         let ids = tokio::select! {
             biased;
@@ -689,7 +689,7 @@ impl EventSource {
                 .map(str::trim)
                 .filter(|filter| !filter.is_empty())
                 .unwrap_or("{}");
-            crate::graphql::validate_graphql_filter_fragment(filter)?;
+            crate::store::graphql::validate_graphql_filter_fragment(filter)?;
             let rows = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => anyhow::bail!("event source correlation seeding cancelled"),
@@ -945,12 +945,15 @@ impl EventSource {
                 }}
             }}"#,
             collection = collection,
-            id = crate::graphql::escape_graphql_string(source_doc_id),
+            id = crate::store::graphql::escape_graphql_string(source_doc_id),
             projection = projection,
         );
-        let response =
-            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "fetch source doc")
-                .await?;
+        let response = crate::store::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "fetch source doc",
+        )
+        .await?;
         let Some(rows) = response
             .data
             .as_ref()
@@ -1274,7 +1277,10 @@ impl EventSource {
         let correlations = correlations
             .iter()
             .map(|correlation| {
-                format!("\"{}\"", crate::graphql::escape_graphql_string(correlation))
+                format!(
+                    "\"{}\"",
+                    crate::store::graphql::escape_graphql_string(correlation)
+                )
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -1289,11 +1295,11 @@ impl EventSource {
                     limit: {limit}
                 ) {{ caused_by_correlation request_id retry_key }}
             }}"#,
-            node_did = crate::graphql::escape_graphql_string(node_did),
-            trigger_id = crate::graphql::escape_graphql_string(&trigger.trigger_id),
+            node_did = crate::store::graphql::escape_graphql_string(node_did),
+            trigger_id = crate::store::graphql::escape_graphql_string(&trigger.trigger_id),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = match crate::graphql::graphql_with_transaction_retry(
+        let response = match crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
             "event-trigger batched marker prune",
@@ -1345,7 +1351,7 @@ impl EventSource {
             .collect::<RapidHashMap<_, _>>();
         let keys = keys_to_correlations
             .keys()
-            .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
+            .map(|key| format!("\"{}\"", crate::store::graphql::escape_graphql_string(key)))
             .collect::<Vec<_>>()
             .join(", ");
         let query = format!(
@@ -1355,10 +1361,10 @@ impl EventSource {
                     limit: {limit}
                 ) {{ group_key quiesced_at }}
             }}"#,
-            owner = crate::graphql::escape_graphql_string(delivery.owner()),
+            owner = crate::store::graphql::escape_graphql_string(delivery.owner()),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = match crate::graphql::graphql_with_transaction_retry(
+        let response = match crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
             "event-trigger durable quiescence prune",

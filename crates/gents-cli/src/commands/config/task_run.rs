@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use gents::documents::template::{render_template, task_node_ctx, TemplateScope};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
@@ -73,17 +73,18 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             let node_did = &node_did;
             let task_id = &task_id;
             Box::pin(async move {
-                let (task_doc_id, value) = gents::config_client::read_desired_state_record_in_txn(
-                    txn,
-                    gents::Collection::Task,
-                    node_did,
-                    task_id,
-                )
-                .await?
-                .context("task not found under the selected node")?;
+                let (task_doc_id, value) =
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Task,
+                        node_did,
+                        task_id,
+                    )
+                    .await?
+                    .context("task not found under the selected node")?;
                 let task: gents::documents::Task = serde_json::from_value(value)?;
                 anyhow::ensure!(task.enabled, "Task {} is disabled", task.task_id);
-                let (_, value) = gents::config_client::read_desired_state_record_in_txn(
+                let (_, value) = gents::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     gents::Collection::Agent,
                     node_did,

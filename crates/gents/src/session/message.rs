@@ -1,11 +1,11 @@
 #[cfg(test)]
-use crate::config_client::ConfigAccess;
-#[cfg(test)]
-use crate::graphql::escape_graphql_string;
-#[cfg(test)]
 use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
 #[cfg(test)]
 use crate::session::origin::SessionScope;
+#[cfg(test)]
+use crate::store::config_client::ConfigAccess;
+#[cfg(test)]
+use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::tools::surface::AgentToolConfig;
 use anyhow::Result;

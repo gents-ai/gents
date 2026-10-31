@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::config_client::{
+use gents::defra_node::{EmbeddedNode, HttpConfig};
+use gents::documents::{BackendAuth, Node, PackConfig};
+use gents::store::config_client::{
     apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
     ConfigAccess, DesiredStateApplyPlan,
 };
-use gents::defra_node::{EmbeddedNode, HttpConfig};
-use gents::documents::{BackendAuth, Node, PackConfig};
 use gents::{
     default_agent_id_for_node, ensure_runtime_schemas, Collection, DocumentRuntimeOptions, Gents,
     InferenceBackend, KeyIdentity, McpPool, NodeIdentity, ToolCeiling, DEFAULT_MAX_TURNS,
@@ -174,7 +174,7 @@ async fn seed_demo_documents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::write_inference_backend_document;
+    use gents::store::config_client::write_inference_backend_document;
     use serde_json::json;
 
     #[tokio::test]

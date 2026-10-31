@@ -133,8 +133,8 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     );
     let peer = core.local_peer_id().to_owned();
     let client_did = core.node_identity().did().to_owned();
-    let did = gents::graphql::escape_graphql_string(&client_did);
-    gents::config_client::ConfigAccess::write_local(
+    let did = gents::store::graphql::escape_graphql_string(&client_did);
+    gents::store::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "installation_upgrade.seed",
         &format!(
@@ -254,7 +254,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     );
     assert_eq!(reopened.local_peer_id(), peer);
     assert_eq!(reopened.node_identity().did(), client_did);
-    let rows = gents::config_client::ConfigAccess::local(reopened.node_arc())
+    let rows = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
         .execute("{ AgentSession { session_id } }")
         .await
         .unwrap();

@@ -1,6 +1,6 @@
 use super::*;
-use crate::config_client::ConfigAccess;
 use crate::request::watcher::AgentRequest;
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 
 async fn signed_reply(

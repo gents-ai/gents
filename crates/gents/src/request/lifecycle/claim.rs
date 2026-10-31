@@ -92,7 +92,7 @@ where
     );
     let snapshot_query = &snapshot_query;
     let build_mutation = &build_mutation;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "lifecycle.claim_request",
@@ -248,11 +248,14 @@ async fn fetch_interrupt_and_ttl(
             }}
         }}"#
     );
-    let resp =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "fetch_interrupt_and_ttl")
-            .await?;
+    let resp = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "fetch_interrupt_and_ttl",
+    )
+    .await?;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&resp, "AgentRequest")?
+        crate::store::graphql::first_row(&resp, "AgentRequest")?
             .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?;
     let interrupt = row
         .interrupt_requested_at
@@ -360,10 +363,10 @@ impl RequestLifecycle {
         let generation = generation.to_owned();
         let request_doc_id = request_doc_id.to_owned();
         let now = &now;
-        crate::config_client::ConfigAccess::transact_local_idempotent(
+        crate::store::config_client::ConfigAccess::transact_local_idempotent(
             node,
             None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
             "lifecycle.begin_owned_execution",
             move |txn| {
                 let generation = generation.clone();
@@ -432,10 +435,10 @@ impl RequestLifecycle {
             }}"#
         );
         let request = &self.request;
-        let resp = crate::config_client::ConfigAccess::transact_local_idempotent(
+        let resp = crate::store::config_client::ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
             "interrupt_before_claim",
             |txn| {
                 let mutation = &mutation;
@@ -516,10 +519,10 @@ impl RequestLifecycle {
             }}"#
         );
         let request = &self.request;
-        let resp = crate::config_client::ConfigAccess::transact_local_idempotent(
+        let resp = crate::store::config_client::ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
             "expire_stale",
             |txn| {
                 let mutation = &mutation;
@@ -609,10 +612,10 @@ impl RequestLifecycle {
         let request = &self.request;
         let outcome_reason = reason_text.as_str();
         let outcome_time = terminalized_at_value.as_str();
-        let updated = crate::config_client::ConfigAccess::transact_local_idempotent(
+        let updated = crate::store::config_client::ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
             "lifecycle.reject_admission",
             move |txn| {
                 Box::pin(async move {
@@ -840,7 +843,7 @@ impl RequestLifecycle {
             )
         })?;
         let request_commit_cid =
-            crate::graphql::mutation_composite_version(&resp, "update_AgentRequest")?
+            crate::store::graphql::mutation_composite_version(&resp, "update_AgentRequest")?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "claimed AgentRequest {doc_id} returned no composite DefraDB version"
@@ -897,7 +900,7 @@ mod tests {
         for interrupted in [true, false] {
             let fixture = Fixture::new().await;
             let (_, mutations) =
-                crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+                crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
                     || async {
                         let mut lifecycle = fixture.lifecycle();
                         if interrupted {
@@ -951,7 +954,7 @@ mod tests {
         for interrupted in [true, false] {
             let fixture = Fixture::new().await;
             let doc_id = escape_graphql_string(&fixture.request.doc_id);
-            crate::config_client::ConfigAccess::write_local(
+            crate::store::config_client::ConfigAccess::write_local(
                 &fixture.node,
                 "test.pending_workspace_terminal_lost_cas",
                 &format!(
@@ -1043,7 +1046,7 @@ mod tests {
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
             fields = crate::request::watcher::AGENT_REQUEST_FIELDS,
         );
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             node,
             "test.insert_pending_request",
             &mutation,
@@ -1068,9 +1071,12 @@ mod tests {
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")
-            .unwrap()
-            .unwrap()
+        crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+            &response,
+            "AgentRequest",
+        )
+        .unwrap()
+        .unwrap()
     }
 
     #[tokio::test]
@@ -1202,7 +1208,7 @@ mod tests {
             .await;
         }
         for (request, expected) in [(&first, true), (&second, false)] {
-            let allowed = crate::config_client::ConfigAccess::transact_local_write(
+            let allowed = crate::store::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "test.claim_queue_arrival_order",
@@ -1293,7 +1299,7 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.seed_serial_claim_receipts",
@@ -1324,7 +1330,7 @@ mod tests {
                 .unwrap()["can_claim"]
                 .as_bool()
                 .unwrap();
-            let allowed = crate::config_client::ConfigAccess::transact_local_write(
+            let allowed = crate::store::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "test.serial_claim_trigger_cohort",
@@ -1385,7 +1391,7 @@ mod tests {
                     "goal_id": original.goal_id, "goal_objective": "perform next assignment",
                     "goal_token_budget": task_budget, "goal_assignment_applied": false,
                 });
-                crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.task_assignment", |txn| {
+                crate::store::config_client::ConfigAccess::transact_local_write(&node, None, "test.task_assignment", |txn| {
             let receipt = receipt.clone();
             Box::pin(async move {
                 txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
@@ -1441,7 +1447,7 @@ mod tests {
                     escape_graphql_string(&first_doc_id),
                     escape_graphql_string(&first_doc_id)
                 );
-                crate::config_client::ConfigAccess::transact_local_write(
+                crate::store::config_client::ConfigAccess::transact_local_write(
                     &node,
                     None,
                     "test.finish_prior_assignment",
@@ -1545,7 +1551,7 @@ mod tests {
                 "queued_serial": true,
                 "goal_assignment_applied": false,
             });
-            crate::config_client::ConfigAccess::transact_local_write(
+            crate::store::config_client::ConfigAccess::transact_local_write(
                 &node, None, "test.serial_claim_receipt", |txn| {
                     let input = input.clone();
                     Box::pin(async move {
@@ -1680,7 +1686,7 @@ mod tests {
             .expect("successful claim records its exact DefraDB commit")
             .to_string();
 
-        let commits = crate::graphql::composite_commits(
+        let commits = crate::store::graphql::composite_commits(
             node.as_ref(),
             &first_doc_id,
             "verify_exact_claim_version",
@@ -1744,7 +1750,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let parent_doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let parent_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         access.write("test.snapshot_finished_parent", &format!("mutation {{update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"completed\"}}) {{_docID}}}}",escape_graphql_string(&parent_doc))).await.unwrap();
         let mut wake = AgentRequestCreate::base(
             RequestPurpose::Normal,
@@ -1780,7 +1786,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         let response = access
             .execute(&format!(
                 "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
@@ -1930,7 +1936,7 @@ mod tests {
             None,
         )
         .await;
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         let response = access
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ message_key: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
@@ -2053,7 +2059,7 @@ mod tests {
                 r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending"{budget_patch} }}) {{ _docID }} }}"#,
                 escape_graphql_string(&resumed_request.doc_id)
             );
-            crate::config_client::ConfigAccess::write_local_response(
+            crate::store::config_client::ConfigAccess::write_local_response(
                 &node,
                 "test.requeue_budget",
                 &mutation,

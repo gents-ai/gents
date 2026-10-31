@@ -83,7 +83,7 @@ async fn runtime_seal_case(unowned: bool) {
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&response, "AgentRequest")
+        crate::store::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
     let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();

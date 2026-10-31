@@ -39,7 +39,7 @@ pub(super) async fn load(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::graphql::{ensure_no_errors, escape_graphql_string};
+    use gents::store::graphql::{ensure_no_errors, escape_graphql_string};
     use serde_json::json;
 
     #[tokio::test]

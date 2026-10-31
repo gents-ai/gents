@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::inference::llm::message::Message;
 use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::inference::rendered_request::RenderedCompletionRequest;
+use gents::store::graphql::escape_graphql_string;
 use gents::{AgentBuilder, CompactionStrategy, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
@@ -1253,12 +1253,12 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     gents::sign_agent_request_create_as_registered_target(&mut create)
         .await
         .unwrap();
-    let response = gents::config_client::ConfigAccess::local(db.node.clone())
+    let response = gents::store::config_client::ConfigAccess::local(db.node.clone())
         .write("test.retry_successor", &create.graphql_mutation().unwrap())
         .await
         .unwrap();
     let response: gents::defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-    let doc_id = gents::graphql::single_mutation_document(&response, "create_AgentRequest")
+    let doc_id = gents::store::graphql::single_mutation_document(&response, "create_AgentRequest")
         .unwrap()
         .unwrap()["_docID"]
         .as_str()
@@ -1305,7 +1305,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         "{messages:?}"
     );
     let retry_doc = escape_graphql_string(&doc_id);
-    let rows = gents::graphql::graphql_with_transaction_retry(db.node.as_ref(), &format!(
+    let rows = gents::store::graphql::graphql_with_transaction_retry(db.node.as_ref(), &format!(
         r#"{{ AgentMessage(filter: {{request_doc_id: {{_eq:"{retry_doc}"}}, message_key: {{_eq:"authored:{retry_doc}:prompt"}}}}) {{_docID}} }}"#
     ), "test.retry_authored_input").await.unwrap();
     assert_eq!(
@@ -1386,7 +1386,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
             "turn {index} must carry the body the provider was posted"
         );
     }
-    let request_commits = gents::graphql::composite_commits(
+    let request_commits = gents::store::graphql::composite_commits(
         db.node.as_ref(),
         &doc_id,
         "load captured AgentRequest versions",
@@ -1838,7 +1838,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         "the seeding request must be a single uncompacted completion"
     );
 
-    let seed_commit = gents::graphql::newest_document_composite_commit(
+    let seed_commit = gents::store::graphql::newest_document_composite_commit(
         db.node.as_ref(),
         &seed_doc,
         "seed request reduction boundary",
@@ -1900,15 +1900,16 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
             compacted_tokens: 10
             created_at: "2026-09-02T00:00:00Z"
         }}) {{ _docID }} }}"#,
-        reduction_key = gents::graphql::escape_graphql_string(&reduction_key),
-        node_did = gents::graphql::escape_graphql_string(&agent.node_did),
-        session_id = gents::graphql::escape_graphql_string(session_id),
-        request_doc_id = gents::graphql::escape_graphql_string(&seed_doc),
-        request_commit_cid = gents::graphql::escape_graphql_string(&seed_commit.cid),
-        boundary_json = gents::graphql::escape_graphql_string(&boundary_json),
-        empty_prefix_json = gents::graphql::escape_graphql_string(&empty_prefix_json),
-        checkpoint_json = gents::graphql::escape_graphql_string(&checkpoint_json),
-        replay_associations_json = gents::graphql::escape_graphql_string(&replay_associations_json),
+        reduction_key = gents::store::graphql::escape_graphql_string(&reduction_key),
+        node_did = gents::store::graphql::escape_graphql_string(&agent.node_did),
+        session_id = gents::store::graphql::escape_graphql_string(session_id),
+        request_doc_id = gents::store::graphql::escape_graphql_string(&seed_doc),
+        request_commit_cid = gents::store::graphql::escape_graphql_string(&seed_commit.cid),
+        boundary_json = gents::store::graphql::escape_graphql_string(&boundary_json),
+        empty_prefix_json = gents::store::graphql::escape_graphql_string(&empty_prefix_json),
+        checkpoint_json = gents::store::graphql::escape_graphql_string(&checkpoint_json),
+        replay_associations_json =
+            gents::store::graphql::escape_graphql_string(&replay_associations_json),
     );
     let response = db.node.execute(&fixture).await;
     assert!(
@@ -2880,7 +2881,9 @@ async fn boot_capture_agent_with(
 }
 
 async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) {
-    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     gents::ensure_node(node, owner).await.unwrap();
     let value = serde_json::json!({"node_did":owner,"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100});
     let profile_id = format!("{CAPTURE_AGENT_ID}:inference");
@@ -2903,7 +2906,9 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.install_provider_backend", |txn| {
         let plan = &plan;
-        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();

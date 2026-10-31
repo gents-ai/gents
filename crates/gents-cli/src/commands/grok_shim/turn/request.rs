@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::Value;
 use tokio::sync::{oneshot, Mutex};
 
@@ -24,7 +24,7 @@ impl TurnManager {
         _prompt_id: &str,
     ) -> Result<gents_protocol::row::AgentRequestRow> {
         let content = prompt_text(request);
-        let graphql = gents::config_client::GraphqlEndpoint::as_principal(
+        let graphql = gents::store::config_client::GraphqlEndpoint::as_principal(
             self.config.graphql.clone(),
             self.config.actor.to_string(),
         );
