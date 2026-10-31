@@ -193,12 +193,6 @@ impl StoreScope {
                 source_at(&rows.datastore_tool_surface_source_node_dids, index),
             ));
         }
-        for (index, row) in rows.chain_key_bindings.iter().enumerate() {
-            self.insert_optional(owner_or_source(
-                Some(&row.node_did),
-                source_at(&rows.chain_key_binding_source_node_dids, index),
-            ));
-        }
         for node_did in &rows.operator_config_authoritative_node_dids {
             self.insert_optional(Some(node_did));
         }

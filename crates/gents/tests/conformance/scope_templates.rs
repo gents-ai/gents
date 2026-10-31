@@ -189,8 +189,6 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "ToolServiceRegistry",
         "Skill",
         "DatastoreToolSurface",
-        "ChainKeyBinding",
-        "EthTool",
         "Task",
         "Schedule",
         "Trigger",
@@ -381,8 +379,6 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         "ToolServiceRegistry",
         "Skill",
         "DatastoreToolSurface",
-        "ChainKeyBinding",
-        "EthTool",
     ] {
         assert!(t.collections.contains(&col));
         assert!(!filter.contains_key(col), "config {col} must be unfiltered");

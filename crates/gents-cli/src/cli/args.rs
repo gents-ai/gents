@@ -253,11 +253,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: JobCommand,
     },
-    #[command(about = "Manage EVM chain keys, endpoints, and queries")]
-    Chain {
-        #[command(subcommand)]
-        command: ChainCommand,
-    },
     #[command(about = "List and resolve human-attention mailbox items")]
     Mailbox {
         #[command(subcommand)]

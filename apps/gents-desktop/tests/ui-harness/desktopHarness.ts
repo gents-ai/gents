@@ -3836,7 +3836,6 @@ function createDeployment(): DeploymentView {
     inferenceExecution: [],
     agentTargets: [],
     datastoreToolSurfaces: [],
-    chainKeyBindings: [],
     mailboxItems: [],
     sessions: [],
   };

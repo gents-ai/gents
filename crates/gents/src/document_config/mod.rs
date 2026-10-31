@@ -1,11 +1,8 @@
 mod behavior;
 mod callback;
-mod chain_key_binding;
-pub use chain_key_binding::preserve_chain_key_binding_update_fields;
 mod compaction;
 mod context;
 mod datastore_tool_surface;
-mod eth_tool;
 mod eval_definition;
 mod event_trigger;
 mod inference_backend;
@@ -98,14 +95,7 @@ pub(crate) use write_tool::{reject_protected_collection_name, undeclared_field_r
 
 pub use agent_target::AgentTargetDocument;
 
-pub use chain_key_binding::{
-    chain_key_binding_by_id_query, create_chain_key_binding_mutation,
-    delete_chain_key_binding_mutation, list_chain_key_binding_records,
-    list_chain_key_bindings_query, load_chain_key_binding_by_doc_id, upsert_chain_key_binding,
-    upsert_chain_key_binding_mutation, ChainKeyBindingDocument,
-};
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
-pub use eth_tool::{eth_tool_by_id_query, list_eth_tools, EthToolDocument};
 pub use skill::SkillDocument;
 
 #[cfg(test)]

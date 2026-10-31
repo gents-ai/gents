@@ -172,10 +172,6 @@ def surfaceViewJson (v : SurfaceView) : String :=
     ++ "\"query_grants\":"
       ++ jsonArray (v.queryGrants.map writeGrantViewJson) ++ ","
     ++ "\"query_fields\":" ++ jsonArray (v.queryFields.map jsonString) ++ ","
-    ++ "\"eth_query_methods_kind\":" ++ jsonString v.ethQueryMethodsKind ++ ","
-    ++ "\"eth_query_methods_keys\":" ++ jsonStringArray v.ethQueryMethodsKeys ++ ","
-    ++ "\"eth_call_tools_kind\":" ++ jsonString v.ethCallToolsKind ++ ","
-    ++ "\"eth_call_tools_keys\":" ++ jsonStringArray v.ethCallToolsKeys ++ ","
     ++ "\"plugin_tools_kind\":" ++ jsonString v.pluginToolsKind ++ ","
     ++ "\"plugin_tools_keys\":" ++ jsonStringArray v.pluginToolsKeys
   ++ "}"

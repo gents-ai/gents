@@ -308,16 +308,6 @@ impl ConfigReferences {
                     "inference_profile_id",
                 )?;
             }
-            Collection::ChainKeyBinding => decode::<ChainKeyBindingDocument>(value)?.validate()?,
-            Collection::EthTool => {
-                let doc: EthToolDocument = decode(value)?;
-                doc.validate()?;
-                optional(
-                    Collection::ChainKeyBinding,
-                    doc.key_binding_id.as_deref(),
-                    "key_binding_id",
-                )?;
-            }
             Collection::Tools => {
                 let doc: Tools = decode(value)?;
                 doc.validate()?;
@@ -334,33 +324,11 @@ impl ConfigReferences {
                     .into_iter()
                     .flat_map(|host| host.cli.iter().map(|tool| tool.name.clone()))
                     .collect::<Vec<_>>();
-                let eth_tools = self
-                    .documents
-                    .iter()
-                    .filter(|((collection, _), _)| *collection == Collection::EthTool)
-                    .map(|(_, value)| decode::<EthToolDocument>(value))
-                    .collect::<Result<Vec<_>>>()?;
-                for tool_id in doc
-                    .integrations
-                    .as_ref()
-                    .and_then(|group| group.eth_tool_ids.as_deref())
-                    .unwrap_or(&[])
-                {
-                    require(Collection::EthTool, tool_id, "integrations.eth_tool_ids")?;
-                }
-                let expanded =
-                    crate::agent::document_view::expand_eth_tools_from_docs(&doc, &eth_tools)?;
-                let eth_names = expanded
-                    .queries
-                    .iter()
-                    .map(|query| query.tool_name())
-                    .chain(expanded.calls.iter().map(|call| call.tool_name.clone()))
-                    .collect::<Vec<_>>();
                 validate_surface_tool_names(
                     &merged.write_tools,
                     &merged.query_tools,
                     &cli_names,
-                    &eth_names,
+                    &[],
                 )?;
                 if let Some(remote) = &doc.remote {
                     for service in &remote.services {

@@ -466,15 +466,6 @@ pub struct IntegrationTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub lsp: Option<LspTools>,
-    /// Bare `tool_id` refs to same-agent `EthTool` docs. Expanded at snapshot
-    /// build (fail-closed). Empty/absent = no eth tools.
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
-    )]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub eth_tool_ids: Option<Vec<String>>,
     /// Installed plugins offered to the model as tools, each named after its
     /// plugin. Empty/absent = no plugin tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -879,16 +870,6 @@ impl Tools {
                     }
                 }
             }
-            names(
-                &mut errors,
-                "integrations.eth_tool_ids",
-                integrations
-                    .eth_tool_ids
-                    .iter()
-                    .flatten()
-                    .map(String::as_str),
-                false,
-            );
             if let Some(lsp) = &integrations.lsp {
                 bounded(
                     &mut errors,

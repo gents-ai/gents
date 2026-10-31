@@ -139,10 +139,6 @@ pub(super) fn normalize_rows(rows: &mut ClientStoreRows) {
         &mut rows.datastore_tool_surface_source_node_dids,
         rows.datastore_tool_surfaces.len(),
     );
-    normalize_source_node_dids(
-        &mut rows.chain_key_binding_source_node_dids,
-        rows.chain_key_bindings.len(),
-    );
 }
 
 impl ClientStore {
@@ -219,7 +215,6 @@ impl ClientStore {
             event_sources: rows.event_sources,
             agent_targets: rows.agent_targets,
             datastore_tool_surfaces: rows.datastore_tool_surfaces,
-            chain_key_bindings: rows.chain_key_bindings,
             inference_backend_source_node_dids: rows.inference_backend_source_node_dids,
             backend_observation_source_node_dids: rows.backend_observation_source_node_dids,
             inference_profile_source_node_dids: rows.inference_profile_source_node_dids,
@@ -229,7 +224,6 @@ impl ClientStore {
             event_source_source_node_dids: rows.event_source_source_node_dids,
             agent_target_source_node_dids: rows.agent_target_source_node_dids,
             datastore_tool_surface_source_node_dids: rows.datastore_tool_surface_source_node_dids,
-            chain_key_binding_source_node_dids: rows.chain_key_binding_source_node_dids,
             operator_config_authoritative_node_dids: rows.operator_config_authoritative_node_dids,
             transcript_messages_by_session_id,
             output_segments_by_request_doc_id,

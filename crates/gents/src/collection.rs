@@ -10,8 +10,6 @@ pub enum Collection {
     Compaction,
     Skill,
     DatastoreToolSurface,
-    ChainKeyBinding,
-    EthTool,
     Tools,
     AgentTarget,
     InferenceBackend,
@@ -35,18 +33,16 @@ pub enum Collection {
 /// This enumeration provides no reference-safety guarantee; publication must
 /// validate the complete manifest and atomically commit it, including legal
 /// reference cycles.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 26] = Collection::ALL;
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 24] = Collection::ALL;
 
 impl Collection {
-    pub const ALL: [Collection; 26] = [
+    pub const ALL: [Collection; 24] = [
         Self::Node,
         Self::Agent,
         Self::AgentContext,
         Self::Compaction,
         Self::Skill,
         Self::DatastoreToolSurface,
-        Self::ChainKeyBinding,
-        Self::EthTool,
         Self::Tools,
         Self::AgentTarget,
         Self::InferenceBackend,
@@ -82,8 +78,6 @@ impl Collection {
             Self::Compaction => Some("compactions"),
             Self::Skill => Some("skills"),
             Self::DatastoreToolSurface => Some("datastore_tool_surfaces"),
-            Self::ChainKeyBinding => Some("chain_key_bindings"),
-            Self::EthTool => Some("eth_tools"),
             Self::Tools => Some("tools"),
             Self::AgentTarget => Some("agent_targets"),
             Self::InferenceBackend => Some("inference_backends"),
@@ -113,8 +107,6 @@ impl Collection {
             Self::Compaction => "CompactionConfig",
             Self::Skill => "Skill",
             Self::DatastoreToolSurface => "DatastoreToolSurface",
-            Self::ChainKeyBinding => "ChainKeyBinding",
-            Self::EthTool => "EthTool",
             Self::Tools => "Tools",
             Self::AgentTarget => "AgentTarget",
             Self::InferenceBackend => "InferenceBackend",
@@ -145,8 +137,6 @@ impl Collection {
             Self::Compaction => "compaction_id",
             Self::Skill => "skill_id",
             Self::DatastoreToolSurface => "surface_id",
-            Self::ChainKeyBinding => "binding_id",
-            Self::EthTool => "tool_id",
             Self::Tools => "tools_id",
             Self::AgentTarget => "target_id",
             Self::InferenceBackend => "backend_id",

@@ -216,7 +216,6 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "event_sources",
         "agent_targets",
         "datastore_tool_surfaces",
-        "chain_key_bindings",
         "sessions",
         "requests",
     ] {

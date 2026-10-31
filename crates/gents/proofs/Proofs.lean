@@ -99,7 +99,6 @@ import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.RequestExecutionLease
-import Proofs.EthSubmission
 import Proofs.PeerRegistryDiscovery.DirectoryProjection
 import Proofs.PeerRegistryDiscovery.RootAdmission
 

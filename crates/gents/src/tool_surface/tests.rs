@@ -138,8 +138,6 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -225,8 +223,6 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -295,8 +291,6 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -355,8 +349,6 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -414,8 +406,6 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -472,8 +462,6 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -531,8 +519,6 @@ fn containing_selection_root_clamps_to_operator_root() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -602,8 +588,6 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -658,8 +642,6 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -712,8 +694,6 @@ fn selection_without_root_inherits_operator_root() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -779,8 +759,6 @@ fn selection_cli_tools_require_ceiling_entries() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -843,8 +821,6 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -910,8 +886,6 @@ fn selection_mcp_service_allowlist_is_deduped() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -1052,8 +1026,6 @@ fn background_tool_allowlist_registers_r6_tools() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -1107,8 +1079,6 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -1170,8 +1140,6 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             remote_tools: None,
         },
@@ -1564,7 +1532,6 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         "reporter",
         &selection,
         &surfaces,
-        &[],
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
@@ -2662,89 +2629,6 @@ async fn agent_config_alias_expands_to_config_scope() {
 }
 
 #[test]
-fn eth_query_tools_advertise_when_selection_has_resolved_queries() {
-    let query = crate::eth::ResolvedEthQuery {
-        tool_id: "base-read".to_string(),
-        chain_id: 8453,
-        rpc_url: "https://mainnet.base.org".to_string(),
-        rpc_timeout: std::time::Duration::from_secs(30),
-        methods: vec!["eth_chainId".to_string(), "eth_blockNumber".to_string()],
-    };
-    let config = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            eth_queries: vec![query],
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap();
-    assert!(config
-        .static_policy()
-        .eth_query_methods
-        .permits(&"eth_chainId".to_string()));
-    assert!(!config
-        .static_policy()
-        .eth_query_methods
-        .permits(&"eth_sendRawTransaction".to_string()));
-    assert!(config.static_policy().eth_call_tools.is_deny_all());
-}
-
-#[test]
-fn explain_expands_eth_tool_ids_from_documents() {
-    let node_did = "did:key:zExplainEth";
-    let selection = tools_document(
-        serde_json::json!({"node_did":node_did,"integrations":{"eth_tool_ids":["base-read"]}}),
-    );
-    let eth_tools = vec![crate::document_config::EthToolDocument {
-        tool_id: "base-read".to_string(),
-        tags: Vec::new(),
-        rpc_timeout_secs: None,
-        node_did: node_did.to_string(),
-        display_name: Some("base".to_string()),
-        enabled: true,
-        chain_id: Some(8453),
-        rpc_url: Some("https://mainnet.base.org".to_string()),
-        query_methods: Some(vec![
-            "eth_blockNumber".to_string(),
-            "eth_chainId".to_string(),
-        ]),
-        calls: None,
-        key_binding_id: None,
-        created_at: None,
-    }];
-    let missing = AgentToolSurfaceConfig::from_tools_document(
-        "ops",
-        &selection,
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap_err();
-    assert!(missing.to_string().contains("missing EthTool"));
-
-    let config = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
-        "ops",
-        &selection,
-        &[],
-        &eth_tools,
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap();
-    let explanation =
-        config.explain_with_runtime(false, node_did, &rapidhash::RapidHashSet::default());
-    assert!(
-        explanation
-            .tool_names
-            .iter()
-            .any(|name| name == "base-read_query"),
-        "explain must advertise expanded eth tools: {:?}",
-        explanation.tool_names
-    );
-}
-
-#[test]
 fn artifact_selection_preserves_effect_only_after_bash_and_operator_ceilings() {
     use crate::toolset::CommandExecutionMode;
     let root = temp_root("artifact-selection-ceilings");
@@ -2851,16 +2735,9 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
         }
     }))
     .unwrap();
-    let config = AgentToolSurfaceConfig::from_tools_documents(
-        "capped",
-        &tools,
-        &[],
-        &[],
-        &[],
-        &ceiling,
-        vec![],
-    )
-    .unwrap();
+    let config =
+        AgentToolSurfaceConfig::from_tools_documents("capped", &tools, &[], &[], &ceiling, vec![])
+            .unwrap();
     let cli_caps = config
         .host_tools()
         .native_tools()
@@ -2988,16 +2865,9 @@ fn configured_tool_timeouts_reach_built_tools_within_host_ceilings() {
         "integrations": {"lsp": {"timeout_secs": 40, "max_timeout_secs": 90}}
     }))
     .unwrap();
-    let config = AgentToolSurfaceConfig::from_tools_documents(
-        "timed",
-        &tools,
-        &[],
-        &[],
-        &[],
-        &ceiling,
-        vec![],
-    )
-    .unwrap();
+    let config =
+        AgentToolSurfaceConfig::from_tools_documents("timed", &tools, &[], &[], &ceiling, vec![])
+            .unwrap();
 
     let bash = config
         .host_tools()
@@ -3059,16 +2929,9 @@ fn unconfigured_tool_timeouts_keep_host_defaults() {
         "host": {"bash": {"mode": "ReadOnly"}, "cli": [{"name": "git"}]}
     }))
     .unwrap();
-    let config = AgentToolSurfaceConfig::from_tools_documents(
-        "plain",
-        &tools,
-        &[],
-        &[],
-        &[],
-        &ceiling,
-        vec![],
-    )
-    .unwrap();
+    let config =
+        AgentToolSurfaceConfig::from_tools_documents("plain", &tools, &[], &[], &ceiling, vec![])
+            .unwrap();
     let timeouts = config
         .host_tools()
         .native_tools()
@@ -3106,7 +2969,6 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
             &tools,
             &[],
             &[],
-            &[],
             &ceiling,
             vec![],
         )
@@ -3141,16 +3003,9 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
             "max_list_entries": 3, "max_matches": 2}}
     }))
     .unwrap();
-    let config = AgentToolSurfaceConfig::from_tools_documents(
-        "files",
-        &tools,
-        &[],
-        &[],
-        &[],
-        &ceiling,
-        vec![],
-    )
-    .unwrap();
+    let config =
+        AgentToolSurfaceConfig::from_tools_documents("files", &tools, &[], &[], &ceiling, vec![])
+            .unwrap();
     let limits = config
         .host_tools()
         .native_tools()
@@ -3201,7 +3056,6 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
     let config = AgentToolSurfaceConfig::from_tools_documents(
         "files",
         &unconfigured,
-        &[],
         &[],
         &[],
         &ceiling,

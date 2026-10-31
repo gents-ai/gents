@@ -16,7 +16,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         return;
     }
     tooling::validate_surfaces(manifest, errors);
-    tooling::validate_eth_tools(manifest, errors);
     tooling::validate_tools(manifest, errors);
     tooling::validate_tool_service_registries(manifest, errors);
     projection::validate_projection_bindings(manifest, errors);

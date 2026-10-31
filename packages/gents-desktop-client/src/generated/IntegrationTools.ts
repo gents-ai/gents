@@ -11,11 +11,6 @@ export type IntegrationTools = {
  */
 lsp?: LspTools | null,
 /**
- * Bare `tool_id` refs to same-agent `EthTool` docs. Expanded at snapshot
- * build (fail-closed). Empty/absent = no eth tools.
- */
-eth_tool_ids?: Array<string> | null,
-/**
  * Installed plugins offered to the model as tools, each named after its
  * plugin. Empty/absent = no plugin tools.
  */

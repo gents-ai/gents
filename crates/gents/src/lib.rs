@@ -35,7 +35,6 @@ pub mod defra_write;
 pub mod document_config;
 pub mod drop_cleanup;
 pub mod error;
-pub mod eth;
 pub mod eval;
 pub mod event_delivery_contract;
 pub mod external_adapter_capture;
@@ -370,17 +369,6 @@ pub mod truncation;
 pub mod watcher;
 pub mod workspace;
 
-pub use background_tools::load_caused_request_terminal;
-pub use background_tools::status_projection::OutputEvidence;
-pub use callback::reject_secret_bearing_callback_fields;
-pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
-pub use eth::{
-    address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, method_permitted, validate_eth_call_declarations,
-    validate_query_methods, ChainKeyMaterialStore, HttpEthRpc, KeyringChainKeyStore,
-    BUILTIN_QUERY_METHODS, ETH_USER_AGENT, KEYRING_SERVICE, KEY_BACKEND_KEYRING,
-};
-
 pub use adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
@@ -413,6 +401,10 @@ pub use background_completion_diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
     BackgroundCompletionEpochDiagnostic,
 };
+pub use background_tools::load_caused_request_terminal;
+pub use background_tools::status_projection::OutputEvidence;
+pub use callback::reject_secret_bearing_callback_fields;
+pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use compaction::CompactionStrategy;
 pub use config::{
     ReasoningEffort, ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
@@ -425,17 +417,14 @@ pub use defra_node;
 #[cfg(test)]
 pub(crate) use document_config::upsert_node;
 pub use document_config::{
-    chain_key_binding_by_id_query, create_chain_key_binding_mutation, default_agent_id_for_node,
-    default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
-    delete_chain_key_binding_mutation, deserialize_dual_shape, ensure_node, eth_tool_by_id_query,
-    is_reserved_builtin_tool_name, list_agents, list_chain_key_bindings_query,
-    list_datastore_tool_surfaces, list_eth_tools, list_inference_profile_records, load_agent,
-    load_inference_profile, load_node, merge_datastore_tool_surfaces, upsert_agent,
-    upsert_chain_key_binding, upsert_chain_key_binding_mutation, upsert_inference_profile,
-    Agent as AgentDocument, AgentTargetDocument, ChainKeyBindingDocument, ConfigReferences,
-    DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile, MergedSurfaceTools,
-    QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField, WriteToolFieldFill,
-    WriteToolOutputObligation, WriteToolOutputObligationScope,
+    default_agent_id_for_node, default_inference_profile_id_for_agent,
+    default_inference_profile_id_for_node, deserialize_dual_shape, ensure_node,
+    is_reserved_builtin_tool_name, list_agents, list_datastore_tool_surfaces,
+    list_inference_profile_records, load_agent, load_inference_profile, load_node,
+    merge_datastore_tool_surfaces, upsert_agent, upsert_inference_profile, Agent as AgentDocument,
+    AgentTargetDocument, ConfigReferences, DatastoreToolSurfaceDocument, InferenceProfile,
+    MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,

@@ -227,18 +227,6 @@ async fn apply_collections_declare_updated_at_without_moving_fields() {
             "bafyreibrawpzq3wv3gm6ew2gd26k75rfi6xm64fp4x55njpfdics6xx26e",
         ),
         (
-            schemas::CHAIN_KEY_BINDING_NAME,
-            schemas::CHAIN_KEY_BINDING,
-            "binding_id",
-            "bafyreias5umbmxkuo6iguihj6tvovbuzgjscwj7wjcmz23pirgk7jo4uom",
-        ),
-        (
-            schemas::ETH_TOOL_NAME,
-            schemas::ETH_TOOL,
-            "tool_id",
-            "bafyreie24fvfqig33silif6nxrf4jfua2yokujyqbf4ydvstrifvhweaca",
-        ),
-        (
             schemas::CALLBACK_NAME,
             schemas::CALLBACK,
             "callback_id",

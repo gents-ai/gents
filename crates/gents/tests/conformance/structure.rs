@@ -54,7 +54,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         ("DurableLineage", Module("conformance/background.rs")),
         ("EditMatch", Module("conformance/edit_match.rs")),
-        ("EthSubmission", Module("conformance/eth_submission.rs")),
         ("Enrollment", Module("conformance/enrollment.rs")),
         ("TitleText", WorkspaceTest("crates/gents/src/session/title_text.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),

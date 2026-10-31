@@ -54,10 +54,7 @@ pub async fn apply_desired_state_plan(
             if document.collection == Collection::Node {
                 validate_node_replacement(&current, &document.update)?;
             }
-            let mut update = document.update.clone();
-            if document.collection == Collection::ChainKeyBinding {
-                crate::document_config::preserve_chain_key_binding_update_fields(&mut update)?;
-            }
+            let update = document.update.clone();
             (
                 format!(
                     r#"mutation($input: {name}MutationInputArg!) {{ update_{name}(docID: "{}", input: $input) {{ _docID }} }}"#,

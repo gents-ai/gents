@@ -66,7 +66,6 @@ function deployment(
     toolServiceRegistries: [],
     agentTargets: [],
     datastoreToolSurfaces: [],
-    chainKeyBindings: [],
     skills: [],
     tasks: [],
     schedules: [],

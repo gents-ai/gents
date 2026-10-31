@@ -291,8 +291,6 @@ mod tests {
             "ToolServiceRegistry",
             "Skill",
             "DatastoreToolSurface",
-            "ChainKeyBinding",
-            "EthTool",
             "Task",
             "Schedule",
             "Trigger",

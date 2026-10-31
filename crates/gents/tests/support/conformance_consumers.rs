@@ -1665,13 +1665,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             module_path: "admission::tests",
             function: "rust_inference_call_transition_table_matches_lean_contract",
         },
-        ConformanceConsumer::RustTest {
-            id: "eth::submit::tests::transition_table_matches_lean_contract",
-            package: "gents",
-            source_path: "crates/gents/src/eth/submit/tests.rs",
-            module_path: "eth::submit::tests",
-            function: "transition_table_matches_lean_contract",
-        },
         ConformanceConsumer::TypeScriptTest {
             id: "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts",
             app: "gents-desktop-chat",

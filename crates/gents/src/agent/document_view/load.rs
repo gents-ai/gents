@@ -44,7 +44,6 @@ pub(crate) async fn load_document_runtime_view(
                         Collection::DatastoreToolSurface,
                     )
                     .await?,
-                    eth_tools: load_records(txn, &owner, Collection::EthTool).await?,
                     inference_profiles: load_records(txn, &owner, Collection::InferenceProfile)
                         .await?,
                     inference_sampling: load_records(txn, &owner, Collection::InferenceSampling)
@@ -86,7 +85,6 @@ pub(crate) async fn load_document_runtime_view(
                     agent_targets,
                     skills,
                     datastore_tool_surfaces,
-                    eth_tools,
                     inference_profiles,
                     inference_sampling,
                     inference_execution,

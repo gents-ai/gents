@@ -1,10 +1,10 @@
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use gents::document_config::{
-    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
-    DatastoreToolSurfaceDocument, EventSource, InferenceBackend, InferenceBackendObservation,
-    InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
-    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
+    Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
+    EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
+    InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
+    ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
@@ -141,8 +141,6 @@ pub(super) const AGENT_TARGET_FIELDS: &str =
     "target_id node_did target_node_did agent_id name description tags";
 pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id node_did display_name enabled entries created_at tags";
-pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
-    "binding_id node_did address key_backend attestation created_at revoked_at tags";
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
 pub async fn load_chat_patch(

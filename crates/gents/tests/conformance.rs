@@ -83,8 +83,6 @@ mod coverage;
 mod directory_projection;
 #[path = "conformance/enrollment.rs"]
 mod enrollment;
-#[path = "conformance/eth_submission.rs"]
-mod eth_submission;
 #[path = "conformance/eval.rs"]
 mod eval;
 #[path = "conformance/event_delivery.rs"]

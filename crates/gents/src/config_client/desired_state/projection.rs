@@ -94,8 +94,6 @@ pub fn config_projection(
         Collection::AgentTarget => project::<AgentTargetDocument>(value),
         Collection::Skill => project::<SkillDocument>(value),
         Collection::DatastoreToolSurface => project::<DatastoreToolSurfaceDocument>(value),
-        Collection::ChainKeyBinding => project::<ChainKeyBindingDocument>(value),
-        Collection::EthTool => project::<EthToolDocument>(value),
         Collection::InferenceBackend => project::<InferenceBackend>(value),
         Collection::InferenceProfile => project::<InferenceProfile>(value),
         Collection::InferenceSampling => project::<InferenceSampling>(value),

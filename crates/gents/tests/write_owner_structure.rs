@@ -1794,8 +1794,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/config_client/retry.rs", 2),
     ("crates/gents/src/config_client/schema_install.rs", 2),
     ("crates/gents/src/defra_query/mod.rs", 1),
-    ("crates/gents/src/eth/call_tool.rs", 1),
-    ("crates/gents/src/eth/query.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),
     ("crates/gents/src/eval/report/mod.rs", 1),
     ("crates/gents/src/eval/report/store.rs", 1),
@@ -1991,7 +1989,6 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // DefraDB HTTP 409 commit body
     ("crates/gents/src/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording
-    ("crates/gents/src/eth/rpc.rs", 8),
     // persisted AgentRequest failure_reason
     ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)

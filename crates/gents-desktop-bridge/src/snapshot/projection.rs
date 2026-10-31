@@ -161,7 +161,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     deployment.agent_configs.clear();
     deployment.agent_targets.clear();
     deployment.datastore_tool_surfaces.clear();
-    deployment.chain_key_bindings.clear();
     deployment.schedules.clear();
     deployment.event_sources.clear();
     deployment.triggers.clear();
@@ -386,7 +385,6 @@ mod tests {
                     tools: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","tools_id":"tools","host":{"root":"/secret/tools"}})).unwrap()],
                     agent_targets: vec![],
                     datastore_tool_surfaces: vec![],
-                    chain_key_bindings: vec![],
                     tool_service_registries: vec![],
                     skills: vec![SkillView {
                         skill_id: "skill_a".into(),

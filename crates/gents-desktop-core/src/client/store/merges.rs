@@ -230,13 +230,6 @@ macro_rules! retain_node_scope {
                 row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
             },
         );
-        retain_rows_and_sources(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            |row, source| {
-                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
-            },
-        );
     }};
 }
 
@@ -460,13 +453,6 @@ impl ClientStore {
             |row| row.node_did.as_str(),
         );
         replace_node_rows_with_sources(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            remote.chain_key_bindings,
-            node_did,
-            |row| row.node_did.as_str(),
-        );
-        replace_node_rows_with_sources(
             &mut rows.sessions,
             &mut rows.session_source_node_dids,
             remote.sessions,
@@ -653,13 +639,6 @@ impl ClientStore {
             incoming.datastore_tool_surface_source_node_dids,
             datastore_tool_surface_merge_key,
         );
-        upsert_rows_with_sources_by_key(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            incoming.chain_key_bindings,
-            incoming.chain_key_binding_source_node_dids,
-            chain_key_binding_merge_key,
-        );
 
         ClientStore::from_rows(rows)
     }
@@ -769,7 +748,6 @@ impl ClientStore {
             event_sources: self.event_sources.clone(),
             agent_targets: self.agent_targets.clone(),
             datastore_tool_surfaces: self.datastore_tool_surfaces.clone(),
-            chain_key_bindings: self.chain_key_bindings.clone(),
             inference_backend_source_node_dids: self.inference_backend_source_node_dids.clone(),
             backend_observation_source_node_dids: self.backend_observation_source_node_dids.clone(),
             inference_profile_source_node_dids: self.inference_profile_source_node_dids.clone(),
@@ -783,7 +761,6 @@ impl ClientStore {
             datastore_tool_surface_source_node_dids: self
                 .datastore_tool_surface_source_node_dids
                 .clone(),
-            chain_key_binding_source_node_dids: self.chain_key_binding_source_node_dids.clone(),
             operator_config_authoritative_node_dids: self
                 .operator_config_authoritative_node_dids
                 .clone(),
