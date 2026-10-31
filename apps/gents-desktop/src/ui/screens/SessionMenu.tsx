@@ -1,4 +1,4 @@
-import { useRef, type ComponentType, type ReactElement, type ReactNode } from "react";
+import { useState, type ComponentType, type ReactElement, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Archive,
@@ -72,20 +72,20 @@ export const DROPDOWN_MENU: MenuParts = {
 
 /** A rename started from a menu keeps the focus its field takes; the menu
     would otherwise hand focus back to its trigger as it closes, and the
-    field would end on that blur. Pass `finalFocus` to the menu's content. */
+    field would end on that blur. Pass `finalFocus` to the menu's content
+    and `onOpenChange` to its root to reset the override for the next opening. */
 export function useRenameFromMenu(start: (() => void) | null) {
-  const started = useRef(false);
+  const [started, setStarted] = useState(false);
   return {
     onRename:
       start &&
       (() => {
-        started.current = true;
+        setStarted(true);
         start();
       }),
-    finalFocus: () => {
-      const back = !started.current;
-      started.current = false;
-      return back;
+    finalFocus: started ? false : undefined,
+    onOpenChange: (open: boolean) => {
+      if (open) setStarted(false);
     },
   };
 }

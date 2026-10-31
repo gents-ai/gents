@@ -196,7 +196,7 @@ export function DockTabs({
           ref={reorder.container}
           data-cut={cut || undefined}
           className={cn(
-            "flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            "flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
             cut &&
               "[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]",
           )}

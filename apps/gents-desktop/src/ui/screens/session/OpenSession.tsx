@@ -244,7 +244,11 @@ export function OpenSession() {
                   </div>
                 )}
                 <Slot area={SESSION_HEADER_ACTIONS_AREA} />
-                <PanelMenu routeName="session" finalFocus={rename.finalFocus}>
+                <PanelMenu
+                  routeName="session"
+                  finalFocus={rename.finalFocus}
+                  onOpenChange={rename.onOpenChange}
+                >
                   {summary && (
                     <SessionItems
                       session={summary}
