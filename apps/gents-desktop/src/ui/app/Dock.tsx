@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Columns2, MessageSquare, Plus, X } from "lucide-react";
+import { Columns2, Maximize2, MessageSquare, Minimize2, Plus, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -83,10 +83,15 @@ export function DockTabs({
   sessionId,
   routeName,
   paneTab = null,
+  expanded = false,
+  onExpand,
 }: {
   sessionId: string | null;
   routeName: string;
   paneTab?: { onShow: () => void; progress: number } | null;
+  /** the panel fills the window, the session behind its tab */
+  expanded?: boolean;
+  onExpand?: () => void;
 }) {
   const { dock, activate, moveTab, closeTab, closeDock, openSurface } = useDockFor(
     dockScopeOf(routeName, sessionId),
@@ -194,6 +199,9 @@ export function DockTabs({
           role="tablist"
           aria-label="Panels"
           ref={reorder.container}
+          onDoubleClick={(e) => {
+            if (e.target === e.currentTarget) onExpand?.();
+          }}
           data-cut={cut || undefined}
           className={cn(
             "flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
@@ -264,6 +272,20 @@ export function DockTabs({
         </div>
         <AddTab available={view.available} onOpen={openSurface} />
       </div>
+      {onExpand && (
+        <Hint label={expanded ? "Restore panel" : "Expand panel"}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={expanded ? "Restore panel" : "Expand panel"}
+            aria-pressed={expanded}
+            className="ml-1 shrink-0"
+            onClick={onExpand}
+          >
+            {expanded ? <Minimize2 /> : <Maximize2 />}
+          </Button>
+        </Hint>
+      )}
       <Hint label="Hide panel">
         <Button
           variant="ghost"
