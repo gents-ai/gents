@@ -285,8 +285,8 @@ async fn embedded_filtered_replicator_replays_existing_matching_documents() {
 
 #[tokio::test]
 async fn selected_delivery_outlives_the_former_bulk_deadline() {
-    let sender_test = runtime_test_node().await;
-    let receiver_test = runtime_test_node().await;
+    let sender_test = test_node().await;
+    let receiver_test = test_node().await;
     let sender = &sender_test.node;
     let receiver = &receiver_test.node;
     for node in [sender, receiver] {
@@ -294,7 +294,11 @@ async fn selected_delivery_outlives_the_former_bulk_deadline() {
             .await
             .unwrap();
     }
-    let inputs = (0..1200)
+    let pacing = db::merge::ReplayPushConfig::default();
+    let former_deadline = Duration::from_secs(10);
+    let document_count = pacing.per_peer_rate_limit_burst as usize
+        + (pacing.per_peer_rate_limit_rate * (former_deadline.as_secs_f64() + 2.0)).ceil() as usize;
+    let inputs = (0..document_count)
         .map(|value| format!("{{value: {value}}}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -314,7 +318,7 @@ async fn selected_delivery_outlives_the_former_bulk_deadline() {
             doc_id: row["_docID"].as_str().unwrap().into(),
         })
         .collect::<Vec<_>>();
-    assert_eq!(documents.len(), 1200);
+    assert_eq!(documents.len(), document_count);
     let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
     let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
     let sender_addresses = wait_for_peer_info(&sender_admin).await;
@@ -331,31 +335,43 @@ async fn selected_delivery_outlives_the_former_bulk_deadline() {
         .await
         .unwrap();
     let peer = receiver.p2p().unwrap().local_peer_id().await.unwrap();
+    let expected = documents
+        .iter()
+        .map(|document| document.doc_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut updates = crate::subscribe_collections(receiver, ["PacedDeliveryProbe"]).unwrap();
     let started = tokio::time::Instant::now();
     push_documents_to_peer(sender, &peer, documents)
         .await
         .unwrap();
     assert!(
-        started.elapsed() > Duration::from_secs(10),
-        "default native pacing must exercise the former deadline"
+        started.elapsed() > former_deadline,
+        "native pacing-derived workload must exercise the former deadline"
     );
     // Native ACKs admit heads; local merge completion is a separate observation.
     let access = crate::store::config_client::ConfigAccess::local(receiver.clone());
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let received = access
-                .execute("{ PacedDeliveryProbe(limit: 1201) { _docID } }")
+                .execute(&format!(
+                    "{{ PacedDeliveryProbe(limit: {}) {{ _docID }} }}",
+                    document_count + 1
+                ))
                 .await
                 .unwrap();
-            if received["data"]["PacedDeliveryProbe"]
+            let observed = received["data"]["PacedDeliveryProbe"]
                 .as_array()
                 .unwrap()
-                .len()
-                == 1200
-            {
+                .iter()
+                .map(|row| row["_docID"].as_str().unwrap().to_string())
+                .collect::<std::collections::BTreeSet<_>>();
+            if observed == expected {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            updates
+                .recv()
+                .await
+                .expect("receiver collection subscription remains open");
         }
     })
     .await
