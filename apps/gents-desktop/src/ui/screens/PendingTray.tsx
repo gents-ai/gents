@@ -343,17 +343,14 @@ function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): Pendin
   );
 }
 
-/** A queued message's text, with its skills as chips like a sent one's;
-    the queue's entry follows the message's edits, the turn is what was sent. */
+/** A queued message's text, with its skills and session references as
+    chips like a sent one's; the queue's entry follows the message's edits,
+    the turn is what was sent. */
 function QueuedText({ row }: { row: PendingRow }) {
   const skills =
     (row.kind === "message" ? row.entry?.selectedSkillIds : null) ??
     row.turn.selectedSkillIds;
-  return skills?.length ? (
-    <SentText content={row.turn.content} skills={skills} />
-  ) : (
-    row.turn.content
-  );
+  return <SentText content={row.turn.content} skills={skills} />;
 }
 
 function TakenRow({ row }: { row: PendingRow }) {

@@ -6,11 +6,13 @@ import {
   formatReference,
   referenceKind,
   type ChipKind,
+  type ComposerChip,
   type ComposerTrigger,
   type ComposerTriggerItem,
 } from "@gents/ui/conversation";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { matchScore, queryWords } from "../lib/search";
+import { listedSession, nodeOf } from "../../hooks/fleetStore";
 import { useFleet } from "../hooks/useFleet";
 import { agentName } from "./behavior";
 import { when } from "./time";
@@ -25,35 +27,40 @@ const newestFirst = (a: SessionSummary, b: SessionSummary) =>
   (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "");
 
 /** How a session reference looks, in the composer and on a sent message:
-    its card names the session's agent and shows its latest text. */
+    its card names the session's agent and shows its latest text. The kind
+    reads no session itself, so a sent message does not follow the fleet; an
+    open card follows the one session it shows. */
 export function useSessionChipKind(nodeDid: string | null): ChipKind {
-  const { sessions, node } = useFleet(
-    useShallow((s) => ({
-      sessions: s.sessions,
-      node: nodeDid ? (s.nodes[nodeDid] ?? null) : null,
-    })),
-  );
   return useMemo(
     () =>
       referenceKind("session", {
         icon: <MessageSquare />,
-        preview: (chip) => {
-          const session = Object.values(sessions).find(
-            (s) => s.nodeDid === nodeDid && s.sessionId === chip.id,
-          );
-          return (
-            <ChipCard
-              title={chip.label}
-              subtitle={
-                session ? `Session · ${agentName(session.agentId, node)}` : "Session"
-              }
-            >
-              {session?.previewText ?? undefined}
-            </ChipCard>
-          );
-        },
+        preview: (chip) => <SessionCard chip={chip} nodeDid={nodeDid} />,
       }),
-    [sessions, node, nodeDid],
+    [nodeDid],
+  );
+}
+
+function SessionCard({
+  chip,
+  nodeDid,
+}: {
+  chip: ComposerChip;
+  nodeDid: string | null;
+}) {
+  const { session, node } = useFleet(
+    useShallow((s) => ({
+      session: listedSession(s, nodeDid, chip.id),
+      node: nodeOf(s, nodeDid),
+    })),
+  );
+  return (
+    <ChipCard
+      title={chip.label}
+      subtitle={session ? `Session · ${agentName(session.agentId, node)}` : "Session"}
+    >
+      {session?.previewText ?? undefined}
+    </ChipCard>
   );
 }
 

@@ -13,7 +13,7 @@ vi.mock("@/hooks/useClient", () => ({
 
 vi.mock("../src/ui/hooks/useFleet", () => ({
   useFleet: (select: (state: unknown) => unknown) =>
-    select({ sessions: {}, nodes: {} }),
+    select({ nodes: {}, byNodeSessionId: {} }),
 }));
 
 const chips = () =>
@@ -97,5 +97,31 @@ describe("a queued message's skills", () => {
     );
     expect(chips()).toEqual(["/review"]);
     expect(screen.getByText("fix it")).toBeTruthy();
+  });
+
+  it("show a session reference as a chip without any skill", () => {
+    const { container } = render(
+      <PendingTray
+        queued={[
+          {
+            requestId: "q",
+            content: "compare with [Lexer work](gents:session/s-1)",
+            selectedSkillIds: [],
+            lifecycleState: "pending",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: "2026-10-30T00:00:00Z",
+          },
+        ]}
+        queue={[]}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(
+      [...document.querySelectorAll('[data-slot="session-chip"]')].map(
+        (chip) => chip.textContent,
+      ),
+    ).toEqual(["Lexer work"]);
+    expect(container.textContent).not.toContain("gents:session");
   });
 });
