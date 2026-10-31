@@ -680,7 +680,10 @@ export function createChatActions({
       });
       forkDestinations.delete(retained);
       const folder = folderFor(nodeDid, sessionId);
-      if (folder)
+      if (
+        folder !== null ||
+        Object.prototype.hasOwnProperty.call(stores.chat.getState().folders, sessionId)
+      )
         writeChatFolders(stores.chat, (folders) =>
           withFolder(folders, result.sessionId, folder),
         );

@@ -95,6 +95,28 @@ describe("the folder a session's next message runs in", () => {
   });
 });
 
+describe("branching with a chat folder", () => {
+  it("keeps an explicit Agent's folder choice instead of restoring the prefix's cwd", async () => {
+    const stores = ran("local");
+    stores.chat.setState({ folders: { worked: "" } });
+    const actions = createChatActions({
+      api: {
+        forkSessionBeforeMessage: vi.fn(async () => ({
+          nodeDid: "node",
+          sessionId: "child",
+        })),
+      } as unknown as DesktopApiAdapter,
+      stores,
+      project: () => admittingProjection(),
+      refreshSession: vi.fn(),
+      refreshSnapshot: vi.fn(),
+      reportFailure: vi.fn(),
+    });
+    await actions.forkBeforeMessage("worked", "prefix-message");
+    expect(stores.chat.getState().folders).toEqual({ worked: "", child: "" });
+  });
+});
+
 describe("sending with a chat folder", () => {
   it("continues an unpicked session in the folder it last ran in", async () => {
     const sendChatMessage = vi.fn(acceptedChatReply);
