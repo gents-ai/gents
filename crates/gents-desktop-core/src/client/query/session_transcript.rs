@@ -1136,7 +1136,7 @@ async fn load_session_compaction_entries_with_access(
         r#"query DesktopSessionCompactions {{
   CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, {scope} }},
     order: [{{ sequence: ASC }}, {{ compaction_key: ASC }}]) {{
-      compaction_key session_id requester_did sequence messages_compacted
+      compaction_key session_id requester_did request_doc_id sequence messages_compacted
       compacted_through_sequence original_tokens compacted_tokens created_at
   }}
 }}"#
