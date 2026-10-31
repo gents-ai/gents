@@ -30,12 +30,16 @@ describe("pack origin configuration filters", () => {
       />,
     );
 
-    expect(screen.getByText("Review scanner")).toBeTruthy();
+    /* under the person's own entries, a pack's start folded */
     expect(screen.getByText("User coder")).toBeTruthy();
+    expect(screen.queryByText("Review scanner")).toBeNull();
+    const header = screen.getByRole("button", {
+      name: /code_review · 1 from this pack/,
+    });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    await user.click(header);
+    expect(screen.getByText("Review scanner")).toBeTruthy();
     /* the pack's header names it, so its rows don't repeat it */
-    expect(
-      screen.getByRole("button", { name: /code_review · 1 from this pack/ }),
-    ).toBeTruthy();
     expect(screen.queryByText(/pack code_review/)).toBeNull();
 
     await user.click(screen.getByTestId("skills-origin-filter"));
@@ -121,33 +125,26 @@ describe("pack origin configuration filters", () => {
       [...view.container.querySelectorAll("li")].map(
         (li) => li.textContent?.trim() ?? "",
       );
-    expect(order().map((t) => t.split(/[ ·]/)[0])).toEqual([
-      "My",
-      "alpha",
-      "Pack",
-      "Pack",
-      "beta",
-      "Pack",
-    ]);
-    expect(order()[2]).toBe("Pack A one");
-    expect(order()[5]).toBe("Pack B one");
+    /* folded by default under the person's own entries */
+    expect(order().map((t) => t.split(/[ ·]/)[0])).toEqual(["My", "alpha", "beta"]);
     const alpha = screen.getByRole("button", { name: /alpha · 2 from this pack/ });
-    expect(alpha).toHaveAttribute("aria-expanded", "true");
-    await user.click(alpha);
     expect(alpha).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("Pack A one")).toBeNull();
-    expect(screen.getByText("Pack B one")).toBeTruthy();
+    await user.click(alpha);
+    expect(order()[2]).toBe("Pack A one");
+    expect(order()[3]).toBe("Pack A two");
+    expect(screen.queryByText("Pack B one")).toBeNull();
 
     view.unmount();
     render(list());
-    expect(screen.queryByText("Pack A one")).toBeNull();
+    expect(screen.getByText("Pack A one")).toBeTruthy();
+    expect(screen.queryByText("Pack B one")).toBeNull();
     vi.unstubAllGlobals();
   });
 
   it("shows a match inside a folded pack while searching", async () => {
     const user = userEvent.setup();
     const store = new Map([
-      ["gents.config.packFolds.skills", JSON.stringify(["alpha"])],
+      ["gents.config.packGroups.skills", JSON.stringify({ alpha: false })],
     ]);
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => store.get(key) ?? null,
@@ -172,5 +169,18 @@ describe("pack origin configuration filters", () => {
     );
     expect(screen.getByText("Needle")).toBeTruthy();
     vi.unstubAllGlobals();
+  });
+
+  it("opens the groups when no entries of the person's own show", () => {
+    render(
+      <ListDetail
+        base={{ name: "agent", nodeDid: "did:key:test", section: "tasks" }}
+        createLabel="New"
+        detail={() => null}
+        empty="None."
+        rows={[{ id: "t", title: "Pack task", tags: ["gents:pack:alpha"] }]}
+      />,
+    );
+    expect(screen.getByText("Pack task")).toBeTruthy();
   });
 });
