@@ -109,7 +109,8 @@ fn visible_text(message: &Message) -> String {
                 .cloned()
                 .collect(),
         },
-        Message::Assistant { id, content } => Message::Assistant {
+        Message::Assistant { id, content, .. } => Message::Assistant {
+            request_id: None,
             id: id.clone(),
             content: content
                 .iter()
@@ -463,6 +464,7 @@ mod tests {
     #[test]
     fn bounded_inspection_excludes_reasoning_and_tool_arguments() {
         let message = Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![
                 AssistantContent::Text(gents_protocol::message::Text {
@@ -667,6 +669,7 @@ mod tests {
             )
             .await;
         let report = Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![
                 AssistantContent::Reasoning(gents_protocol::message::Reasoning {

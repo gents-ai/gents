@@ -184,14 +184,199 @@ pub(crate) struct LeanPromptAssemblyClaudeMapCase {
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeBodyCase {
     pub(crate) name: String,
+    pub(crate) model: String,
+    pub(crate) first_user_text: String,
+    pub(crate) fingerprint_placeholder: String,
+    pub(crate) prompt_id: String,
+    pub(crate) attribution: String,
     pub(crate) preamble: Option<String>,
     pub(crate) rows: Vec<String>,
     pub(crate) tools: Vec<String>,
     pub(crate) system: Vec<String>,
+    pub(crate) system_marked: Vec<bool>,
     pub(crate) tools_present: bool,
     pub(crate) supported_efforts: Option<Vec<String>>,
     pub(crate) effort: Option<String>,
     pub(crate) selected_effort: Option<String>,
+    pub(crate) facts: LeanPromptAssemblyClaudeFieldFacts,
+    pub(crate) request: LeanPromptAssemblyClaudeFieldRequest,
+    pub(crate) max_tokens: u64,
+    pub(crate) thinking: LeanPromptAssemblyClaudeFieldThinking,
+    pub(crate) temperature: Option<u64>,
+    pub(crate) context_management: bool,
+    pub(crate) body_effort: Option<String>,
+    pub(crate) diagnostics: LeanPromptAssemblyClaudeFieldDiagnostics,
+    pub(crate) per_turn_effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeAttributionCase {
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) fingerprint: String,
+    pub(crate) entrypoint: String,
+    pub(crate) provider: String,
+    pub(crate) first_party_base_url: bool,
+    pub(crate) workload: Option<String>,
+    pub(crate) subagent: bool,
+    pub(crate) previous_request_id: Option<String>,
+    pub(crate) prompt_id: Option<String>,
+    pub(crate) turn_origin: Option<String>,
+    pub(crate) prompt_index: Option<u64>,
+    pub(crate) turn_index: Option<u64>,
+    pub(crate) gateway: Option<String>,
+    pub(crate) project_id: Option<String>,
+    pub(crate) project_source: Option<String>,
+    pub(crate) header: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCacheBlock {
+    #[serde(rename = "type")]
+    pub(crate) kind: String,
+    pub(crate) text: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCacheContent {
+    pub(crate) text: Option<String>,
+    pub(crate) blocks: Option<Vec<LeanClaudeCacheBlock>>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCacheMessage {
+    pub(crate) role: String,
+    pub(crate) content: LeanClaudeCacheContent,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCachePlaced {
+    pub(crate) role: String,
+    pub(crate) text: Option<String>,
+    pub(crate) blocks: Option<Vec<LeanClaudeCacheBlock>>,
+    pub(crate) marker: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeCacheCase {
+    pub(crate) name: String,
+    pub(crate) caching: bool,
+    pub(crate) skip_write: bool,
+    pub(crate) subscriber: bool,
+    pub(crate) main_thread: bool,
+    pub(crate) using_overage: bool,
+    pub(crate) messages: Vec<LeanClaudeCacheMessage>,
+    pub(crate) placed: Vec<LeanClaudeCachePlaced>,
+    pub(crate) ttl: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeOriginCase {
+    pub(crate) name: String,
+    pub(crate) cause: String,
+    pub(crate) root_client: bool,
+    pub(crate) scheduled: bool,
+    pub(crate) kind: String,
+    pub(crate) appends_system_prompt: bool,
+    pub(crate) identity: String,
+    pub(crate) entrypoint: String,
+    pub(crate) background: bool,
+    pub(crate) workload: Option<String>,
+    pub(crate) subagent: bool,
+    pub(crate) request_class: String,
+    pub(crate) main_thread_source: bool,
+    pub(crate) agentic: bool,
+    pub(crate) turn_origin: Option<String>,
+    pub(crate) prompt_index_after_three: Option<u64>,
+    pub(crate) turn_index_after_three: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldFacts {
+    pub(crate) adaptive: bool,
+    pub(crate) always_thinks: bool,
+    pub(crate) thinking_supported: bool,
+    pub(crate) rejects_disabled: bool,
+    pub(crate) accepts_temperature: bool,
+    pub(crate) effort_capable: bool,
+    pub(crate) max_effort: bool,
+    pub(crate) xhigh_effort: bool,
+    pub(crate) caps_effort_when_disabled: bool,
+    pub(crate) per_turn_effort: bool,
+    pub(crate) output_default: u64,
+    pub(crate) output_upper: u64,
+    pub(crate) default_effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldThinkingConfig {
+    pub(crate) kind: String,
+    pub(crate) mechanical: bool,
+    pub(crate) budget: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldRequest {
+    pub(crate) thinking: LeanPromptAssemblyClaudeFieldThinkingConfig,
+    pub(crate) max_tokens_override: Option<u64>,
+    pub(crate) requested_effort: Option<String>,
+    pub(crate) first_party: bool,
+    pub(crate) first_party_default_url: bool,
+    pub(crate) experimental_betas_disabled: bool,
+    pub(crate) agentic: bool,
+    pub(crate) fork: bool,
+    pub(crate) display_updates: bool,
+    pub(crate) context_management_beta: bool,
+    pub(crate) per_turn_control_beta: bool,
+    pub(crate) previous_message_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldThinking {
+    pub(crate) kind: String,
+    pub(crate) budget: Option<u64>,
+    pub(crate) updates: bool,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldDiagnostics {
+    pub(crate) present: bool,
+    pub(crate) previous_message_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldCase {
+    pub(crate) name: String,
+    pub(crate) facts: LeanPromptAssemblyClaudeFieldFacts,
+    pub(crate) request: LeanPromptAssemblyClaudeFieldRequest,
+    pub(crate) max_tokens: u64,
+    pub(crate) thinking: LeanPromptAssemblyClaudeFieldThinking,
+    pub(crate) temperature: Option<u64>,
+    pub(crate) context_management: bool,
+    pub(crate) effort: Option<String>,
+    pub(crate) diagnostics: LeanPromptAssemblyClaudeFieldDiagnostics,
+    pub(crate) per_turn_effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldRowCase {
+    pub(crate) name: String,
+    pub(crate) is_user: Vec<bool>,
+    pub(crate) index: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -516,6 +701,7 @@ pub(crate) fn native_claude_replay_content(
                 let arguments = String::from_utf8(block.arguments.clone().expect("arguments"))
                     .expect("reconstructed UTF-8");
                 content.push(AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: block.id.clone().expect("provider tool id"),
                     call_id: block.call_id.clone(),
                     function: ToolFunction {

@@ -97,6 +97,7 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         1
     );
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: "later-input".into(),
         session_id: "incomplete-session".into(),
         node_did: "did:test:test".into(),
@@ -535,8 +536,10 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
 
     let message = Message::Assistant {
+        request_id: None,
         id: Some("provider-message".into()),
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: "tool-1".into(),
             call_id: Some("provider-call".into()),
             function: ToolFunction::new("read".into(), serde_json::json!({"path":"note.txt"})),
@@ -1449,9 +1452,11 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         )
         .await;
     let message = Message::Assistant {
+        request_id: None,
         id: Some("provider-message".into()),
         content: vec![
             AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "native-tool".into(),
                 call_id: Some("provider-call".into()),
                 function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
@@ -1459,6 +1464,7 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
                 additional_params: None,
             }),
             AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "native-tool-2".into(),
                 call_id: Some("provider-call-2".into()),
                 function: ToolFunction::new(
@@ -1534,8 +1540,10 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         )
         .await;
     let message = Message::Assistant {
+        request_id: None,
         id: Some("provider-message".into()),
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: "native-tool".into(),
             call_id: Some("provider-call".into()),
             function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),

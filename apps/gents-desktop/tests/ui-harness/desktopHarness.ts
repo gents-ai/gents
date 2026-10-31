@@ -1979,6 +1979,10 @@ export function createDesktopUiHarness(
             advertisedModels: [],
             probeStatus: "healthy",
             accountRef: null,
+            allowOverage:
+              backend.auth.kind === "node_oauth_pool"
+                ? backend.auth.allow_overage
+                : null,
           })),
         ],
         inferenceSampling: [
@@ -2364,6 +2368,23 @@ export function createDesktopUiHarness(
       };
       return snapshot();
     },
+    async setBackendRotation({ backendId, rotation }) {
+      deployment = {
+        ...deployment,
+        inferenceBackends: deployment.inferenceBackends.map((backend) =>
+          backend.backendId !== backendId
+            ? backend
+            : rotation.kind === "single"
+              ? { ...backend, authKind: "node_oauth", allowOverage: null }
+              : {
+                  ...backend,
+                  authKind: "node_oauth_pool",
+                  allowOverage: rotation.allow_overage ?? backend.allowOverage ?? false,
+                },
+        ),
+      };
+      return snapshot();
+    },
     async saveBackendConfig(request) {
       const document = request.document;
       const backendId = document.backend_id.trim() || `backend-${requestSeq}`;
@@ -2394,6 +2415,10 @@ export function createDesktopUiHarness(
             advertisedModels: [],
             probeStatus: "healthy",
             accountRef: null,
+            allowOverage:
+              document.auth.kind === "node_oauth_pool"
+                ? document.auth.allow_overage
+                : null,
           },
         ),
       };
@@ -3710,6 +3735,7 @@ function createDeployment(): DeploymentView {
         advertisedModels: [],
         probeStatus: "healthy",
         accountRef: null,
+        allowOverage: null,
       },
     ],
     inferenceProfiles: [

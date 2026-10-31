@@ -7,7 +7,11 @@ async fn catalog_freshness_preserves_existing_backend_lineage_and_fields() {
     let node = common::fresh_node().await;
     let previous = schemas::INFERENCE_BACKEND
         .lines()
-        .filter(|line| !line.trim_start().starts_with("catalog_freshness:"))
+        .filter(|line| {
+            !["catalog_freshness:", "claude_platform:"]
+                .iter()
+                .any(|field| line.trim_start().starts_with(field))
+        })
         .collect::<Vec<_>>()
         .join("\n");
     node.add_collection(&previous).await.unwrap();

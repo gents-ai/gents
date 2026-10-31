@@ -5,18 +5,28 @@ use std::sync::Arc;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use futures::StreamExt;
+use reqwest::StatusCode;
 use rig::client::CompletionClient;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, GetTokenUsage, Usage,
 };
-use rig::http_client::ReqwestClient;
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
 
+use chrono::DateTime;
+use gents_claude::metadata::device_id;
+use gents_claude::rotation::{tier, Family, Tier};
+use gents_loop::claude_messages_body::{ClaudeAccountContext, SESSION_KEY_PARAM};
+use gents_loop::provider_limit::{mark_account_rotated, ProviderLimitHeaders};
+
+use crate::claude_messages::{non_success_message, open_messages_at, ClaudeRoute, MESSAGES_URI};
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
-use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
-use crate::usage_observation::{UsageAccount, UsageReporter};
+use crate::oauth_credential::{
+    BearerSource, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
+};
+use crate::usage_observation::now_unix_secs;
+use crate::usage_observation::{RotationFeed, UsageAccount, UsageCache, UsageReporter};
 
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
 pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
@@ -30,13 +40,96 @@ pub fn default_model_name() -> &'static str {
     DEFAULT_MODEL_ID
 }
 
+/// Who an account is to Anthropic: the install id, the account UUID and the credential kind
+/// that Claude Code puts into a request's metadata, betas and cache lifetime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AccountIdentity {
+    device_id: String,
+    account_uuid: String,
+    api_key: bool,
+    subscriber: bool,
+}
+
+impl AccountIdentity {
+    /// A subscription sign-in: the install id derives from the node and the credential, and
+    /// the account UUID is the account part of the credential's `organization:account` key.
+    pub(crate) fn of_credential(credential: &OAuthCredential) -> Self {
+        Self {
+            device_id: device_id(
+                format!("{}\n{}", credential.node_did, credential.credential_id).as_bytes(),
+            ),
+            account_uuid: credential
+                .provider_account_key
+                .as_deref()
+                .and_then(|key| key.split_once(':'))
+                .map(|(_, account)| account.to_owned())
+                .unwrap_or_default(),
+            api_key: false,
+            subscriber: true,
+        }
+    }
+
+    /// An API key: one install id per node, no account UUID.
+    pub(crate) fn of_api_key(node_did: &str) -> Self {
+        Self {
+            device_id: device_id(format!("{node_did}\napi-key").as_bytes()),
+            account_uuid: String::new(),
+            api_key: true,
+            subscriber: false,
+        }
+    }
+
+    /// A Claude platform backend: one install id per node and backend, no account UUID and
+    /// no subscription.
+    pub(crate) fn of_platform(node_did: &str, backend_id: &str) -> Self {
+        Self {
+            device_id: device_id(format!("{node_did}\n{backend_id}\nclaude-platform").as_bytes()),
+            account_uuid: String::new(),
+            api_key: false,
+            subscriber: false,
+        }
+    }
+
+    pub(crate) fn context(&self, using_overage: bool) -> ClaudeAccountContext {
+        ClaudeAccountContext {
+            device_id: self.device_id.clone(),
+            account_uuid: self.account_uuid.clone(),
+            subscriber: self.subscriber,
+            using_overage,
+            api_key: self.api_key,
+        }
+    }
+}
+
+/// One Claude account a client can send with: its `OAuthCredential` id, bearer and usage reporter.
+pub(crate) struct ClaudeAccount<S>
+where
+    S: BearerSource,
+{
+    pub(crate) credential_id: String,
+    pub(crate) bearer: Arc<S>,
+    pub(crate) usage: Option<Arc<UsageReporter>>,
+    pub(crate) identity: AccountIdentity,
+}
+
+/// Rotation over a pool backend's accounts, shared through the runtime's usage cache.
+#[derive(Clone)]
+pub(crate) struct Rotation {
+    pub(crate) policy: gents_claude::rotation::Policy,
+    pub(crate) cache: Arc<UsageCache>,
+    pub(crate) credential_ids: Arc<[String]>,
+}
+
 pub struct ClaudeSubscriptionClient<S = DbCredentialBearer>
 where
     S: BearerSource,
 {
-    pub(crate) bearer: Arc<S>,
-    pub(crate) http: ReqwestClient,
-    pub(crate) usage: Option<Arc<UsageReporter>>,
+    /// Never empty.
+    pub(crate) accounts: Arc<[ClaudeAccount<S>]>,
+    /// `None` is a single account with no rotation.
+    pub(crate) rotation: Option<Rotation>,
+    /// Where the requests go; the first-party API unless the backend is a Claude platform.
+    pub(crate) route: ClaudeRoute,
 }
 
 impl<S> Clone for ClaudeSubscriptionClient<S>
@@ -45,9 +138,9 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            bearer: self.bearer.clone(),
-            http: self.http.clone(),
-            usage: self.usage.clone(),
+            accounts: self.accounts.clone(),
+            rotation: self.rotation.clone(),
+            route: self.route.clone(),
         }
     }
 }
@@ -64,11 +157,80 @@ where
 
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
     pub async fn build(
-        cache: Arc<crate::usage_observation::UsageCache>,
+        cache: Arc<UsageCache>,
         node: Arc<EmbeddedNode>,
         node_did: &str,
         account_ref: Option<&str>,
     ) -> Result<Self> {
+        let account = Self::bootstrap_account(&cache, &node, node_did, account_ref).await?;
+        Ok(Self {
+            accounts: Arc::from([account]),
+            rotation: None,
+            route: ClaudeRoute::first_party(MESSAGES_URI),
+        })
+    }
+
+    /// A client that rotates over every enabled Claude account of the node.
+    pub async fn build_pool(
+        cache: Arc<UsageCache>,
+        node: Arc<EmbeddedNode>,
+        node_did: &str,
+        allow_overage: bool,
+    ) -> Result<Self> {
+        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let rows =
+            crate::oauth_credential::resolve_oauth_pool(&access, node_did, CLAUDE_OAUTH_PROVIDER)
+                .await?;
+        if rows.is_empty() {
+            anyhow::bail!(
+                "no enabled Claude account on this node; sign in with `gents claude-login`"
+            );
+        }
+        // One concurrent bootstrap per account; an account whose sign-in cannot be
+        // loaded or refreshed leaves the pool instead of taking the others down.
+        let booted = futures::future::join_all(rows.iter().map(|row| {
+            Self::bootstrap_account(&cache, &node, node_did, row.account_ref.as_deref())
+        }))
+        .await;
+        let mut accounts = Vec::with_capacity(rows.len());
+        let mut first_error = None;
+        for (row, result) in rows.iter().zip(booted) {
+            match result {
+                Ok(account) => accounts.push(account),
+                Err(error) => {
+                    tracing::warn!(
+                        credential_id = %row.credential_id,
+                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        "Claude account left the rotation pool: its sign-in could not be loaded"
+                    );
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        if accounts.is_empty() {
+            return Err(first_error
+                .unwrap_or_else(|| anyhow::anyhow!("no Claude account could be loaded"))
+                .context("no Claude account of this node could be loaded; sign in again with `gents claude-login`"));
+        }
+        let credential_ids: Arc<[String]> =
+            accounts.iter().map(|a| a.credential_id.clone()).collect();
+        Ok(Self {
+            accounts: accounts.into(),
+            rotation: Some(Rotation {
+                policy: gents_claude::rotation::Policy { allow_overage },
+                cache,
+                credential_ids,
+            }),
+            route: ClaudeRoute::first_party(MESSAGES_URI),
+        })
+    }
+
+    async fn bootstrap_account(
+        cache: &Arc<UsageCache>,
+        node: &Arc<EmbeddedNode>,
+        node_did: &str,
+        account_ref: Option<&str>,
+    ) -> Result<ClaudeAccount<DbCredentialBearer>> {
         let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
             node.clone(),
             node_did,
@@ -78,12 +240,13 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
             crate::oauth_credential::AccountPick::Reference(account_ref),
         )
         .await?;
-        Ok(Self {
+        Ok(ClaudeAccount {
+            credential_id: credential.credential_id.clone(),
+            identity: AccountIdentity::of_credential(&credential),
             bearer,
-            http: ReqwestClient::new(),
             usage: Some(UsageReporter::new(
-                cache,
-                node,
+                cache.clone(),
+                node.clone(),
                 UsageAccount::for_credential(&credential),
             )),
         })
@@ -91,11 +254,35 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
 }
 
 impl ClaudeSubscriptionClient<ApiKeyBearer> {
-    pub fn with_api_key(key: String) -> Self {
+    pub fn with_api_key(node_did: &str, key: String, usage: Option<Arc<UsageReporter>>) -> Self {
         Self {
-            bearer: Arc::new(ApiKeyBearer::new(key)),
-            http: ReqwestClient::new(),
-            usage: None,
+            accounts: Arc::from([ClaudeAccount {
+                credential_id: String::new(),
+                bearer: Arc::new(ApiKeyBearer::new(key)),
+                usage,
+                identity: AccountIdentity::of_api_key(node_did),
+            }]),
+            rotation: None,
+            route: ClaudeRoute::first_party(MESSAGES_URI),
+        }
+    }
+
+    /// A Claude platform backend sending its static `key` along `route`.
+    pub(crate) fn with_platform(
+        node_did: &str,
+        backend_id: &str,
+        key: String,
+        route: ClaudeRoute,
+    ) -> Self {
+        Self {
+            accounts: Arc::from([ClaudeAccount {
+                credential_id: String::new(),
+                bearer: Arc::new(ApiKeyBearer::new(key)),
+                usage: None,
+                identity: AccountIdentity::of_platform(node_did, backend_id),
+            }]),
+            rotation: None,
+            route,
         }
     }
 }
@@ -107,9 +294,14 @@ where
     #[cfg(test)]
     pub(crate) fn with_bearer(bearer: Arc<S>) -> Self {
         Self {
-            bearer,
-            http: ReqwestClient::new(),
-            usage: None,
+            accounts: Arc::from([ClaudeAccount {
+                credential_id: String::new(),
+                bearer,
+                usage: None,
+                identity: AccountIdentity::of_credential(&test_credential()),
+            }]),
+            rotation: None,
+            route: ClaudeRoute::first_party(MESSAGES_URI),
         }
     }
 }
@@ -121,11 +313,15 @@ where
     type CompletionModel = ClaudeSubscriptionModel<S>;
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClaudeStreamResponse {
     pub usage: Option<Usage>,
     #[serde(default)]
     pub token_usage: gents_protocol::usage::TokenUsage,
+    /// The response's `request-id` header, under the field name the loop reads
+    /// (`gents_loop::rig_compat::RESPONSE_REQUEST_ID_FIELD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl GetTokenUsage for ClaudeStreamResponse {
@@ -139,9 +335,10 @@ where
     S: BearerSource,
 {
     model: String,
-    bearer: Arc<S>,
-    http: ReqwestClient,
-    usage: Option<Arc<UsageReporter>>,
+    /// Never empty; with rotation each reporter also feeds this model's family.
+    accounts: Arc<[ClaudeAccount<S>]>,
+    rotation: Option<Rotation>,
+    route: ClaudeRoute,
 }
 
 impl<S> Clone for ClaudeSubscriptionModel<S>
@@ -151,9 +348,9 @@ where
     fn clone(&self) -> Self {
         Self {
             model: self.model.clone(),
-            bearer: self.bearer.clone(),
-            http: self.http.clone(),
-            usage: self.usage.clone(),
+            accounts: self.accounts.clone(),
+            rotation: self.rotation.clone(),
+            route: self.route.clone(),
         }
     }
 }
@@ -173,6 +370,54 @@ fn surface_of(request: &CompletionRequest) -> RapidHashSet<String> {
     request.tools.iter().map(|tool| tool.name.clone()).collect()
 }
 
+impl<S> ClaudeSubscriptionModel<S>
+where
+    S: BearerSource + 'static,
+{
+    /// Open the response stream: on the one account, or on the pool's pick with its rotation bookkeeping.
+    async fn open(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<
+        futures::stream::BoxStream<
+            'static,
+            Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>,
+        >,
+        CompletionError,
+    > {
+        let surface = surface_of(request);
+        match &self.rotation {
+            Some(rotation) => open_rotated(
+                &self.route,
+                &self.model,
+                request,
+                surface,
+                &self.accounts,
+                rotation,
+            )
+            .await
+            .map(StreamExt::boxed),
+            None => {
+                let account = self.accounts.first().ok_or_else(|| {
+                    CompletionError::ProviderError("Claude client has no account".to_string())
+                })?;
+                crate::claude_messages::open_messages_at(
+                    &self.route,
+                    &self.model,
+                    request,
+                    &account.identity.context(false),
+                    surface,
+                    account.bearer.as_ref(),
+                    account.usage.clone(),
+                )
+                .await
+                .map(StreamExt::boxed)
+                .map_err(|failure| failure.error)
+            }
+        }
+    }
+}
+
 impl<S> CompletionModel for ClaudeSubscriptionModel<S>
 where
     S: BearerSource + 'static,
@@ -182,11 +427,31 @@ where
     type Client = ClaudeSubscriptionClient<S>;
 
     fn make(client: &Self::Client, model: impl Into<String>) -> Self {
+        let model = model.into();
+        let family = gents_claude::rotation::Family::of_model(&model);
+        let accounts = match client.rotation {
+            None => client.accounts.clone(),
+            Some(_) => client
+                .accounts
+                .iter()
+                .map(|account| ClaudeAccount {
+                    credential_id: account.credential_id.clone(),
+                    identity: account.identity.clone(),
+                    bearer: account.bearer.clone(),
+                    usage: account.usage.as_ref().map(|usage| {
+                        usage.with_rotation(RotationFeed {
+                            credential_id: account.credential_id.clone(),
+                            family,
+                        })
+                    }),
+                })
+                .collect(),
+        };
         Self {
-            model: model.into(),
-            bearer: client.bearer.clone(),
-            http: client.http.clone(),
-            usage: client.usage.clone(),
+            model,
+            accounts,
+            rotation: client.rotation.clone(),
+            route: client.route.clone(),
         }
     }
 
@@ -194,17 +459,7 @@ where
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        let surface = surface_of(&request);
-        let stream = crate::claude_messages::stream_messages(
-            &self.model,
-            &request,
-            surface,
-            self.bearer.as_ref(),
-            &self.http,
-            self.usage.clone(),
-        )
-        .await?;
-        futures::pin_mut!(stream);
+        let mut stream = self.open(&request).await?;
         let mut text = String::new();
         let mut usage = Usage::new();
         let mut raw_response = ClaudeStreamResponse::default();
@@ -238,17 +493,97 @@ where
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let surface = surface_of(&request);
-        let stream = crate::claude_messages::stream_messages(
-            &self.model,
-            &request,
-            surface,
-            self.bearer.as_ref(),
-            &self.http,
-            self.usage.clone(),
-        )
-        .await?;
-        Ok(StreamingCompletionResponse::stream(Box::pin(stream)))
+        let stream = self.open(&request).await?;
+        Ok(StreamingCompletionResponse::stream(stream))
+    }
+}
+
+// Per-call account choice for a pool backend. A failure is annotated
+// `account-rotated` only when the pool now yields a different eligible account.
+
+/// The session a request rotates under; requests without one share the empty key.
+fn session_key(request: &CompletionRequest) -> &str {
+    request
+        .additional_params
+        .as_ref()
+        .and_then(|params| params.get(SESSION_KEY_PARAM))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+}
+
+/// The failure when every account is exhausted for the family: a provider usage
+/// limit, so the loop's usage-limit path reads its reset time.
+fn pool_exhausted(reset_at: Option<u64>) -> CompletionError {
+    let message = non_success_message(
+        StatusCode::TOO_MANY_REQUESTS,
+        None,
+        "every Claude account on this node has reached its usage limit",
+    );
+    let limits = ProviderLimitHeaders {
+        reset_at: reset_at
+            .and_then(|at| i64::try_from(at).ok())
+            .and_then(|at| DateTime::from_timestamp(at, 0)),
+        usage_exhausted: true,
+        ..Default::default()
+    };
+    CompletionError::ProviderError(limits.annotate(&message))
+}
+
+async fn open_rotated<S>(
+    route: &ClaudeRoute,
+    model: &str,
+    request: &CompletionRequest,
+    surface: RapidHashSet<String>,
+    accounts: &Arc<[ClaudeAccount<S>]>,
+    rotation: &Rotation,
+) -> Result<
+    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    CompletionError,
+>
+where
+    S: BearerSource,
+{
+    let pool = rotation.cache.claude_accounts();
+    let (ids, policy) = (&rotation.credential_ids[..], &rotation.policy);
+    let (family, session) = (Family::of_model(model), session_key(request));
+    let now = now_unix_secs();
+    let Some(choice) = pool.choose(ids, session, family, now, policy) else {
+        return Err(pool_exhausted(
+            pool.earliest_reset(ids, family, now, policy),
+        ));
+    };
+    let account = accounts
+        .get(choice.index)
+        .ok_or_else(|| CompletionError::ProviderError("Claude pool lost an account".to_string()))?;
+    // Only an account the pool is currently serving through paid overage draws it.
+    let using_overage = pool
+        .account_state(&choice.key)
+        .is_some_and(|state| tier(policy, now, family, &state) == Some(Tier::Overage));
+    match open_messages_at(
+        route,
+        model,
+        request,
+        &account.identity.context(using_overage),
+        surface,
+        account.bearer.as_ref(),
+        account.usage.clone(),
+    )
+    .await
+    {
+        Ok(stream) => Ok(stream),
+        Err(failure) if failure.rejected => {
+            // The rejected response was observed into the pool before this error returned.
+            let next = pool.choose(ids, session, family, now_unix_secs(), policy);
+            Err(match (failure.error, next) {
+                (CompletionError::ProviderError(text), Some(next))
+                    if next.index != choice.index =>
+                {
+                    CompletionError::ProviderError(mark_account_rotated(&text))
+                }
+                (error, _) => error,
+            })
+        }
+        Err(failure) => Err(failure.error),
     }
 }
 
@@ -268,6 +603,29 @@ impl BearerSource for ApiKeyBearer {
 
     fn is_oauth(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+fn test_credential() -> OAuthCredential {
+    OAuthCredential {
+        doc_id: None,
+        credential_id: "test-credential".to_owned(),
+        node_did: "did:key:z6MkTest".to_owned(),
+        provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_owned(),
+        access_token: String::new(),
+        refresh_token: String::new(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::DateTime::UNIX_EPOCH,
+        last_refresh: None,
+        enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: Some("org-test:account-test".to_owned()),
+        label: None,
     }
 }
 

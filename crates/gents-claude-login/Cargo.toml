@@ -7,13 +7,11 @@ repository.workspace = true
 description = "Minimal Claude subscription OAuth login flows for Gents"
 
 [dependencies]
+gents-claude.workspace = true
 gents-login-ui.workspace = true
-base64.workspace = true
 rand.workspace = true
 reqwest.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 rapidhash = { workspace = true }
 tiny_http = "0.12"
 tokio.workspace = true

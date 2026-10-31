@@ -117,9 +117,11 @@ pub(crate) async fn publish_accepted_on_claimed_request(
         )
         .await;
     let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
         id: Some(format!("fixture-provider-message-{turn}")),
         content: vec![gents_protocol::message::AssistantContent::ToolCall(
             gents_protocol::message::ToolCall {
+                raw_arguments: None,
                 id: tool_call_id.to_owned(),
                 call_id: Some(format!("fixture-provider-call-{turn}")),
                 function: gents_protocol::message::ToolFunction::new(
@@ -197,6 +199,7 @@ pub(crate) async fn complete_child(
         )
         .await;
     let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
         id: Some(format!("answer-{child_id}")),
         content: vec![gents_protocol::message::AssistantContent::Text(
             gents_protocol::message::Text {
@@ -522,9 +525,11 @@ pub async fn published_admission_with_owner(
         ("spawn-native-tool", serde_json::json!({"command": "work"}))
     };
     let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
         id: Some("spawn-provider-message".into()),
         content: vec![gents_protocol::message::AssistantContent::ToolCall(
             gents_protocol::message::ToolCall {
+                raw_arguments: None,
                 id: native_id.into(),
                 call_id: Some("spawn-provider-call".into()),
                 function: gents_protocol::message::ToolFunction::new(tool_name, arguments),

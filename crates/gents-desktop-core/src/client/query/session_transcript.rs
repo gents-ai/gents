@@ -1247,6 +1247,7 @@ mod dependency_identity_tests {
         TranscriptMessageRow {
             doc_id: doc_id.to_string(),
             message: TranscriptMessage {
+                native_request_id: None,
                 message_key: message_key.to_string(),
                 session_id: "session".to_string(),
                 node_did: "agent".to_string(),

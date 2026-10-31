@@ -156,6 +156,7 @@ fn message(value: &Value, selected: &Value) -> TranscriptMessageRow {
     TranscriptMessageRow {
         doc_id: document(&header["id"]),
         message: TranscriptMessage {
+            native_request_id: None,
             message_key: text(&value["key"]),
             session_id: session(&header["session"], selected),
             node_did: text(&selected["admission"]["node"]),

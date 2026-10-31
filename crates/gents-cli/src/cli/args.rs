@@ -2713,6 +2713,11 @@ pub(crate) enum BackendCommand {
     Set(BackendSetArgs),
     #[command(name = "discover-models")]
     DiscoverModels(BackendDiscoverModelsArgs),
+    #[command(
+        name = "pool",
+        about = "Rotate a Claude subscription backend over the node's enabled accounts"
+    )]
+    Pool(BackendPoolArgs),
     #[command(name = "list", about = "List InferenceBackend documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an InferenceBackend document")]
@@ -3242,6 +3247,25 @@ pub(crate) struct BackendSetArgs {
     /// Canonical InferenceBackend JSON document, including its owning node DID.
     #[arg(long)]
     pub(crate) file: PathBuf,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct BackendPoolArgs {
+    /// The Claude subscription backend to switch.
+    pub(crate) backend_id: String,
+    /// Let a call draw paid extra usage once every account is past its limit.
+    #[arg(long, conflicts_with_all = ["no_overage", "single"])]
+    pub(crate) allow_overage: bool,
+    /// Never draw paid extra usage (the default for a new pool).
+    #[arg(long, conflicts_with = "single")]
+    pub(crate) no_overage: bool,
+    /// Go back to the provider's default account instead of a pool.
+    #[arg(long)]
+    pub(crate) single: bool,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]

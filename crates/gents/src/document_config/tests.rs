@@ -1173,7 +1173,9 @@ fn default_agent_publication_matches_lean() {
 #[tokio::test]
 async fn oauth_account_scope_matches_lean() {
     use crate::backend_provider::{BackendProviderKind, BackendProviderOauthExt};
-    use crate::oauth_credential::{resolve_oauth_credential, upsert_oauth_credential, AccountPick};
+    use crate::oauth_credential::{
+        resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential, AccountPick,
+    };
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
     let lean = &snapshot.configuration_scope_cases["oauth_account"];
     let kind_of = |value: &serde_json::Value| -> BackendProviderKind {
@@ -1208,8 +1210,9 @@ async fn oauth_account_scope_matches_lean() {
     }
     let access = crate::config_client::ConfigAccess::local(node);
 
+    let row_json = |owner: &str, account: Option<&str>| serde_json::json!({"owner": owner, "account": account});
     let cases = lean["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 6);
+    assert_eq!(cases.len(), 11);
     for case in cases {
         let text = case["auth"].as_str().unwrap();
         let auth: BackendAuth = serde_json::from_str(text).unwrap();
@@ -1220,6 +1223,27 @@ async fn oauth_account_scope_matches_lean() {
             !text.contains(scope) && !text.contains(stored_owner),
             "{case}"
         );
+        if let BackendAuth::NodeOAuthPool { .. } = auth {
+            let owner = case["owner"].as_str().unwrap();
+            let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
+            let rows = resolve_oauth_pool(&access, scope, provider).await.unwrap();
+            let mut pool: Vec<_> = rows
+                .iter()
+                .inspect(|row| assert_eq!(row.node_did, owner, "{case}"))
+                .map(|row| row_json(&row.node_did, row.account_ref.as_deref()))
+                .collect();
+            let mut expected: Vec<_> = case["resolved"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row_json(row["owner"].as_str().unwrap(), row["account"].as_str()))
+                .collect();
+            let key = |row: &serde_json::Value| row.to_string();
+            pool.sort_by_key(key);
+            expected.sort_by_key(key);
+            assert_eq!(pool, expected, "{case}");
+            continue;
+        }
         let resolved = match case["owner"].as_str() {
             Some(owner) => {
                 assert!(matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
@@ -1235,9 +1259,7 @@ async fn oauth_account_scope_matches_lean() {
                 if let Some(row) = &row {
                     assert_eq!(row.node_did, owner, "{case}");
                 }
-                row.map(
-                    |row| serde_json::json!({"owner": row.node_did, "account": row.account_ref}),
-                )
+                row.map(|row| row_json(&row.node_did, row.account_ref.as_deref()))
             }
             None => {
                 assert!(!matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
@@ -1246,7 +1268,7 @@ async fn oauth_account_scope_matches_lean() {
         };
         let expected = case["resolved"]
             .as_object()
-            .map(|row| serde_json::json!({"owner": row["owner"], "account": row["account"]}));
+            .map(|row| row_json(row["owner"].as_str().unwrap(), row["account"].as_str()));
         assert_eq!(resolved, expected, "{case}");
     }
 }

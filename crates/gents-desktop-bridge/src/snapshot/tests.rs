@@ -130,6 +130,7 @@ fn canonical_text_message(
     let header = TranscriptMessageRow {
         doc_id: doc_id.to_string(),
         message: TranscriptMessage {
+            native_request_id: None,
             message_key: doc_id.to_string(),
             session_id: session_id.to_string(),
             node_did: "did:test:amy".to_string(),

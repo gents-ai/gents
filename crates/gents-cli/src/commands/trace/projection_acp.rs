@@ -1209,6 +1209,7 @@ mod tests {
             timestamp: None,
             node_did: None,
             header: gents_protocol::output::TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("{session_id}:{sequence}"),
                 session_id,
                 node_did: "did:test:agent".to_string(),

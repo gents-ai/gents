@@ -350,7 +350,10 @@ async fn oauth_credential_for_probe(
         provider,
         oauth_refresh_kind(backend.provider_kind),
         oauth_product(backend.provider_kind),
-        crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
+        backend
+            .auth
+            .account_pick()
+            .unwrap_or(crate::oauth_credential::AccountPick::Reference(None)),
     )
     .await
     .map_err(|source| OAuthProbeError {
@@ -551,7 +554,7 @@ async fn probe_selected_backends(
             continue;
         }
 
-        let (event, error_text) = match backend.auth.resolve_api_key() {
+        let (event, error_text) = match backend.auth.probe_key() {
             Err(error) => (ProbeEvent::ProbeFail, Some(error.to_string())),
             Ok(api_key) => {
                 let cancellation = env.cancel.cloned().unwrap_or_default();
@@ -1131,6 +1134,7 @@ mod tests {
             provider_kind: crate::backend_provider::BackendProviderKind::OpenAiCompatible,
             openai_wire_api: None,
             endpoint,
+            claude_platform: None,
             auth: crate::document_config::BackendAuth::Unauthenticated,
             connect_timeout_secs: None,
             discovery_timeout_secs: None,

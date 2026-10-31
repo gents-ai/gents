@@ -52,6 +52,7 @@ export type {
   NodeConfigSaveRequest,
   DefaultAgentSetRequest,
   BackendSaveRequest,
+  BackendRotationSetRequest,
   ConfigComponentsApplyRequest,
   ConfigComponentsPatchRequest,
   ConfigComponentPatch,

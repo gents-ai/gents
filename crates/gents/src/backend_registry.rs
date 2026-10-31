@@ -4,7 +4,7 @@ pub use catalog_freshness::decode_backend_observation;
 use crate::backend_provider::BackendProviderKind;
 pub use crate::document_config::InferenceBackend;
 use crate::document_config::{
-    AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackendObservation,
+    AdvertisedModel, BackendAuth, BackendModelCatalog, ClaudePlatform, InferenceBackendObservation,
 };
 use crate::graphql::escape_graphql_string;
 use crate::openai_wire::OpenAiWireApi;
@@ -25,9 +25,10 @@ pub struct BackendFields {
     pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
     pub backend_auth: BackendAuth,
+    pub claude_platform: Option<ClaudePlatform>,
 }
 
-pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
+pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 
 impl InferenceBackend {
     pub fn from_value(value: &serde_json::Value) -> Result<Self> {
@@ -62,6 +63,7 @@ impl InferenceBackend {
             ),
             backend_endpoint: self.endpoint.clone(),
             backend_auth: self.auth.clone(),
+            claude_platform: self.claude_platform.clone(),
         }
     }
 
@@ -107,11 +109,31 @@ impl InferenceBackend {
             }
             _ => {}
         }
-        if matches!(self.auth, BackendAuth::NodeOAuth { .. })
-            != self.provider_kind.is_node_scoped_oauth()
+        if self.auth.uses_node_oauth() != self.provider_kind.is_node_scoped_oauth()
+            || !self.auth.suits_provider(self.provider_kind)
         {
             violations
                 .push("backend auth selection is incompatible with the provider adapter".into());
+        }
+        if let Err(error) =
+            ClaudePlatform::validate(self.provider_kind, self.claude_platform.as_ref())
+        {
+            violations.push(error.to_string());
+        }
+        if self.provider_kind.is_claude_platform()
+            && !(self.endpoint.starts_with("https://") || self.endpoint.starts_with("http://"))
+        {
+            violations.push("endpoint must be an http or https URL".into());
+        }
+        // The rotation policy reads Claude's unified rate-limit headers; no
+        // other provider adapter reports the limit state it chooses by.
+        if matches!(self.auth, BackendAuth::NodeOAuthPool { .. })
+            && self.provider_kind != BackendProviderKind::ClaudeCliSubscription
+        {
+            violations.push(
+                "account pools rotate Claude subscription accounts; select one account for this provider"
+                    .into(),
+            );
         }
         let anthropic_endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
         if self.provider_kind == BackendProviderKind::AnthropicApiKey
@@ -131,11 +153,22 @@ impl InferenceBackend {
     }
 
     pub fn catalog_scope(&self) -> Option<&str> {
-        matches!(self.auth, BackendAuth::NodeOAuth { .. }).then_some(self.node_did.as_str())
+        self.auth
+            .uses_node_oauth()
+            .then_some(self.node_did.as_str())
     }
 }
 
 impl BackendAuth {
+    /// The key a health probe may send: cloud credentials sign requests rather than
+    /// travel as a key, so a probe has none to resolve for them.
+    pub fn probe_key(&self) -> Result<Option<String>> {
+        match self {
+            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => Ok(None),
+            other => other.resolve_api_key(),
+        }
+    }
+
     pub fn resolve_api_key(&self) -> Result<Option<String>> {
         match self {
             Self::Unauthenticated => Ok(None),
@@ -157,8 +190,13 @@ impl BackendAuth {
                 );
                 Ok(Some(key))
             }
-            Self::NodeOAuth { .. } => {
+            Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. } => {
                 anyhow::bail!("node OAuth requires the invoking node's OAuthCredential")
+            }
+            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => {
+                anyhow::bail!(
+                    "AWS and Google credentials sign requests, which this build does not do yet; use an API key or bearer token"
+                )
             }
         }
     }
@@ -655,7 +693,7 @@ pub async fn probe_and_promote_enabled_backends(node: &Arc<EmbeddedNode>) {
     for backend in backends {
         // Agent-scoped credential refresh stays with the invoking-agent owner;
         // a fleet scan cannot choose an OAuth principal.
-        if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
+        if backend.auth.uses_node_oauth() {
             continue;
         }
         if let Err(error) = discover_shared_backend(node, &backend).await {
@@ -680,7 +718,7 @@ pub(crate) async fn discover_shared_backend(
         .connect_timeout(connect_timeout)
         .timeout(discovery_timeout)
         .build()?;
-    let api_key = backend.auth.resolve_api_key()?;
+    let api_key = backend.auth.probe_key()?;
     let models = crate::backend_provider::discover_models(
         &client,
         backend.provider_kind,
@@ -715,6 +753,9 @@ pub(crate) async fn discover_shared_backend(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod claude_platform_tests;
 
 #[cfg(test)]
 mod read_ownership_tests;

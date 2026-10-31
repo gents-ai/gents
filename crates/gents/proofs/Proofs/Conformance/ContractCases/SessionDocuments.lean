@@ -115,6 +115,7 @@ def sourceMessage (id sequence : Nat) : MessageEnvelope :=
   , key := "origin-" ++ toString id
   , sequence
   , nativeId := some "native-provider-id"
+  , nativeRequestId := some "native-request-id"
   , blocks := [.text ⟨⟨100 + id, 0⟩, .full⟩]
   , createdAt := 5 }
 def history : History :=
@@ -135,6 +136,7 @@ example : copied.messages.map (·.header.origin) = [some 1] := by decide
 example : copied.messages.map (·.header.request) = [none] := by decide
 example : copied.messages.map (·.blocks) = history.messages.map (·.blocks) := by decide
 example : copied.messages.map (·.nativeId) = history.messages.map (·.nativeId) := by decide
+example : copied.messages.map (·.nativeRequestId) = history.messages.map (·.nativeRequestId) := by decide
 example : copied.messages.map (·.key) = ["child:origin-1"] := by decide
 example : copied.compactions = [⟨1004, child.session, 1, 0⟩] := by decide
 example : (retentionDependencies copied).originMessages = [1] := by decide

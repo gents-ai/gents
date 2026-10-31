@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::document_config::{BackendAuth, InferenceBackend};
+use gents::document_config::InferenceBackend;
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;
@@ -81,7 +81,7 @@ async fn backend_check(
     let observation =
         crate::shared::load_backend_observation(access, &backend.node_did, &backend.backend_id)
             .await?;
-    let oauth = matches!(backend.auth, BackendAuth::NodeOAuth { .. });
+    let oauth = backend.auth.uses_node_oauth();
     let probe_status = observation.probe_status.as_deref().unwrap_or("unknown");
     let offline_unprobed =
         matches!(access, ConfigAccess::Local(_)) && probe_status == "unknown" && !oauth;
@@ -143,6 +143,7 @@ const OAUTH_CREDENTIAL_DISCOVERY_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::document_config::BackendAuth;
     use std::sync::Arc;
 
     #[tokio::test]

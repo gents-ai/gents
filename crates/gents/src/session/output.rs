@@ -2596,6 +2596,7 @@ mod tests {
         super::super::canonical_rows::TranscriptMessageRow {
             doc_id: doc_id.into(),
             message: TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("key-{doc_id}"),
                 session_id: session_id.into(),
                 node_did: "did:test:agent".into(),
@@ -2829,6 +2830,7 @@ mod tests {
     ) -> String {
         use gents_protocol::output::*;
         let header = TranscriptMessage {
+            native_request_id: None,
             message_key: key.into(),
             session_id: "session-scan-gap".into(),
             node_did: "did:test:test".into(),

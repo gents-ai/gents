@@ -32,11 +32,13 @@ async fn fixture(
 
 fn tool_turn(ids: &[String]) -> Message {
     Message::Assistant {
+        request_id: None,
         id: None,
         content: ids
             .iter()
             .map(|id| {
                 AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: id.clone(),
                     call_id: Some(id.clone()),
                     function: ToolFunction {

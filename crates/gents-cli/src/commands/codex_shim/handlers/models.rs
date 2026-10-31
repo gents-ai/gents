@@ -6,7 +6,7 @@ use gents::config_client::{
     apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::{BackendAuth, BackendModelCatalog};
+use gents::document_config::BackendModelCatalog;
 use gents::{
     list_agents, list_inference_profile_records, load_inference_profile, Collection,
     InferenceBackend, InferenceProfile, ReasoningEffort,
@@ -162,8 +162,7 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
 
     let mut available = Vec::with_capacity(backends.len());
     for backend in backends {
-        let credential_scope =
-            matches!(backend.auth, BackendAuth::NodeOAuth { .. }).then_some(node_did);
+        let credential_scope = backend.auth.uses_node_oauth().then_some(node_did);
         let catalog = lookup_backend_observation(&state.node, node_did, &backend.backend_id)
             .await
             .with_context(|| {
@@ -405,7 +404,7 @@ async fn apply_model_selection(
                     lookup_backend_observation_in_txn(txn, owner, &selection.backend_id)
                         .await?
                         .context("selected backend has no discovery observation")?;
-                let scope = matches!(backend.auth, BackendAuth::NodeOAuth { .. }).then_some(owner);
+                let scope = backend.auth.uses_node_oauth().then_some(owner);
                 let catalog = observation
                     .catalog_for(scope)?
                     .context("selected backend has no catalog in this credential scope")?;
@@ -463,6 +462,7 @@ mod tests {
     };
     use gents::defra_node::EmbeddedNode;
     use gents::document_config::AdvertisedModel;
+    use gents::document_config::BackendAuth;
     use gents::{record_model_catalog_in_txn, BackendProviderKind};
     use gents_protocol::row::{
         AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
@@ -493,6 +493,7 @@ mod tests {
             provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: None,
             endpoint: "http://127.0.0.1:11434/v1".to_string(),
+            claude_platform: None,
             auth: BackendAuth::Unauthenticated,
             connect_timeout_secs: None,
             discovery_timeout_secs: None,

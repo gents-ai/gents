@@ -1695,6 +1695,7 @@ mod tests {
             });
         }
         let message = TranscriptMessage {
+            native_request_id: None,
             message_key: gents::session::sequence_message_key(
                 node_did,
                 session_id,

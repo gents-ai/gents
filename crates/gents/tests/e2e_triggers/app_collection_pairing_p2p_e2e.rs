@@ -1124,6 +1124,7 @@ async fn seed_preexisting_hydration_history(
         .to_owned();
 
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: sequence_message_key(node_did, HYDRATION_SESSION_ID, Some(requester_did), 1),
         session_id: HYDRATION_SESSION_ID.into(),
         node_did: node_did.into(),

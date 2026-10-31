@@ -54,6 +54,10 @@ pub enum ClientCommand {
     BackendAuthenticationSave {
         request: crate::accounts::BackendAuthenticationSaveRequest,
     },
+    #[serde(rename = "client_backend_rotation_save")]
+    BackendRotationSave {
+        request: crate::accounts::BackendRotationSaveRequest,
+    },
     #[serde(rename = "client_runtime_is_local")]
     RuntimeIsLocal {
         #[serde(rename = "nodeDid")]
@@ -353,6 +357,7 @@ impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
         "client_backend_authentication",
         "client_backend_authentication_save",
+        "client_backend_rotation_save",
         "client_runtime_is_local",
         "client_inference_setup_catalog",
         "client_inference_setup_state",

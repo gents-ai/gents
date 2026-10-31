@@ -124,9 +124,10 @@ impl RuntimeContext {
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
-        let api_key = match &agent_config.backend_auth {
-            crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
-            _ => agent_config.completion_client_api_key()?,
+        let api_key = if agent_config.backend_auth.uses_node_oauth() {
+            "no-key".to_owned()
+        } else {
+            agent_config.completion_client_api_key()?
         };
         let allowed_targets =
             tool_surface::resolve_agent_target_descriptions(tool_surface.as_ref());
@@ -171,12 +172,14 @@ impl RuntimeContext {
         .await?;
         let provider_family = Some(client.provider_family().to_owned());
         let replay_issuer = client.replay_issuer()?;
+        let account_hops = client.account_hops();
 
         crate::llm::backend_client::with_backend_client!(client, |client| {
             Box::pin(self.run_agent_with_client(
                 agent_config,
                 provider_family,
                 replay_issuer,
+                account_hops,
                 request_rx,
                 capacity,
                 slot_generation,
@@ -201,6 +204,7 @@ impl RuntimeContext {
         agent_config: Arc<crate::config::ResolvedAgent>,
         provider_family: Option<String>,
         replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
+        account_hops: u32,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
@@ -255,6 +259,7 @@ impl RuntimeContext {
         })?
         .with_inference_observations(self.inference_observations.clone())
         .with_replay_issuer(replay_issuer)
+        .with_account_hops(account_hops)
         .with_approval_home(
             self.tool_runtime
                 .plugin_home()

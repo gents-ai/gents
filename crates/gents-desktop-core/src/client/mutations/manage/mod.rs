@@ -105,7 +105,8 @@ pub use inference::{delete_inference_backend_on, upsert_inference_backend_on};
 pub use principal::{
     apply_config_components_on, patch_config_components_on, read_backend_authentication_on,
     read_config_editor_on, save_backend_authentication_on, save_config_editor_on,
-    set_default_agent_on, upsert_node_on, ConfigEditorDocument, ConfigEditorRevision,
+    set_backend_rotation_on, set_default_agent_on, upsert_node_on, ConfigEditorDocument,
+    ConfigEditorRevision,
 };
 pub use profile::{
     delete_inference_profile_on, select_agent_model_on, upsert_inference_profile_on,

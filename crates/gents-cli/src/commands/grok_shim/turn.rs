@@ -2908,6 +2908,7 @@ mod tests {
                 .expect("physical segment id")
                 .to_string();
         let message = TranscriptMessage {
+            native_request_id: None,
             message_key: message_key.into(),
             session_id: session_id.into(),
             node_did: node_did.into(),

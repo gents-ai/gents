@@ -129,7 +129,7 @@ pub(super) const TRIGGER_OBSERVATION_FIELDS: &str =
 pub(super) const TOOLS_FIELDS: &str = "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags";
 pub(super) const AGENT_CONTEXT_FIELDS: &str = "context_id node_did display_name description system_prompt tools_id compaction_id skill_ids tags";
 pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id node_did display_name strategy threshold keep_recent_tokens tool_result_max_chars summary_max_output_tokens summary_file_list_max inference_profile_id tags";
-pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id node_did name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
+pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id node_did name provider_kind openai_wire_api endpoint auth claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
     "backend_id catalogs catalog_freshness last_probe probe_status";
 pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id node_did display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";

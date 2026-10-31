@@ -12,11 +12,17 @@ def oauthRef : BackendAuth → Option String
 
 /-- Preserve the raw-secret restriction while allowing environment references;
 OAuth account references are operator-managed: a node-OAuth candidate keeps the
-stored reference and a non-OAuth backend counts as the original account. -/
+stored reference and a non-OAuth backend counts as the original account. A
+rotation pool and its overage choice are operator-managed too: a candidate pool
+must equal the stored one. Static cloud credentials are raw secrets like an API
+key: a patch can keep the stored value but never introduce or change one. -/
 def authPatchAllowed (stored candidate : BackendAuth) : Bool :=
   match candidate with
   | .apiKey _ => decide (candidate = stored)
+  | .awsCredentials .. => decide (candidate = stored)
+  | .googleCredentials _ => decide (candidate = stored)
   | .nodeOAuth a => decide (a = oauthRef stored)
+  | .nodeOAuthPool _ => decide (candidate = stored)
   | _ => true
 
 def authGuard (decode : Doc → Option BackendAuth) (stored candidate : Doc) : Bool :=
@@ -33,6 +39,49 @@ theorem backend_step_cannot_set_new_raw_key (decode : Doc → Option BackendAuth
     (h : backendStep decode validate stored p = some merged)
     (hm : decode merged = some (.apiKey key)) :
     decode stored = some (.apiKey key) := by
+  have hg := (step_accept_validates validate (authGuard decode stored)
+    .inferenceBackend stored p merged h).2
+  cases hs : decode stored with
+  | none => simp [authGuard, hs] at hg
+  | some oldAuth =>
+    simp [authGuard, hs, hm, authPatchAllowed] at hg
+    exact congrArg some hg.symm
+
+/-- Static AWS credentials follow the raw-key rule: a patch cannot introduce them. -/
+theorem backend_step_cannot_set_new_aws_credentials (decode : Doc → Option BackendAuth)
+    (validate : Doc → Bool) (stored merged : Doc) (p : Patch)
+    (id secret : String) (token : Option String)
+    (h : backendStep decode validate stored p = some merged)
+    (hm : decode merged = some (.awsCredentials id secret token)) :
+    decode stored = some (.awsCredentials id secret token) := by
+  have hg := (step_accept_validates validate (authGuard decode stored)
+    .inferenceBackend stored p merged h).2
+  cases hs : decode stored with
+  | none => simp [authGuard, hs] at hg
+  | some oldAuth =>
+    simp [authGuard, hs, hm, authPatchAllowed] at hg
+    exact congrArg some hg.symm
+
+/-- Static Google credentials follow the raw-key rule: a patch cannot introduce them. -/
+theorem backend_step_cannot_set_new_google_credentials (decode : Doc → Option BackendAuth)
+    (validate : Doc → Bool) (stored merged : Doc) (p : Patch) (json : String)
+    (h : backendStep decode validate stored p = some merged)
+    (hm : decode merged = some (.googleCredentials json)) :
+    decode stored = some (.googleCredentials json) := by
+  have hg := (step_accept_validates validate (authGuard decode stored)
+    .inferenceBackend stored p merged h).2
+  cases hs : decode stored with
+  | none => simp [authGuard, hs] at hg
+  | some oldAuth =>
+    simp [authGuard, hs, hm, authPatchAllowed] at hg
+    exact congrArg some hg.symm
+
+/-- A patch can neither introduce a rotation pool nor change its overage choice. -/
+theorem backend_step_cannot_introduce_pool (decode : Doc → Option BackendAuth)
+    (validate : Doc → Bool) (stored merged : Doc) (p : Patch) (allowOverage : Bool)
+    (h : backendStep decode validate stored p = some merged)
+    (hm : decode merged = some (.nodeOAuthPool allowOverage)) :
+    decode stored = some (.nodeOAuthPool allowOverage) := by
   have hg := (step_accept_validates validate (authGuard decode stored)
     .inferenceBackend stored p merged h).2
   cases hs : decode stored with
@@ -71,6 +120,7 @@ def backendChoiceAllowed (dflt : String → Option String)
     | some (kind, auth) =>
       if kind = next.1 then decide (auth = next.2) else decide (r = dflt next.1)
     | none => decide (r = dflt next.1)
+  | .nodeOAuthPool _ => decide (current = some next)
   | _ => true
 
 def profileGuard (backendOf : String → Option (String × BackendAuth))
@@ -101,6 +151,13 @@ theorem profile_choice_lands_on_current_or_default (dflt : String → Option Str
     by_cases hk : k = kind
     · subst hk; simp [backendChoiceAllowed] at h; exact .inl (by rw [h])
     · simp [backendChoiceAllowed, hk] at h; exact .inr h
+
+/-- A profile reaches a rotation pool only by keeping the one it already uses. -/
+theorem profile_cannot_switch_to_pool (dflt : String → Option String)
+    (current : Option (String × BackendAuth)) (kind : String) (allowOverage : Bool)
+    (h : backendChoiceAllowed dflt current (kind, .nodeOAuthPool allowOverage) = true) :
+    current = some (kind, .nodeOAuthPool allowOverage) := by
+  simpa [backendChoiceAllowed] using h
 
 def profileChoiceAllowed (backendOf : String → Option (String × BackendAuth))
     (dflt : String → Option String) (current : Option String) (next : String) : Bool :=

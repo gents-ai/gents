@@ -242,6 +242,7 @@ async fn insert_materialized_response(
         });
     }
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(&runtime.node_did, session_id, None, 1),
         session_id: session_id.to_owned(),
         node_did: runtime.node_did.clone(),

@@ -405,7 +405,7 @@ fn codex_cache_key_stays_with_session_across_requests() {
     agent.openai_wire_api = crate::OpenAiWireApi::Responses;
     let mut request = request();
     let first = request_additional_params(&agent, &request).unwrap();
-    let config = loop_config_for_request(&agent, "system".into(), &request, None, 0).unwrap();
+    let config = loop_config_for_request(&agent, "system".into(), &request, None, 0, 0).unwrap();
     let params = config.additional_params.unwrap();
     assert_eq!(params["prompt_cache_key"], first["prompt_cache_key"]);
     assert_eq!(params["reasoning"]["effort"], "medium");
@@ -447,7 +447,7 @@ fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
     request.deadline = Some("2030-01-01T00:00:00Z".to_string());
 
     let config =
-        loop_config_for_request(&agent, "preamble".to_string(), &request, None, 0).unwrap();
+        loop_config_for_request(&agent, "preamble".to_string(), &request, None, 0, 0).unwrap();
 
     assert_eq!(
         config.retry_policy.transport_backoff,
@@ -465,7 +465,7 @@ fn loop_config_for_request_rejects_unknown_retry_origin() {
     let mut request = request();
     request.execution_origin = Some("legacy-or-missing".to_string());
 
-    let Err(error) = loop_config_for_request(&agent, "preamble".to_string(), &request, None, 0)
+    let Err(error) = loop_config_for_request(&agent, "preamble".to_string(), &request, None, 0, 0)
     else {
         panic!("unknown execution origin must fail closed");
     };
@@ -535,6 +535,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+        claude_platform: None,
         backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -559,6 +560,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         completion_retry,
         sampling: SamplingConfig::default(),
         skills: Vec::new(),
+        oauth_pool: Vec::new(),
     }
 }
 
@@ -606,7 +608,7 @@ fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
     request.max_total_tokens = Some(4_096);
     let budget = Some(AggregateTokenBudget::new(4_096));
     assert!(
-        loop_config_for_request(&agent, "system".to_string(), &request, budget, 0)
+        loop_config_for_request(&agent, "system".to_string(), &request, budget, 0, 0)
             .unwrap()
             .aggregate_token_budget
             .is_some()
@@ -1277,4 +1279,17 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         "each request seeds its own calibration; one request's observations never reach another's"
     );
     node.shutdown().await;
+}
+
+#[test]
+fn claude_subscription_requests_carry_the_session_key_and_hops_reach_the_policy() {
+    let mut agent = agent_with_retry(CompletionRetryProfileFields::default());
+    agent.backend_provider_kind = BackendProviderKind::ClaudeCliSubscription;
+    let config = loop_config_for_request(&agent, "system".into(), &request(), None, 0, 3).unwrap();
+    let params = config.additional_params.unwrap();
+    assert_eq!(
+        params[crate::claude_messages::SESSION_KEY_PARAM],
+        "session-456"
+    );
+    assert_eq!(config.retry_policy.account_hops, 3);
 }

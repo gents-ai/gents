@@ -21,6 +21,10 @@ pub enum Message {
     },
     Assistant {
         id: Option<String>,
+        /// The provider's response request id (for Claude, the `request-id`
+        /// header); `None` when the provider reports none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
         content: Vec<AssistantContent>,
     },
 }
@@ -41,6 +45,7 @@ impl Message {
     pub fn assistant(text: impl Into<String>) -> Self {
         Message::Assistant {
             id: None,
+            request_id: None,
             content: vec![AssistantContent::text(text)],
         }
     }
@@ -48,6 +53,7 @@ impl Message {
     pub fn assistant_with_id(id: String, text: impl Into<String>) -> Self {
         Message::Assistant {
             id: Some(id),
+            request_id: None,
             content: vec![AssistantContent::text(text)],
         }
     }
@@ -251,6 +257,11 @@ pub struct ToolCall {
     pub function: ToolFunction,
     pub signature: Option<String>,
     pub additional_params: Option<serde_json::Value>,
+    /// The provider's streamed argument text, kept only when it parses to
+    /// `function.arguments` yet differs from its compact serialization (key
+    /// order or spacing); set through [`ToolCall::raw_arguments_for`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_arguments: Option<String>,
 }
 
 impl ToolCall {
@@ -261,7 +272,16 @@ impl ToolCall {
             function,
             signature: None,
             additional_params: None,
+            raw_arguments: None,
         }
+    }
+
+    /// The one rule for [`ToolCall::raw_arguments`]: `text` is kept only when
+    /// it parses to exactly `arguments` and is not already their compact form.
+    pub fn raw_arguments_for(arguments: &serde_json::Value, text: &str) -> Option<String> {
+        let parsed = serde_json::from_str::<serde_json::Value>(text).ok()?;
+        (parsed == *arguments && serde_json::to_string(arguments).ok().as_deref() != Some(text))
+            .then(|| text.to_owned())
     }
 
     pub fn with_call_id(mut self, call_id: String) -> Self {
@@ -469,5 +489,52 @@ mod tests {
                 "native re-serialization must reproduce the recorded bytes"
             );
         }
+    }
+
+    #[test]
+    fn raw_arguments_are_kept_only_for_a_distinct_exact_text() {
+        let arguments = serde_json::json!({"b": 1, "a": [true, null]});
+        let canonical = serde_json::to_string(&arguments).unwrap();
+        // Same value, different spelling: kept.
+        for text in [
+            r#"{"b":1,"a":[true,null]}"#,
+            r#"{ "b": 1, "a": [true, null] }"#,
+        ] {
+            assert_eq!(
+                ToolCall::raw_arguments_for(&arguments, text).as_deref(),
+                (text != canonical).then_some(text),
+                "{text}"
+            );
+        }
+        // Already the compact serialization, a different value, or not JSON: dropped.
+        assert_eq!(ToolCall::raw_arguments_for(&arguments, &canonical), None);
+        assert_eq!(
+            ToolCall::raw_arguments_for(&arguments, r#"{"b":2,"a":[true,null]}"#),
+            None
+        );
+        assert_eq!(ToolCall::raw_arguments_for(&arguments, "{"), None);
+        assert_eq!(ToolCall::raw_arguments_for(&arguments, ""), None);
+    }
+
+    #[test]
+    fn raw_arguments_and_request_id_are_invisible_when_absent() {
+        let call = ToolCall::new(
+            "c".into(),
+            ToolFunction::new("t".into(), serde_json::json!({})),
+        );
+        assert!(!serde_json::to_string(&call)
+            .unwrap()
+            .contains("raw_arguments"));
+        let message = Message::assistant("hi");
+        assert!(!serde_json::to_string(&message)
+            .unwrap()
+            .contains("request_id"));
+        let with = Message::Assistant {
+            id: None,
+            request_id: Some("req_1".into()),
+            content: vec![],
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), with);
     }
 }

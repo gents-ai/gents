@@ -1099,3 +1099,70 @@ async fn tool_file_content_schema_pin_matches() {
     );
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn native_request_id_column_upgrades_existing_messages_in_place() {
+    let legacy_sdl = schemas::AGENT_MESSAGE
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("native_request_id:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let fresh = fresh_node().await;
+    fresh.add_collection(schemas::AGENT_MESSAGE).await.unwrap();
+    let fresh_id = fresh
+        .get_collection("AgentMessage")
+        .unwrap()
+        .unwrap()
+        .version_id;
+
+    let node = fresh_node().await;
+    node.add_collection(&legacy_sdl).await.unwrap();
+    let legacy = node.get_collection("AgentMessage").unwrap().unwrap();
+    assert_eq!(
+        legacy.version_id,
+        "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a"
+    );
+    let created = node
+        .execute(
+            r#"mutation {
+        add_AgentMessage(input: {
+            message_key: "provider-turn" session_id: "session" node_did: "did:key:node"
+            publication: "{\"kind\":\"request_execution\"}" outcome: "complete" sequence: 1
+            role: "assistant" native_id: "msg_1" blocks: "[]" created_at: "2026-10-21T00:00:00Z"
+        }) {_docID}
+    }"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "seed legacy message: {created:?}");
+
+    let first = ensure_migrations(node.as_ref()).await.unwrap();
+    assert!(first.steps_applied > 0);
+    let migrated = node.get_collection("AgentMessage").unwrap().unwrap();
+    assert_eq!(
+        (fresh_id.as_str(), migrated.version_id.as_str()),
+        (
+            "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm",
+            "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4"
+        )
+    );
+    for field in &legacy.fields {
+        let current = migrated.fields.iter().find(|f| f.name == field.name);
+        assert_eq!(
+            current.map(|f| &f.id),
+            Some(&field.id),
+            "AgentMessage.{} field ID changed",
+            field.name
+        );
+    }
+    let read = node
+        .execute(r#"{ AgentMessage { native_id native_request_id } }"#)
+        .await;
+    assert!(!read.has_errors(), "{read:?}");
+    let rows = &read.data.as_ref().unwrap()["AgentMessage"];
+    assert_eq!(rows[0]["native_id"], "msg_1");
+    assert!(rows[0]["native_request_id"].is_null());
+    let second = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(second.steps_applied, 0);
+    fresh.shutdown().await;
+    node.shutdown().await;
+}

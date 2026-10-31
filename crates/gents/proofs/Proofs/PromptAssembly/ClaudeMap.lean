@@ -212,9 +212,36 @@ inductive Msg where
   | other (tag : String)
   deriving DecidableEq, Repr
 
-/-- `system[0]` on every request; the agent's subscription credential routes
-on it. -/
-def identity : String := "You are Claude Code, Anthropic's official CLI for Claude."
+/-- Identity prefixes of Claude Code 2.1.311 (`chunk-gpjkk9qe.js` `ne`, `Ue`,
+`Pe`). Subscription credentials are served only behind one of them. -/
+def cliIdentity : String := "You are Claude Code, Anthropic's official CLI for Claude."
+
+def sdkIdentity : String :=
+  "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+
+def agentIdentity : String := "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+
+def identities : List String := [cliIdentity, sdkIdentity, agentIdentity]
+
+inductive SessionMode where
+  | interactive
+  | nonInteractive (appendsSystemPrompt : Bool)
+  deriving DecidableEq, Repr
+
+/-- Claude Code `f6n`: Vertex always takes the CLI identity; a non-interactive
+session takes the SDK identity when it appends a system prompt and the bare
+agent identity otherwise. Claude Code's `recorded` override only replays the
+prefix a resumed session already used; a Gents session's mode is fixed, so the
+choice is already stable. -/
+def identityFor (vertex : Bool) (mode : SessionMode) : String :=
+  if vertex then cliIdentity
+  else match mode with
+    | .interactive => cliIdentity
+    | .nonInteractive true => sdkIdentity
+    | .nonInteractive false => agentIdentity
+
+/-- Prefix of the attribution block (`Knt`). -/
+def attributionPrefix : String := "x-anthropic-billing-header:"
 
 def splitSystem : List Msg → List String × List Msg
   | [] => ([], [])
@@ -225,14 +252,97 @@ def splitSystem : List Msg → List String × List Msg
     let (sys, others) := splitSystem rest
     (sys, m :: others)
 
-def systemBlocks (preamble : Option String) (rows : List String) : List String :=
-  identity :: (preamble.toList ++ rows)
+structure SystemBlock where
+  text : String
+  /-- Carries `cache_control` with the organization cache scope. -/
+  marked : Bool
+  deriving DecidableEq, Repr
 
-theorem systemBlocks_head (preamble : Option String) (rows : List String) :
-    (systemBlocks preamble rows).head? = some identity := rfl
+structure SystemSplit where
+  attribution : Option String := none
+  identity : Option String := none
+  prompt : List String := []
+  deriving DecidableEq, Repr
 
-theorem systemBlocks_tail_verbatim (preamble : Option String) (rows : List String) :
-    (systemBlocks preamble rows).tail = preamble.toList ++ rows := rfl
+def SystemSplit.push (split : SystemSplit) (text : String) : SystemSplit :=
+  if text.isEmpty then split
+  else if attributionPrefix.isPrefixOf text then { split with attribution := some text }
+  else if identities.contains text then { split with identity := some text }
+  else { split with prompt := split.prompt ++ [text] }
+
+/-- Claude Code 2.1.311 `Qzs` and `D0o` (`chunk-gpjkk9qe.js`) for a prompt
+without `__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__`. The input is
+`[attribution, identity, ...prompt]`. Empty strings are dropped, a later
+attribution or identity string replaces an earlier one, and every other string
+joins one block separated by a blank line. The attribution block is never
+marked; the identity block and the joined prompt block carry the organization
+cache scope. `D0o`'s global-scope branch needs the boundary marker and its
+`# Reporting outcomes` split needs Claude Code's own prompt text; a Gents prompt
+carries neither, so both branches are unreachable here. -/
+def systemBlocks (strings : List String) : List SystemBlock :=
+  let split := strings.foldl SystemSplit.push {}
+  split.attribution.toList.map (fun text => ⟨text, false⟩)
+    ++ split.identity.toList.map (fun text => ⟨text, true⟩)
+    ++ (if split.prompt.isEmpty then [] else [⟨"\n\n".intercalate split.prompt, true⟩])
+
+def ordinaryPrompt (text : String) : Bool :=
+  !attributionPrefix.isPrefixOf text && !identities.contains text
+
+theorem push_ordinary (split : SystemSplit) (text : String)
+    (h : ordinaryPrompt text = true) :
+    split.push text =
+      if text.isEmpty then split else { split with prompt := split.prompt ++ [text] } := by
+  simp [ordinaryPrompt] at h
+  unfold SystemSplit.push
+  by_cases he : text.isEmpty = true <;> simp_all
+
+theorem foldl_ordinary (split : SystemSplit) (texts : List String)
+    (h : ∀ text ∈ texts, ordinaryPrompt text = true) :
+    texts.foldl SystemSplit.push split =
+      { split with prompt := split.prompt ++ texts.filter (fun text => !text.isEmpty) } := by
+  induction texts generalizing split with
+  | nil => simp
+  | cons text rest ih =>
+    have hrest : ∀ t ∈ rest, ordinaryPrompt t = true := fun t ht => h t (by simp [ht])
+    simp only [List.foldl_cons]
+    rw [push_ordinary split text (h text (by simp))]
+    by_cases he : text.isEmpty = true
+    · simp [he, ih split hrest]
+    · simp [he, ih _ hrest, List.append_assoc]
+
+/-- The block shape every Gents request takes: an unmarked attribution block,
+the marked identity block, then at most one marked prompt block. -/
+theorem systemBlocks_shape (attribution identity : String) (prompt : List String)
+    (hAttribution : attributionPrefix.isPrefixOf attribution = true)
+    (hNonEmpty : attribution.isEmpty = false)
+    (hIdentity : identity ∈ identities)
+    (hPrompt : ∀ text ∈ prompt, ordinaryPrompt text = true) :
+    systemBlocks (attribution :: identity :: prompt) =
+      ⟨attribution, false⟩ :: ⟨identity, true⟩ ::
+        (if (prompt.filter (fun text => !text.isEmpty)).isEmpty then []
+         else [⟨"\n\n".intercalate (prompt.filter (fun text => !text.isEmpty)), true⟩]) := by
+  have hIdentityFacts :
+      identity.isEmpty = false ∧ attributionPrefix.isPrefixOf identity = false ∧
+        identities.contains identity = true := by
+    simp only [identities, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false]
+      at hIdentity
+    rcases hIdentity with rfl | rfl | rfl <;> native_decide
+  have hFirst : ({} : SystemSplit).push attribution = { attribution := some attribution } := by
+    simp [SystemSplit.push, hNonEmpty, hAttribution]
+  have hSecond :
+      ({ attribution := some attribution } : SystemSplit).push identity =
+        { attribution := some attribution, identity := some identity } := by
+    simp [SystemSplit.push, hIdentityFacts.1, hIdentityFacts.2.1, hIdentity]
+  simp only [systemBlocks, List.foldl_cons, hFirst, hSecond, foldl_ordinary _ _ hPrompt]
+  simp
+
+theorem systemBlocks_marked_le_two (strings : List String) :
+    ((systemBlocks strings).filter (·.marked)).length ≤ 2 := by
+  unfold systemBlocks
+  generalize strings.foldl SystemSplit.push {} = split
+  obtain ⟨attribution, identity, prompt⟩ := split
+  cases attribution <;> cases identity <;>
+    by_cases hp : prompt.isEmpty = true <;> simp [hp]
 
 def isSystem : Msg → Bool
   | .system _ => true
@@ -251,11 +361,12 @@ theorem splitSystem_partition (msgs : List Msg) :
     | system t => simp [splitSystem, isSystem, List.filter, h1, h2, h3]
     | other tag => simp [splitSystem, isSystem, List.filter, h1, h2, h3]
 
-def toolsField : List String → Option (List String)
-  | [] => none
-  | tools => some tools
+/-- Claude Code always sends `tools`, an empty list as `[]` (`lh` in the query
+generator); the key is only dropped under message-thread shaping, which Gents
+never enables. -/
+def toolsField (tools : List String) : Option (List String) := some tools
 
-theorem toolsField_empty : toolsField [] = none := rfl
+theorem toolsField_empty : toolsField [] = some [] := rfl
 
 theorem toolsField_nonempty (t : String) (rest : List String) :
     toolsField (t :: rest) = some (t :: rest) := rfl

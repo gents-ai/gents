@@ -205,6 +205,7 @@ pub(super) async fn seed_canonical_assistant_message(
         insert_segment(node, &segment(0, reasoning, StreamPayload::Reasoning)).await;
     let text_close_doc_id = insert_segment(node, &segment(1, text, StreamPayload::Text)).await;
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: message_key.into(),
         session_id: session_id.into(),
         node_did: node_did.into(),
@@ -502,6 +503,7 @@ pub(crate) async fn seed_canonical_tool_call(
                     "AgentOutputSegment",
                 )?;
                 let header = TranscriptMessage {
+                    native_request_id: None,
                     message_key,
                     session_id: session_id_for_header,
                     node_did: node_did_for_header,
@@ -575,6 +577,7 @@ pub(crate) async fn seed_canonical_tool_call(
         insert_transcript_header(
             node,
             &TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("delivery:{request_doc_id}:{tool_call_id}"),
                 session_id: session_id.into(),
                 node_did: node_did.into(),
@@ -657,6 +660,7 @@ pub(crate) async fn seed_background_receipt(
     insert_transcript_header(
         node,
         &TranscriptMessage {
+            native_request_id: None,
             message_key: key,
             session_id: session_id.into(),
             node_did: node_did.into(),
@@ -740,6 +744,7 @@ pub(super) async fn complete_canonical_tool_call(
     insert_transcript_header(
         node,
         &TranscriptMessage {
+            native_request_id: None,
             message_key: format!("delivery:{request_doc_id}:{tool_call_id}"),
             session_id: session_id.into(),
             node_did: node_did.into(),

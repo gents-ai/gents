@@ -52,6 +52,8 @@ pub struct InferenceBackendView {
     pub probe_status: Option<String>,
     /// The account a subscription backend runs on; `None` is the original.
     pub account_ref: Option<String>,
+    /// Whether a pool backend may draw paid extra usage; `None` for any other backend.
+    pub allow_overage: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +79,9 @@ pub fn backend_config_view(
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
         BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
         BackendAuth::NodeOAuth { .. } => ("node_oauth", false, None),
+        BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", false, None),
+        BackendAuth::AwsCredentials { .. } => ("aws_credentials", false, None),
+        BackendAuth::GoogleCredentials { .. } => ("google_credentials", false, None),
     };
     let advertised_models = match gents::config::backend_catalog(row, observation) {
         Ok(catalog) => catalog,
@@ -111,6 +116,7 @@ pub fn backend_config_view(
         advertised_models,
         probe_status: observation.and_then(|observation| observation.probe_status.clone()),
         account_ref: row.auth.oauth_account_ref().map(str::to_owned),
+        allow_overage: row.auth.pool_allow_overage(),
     }
 }
 

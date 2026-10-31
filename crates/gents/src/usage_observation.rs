@@ -176,6 +176,7 @@ pub fn usage_view(
 pub struct UsageCache {
     endpoints: UsageEndpoints,
     entries: tokio::sync::Mutex<rapidhash::RapidHashMap<CacheKey, UsageObservation>>,
+    claude_accounts: gents_claude::pool::AccountPool<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -195,6 +196,11 @@ impl UsageCache {
 
     pub fn endpoints(&self) -> &UsageEndpoints {
         &self.endpoints
+    }
+
+    /// Rotation state of this runtime's Claude accounts, keyed by `credential_id`.
+    pub(crate) fn claude_accounts(&self) -> &gents_claude::pool::AccountPool<String> {
+        &self.claude_accounts
     }
 
     async fn load(&self, target: &Target) -> Option<UsageObservation> {
@@ -317,10 +323,23 @@ async fn write(
     Ok(())
 }
 
+/// Seconds since the Unix epoch, as the rotation pool counts time.
+pub(crate) fn now_unix_secs() -> u64 {
+    u64::try_from(Utc::now().timestamp()).unwrap_or(0)
+}
+
+/// Where a reporter also feeds account rotation: the account it belongs to and the model family it serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RotationFeed {
+    pub(crate) credential_id: String,
+    pub(crate) family: gents_claude::rotation::Family,
+}
+
 pub struct UsageReporter {
     cache: Arc<UsageCache>,
     node: Arc<EmbeddedNode>,
     pub(crate) account: UsageAccount,
+    rotation: Option<RotationFeed>,
 }
 
 impl std::fmt::Debug for UsageReporter {
@@ -339,11 +358,31 @@ impl UsageReporter {
             cache,
             node,
             account,
+            rotation: None,
+        })
+    }
+
+    /// A reporter for the same account that also feeds rotation for one model family.
+    pub(crate) fn with_rotation(&self, feed: RotationFeed) -> Arc<Self> {
+        Arc::new(Self {
+            cache: self.cache.clone(),
+            node: self.node.clone(),
+            account: self.account.clone(),
+            rotation: Some(feed),
         })
     }
 
     /// The response never waits on credential resolution; cache writes cannot affect admission.
     pub(crate) fn observe(self: &Arc<Self>, headers: &HeaderMap, source: UsageSource) {
+        if let Some(feed) = &self.rotation {
+            let now = now_unix_secs();
+            self.cache.claude_accounts.observe_headers(
+                &feed.credential_id,
+                feed.family,
+                |name| headers.get(name).and_then(|v| v.to_str().ok()),
+                now,
+            );
+        }
         let headers = headers
             .iter()
             .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)));
@@ -424,6 +463,10 @@ pub async fn read_account_usage(
     if !backend.enabled {
         return Ok(UsageRead::Disabled);
     }
+    // A pool's usage is its accounts' usage, each read through its own account backend.
+    if matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
+        return Ok(UsageRead::NotReported);
+    }
     if matches!(kind, Kind::OpenAiCompatible | Kind::AnthropicApiKey) {
         return Ok(UsageRead::NotReported);
     }
@@ -493,7 +536,16 @@ pub async fn read_account_usage(
                 ),
                 // A new provider kind must fail to compile here rather than
                 // send its bearer to another provider.
-                Kind::OpenAiCompatible | Kind::OpenRouter | Kind::AnthropicApiKey => {
+                Kind::OpenAiCompatible
+                | Kind::OpenRouter
+                | Kind::AnthropicApiKey
+                | Kind::ClaudeBedrock
+                | Kind::ClaudeVertex
+                | Kind::ClaudeFoundry
+                | Kind::ClaudeAnthropicAws
+                | Kind::ClaudeMantle
+                | Kind::ClaudeGoogleCloud
+                | Kind::ClaudeGateway => {
                     return Ok(UsageRead::NotReported);
                 }
             };
@@ -580,6 +632,10 @@ pub async fn read_node_usage(
     let mut seen = rapidhash::RapidHashSet::default();
     let mut jobs = Vec::new();
     for backend in &backends {
+        // A pool's accounts are read below through their own account backends.
+        if matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
+            continue;
+        }
         let (entry, account_enabled) =
             match crate::oauth_credential::backend_account(backend, &accounts) {
                 Some(None) => continue,
@@ -686,6 +742,9 @@ pub async fn usage_for_backend(
     node_did: &str,
     backend: &InferenceBackend,
 ) -> Result<Option<UsageObservation>> {
+    if matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
+        return Ok(None);
+    }
     let account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(access, &account).await? else {
         return Ok(None);

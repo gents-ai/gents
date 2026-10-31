@@ -107,12 +107,14 @@ fn call_tool_requires_object_arguments_without_string_coercion() {
 #[test]
 fn extracts_raw_tool_call_json_from_persisted_assistant_message() {
     let message = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![
             AssistantContent::Text(Text {
                 text: "Checking.".to_string(),
             }),
             AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "internal-1".to_string(),
                 call_id: Some("call-1".to_string()),
                 function: ToolFunction {

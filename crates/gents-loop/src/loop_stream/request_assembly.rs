@@ -17,7 +17,7 @@ pub fn replay_compaction_prefix_bound(
     let mut assistants = Vec::new();
     for row in rows {
         match &row.message {
-            Message::Assistant { id, content } => assistants.push(TaggedAssistantRow {
+            Message::Assistant { id, content, .. } => assistants.push(TaggedAssistantRow {
                 source: row.source.clone(),
                 physical_header: row.physical_header.clone(),
                 block_indices: row.block_indices.clone(),
@@ -186,6 +186,7 @@ mod replay_error_tests {
         let tag = provider_tag(0);
         let originals = vec![TaggedMessage {
             message: Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![
                     AssistantContent::Text(Text {
@@ -204,6 +205,7 @@ mod replay_error_tests {
             source_index: 0,
             block_indices: vec![1],
             message: Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![AssistantContent::Text(Text {
                     text: "second".into(),
@@ -223,6 +225,7 @@ mod replay_error_tests {
     fn association_rejects_a_provider_order_applied_before_it() {
         let original = TaggedMessage {
             message: Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![
                     AssistantContent::Reasoning(gents_protocol::message::Reasoning {
@@ -262,6 +265,7 @@ mod replay_error_tests {
             TaggedMessage::unassociated(Message::user("start")),
             TaggedMessage {
                 message: Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![
                         AssistantContent::Reasoning(gents_protocol::message::Reasoning::new(
@@ -271,6 +275,7 @@ mod replay_error_tests {
                             text: "visible".into(),
                         }),
                         AssistantContent::ToolCall(ToolCall {
+                            raw_arguments: None,
                             id: "call-1".into(),
                             call_id: Some("call-1".into()),
                             function: ToolFunction {
@@ -610,6 +615,139 @@ mod replay_error_tests {
         }
     }
 
+    fn assistant_with(request_id: Option<&str>, call: Option<(&str, &str)>) -> Message {
+        Message::Assistant {
+            id: Some("msg_x".into()),
+            request_id: request_id.map(str::to_owned),
+            content: vec![match call {
+                Some((id, raw)) => {
+                    let mut call = gents_protocol::message::ToolCall::new(
+                        id.into(),
+                        gents_protocol::message::ToolFunction::new(
+                            "t".into(),
+                            serde_json::json!({}),
+                        ),
+                    );
+                    call.raw_arguments = Some(raw.to_owned());
+                    AssistantContent::ToolCall(call)
+                }
+                None => AssistantContent::text("answer"),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_requests_carry_the_previous_request_id_and_raw_tool_text() {
+        use crate::claude_messages_body::{
+            CLAUDE_REQUEST_PARAM, PREVIOUS_REQUEST_ID_PARAM, RAW_TOOL_ARGUMENTS_BY_CALL_PARAM,
+        };
+        let mut config = replay_assembly_config();
+        config.additional_params = Some(serde_json::json!({ CLAUDE_REQUEST_PARAM: {} }));
+        let history = vec![
+            Message::user("one"),
+            assistant_with(Some("req_1"), Some(("c1", "{ }"))),
+            Message::User {
+                content: vec![gents_protocol::message::UserContent::tool_result(
+                    "c1",
+                    vec![gents_protocol::message::ToolResultContent::text("ok")],
+                )],
+            },
+            assistant_with(Some("req_2"), None),
+            Message::user("two"),
+        ];
+        let params = |request: &rig::completion::CompletionRequest| {
+            request.additional_params.clone().unwrap()
+        };
+        let request = super::build_request(
+            &AssemblyOnlyModel,
+            Message::user("three"),
+            &history,
+            &[],
+            &[],
+            &config,
+        )
+        .await
+        .unwrap();
+        let sent = params(&request);
+        assert_eq!(sent[PREVIOUS_REQUEST_ID_PARAM], "req_2");
+        assert_eq!(
+            sent[RAW_TOOL_ARGUMENTS_BY_CALL_PARAM],
+            serde_json::json!({"c1": "{ }"})
+        );
+
+        // A prior in-loop assistant row is the latest in the history being sent.
+        let prior = vec![assistant_with(Some("req_3"), None)];
+        let request = super::build_request(
+            &AssemblyOnlyModel,
+            Message::user("three"),
+            &history,
+            &prior,
+            &[],
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(params(&request)[PREVIOUS_REQUEST_ID_PARAM], "req_3");
+
+        // A compacted history keeps no assistant row: neither key is sent.
+        let request = super::build_request(
+            &AssemblyOnlyModel,
+            Message::user("three"),
+            &[Message::user("summary")],
+            &[],
+            &[],
+            &config,
+        )
+        .await
+        .unwrap();
+        let sent = params(&request);
+        assert!(sent.get(PREVIOUS_REQUEST_ID_PARAM).is_none());
+        assert!(sent.get(RAW_TOOL_ARGUMENTS_BY_CALL_PARAM).is_none());
+
+        // The rebuilt request after compaction replaces stale values in place.
+        let mut rebuilt = super::build_request(
+            &AssemblyOnlyModel,
+            Message::user("three"),
+            &history,
+            &[],
+            &[],
+            &config,
+        )
+        .await
+        .unwrap();
+        super::replace_core_chat_history(
+            &mut rebuilt,
+            &config,
+            &[TaggedMessage::unassociated(Message::user("summary"))],
+            &[TaggedMessage::unassociated(Message::user("three"))],
+        )
+        .unwrap();
+        assert!(params(&rebuilt).get(PREVIOUS_REQUEST_ID_PARAM).is_none());
+    }
+
+    #[tokio::test]
+    async fn other_providers_never_receive_the_reserved_parameters() {
+        let mut config = replay_assembly_config();
+        let history = vec![
+            Message::user("one"),
+            assistant_with(Some("req_1"), Some(("c1", "{ }"))),
+        ];
+        for params in [None, Some(serde_json::json!({"prompt_cache_key": "k"}))] {
+            config.additional_params = params.clone();
+            let request = super::build_request(
+                &AssemblyOnlyModel,
+                Message::user("two"),
+                &history,
+                &[],
+                &[],
+                &config,
+            )
+            .await
+            .unwrap();
+            assert_eq!(request.additional_params, params);
+        }
+    }
+
     #[cfg(feature = "native")]
     #[tokio::test]
     async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
@@ -731,6 +869,7 @@ mod replay_error_tests {
             TaggedMessage::unassociated(Message::user("prompt")),
             TaggedMessage {
                 message: Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: replay_assembly_content(),
                 },
@@ -848,6 +987,7 @@ mod replay_error_tests {
         let mut rows = vec![
             TaggedMessage {
                 message: Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![
                         reasoning("a"),
@@ -984,7 +1124,12 @@ pub fn select_tagged_assistant_blocks(
     source: &TaggedMessage,
     retained_original_indices: &[usize],
 ) -> Result<TaggedMessage, ReplayCheckpointError> {
-    let Message::Assistant { id, content } = &source.message else {
+    let Message::Assistant {
+        id,
+        request_id,
+        content,
+    } = &source.message
+    else {
         return Err(ReplayCheckpointError::InvalidAssociation);
     };
     if source.block_indices.len() != content.len()
@@ -1005,6 +1150,7 @@ pub fn select_tagged_assistant_blocks(
         .unzip();
     Ok(TaggedMessage {
         message: Message::Assistant {
+            request_id: request_id.clone(),
             id: id.clone(),
             content: selected,
         },
@@ -1134,7 +1280,7 @@ fn assistant_rows(rows: &[TaggedMessage]) -> (Vec<usize>, Vec<TaggedAssistantRow
     rows.iter()
         .enumerate()
         .filter_map(|(index, row)| match &row.message {
-            Message::Assistant { id, content } => Some((
+            Message::Assistant { id, content, .. } => Some((
                 index,
                 TaggedAssistantRow {
                     source: row.source.clone(),

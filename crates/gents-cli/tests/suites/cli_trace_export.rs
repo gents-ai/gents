@@ -1702,6 +1702,7 @@ async fn seed_canonical_trace_tool(
     )
     .await?;
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: format!("trace:{session_id}:{sequence}"),
         session_id: session_id.into(),
         node_did: node_did.into(),
@@ -1773,6 +1774,7 @@ async fn seed_canonical_trace_tool(
         )
         .await?;
         let delivery = TranscriptMessage {
+            native_request_id: None,
             message_key: format!("trace-delivery:{tool_doc_id}"),
             session_id: session_id.into(),
             node_did: node_did.into(),
@@ -1867,6 +1869,7 @@ async fn seed_canonical_terminal_text(
     )
     .await?;
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: format!("trace-terminal:{request_doc_id}"),
         session_id: session_id.into(),
         node_did: node_did.into(),
@@ -2486,6 +2489,7 @@ fn projection_mock_agent_messages(query: &str) -> Value {
         PayloadRef, PresentedPayload, ToolResultPart, TranscriptMessage,
     };
     let root_tool = TranscriptMessage {
+        native_request_id: None,
         message_key: "acp-root-tool".into(),
         session_id: "session-acp".into(),
         node_did: "did:test:amy".into(),
@@ -2513,6 +2517,7 @@ fn projection_mock_agent_messages(query: &str) -> Value {
         created_at: "2026-06-05T18:00:01Z".into(),
     };
     let root_result = TranscriptMessage {
+        native_request_id: None,
         message_key: "acp-root-result".into(),
         session_id: "session-acp".into(),
         node_did: "did:test:amy".into(),
@@ -2575,6 +2580,7 @@ fn canonical_text_header(
         PayloadRef, PresentedPayload, TranscriptMessage,
     };
     TranscriptMessage {
+        native_request_id: None,
         message_key: message_key.into(),
         session_id: "session-acp".into(),
         node_did: if request_doc_id == "doc-request-child" {

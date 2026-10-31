@@ -363,8 +363,10 @@ impl CanonicalBackgroundFixture {
             .await;
         let native_id = format!("fixture-native-tool-{turn}");
         let message = Message::Assistant {
+            request_id: None,
             id: Some(format!("fixture-provider-message-{turn}")),
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: native_id.clone(),
                 call_id: Some(format!("fixture-provider-call-{turn}")),
                 function: ToolFunction::new(

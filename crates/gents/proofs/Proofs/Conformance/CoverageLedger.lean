@@ -123,6 +123,11 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "account-rotation"
+    , required := [Surface.runtimeInternal]
+    , deferred := [(Surface.operatorUi,
+        "The rotation pool and each account's limit state surface with the account settings in the CLI and desktop.")]
+    }
   , { feature := "tool-call"
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
@@ -553,6 +558,21 @@ def caseCoverage : List CoverageEntry :=
       "RequestExecutionObservedCases"
       "lifecycle::execution_lease::tests::generated_recovery_invalidates_real_admitted_renewal_transaction")
       "request-execution-lease" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "account_rotation_cases"
+      "AccountRotationSelectCases"
+      "gents_claude::rotation::tests::generated_rotation_select_cases_choose_the_account")
+      "account-rotation" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "account_rotation_cases"
+      "AccountRotationAttemptCases"
+      "gents_claude::rotation::tests::generated_rotation_attempt_cases_walk_the_pool")
+      "account-rotation" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "account_rotation_cases"
+      "AccountRotationObserveCases"
+      "gents_claude::rotation::tests::generated_rotation_observe_cases_fold_limits")
+      "account-rotation" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_cases"
       "RequestExecutionLeaseCases"
@@ -897,6 +917,11 @@ def caseCoverage : List CoverageEntry :=
       "RuntimeReconcileCases"
       "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases"
       "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "claude_platform_cases"
+      "ClaudePlatformCases"
+      "document_config::claude_platform_tests::generated_claude_platform_cases_match_the_lean_owner")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "catalog_refresh_cases"
@@ -2435,6 +2460,31 @@ def caseCoverage : List CoverageEntry :=
       "prompt_assembly_cases"
       "PromptAssemblyClaudeBodyCases"
       "conformance::prompt_assembly::generated_claude_body_cases_drive_the_body_builder")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeAttributionCases"
+      "gents_claude::attribution::tests::generated_attribution_cases_render_the_header")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeCacheCases"
+      "gents_claude::cache::tests::generated_cache_cases_place_the_breakpoint")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeOriginCases"
+      "gents_claude::origin::tests::generated_origin_cases_pick_the_wire_mode")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeFieldCases"
+      "gents_claude::body::tests::generated_field_cases_decide_the_body_fields")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeFieldRowCases"
+      "gents_claude::body::tests::generated_field_row_cases_place_the_per_turn_row")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"

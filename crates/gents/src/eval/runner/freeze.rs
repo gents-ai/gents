@@ -8,7 +8,7 @@ use crate::config_client::{
     desired_state_document_digest, read_desired_state_record_in_txn, ConfigAccess,
 };
 use crate::document_config::{
-    BackendAuth, EvalDefinition, EvalSplit, InferenceBackend, InferenceExecution, InferenceProfile,
+    EvalDefinition, EvalSplit, InferenceBackend, InferenceExecution, InferenceProfile,
     InferenceRetryPolicy, InferenceSampling, PackConfig,
 };
 use crate::eval::checks::CHECK_REGISTRY_VERSION;
@@ -645,7 +645,7 @@ async fn inference_binding(
             None => None,
         };
 
-    if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
+    if backend.auth.uses_node_oauth() {
         return Err(refused(format!(
             "backend {:?} authenticates with node_oauth; an eval run must not \
              spend the launching principal's subscription credential",
