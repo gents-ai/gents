@@ -153,6 +153,17 @@ export function OpenSessionComposer({
   const questions = useUnansweredQuestions(questionScope);
   const questionsKey = questions.map((q) => q.itemId).join(" ");
   const [typingFor, setTypingFor] = useState<string | null>(null);
+  /* a question that arrives while the person writes waits beside the
+     composer, so it neither hides their draft nor reads their next key as a
+     pick; the composer still holds the focus while this renders */
+  const [askedKey, setAskedKey] = useState(questionsKey);
+  if (askedKey !== questionsKey) {
+    setAskedKey(questionsKey);
+    const shown = askedKey !== "" && typingFor !== askedKey && !editing;
+    const writing =
+      draft.trim() !== "" || !!attachmentRoot.current?.contains(document.activeElement);
+    if (questionsKey && !shown && writing) setTypingFor(questionsKey);
+  }
   const asking = questions.length > 0 && typingFor !== questionsKey && !editing;
   const draftKey = useView((view) => view.draftKey);
   const [field, setField] = useDraftField(drafts, draftKey);
