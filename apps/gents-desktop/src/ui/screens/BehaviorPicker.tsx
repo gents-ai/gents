@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Package, Plus, Search, X } from "lucide-react";
+import { ChevronDown, Package, Plus, Search } from "lucide-react";
 import type { NodeView } from "../../hooks/fleetStore";
 import { Button } from "@gents/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
@@ -49,18 +49,15 @@ function MountedAgentPicker({
 }) {
   const readOnly = useNodeConfigReadOnly(deployment);
   const [query, setQuery] = useState("");
-  const [searching, setSearching] = useState(false);
   const [creating, setCreating] = useState(false);
   // Wait for the popover's exit animation so two dialogs are never open at once.
   const createAfterClose = useRef(false);
-  const popover = useExclusivePopover(() => {
-    setQuery("");
-    setSearching(false);
-  });
+  const popover = useExclusivePopover(() => setQuery(""));
   const input = useRef<HTMLInputElement>(null);
+  /* the field takes what the person types from the moment the list opens */
   useEffect(() => {
-    if (searching) input.current?.focus();
-  }, [searching]);
+    if (popover.open) input.current?.focus();
+  }, [popover.open]);
   const describe = (id: string) =>
     deployment.agents.find((b) => b.agentId === id)?.description ?? "";
   const readiness = (id: string) => agentReadiness(deployment, id);
@@ -161,51 +158,38 @@ function MountedAgentPicker({
           aria-label="Choose agent"
           align="start"
           className="w-[min(40rem,calc(100vw-4rem))] p-0"
-          onKeyDown={(e) => {
-            if (
-              !searching &&
-              e.key.length === 1 &&
-              !e.metaKey &&
-              !e.ctrlKey &&
-              !e.altKey
-            ) {
-              setSearching(true);
-              setQuery(e.key);
-              e.preventDefault();
-            }
-          }}
         >
-          {searching && (
-            <div className="flex items-center gap-2 border-b border-border/60 px-3">
-              <Search className="size-3.5 text-muted-foreground" />
-              <input
-                ref={input}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    e.stopPropagation();
-                    setQuery("");
-                    setSearching(false);
-                  }
-                }}
-                placeholder="Search agents"
-                aria-label="Search agents"
-                className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-              />
-              <button
-                type="button"
-                aria-label="Close search"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => {
+          <div className="flex items-center gap-2 border-b border-border/60 py-1 pr-1 pl-3">
+            <Search aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              ref={input}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                /* the first Escape clears a search; the next closes the list */
+                if (e.key === "Escape" && query) {
+                  e.stopPropagation();
                   setQuery("");
-                  setSearching(false);
-                }}
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          )}
+                }
+              }}
+              placeholder="Search agents"
+              aria-label="Search agents"
+              className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Create new agent"
+              title={readOnly ?? "Create new agent"}
+              disabled={Boolean(readOnly)}
+              onClick={() => {
+                createAfterClose.current = true;
+                popover.onOpenChange(false);
+              }}
+            >
+              <Plus />
+            </Button>
+          </div>
           <ScrollArea className="max-h-[min(20rem,calc(var(--available-height)-8rem))] [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
             <ul role="listbox" aria-label="Agent" className="p-1">
               {own.map(row)}
@@ -245,33 +229,6 @@ function MountedAgentPicker({
               )}
             </ul>
           </ScrollArea>
-          <div className="flex items-center border-t border-border/60 p-1">
-            <button
-              type="button"
-              disabled={Boolean(readOnly)}
-              title={readOnly ?? undefined}
-              onClick={() => {
-                createAfterClose.current = true;
-                popover.onOpenChange(false);
-              }}
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-accent disabled:cursor-default disabled:opacity-50"
-            >
-              <span className="grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
-                <Plus className="size-3.5" />
-              </span>
-              Create new agent
-            </button>
-            {!searching && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Search agents"
-                onClick={() => setSearching(true)}
-              >
-                <Search />
-              </Button>
-            )}
-          </div>
         </PopoverContent>
       </Popover>
       {!readOnly && (
