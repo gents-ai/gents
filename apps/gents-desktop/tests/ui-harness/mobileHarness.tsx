@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Button } from "@gents/ui/components/button";
 import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@gents/ui/components/sheet";
 import { useMobileVisualViewport } from "../../src/hooks/useMobileVisualViewport";
@@ -8,6 +9,7 @@ import { EditorSheet } from "../../src/ui/screens/agent/EditorSheet";
 import "../../src/App.css";
 
 function MobileHarness() {
+  const [presses, setPresses] = useState(0);
   const [backs, setBacks] = useState(0);
   const [editor, setEditor] = useState(false);
   const [dialog, setDialog] = useState(false);
@@ -17,6 +19,8 @@ function MobileHarness() {
   return (
     <div className="viewport-frame overflow-y-auto p-4">
       <output data-testid="back-count">{backs}</output>
+      <Button onClick={() => setPresses((n) => n + 1)}>Press target</Button>
+      <output data-testid="press-count">{presses}</output>
       <button onClick={() => setEditor(true)}>Open editor</button>
       <button onClick={() => setDialog(true)}>Open dialog</button>
       <button onClick={() => setBottom(true)}>Open bottom sheet</button>

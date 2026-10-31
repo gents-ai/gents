@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, gotoHarness, openChat, test } from "./desktopTest";
 
 async function keyboard(page: Page, height = 300, top = 50) {
   await page.evaluate(
@@ -169,4 +169,90 @@ test("reading away from a focused field survives viewport scroll notifications",
   expect(await field.evaluate((el) => el.closest(".overflow-y-auto")!.scrollTop)).toBe(
     0,
   );
+});
+
+test("the app frame and portals share the panned visual viewport", async ({ page }) => {
+  await keyboard(page, 300, 50);
+  const frame = page.locator(".viewport-frame");
+  await expect
+    .poll(() => frame.evaluate((el) => Math.round(el.getBoundingClientRect().top)))
+    .toBe(50);
+  await expect
+    .poll(() => frame.evaluate((el) => Math.round(el.getBoundingClientRect().bottom)))
+    .toBe(350);
+  await page.evaluate(() => {
+    Object.defineProperties(window.visualViewport, {
+      width: { configurable: true, value: 360 },
+      offsetLeft: { configurable: true, value: 15 },
+    });
+    window.visualViewport!.dispatchEvent(new Event("resize"));
+  });
+  await expect
+    .poll(() => frame.evaluate((el) => Math.round(el.getBoundingClientRect().left)))
+    .toBe(15);
+  await expect
+    .poll(() => frame.evaluate((el) => Math.round(el.getBoundingClientRect().right)))
+    .toBe(375);
+  await page.getByRole("button", { name: "Open dialog", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Mobile dialog" });
+  await expect
+    .poll(() => dialog.evaluate((el) => el.getBoundingClientRect().left))
+    .toBeGreaterThanOrEqual(15);
+  await expect
+    .poll(() => dialog.evaluate((el) => el.getBoundingClientRect().right))
+    .toBeLessThanOrEqual(375);
+  await keyboard(page, 844, 0);
+  await expect
+    .poll(() => frame.evaluate((el) => Math.round(el.getBoundingClientRect().bottom)))
+    .toBe(844);
+});
+
+test.describe("touch targets", () => {
+  test.use({ hasTouch: true, isMobile: true });
+  test("compact controls have room for an imprecise finger", async ({ page }) => {
+    await page.getByRole("button", { name: "Open editor", exact: true }).tap();
+    const close = page.getByRole("button", { name: "Close", exact: true });
+    const box = await close.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    await page.touchscreen.tap(box!.x + 3, box!.y + 3);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+});
+
+test("dragging off a button cancels its press without moving the hit box", async ({
+  page,
+}) => {
+  const target = page.getByRole("button", { name: "Press target", exact: true });
+  const box = (await target.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 1);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width + 50, box.y + box.height + 50);
+  await page.mouse.up();
+  await expect(page.getByTestId("press-count")).toHaveText("0");
+  await page.mouse.click(box.x + box.width / 2, box.y + 1);
+  await expect(page.getByTestId("press-count")).toHaveText("1");
+});
+
+test("the chat composer stays in the visible frame across keyboard resizing", async ({
+  page,
+}) => {
+  await gotoHarness(page);
+  await openChat(page);
+  await keyboard(page, 400, 50);
+  const composer = page.getByTestId("composer");
+  await expect
+    .poll(() => composer.evaluate((el) => el.getBoundingClientRect().bottom))
+    .toBeLessThanOrEqual(450);
+  await expect
+    .poll(() => composer.evaluate((el) => el.getBoundingClientRect().top))
+    .toBeGreaterThanOrEqual(50);
+  await keyboard(page, 844, 0);
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("app-shell")
+        .evaluate((el) => Math.round(el.getBoundingClientRect().bottom)),
+    )
+    .toBe(844);
 });

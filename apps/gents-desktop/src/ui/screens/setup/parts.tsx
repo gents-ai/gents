@@ -35,7 +35,7 @@ export function Frame({
     );
   return (
     <ScrollArea
-      className="viewport-frame relative bg-background text-foreground"
+      className="viewport-frame bg-background text-foreground"
       data-testid="setup-screen"
     >
       <div className="px-8">
