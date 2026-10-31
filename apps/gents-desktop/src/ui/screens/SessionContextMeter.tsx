@@ -16,22 +16,13 @@ import { cn } from "@gents/ui/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { InfoTip } from "./InfoTip";
+import { compactTokens } from "@/lib/tokens";
+import { fullTime, shortTime } from "./TranscriptMarker";
 
 type LastRequest = NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>;
 
 function formatPercent(value: number) {
   return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-}
-
-function trimFixed(value: number, digits: number) {
-  return value.toFixed(digits).replace(/\.0$/, "");
-}
-
-function compactTokens(tokens: number) {
-  if (tokens < 1000) return tokens.toLocaleString();
-  const thousands = tokens / 1000;
-  if (thousands < 999.5) return `${trimFixed(thousands, thousands < 99.95 ? 1 : 0)}k`;
-  return `${trimFixed(tokens / 1_000_000, 1)}M`;
 }
 
 type InputPart = { label: string; tokens: number; color: string };
@@ -583,15 +574,21 @@ export function SessionContext({
                 .map((entry) => (
                   <li key={entry.compactionKey} className="flex justify-between gap-3">
                     <span>
-                      {entry.createdAt ? `${entry.createdAt} · ` : ""}
-                      {entry.messagesCompacted == null
-                        ? "Message count unavailable"
-                        : `${entry.messagesCompacted.toLocaleString()} messages`}
+                      {entry.createdAt && shortTime(entry.createdAt) ? (
+                        <time
+                          dateTime={entry.createdAt}
+                          title={fullTime(entry.createdAt)}
+                        >
+                          {shortTime(entry.createdAt)}
+                        </time>
+                      ) : (
+                        "Compacted"
+                      )}
                     </span>
                     <span className="text-right tabular-nums">
                       {entry.originalTokens == null || entry.compactedTokens == null
                         ? "Token estimates unavailable"
-                        : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
+                        : `${compactTokens(entry.originalTokens)} → ${compactTokens(entry.compactedTokens)}`}
                     </span>
                   </li>
                 ))}

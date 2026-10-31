@@ -487,6 +487,19 @@ pub enum RenderedTimelineItem {
         original_tokens: Option<i64>,
         compacted_tokens: Option<i64>,
         timestamp: Option<String>,
+        /// What the model reads in place of the compacted messages, so the
+        /// person can see what the agent still knows of them.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        summary: Option<String>,
+        /// The files the compacted messages read and modified, as the
+        /// compaction kept them for the model.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        files_read: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        files_modified: Option<Vec<String>>,
     },
     #[serde(rename_all = "camelCase")]
     PendingUserTurn {
