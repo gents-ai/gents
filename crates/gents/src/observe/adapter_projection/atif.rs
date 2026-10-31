@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use gents_protocol::transcript::{normalize_markdown_text, present_message, PresentedMessageRole};
 
-use crate::run_timeline::{
+use crate::observe::run_timeline::{
     RunTimeline, RunTimelineEvent, TimelineMessageEvent, TimelineToolCallEvent,
 };
 
@@ -846,7 +846,7 @@ pub fn root_observed_model(timeline: &RunTimeline) -> Option<String> {
 
 fn root_inference_call(
     timeline: &RunTimeline,
-    call: &crate::run_timeline::TimelineInferenceCallRow,
+    call: &crate::observe::run_timeline::TimelineInferenceCallRow,
 ) -> bool {
     match timeline.request_doc_id.as_deref() {
         Some(request_doc_id) => call.request_doc_id.as_deref() == Some(request_doc_id),

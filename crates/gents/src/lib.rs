@@ -5,7 +5,6 @@ extern crate self as gents;
 #[path = "../tests/support/mod.rs"]
 pub(crate) mod support;
 
-pub mod adapter_projection;
 pub mod agent;
 pub mod codex_shim_binding;
 pub(crate) mod completion_factory;
@@ -13,23 +12,21 @@ pub mod documents;
 pub mod drop_cleanup;
 pub mod error;
 pub mod eval;
-pub mod external_adapter_capture;
 pub mod failure_text;
 pub mod file_inventory;
 pub mod file_lock;
 pub mod goal;
 pub mod inference;
-pub mod inference_observation;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
 pub mod native_logging;
 mod node_readiness_publisher;
+pub mod observe;
 pub mod openai_wire;
 pub mod p2p_observability;
 pub mod pack;
 pub mod plugin;
 pub(crate) mod provider_input;
-pub mod ux_data;
 pub use gents_loop::provider_input::ProviderInputProfile;
 pub mod provider_budget {
     pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
@@ -275,7 +272,6 @@ pub(crate) mod test_support {
          <function=describe_tool>\", \"raw_schema\": false, \
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
-pub mod log_rate;
 pub mod oneshot;
 pub mod periodic_recovery;
 pub mod prompt;
@@ -288,29 +284,14 @@ pub use request::admission::{
     verify_request_receipt_signature, SIGNED_REQUEST_FIELDS,
 };
 pub mod retry;
-pub mod run_timeline;
-pub mod run_timeline_fetch;
 pub mod runtime_service;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
-pub(crate) mod runtime_trace;
 pub mod session;
 pub mod tools;
-pub mod trace_export;
 pub mod triggers;
 pub mod truncation;
 
-pub use adapter_projection::{
-    adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
-    adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, adapter_projection_native_json,
-    adapter_projection_native_json_schema, build_adapter_projection,
-    validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
-    AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
-    AdapterProjectionKind, AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
-    AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
-    ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
-};
 pub use agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
@@ -331,10 +312,6 @@ pub use documents::{
     AgentTargetDocument, ConfigReferences, DatastoreToolSurfaceDocument, InferenceProfile,
     MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
     WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
-};
-pub use external_adapter_capture::{
-    import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,
-    ExternalAdapterMapping, ExternalAdapterSource,
 };
 pub use gents_protocol::client_protocol;
 pub use inference::admission::call_state_holds_backend_slot;
@@ -359,6 +336,27 @@ pub use inference::resolved::{
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+};
+pub use observe::adapter_projection::{
+    adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
+    adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
+    adapter_projection_jsonl_records, adapter_projection_native_json,
+    adapter_projection_native_json_schema, build_adapter_projection,
+    validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
+    AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
+    AdapterProjectionKind, AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
+    AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
+    ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
+};
+pub use observe::external_adapter_capture::{
+    import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,
+    ExternalAdapterMapping, ExternalAdapterSource,
+};
+pub use observe::run_timeline::{
+    build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
+    TimelineGoalParentState, TimelineGoalState, TimelineGoalTransitionEvent,
+    TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,
+    TimelineSessionRow, TimelineToolCallRow,
 };
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use openai_wire::OpenAiWireApi;
@@ -389,12 +387,6 @@ pub use request::lifecycle::{
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use request::watcher::{AgentRequest, DefraWatcher, Watcher};
-pub use run_timeline::{
-    build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
-    TimelineGoalParentState, TimelineGoalState, TimelineGoalTransitionEvent,
-    TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,
-    TimelineSessionRow, TimelineToolCallRow,
-};
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
     ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,

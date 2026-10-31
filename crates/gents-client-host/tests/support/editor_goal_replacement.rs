@@ -355,7 +355,8 @@ pub async fn verify(
     )
     .await?;
     let timeline =
-        gents::run_timeline_fetch::load_run_timeline_rows(access, &openings[2].request_id).await?;
+        gents::observe::run_timeline_fetch::load_run_timeline_rows(access, &openings[2].request_id)
+            .await?;
     for goal in &selected_goals {
         ensure!(
             timeline

@@ -4,13 +4,13 @@ use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::run_timeline::{
+use crate::observe::run_timeline::{
     build_run_timeline, RunActivityRows, RunTimeline, RunTimelineRows, TimelineCompactionRow,
     TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineProviderContextReductionRow, TimelineRenderedRequestRef, TimelineRenderedRequestRow,
     TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow,
 };
-use crate::run_timeline_fetch::event_loaders::resolve_timeline_messages_for_session;
+use crate::observe::run_timeline_fetch::event_loaders::resolve_timeline_messages_for_session;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use gents_protocol::graphql::graphql_rows_from_response;
@@ -154,7 +154,7 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
 async fn name_serving_accounts(
     access: &ConfigAccess,
     node_did: &str,
-    events: &mut [crate::run_timeline::RunTimelineEvent],
+    events: &mut [crate::observe::run_timeline::RunTimelineEvent],
 ) -> Result<()> {
     let accounts = crate::inference::auth::credential::list_accounts(access, node_did).await?;
     let backends = access
@@ -165,7 +165,7 @@ async fn name_serving_accounts(
         })
         .await?;
     for event in events {
-        let crate::run_timeline::RunTimelineEvent::InferenceCall(call) = event else {
+        let crate::observe::run_timeline::RunTimelineEvent::InferenceCall(call) = event else {
             continue;
         };
         let Some(backend) = backends
@@ -856,7 +856,9 @@ mod tests {
             .await
             .expect("load timeline");
         let inference = timeline.events.iter().find_map(|event| match event {
-            crate::run_timeline::RunTimelineEvent::InferenceCall(inference) => Some(inference),
+            crate::observe::run_timeline::RunTimelineEvent::InferenceCall(inference) => {
+                Some(inference)
+            }
             _ => None,
         });
         let inference = inference.expect("inference event");
@@ -968,7 +970,7 @@ mod tests {
                 .events
                 .into_iter()
                 .filter_map(|event| match event {
-                    crate::run_timeline::RunTimelineEvent::InferenceCall(call) => {
+                    crate::observe::run_timeline::RunTimelineEvent::InferenceCall(call) => {
                         Some((call.call_id, call.account))
                     }
                     _ => None,
@@ -1087,7 +1089,9 @@ mod tests {
             .events
             .iter()
             .filter_map(|event| match event {
-                crate::run_timeline::RunTimelineEvent::GoalTransition(event) => Some(event),
+                crate::observe::run_timeline::RunTimelineEvent::GoalTransition(event) => {
+                    Some(event)
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();

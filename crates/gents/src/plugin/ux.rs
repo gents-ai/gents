@@ -86,7 +86,7 @@ pub struct UxListing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_enabled: Option<bool>,
     /// The datastore surfaces and tools the manifest lets its pages call
-    /// (`crate::ux_data`); empty for a dev plugin, which declares nothing.
+    /// (`crate::observe::ux_data`); empty for a dev plugin, which declares nothing.
     #[serde(default)]
     pub data: Vec<UxDataSurface>,
 }

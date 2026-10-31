@@ -8,7 +8,7 @@ use super::{
     ExternalAdapterCapture, ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterView,
     ImportedMessage,
 };
-use crate::run_timeline::{TimelineRequestRow, TimelineToolCallRow};
+use crate::observe::run_timeline::{TimelineRequestRow, TimelineToolCallRow};
 
 pub(super) fn import_langgraph_capture(
     capture: &ExternalAdapterCapture,
@@ -164,7 +164,7 @@ pub(crate) fn langgraph_state_history_projection(
     capture: &ExternalAdapterCapture,
     mapping: &ExternalAdapterMapping,
     session_id: &str,
-) -> Result<crate::adapter_projection::LangGraphStateHistoryProjection> {
+) -> Result<crate::observe::adapter_projection::LangGraphStateHistoryProjection> {
     let latest_snapshot = capture
         .native
         .get("history")

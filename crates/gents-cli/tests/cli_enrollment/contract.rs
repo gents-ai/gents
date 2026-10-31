@@ -1098,12 +1098,12 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 sleep(Duration::from_millis(50)).await;
             }
         }).await.context("waiting for activity request generation")??;
-        let key = gents::inference_observation::InferenceKey {
+        let key = gents::observe::inference_observation::InferenceKey {
             node: node_did.clone(), session: session.clone(), request: request.clone(), generation,
         };
-        let url = format!("http://127.0.0.1:{port}{}", gents::inference_observation::INFERENCE_ACTIVITY_PATH);
+        let url = format!("http://127.0.0.1:{port}{}", gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH);
         let http = reqwest::Client::new();
-        let call = |did: String, key: gents::inference_observation::InferenceKey| {
+        let call = |did: String, key: gents::observe::inference_observation::InferenceKey| {
             let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, &did);
             let request = endpoint.authorize(http.post(&url)).unwrap().json(&key);
             async move { request.send().await }

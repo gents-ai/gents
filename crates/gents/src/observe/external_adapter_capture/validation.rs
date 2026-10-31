@@ -4,7 +4,9 @@ use anyhow::{bail, Result};
 use serde_json::Value;
 
 use super::{ExternalAdapterCapture, ExternalAdapterMapping};
-use crate::adapter_projection::{validate_adapter_projection_contract, AdapterProjectionKind};
+use crate::observe::adapter_projection::{
+    validate_adapter_projection_contract, AdapterProjectionKind,
+};
 
 pub(super) fn validate_external_adapter_capture_mapping(
     capture: &ExternalAdapterCapture,

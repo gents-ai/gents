@@ -198,7 +198,7 @@ pub(crate) fn runtime_contract_router(
             post(crate::http::process_control::process_control_handler),
         )
         .route(
-            gents::inference_observation::INFERENCE_ACTIVITY_PATH,
+            gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH,
             post(crate::http::inference_activity::read),
         )
         .route("/enrollment/decisions", post(enrollment_decision_handler))

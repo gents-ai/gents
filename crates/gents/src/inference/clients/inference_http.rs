@@ -162,7 +162,7 @@ impl<H> SessionTaggingHttpClient<H> {
     {
         Self::tag_with_trace_context_headers(
             req,
-            crate::runtime_trace::current_trace_context_headers(),
+            crate::observe::runtime_trace::current_trace_context_headers(),
         )
     }
 
@@ -182,7 +182,7 @@ impl<H> SessionTaggingHttpClient<H> {
         let (mut parts, body) = req.into_parts();
         Self::inject_headers(
             &mut parts.headers,
-            crate::runtime_trace::current_trace_context_headers(),
+            crate::observe::runtime_trace::current_trace_context_headers(),
         );
         Request::from_parts(parts, body)
     }

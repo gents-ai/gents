@@ -442,13 +442,13 @@ pub async fn plugin_call(
 
 /// Runs one datastore tool the UX plugin listed as `request.ux` declares
 /// (`ux[].data`) on the agent `request.node_did`, through `access`: the
-/// operator's access to that agent's node (see `gents::ux_data`).
+/// operator's access to that agent's node (see `gents::observe::ux_data`).
 pub async fn ux_data_call(
     home: PathBuf,
     access: ConfigAccess,
-    request: gents::ux_data::UxDataCall,
+    request: gents::observe::ux_data::UxDataCall,
 ) -> Result<Value> {
-    gents::ux_data::call(&home, &access, request).await
+    gents::observe::ux_data::call(&home, &access, request).await
 }
 
 /// The surfaces and tools the UX plugin listed as `ux` may call on the
@@ -459,7 +459,7 @@ pub async fn ux_data_surfaces(
     ux: String,
     node_did: String,
 ) -> Result<Value> {
-    gents::ux_data::surfaces(&home, &access, &ux, &node_did).await
+    gents::observe::ux_data::surfaces(&home, &access, &ux, &node_did).await
 }
 
 #[cfg(test)]

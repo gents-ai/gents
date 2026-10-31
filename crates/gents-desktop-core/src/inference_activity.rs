@@ -1,5 +1,5 @@
 use anyhow::Context;
-use gents::inference_observation::{InferenceKey, InferenceSnapshot};
+use gents::observe::inference_observation::{InferenceKey, InferenceSnapshot};
 
 impl crate::client::ClientCore {
     pub async fn read_inference_activity(
@@ -55,7 +55,7 @@ impl crate::client::ClientCore {
             .context("invalid runtime GraphQL endpoint")?;
         url.set_path(&format!(
             "{base}{}",
-            gents::inference_observation::INFERENCE_ACTIVITY_PATH
+            gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH
         ));
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -102,16 +102,16 @@ impl crate::client::ClientCore {
             "runtime inference activity has a different target"
         );
         let activity = match snapshot.activity {
-            gents::inference_observation::InferenceActivity::AwaitingProvider => {
+            gents::observe::inference_observation::InferenceActivity::AwaitingProvider => {
                 crate::client::InferenceActivity::AwaitingProvider
             }
-            gents::inference_observation::InferenceActivity::Working => {
+            gents::observe::inference_observation::InferenceActivity::Working => {
                 crate::client::InferenceActivity::Working
             }
-            gents::inference_observation::InferenceActivity::Waiting => {
+            gents::observe::inference_observation::InferenceActivity::Waiting => {
                 crate::client::InferenceActivity::Waiting
             }
-            gents::inference_observation::InferenceActivity::Retrying => {
+            gents::observe::inference_observation::InferenceActivity::Retrying => {
                 crate::client::InferenceActivity::Retrying
             }
         };

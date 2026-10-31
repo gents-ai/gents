@@ -1257,7 +1257,7 @@ pub struct DefraSessionHook {
     output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
     steering_input_source: Option<Arc<SteeringInputSource>>,
     inference_observation:
-        Option<std::sync::Weak<crate::inference_observation::InferenceObservationGuard>>,
+        Option<std::sync::Weak<crate::observe::inference_observation::InferenceObservationGuard>>,
 }
 
 struct SteeringInputSource {
@@ -1274,7 +1274,7 @@ enum PolicyDecision {
 impl DefraSessionHook {
     pub(crate) fn with_inference_observation(
         mut self,
-        observation: Option<Arc<crate::inference_observation::InferenceObservationGuard>>,
+        observation: Option<Arc<crate::observe::inference_observation::InferenceObservationGuard>>,
     ) -> Self {
         self.inference_observation = observation.as_ref().map(Arc::downgrade);
         self

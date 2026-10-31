@@ -1465,7 +1465,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
         ToolCallHookAction::Skip { .. }
     ));
 
-    let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
         "request-control-result",
     )
@@ -1549,7 +1549,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
         skipped.push((*id, reason));
     }
 
-    let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
         "request-control-results",
     )

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tracing_subscriber::layer::{Context, Filter};
 
-pub const SUMMARY_TARGET: &str = "gents::log_rate";
+pub const SUMMARY_TARGET: &str = "gents::observe::log_rate";
 
 #[derive(Debug, Clone, Copy)]
 pub struct RateLimitConfig {

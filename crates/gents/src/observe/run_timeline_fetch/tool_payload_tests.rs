@@ -1,5 +1,5 @@
 use super::event_loaders::{resolve_tool_payloads, ToolLifecycleObservation};
-use crate::run_timeline::{TimelineMessageRow, TimelineToolCallRow};
+use crate::observe::run_timeline::{TimelineMessageRow, TimelineToolCallRow};
 use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef, TranscriptMessage,

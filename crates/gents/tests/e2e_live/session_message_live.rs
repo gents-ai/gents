@@ -15,7 +15,7 @@ use gents::documents::{
     Tools,
 };
 use gents::goal::{set_goal, GoalStatus};
-use gents::run_timeline_fetch::load_run_timeline_rows;
+use gents::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::native::{

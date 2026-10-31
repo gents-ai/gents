@@ -5,8 +5,8 @@ use serde_json::Value;
 use self::langgraph::import_langgraph_capture;
 use self::multi_agent::import_multi_agent_capture;
 use self::validation::validate_external_adapter_capture_mapping;
-use crate::adapter_projection::{AdapterProjectionEnvelope, AdapterProjectionKind};
-use crate::run_timeline::{TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow};
+use crate::observe::adapter_projection::{AdapterProjectionEnvelope, AdapterProjectionKind};
+use crate::observe::run_timeline::{TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow};
 
 pub(crate) mod langgraph;
 mod multi_agent;

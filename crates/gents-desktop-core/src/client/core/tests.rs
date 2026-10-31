@@ -1883,7 +1883,7 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         core.sync_state.upsert_for_test(record).await.unwrap();
         let operator = core.operator_observation_endpoint(&did).await.unwrap();
         assert_eq!(operator.is_anonymous(), !authenticated, "{case}");
-        let key = gents::inference_observation::InferenceKey {
+        let key = gents::observe::inference_observation::InferenceKey {
             node: did.clone(),
             session: case.into(),
             request: "request".into(),

@@ -1085,7 +1085,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .find(|epoch| epoch.root_request_id == first_id)
         .unwrap();
     assert_eq!(first_epoch.state, "acknowledged_by_successor");
-    let timeline = crate::run_timeline_fetch::load_run_timeline(&access, &first_id)
+    let timeline = crate::observe::run_timeline_fetch::load_run_timeline(&access, &first_id)
         .await
         .unwrap();
     assert_eq!(timeline.background_completions.len(), 2);

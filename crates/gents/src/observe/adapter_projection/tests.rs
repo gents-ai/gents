@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 use std::collections::BTreeSet;
 
-use crate::run_timeline::{
+use crate::observe::run_timeline::{
     build_run_timeline, RunTimelineRows, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
     TimelineToolCallRow,
@@ -52,7 +52,7 @@ fn message_row(
     }
 }
 
-fn timeline_with_captures() -> crate::run_timeline::RunTimeline {
+fn timeline_with_captures() -> crate::observe::run_timeline::RunTimeline {
     let provenance = serde_json::json!({
         "manifest_version": 3,
         "status": "captured_only",
@@ -676,7 +676,7 @@ fn compaction_is_visible_without_fabricating_external_messages() {
             session_id: Some("session-root".to_string()),
             ..Default::default()
         }],
-        compactions: vec![crate::run_timeline::TimelineCompactionRow {
+        compactions: vec![crate::observe::run_timeline::TimelineCompactionRow {
             compaction_key: "session-root:1".to_string(),
             request_id: Some("req-root".to_string()),
             request_doc_id: Some("doc-root".to_string()),
@@ -1294,7 +1294,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     .unwrap()
     .request_id;
     let tool_call_id = message.admission.tool.tool_call_id().to_owned();
-    let rows = crate::run_timeline_fetch::load_run_timeline_rows(
+    let rows = crate::observe::run_timeline_fetch::load_run_timeline_rows(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
         &caller_request_id,
     )
@@ -1310,7 +1310,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
         Some(message.caused_request_id.as_str())
     );
 
-    let timeline = crate::run_timeline::build_run_timeline(rows);
+    let timeline = crate::observe::run_timeline::build_run_timeline(rows);
     let envelope = build_adapter_projection(
         AdapterProjectionKind::AtifTrajectory,
         &timeline,

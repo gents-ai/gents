@@ -176,7 +176,7 @@ pub(super) async fn replay_capture_from_row(
 /// A bad capture is re-read on every request of its session; one warning a
 /// minute, with the suppressed count, keeps it visible without flooding.
 fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
-    use crate::log_rate::{CallsiteRateLimiter, Decision, RateLimitConfig};
+    use crate::observe::log_rate::{CallsiteRateLimiter, Decision, RateLimitConfig};
     static LIMITER: std::sync::LazyLock<std::sync::Mutex<CallsiteRateLimiter<()>>> =
         std::sync::LazyLock::new(|| {
             std::sync::Mutex::new(CallsiteRateLimiter::new(RateLimitConfig {

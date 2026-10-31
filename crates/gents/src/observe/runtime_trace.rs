@@ -59,7 +59,7 @@ pub(crate) fn record_current_claim_outcome(outcome: &'static str) {
 
 pub(crate) fn record_current_failure_class(error: &anyhow::Error) {
     let error_text = error.to_string();
-    let failure_class = crate::trace_export::analyze_request_failure(Some(&error_text))
+    let failure_class = crate::observe::trace_export::analyze_request_failure(Some(&error_text))
         .map(|class| class.as_str())
         .unwrap_or("external");
     tracing::Span::current().record("failure_class", failure_class);

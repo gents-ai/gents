@@ -203,7 +203,7 @@ impl OutputObligationGate {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
-            let calls = crate::run_timeline_fetch::load_accepted_tool_calls(
+            let calls = crate::observe::run_timeline_fetch::load_accepted_tool_calls(
                 &access,
                 &node_did,
                 &session_id,

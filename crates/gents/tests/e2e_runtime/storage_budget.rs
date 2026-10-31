@@ -386,7 +386,7 @@ fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
 async fn load_transcripts(db: &TestDb, node_did: &str) -> Vec<String> {
     let mut transcripts = Vec::new();
     for session in 0..SESSIONS {
-        let messages = gents::trace_export::load_trace_transcript(
+        let messages = gents::observe::trace_export::load_trace_transcript(
             db.node.as_ref(),
             &session_id(session),
             node_did,

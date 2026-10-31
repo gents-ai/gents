@@ -281,13 +281,13 @@ impl ClientCore {
         &self,
         node_did: &str,
         request_id: &str,
-    ) -> Result<gents::run_timeline::RunTimeline> {
+    ) -> Result<gents::observe::run_timeline::RunTimeline> {
         normalize_required("node_did", node_did)?;
         let request_id = normalize_required("request_id", request_id)?;
         let access = gents::store::config_client::ConfigAccess::local(self.node_arc());
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
-            gents::run_timeline_fetch::load_run_timeline(&access, request_id),
+            gents::observe::run_timeline_fetch::load_run_timeline(&access, request_id),
         )
         .await
         .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?

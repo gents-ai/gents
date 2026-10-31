@@ -4,8 +4,8 @@ use tracing::Instrument;
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
 use crate::inference::admission::{self, AdmissionCallContext, CallKind};
 use crate::inference::compaction;
+use crate::observe::runtime_trace::RequestTraceAttrs;
 use crate::prompt::PromptBuilder;
-use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
 use gents_loop::loop_stream::{provider_messages, provider_view_tagged, TaggedMessage};
 

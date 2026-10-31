@@ -11,12 +11,12 @@ use super::{
 };
 use crate::agent::worker_capacity::{RequestGuard, WorkerTicket};
 use crate::inference::llm::rig_compat::ProviderModel;
+use crate::observe::runtime_trace::{
+    record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
+};
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
 use crate::request::streaming::DefraStreamWriter;
 use crate::request::watcher::AgentRequest;
-use crate::runtime_trace::{
-    record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
-};
 
 impl<M> AgentDaemon<M>
 where

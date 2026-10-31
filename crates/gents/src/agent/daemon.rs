@@ -40,9 +40,9 @@ impl ShutdownDrainFailure {
 use super::runtime::StartupBarrier;
 use crate::inference::compaction::{ReductionEngine, ReductionOptions};
 use crate::inference::resolved::ResolvedAgent;
+use crate::observe::runtime_trace::{record_current_claim_outcome, record_current_request_outcome};
 use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
-use crate::runtime_trace::{record_current_claim_outcome, record_current_request_outcome};
 use crate::tools::call::hook::FailurePolicy;
 
 /// Task hooks and workspace write/integration effects must finish before their
@@ -129,7 +129,7 @@ where
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: crate::tools::call::hook::BackgroundToolRegistry,
     background_execution_registry: crate::tools::call::hook::BackgroundExecutionRegistry,
-    inference_observations: crate::inference_observation::InferenceObservationRegistry,
+    inference_observations: crate::observe::inference_observation::InferenceObservationRegistry,
     remote_tools: Option<crate::documents::RemoteTools>,
     job_tools: rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding>,
     job_driver: Option<Arc<crate::tools::background::job::driver::JobDriver>>,
