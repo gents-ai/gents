@@ -2362,7 +2362,6 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
 /// layer and those below it; the peer tier names none of its siblings.
 /// Root-level modules outside these directories are not ranked.
 const LAYERS: &[&[&str]] = &[
-    &["support"],
     &["store"],
     &["documents"],
     &["inference"],
@@ -2375,7 +2374,7 @@ const LAYERS: &[&[&str]] = &[
     &["eval"],
 ];
 
-const PEER_TIER: usize = 4;
+const PEER_TIER: usize = 3;
 
 /// Upward and peer-crossing `crate::` edges as (from, to, references). The
 /// list only shrinks.

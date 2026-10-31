@@ -84,7 +84,7 @@ Do not duplicate changing versions in instructions.
   and do not add UI-local sync heuristics.
 - Rig is a provider client behind `gents_loop::rig_compat` and
   `gents_loop::provider_input`, re-exported by the inference owner
-  (`llm::rig_compat`) and `provider_input` for callers here. Rig's own types stay inside those two
+  (`llm::rig_compat`) and the turn owner (`provider_input`) for callers here. Rig's own types stay inside those two
   and the loop that drives them (`gents_loop::loop_stream`); runtime owners
   use their native handles (`ProviderModel`, `ProviderClient`). For now,
   provider transport adapters (the `*_http`, Codex, Claude Messages, xAI and
