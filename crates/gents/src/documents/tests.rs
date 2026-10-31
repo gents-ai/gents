@@ -1,0 +1,1370 @@
+use super::*;
+use crate::store::config_client::write_tools_document;
+
+#[test]
+fn tools_document_accepts_empty_string_arrays_and_null_groups() {
+    let document: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "default-tools",
+        "node_did": "did:test:test",
+        "display_name": "Tools",
+        "host": {
+            "files": {"mode": "ReadOnly"},
+            "bash": {"mode": null},
+            "cli": null
+        },
+        "built_ins": null,
+        "remote": {"services": null}
+    }))
+    .expect("null groups and empty-string arrays should deserialize");
+
+    assert!(document.host.as_ref().unwrap().cli.is_empty());
+    assert!(document.remote.as_ref().unwrap().services.is_empty());
+    assert!(document.built_ins.is_none());
+    assert_eq!(
+        document.host.as_ref().unwrap().files.as_ref().unwrap().mode,
+        crate::tools::surface::FileToolMode::ReadOnly
+    );
+}
+
+#[test]
+fn required_mcp_service_selection_is_explicit_and_unique() {
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "required-mcp",
+        "node_did": "did:key:test",
+        "remote": {"services": [{"mcp_service_id": "research", "tool_names": ["search"], "required": true}]},
+    }))
+    .unwrap();
+    tools.validate().unwrap();
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "required-mcp",
+        "node_did": "did:key:test",
+        "remote": {"services": [
+            {"mcp_service_id": "research", "required": true},
+            {"mcp_service_id": "research"}
+        ]},
+    }))
+    .unwrap();
+    let error = tools.validate().unwrap_err().to_string();
+    assert!(
+        error.contains("remote.services") && error.contains("duplicate name"),
+        "duplicate service ids must be rejected: {error}"
+    );
+}
+
+#[test]
+fn validate_rejects_blank_agent_target_ids() {
+    let doc = Tools {
+        tools_id: "test-tools".to_string(),
+        node_did: "did:test:test".to_string(),
+        agents: Some(AgentTools {
+            target_ids: vec!["".to_string()],
+            enabled: Some(true),
+        }),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err());
+    assert!(
+        format!("{}", result.unwrap_err()).contains("agents.target_ids"),
+        "error message must mention agents.target_ids"
+    );
+}
+
+fn validate_write_tools(decls: &[WriteToolDecl]) -> anyhow::Result<()> {
+    super::write_tool::validate_write_tool_declarations(decls, &[], &[])
+}
+
+#[test]
+fn validate_rejects_write_tool_with_empty_tool_name() {
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        tool_name: "   ".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: None,
+    }];
+    let result = validate_write_tools(&decls);
+    assert!(result.is_err(), "empty tool_name must be rejected");
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("write_tools") && err.contains("malformed"),
+        "error message must mention write_tools and the malformed declaration: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_invalid_write_tool_collection_identifiers() {
+    for collection in ["  ", "ActionRequest) { _docID } mutation {"] {
+        let decls = vec![WriteToolDecl {
+            notification: None,
+            tool_name: "request_action".to_string(),
+            collection: collection.to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+            output_obligation: None,
+        }];
+        let err = validate_write_tools(&decls)
+            .expect_err("invalid collection identifier must be rejected")
+            .to_string();
+        assert!(
+            err.contains("write_tools")
+                && err.contains("request_action")
+                && err.contains("invalid collection"),
+            "error must identify the declaration and invalid collection: {err}"
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_invalid_write_tool_field_identifiers() {
+    for field_name in ["  ", "title: \"escaped\""] {
+        let decls = vec![WriteToolDecl {
+            notification: None,
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: String::new(),
+            fields: vec![WriteToolField {
+                name: field_name.to_string(),
+                required: true,
+                fill: None,
+            }],
+            output_obligation: None,
+        }];
+        let err = validate_write_tools(&decls)
+            .expect_err("invalid field identifier must be rejected")
+            .to_string();
+        assert!(
+            err.contains("write_tools")
+                && err.contains("request_action")
+                && err.contains("invalid field[0] name"),
+            "error must identify the declaration and invalid field: {err}"
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_model_provided_requester_identity() {
+    let mut decl = WriteToolDecl {
+        notification: None,
+        tool_name: "write_gate".to_string(),
+        collection: "GraphGate".to_string(),
+        description: String::new(),
+        fields: vec![WriteToolField {
+            name: "requester_did".to_string(),
+            required: true,
+            fill: None,
+        }],
+        output_obligation: None,
+    };
+    assert!(decl
+        .validate()
+        .expect_err("models must not choose requester identity")
+        .to_string()
+        .contains("must be runtime-filled"));
+
+    decl.fields[0].required = false;
+    decl.fields[0].fill = Some(WriteToolFieldFill::SourceField("requester_did".to_string()));
+    assert!(decl.validate().is_ok());
+}
+
+#[test]
+fn validate_rejects_duplicate_write_tool_names() {
+    let decl = |collection: &str| WriteToolDecl {
+        notification: None,
+        tool_name: "request_action".to_string(),
+        collection: collection.to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: None,
+    };
+    let decls = vec![decl("ActionRequest"), decl("OtherCollection")];
+    let result = validate_write_tools(&decls);
+    assert!(result.is_err(), "duplicate tool_name must be rejected");
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("write_tools") && err.contains("request_action"),
+        "error must name write_tools and the duplicated tool: {err}"
+    );
+}
+
+#[test]
+fn validate_accepts_well_formed_write_tools() {
+    let decls = vec![
+        WriteToolDecl {
+            notification: None,
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: "Request an action".to_string(),
+            fields: vec![WriteToolField {
+                name: "title".to_string(),
+                required: true,
+                fill: None,
+            }],
+            output_obligation: None,
+        },
+        WriteToolDecl {
+            notification: None,
+            tool_name: "log_note".to_string(),
+            collection: "Note".to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+            output_obligation: None,
+        },
+    ];
+    assert!(
+        validate_write_tools(&decls).is_ok(),
+        "well-formed, uniquely-named write_tools must validate"
+    );
+}
+
+#[test]
+fn write_tool_output_obligation_round_trips_and_rejects_zero_minimum() {
+    let value = serde_json::json!({
+        "tool_name": "write_result",
+        "collection": "Result",
+        "description": "Persist the request output.",
+        "fields": [{"name": "expected_total", "required": true}],
+        "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1,
+            "expected_count_field": "expected_total"
+        }
+    });
+    let decl: WriteToolDecl = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decl).unwrap(), value);
+
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        output_obligation: Some(WriteToolOutputObligation {
+            scope: WriteToolOutputObligationScope::Trigger,
+            minimum_writes: 0,
+            expected_count_field: None,
+        }),
+        ..decl
+    }];
+    let error = validate_write_tools(&decls).unwrap_err().to_string();
+    assert!(error.contains("minimum_writes"));
+}
+
+#[test]
+fn dynamic_output_obligation_requires_a_model_provided_required_field() {
+    for fields in [
+        vec![WriteToolField {
+            name: "expected_total".to_string(),
+            required: false,
+            fill: None,
+        }],
+        vec![WriteToolField {
+            name: "expected_total".to_string(),
+            required: false,
+            fill: Some(WriteToolFieldFill::SourceField(
+                "expected_total".to_string(),
+            )),
+        }],
+    ] {
+        let decls = vec![WriteToolDecl {
+            notification: None,
+            tool_name: "write_result".to_string(),
+            collection: "Result".to_string(),
+            description: String::new(),
+            fields,
+            output_obligation: Some(WriteToolOutputObligation {
+                scope: WriteToolOutputObligationScope::Trigger,
+                minimum_writes: 1,
+                expected_count_field: Some("expected_total".to_string()),
+            }),
+        }];
+        assert!(validate_write_tools(&decls)
+            .unwrap_err()
+            .to_string()
+            .contains("expected_count_field"));
+    }
+}
+
+#[test]
+fn validate_rejects_write_tool_name_colliding_with_builtin() {
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        tool_name: "read_file".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: vec![WriteToolField {
+            name: "path".to_string(),
+            required: true,
+            fill: None,
+        }],
+        output_obligation: None,
+    }];
+    let result = validate_write_tools(&decls);
+    assert!(
+        result.is_err(),
+        "collision with a native tool must be rejected"
+    );
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("read_file") && err.contains("built-in"),
+        "error must name the colliding tool and the reason: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_write_tool_name_colliding_with_defra_query() {
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        tool_name: "query".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: None,
+    }];
+    assert!(
+        validate_write_tools(&decls).is_err(),
+        "collision with the built-in defra_query tool must be rejected"
+    );
+}
+
+#[test]
+fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        tool_name: "rg".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: None,
+    }];
+    let cli_tool_names = vec!["rg".to_string()];
+    let result = super::write_tool::validate_write_tool_declarations(&decls, &cli_tool_names, &[]);
+    assert!(
+        result.is_err(),
+        "collision with a host.cli entry must be rejected"
+    );
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("rg") && err.contains("CLI entry"),
+        "error must name the colliding tool and the category: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_field_names_within_decl() {
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        tool_name: "request_action".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: String::new(),
+        fields: vec![
+            WriteToolField {
+                name: "summary".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "summary".to_string(),
+                required: false,
+                fill: None,
+            },
+        ],
+        output_obligation: None,
+    }];
+    let result = validate_write_tools(&decls);
+    assert!(result.is_err(), "duplicate field names must be rejected");
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("request_action") && err.contains("summary"),
+        "error must name the tool and the duplicated field: {err}"
+    );
+}
+
+#[test]
+fn reserved_names_cover_native_and_meta_tools() {
+    use crate::tools::native::NativeTool;
+
+    let native = [
+        NativeTool::ListFiles { max_entries: 1 },
+        NativeTool::ReadFile { max_chars: 1 },
+        NativeTool::Glob { max_matches: 1 },
+        NativeTool::Grep { max_matches: 1 },
+        NativeTool::WriteFile {
+            root: std::path::PathBuf::from("/tmp"),
+        },
+        NativeTool::EditFile {
+            root: std::path::PathBuf::from("/tmp"),
+        },
+    ];
+    for tool in &native {
+        assert!(
+            NativeTool::ALL_NAMES.contains(&tool.tool_name().as_str()),
+            "native tool {:?} missing from NativeTool::ALL_NAMES",
+            tool.tool_name()
+        );
+        assert!(
+            is_reserved_builtin_tool_name(&tool.tool_name()),
+            "native tool {:?} must be reserved",
+            tool.tool_name()
+        );
+    }
+    for name in NativeTool::ALL_NAMES {
+        assert!(
+            is_reserved_builtin_tool_name(name),
+            "registry name {name:?} must be reserved"
+        );
+    }
+    assert!(is_reserved_builtin_tool_name("bash"));
+    assert!(is_reserved_builtin_tool_name("bash_unrestricted"));
+    assert!(is_reserved_builtin_tool_name("lsp"));
+
+    for meta in crate::tools::mcp::meta::META_TOOL_NAMES {
+        assert!(
+            is_reserved_builtin_tool_name(meta),
+            "meta tool {meta:?} must be reserved"
+        );
+    }
+    for goal in [
+        crate::goal::CREATE_GOAL_TOOL_NAME,
+        crate::goal::GET_GOAL_TOOL_NAME,
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+    ] {
+        assert!(
+            is_reserved_builtin_tool_name(goal),
+            "goal tool {goal:?} must be reserved"
+        );
+    }
+
+    assert!(!is_reserved_builtin_tool_name("request_action"));
+}
+
+#[cfg(feature = "agent-memory")]
+#[test]
+fn memory_tool_name_is_reserved() {
+    assert!(is_reserved_builtin_tool_name(
+        crate::tools::native::MEMORY_TOOL_NAME
+    ));
+}
+
+#[test]
+fn write_tools_deserialize_trims_whitespace() {
+    let json = serde_json::json!([{
+        "tool_name": "  request_action  ",
+        "collection": " ActionRequest ",
+        "fields": [{ "name": "  summary  ", "required": true }]
+    }]);
+    let loaded = super::deserialize_dual_shape::<WriteToolDecl>(Some(json), "write_tools").unwrap();
+    let decl = &loaded[0];
+    assert_eq!(decl.tool_name, "request_action");
+    assert_eq!(decl.collection, "ActionRequest");
+    assert_eq!(decl.fields[0].name, "summary");
+}
+
+#[test]
+fn stored_built_ins_with_retired_key_decode() {
+    let stored: BuiltInTools = serde_json::from_value(
+        serde_json::json!({"enable_graph_tools": true, "enable_memory": true}),
+    )
+    .expect("a stored built_ins with the retired key decodes");
+    let written = serde_json::to_value(&stored).unwrap();
+    assert_eq!(written, serde_json::json!({"enable_memory": true}));
+    let without: BuiltInTools =
+        serde_json::from_value(serde_json::json!({"enable_memory": true})).unwrap();
+    assert_eq!(stored, without);
+}
+
+#[tokio::test]
+async fn tools_document_round_trips_defra_query_fields() {
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = Tools {
+        tools_id: "amy-general-tools".to_string(),
+        node_did: "did:key:z-test".to_string(),
+        built_ins: Some(BuiltInTools {
+            enable_session_history_tool: Some(true),
+            ..Default::default()
+        }),
+        datastore: Some(DatastoreTools {
+            enable_defra_query: Some(false),
+            defra_query_collections: Some(vec![
+                "AgentRequest".to_string(),
+                "AgentResponse".to_string(),
+            ]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let access = crate::store::config_client::ConfigAccess::local(node);
+    write_tools_document(&access, &doc)
+        .await
+        .expect("write should persist the defra_query fields");
+
+    let loaded: Tools = access
+        .transact_write("test.tools.read", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &doc.node_did,
+                    &doc.tools_id,
+                )
+                .await?
+                .map(|(_, value)| {
+                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                })
+                .transpose()
+            })
+        })
+        .await
+        .expect("read should succeed")
+        .expect("tools should exist");
+    assert_eq!(
+        loaded
+            .built_ins
+            .as_ref()
+            .unwrap()
+            .enable_session_history_tool,
+        Some(true)
+    );
+    assert_eq!(
+        loaded.datastore.as_ref().unwrap().enable_defra_query,
+        Some(false)
+    );
+    assert_eq!(
+        loaded.datastore.as_ref().unwrap().defra_query_collections,
+        Some(vec![
+            "AgentRequest".to_string(),
+            "AgentResponse".to_string()
+        ])
+    );
+}
+
+#[tokio::test]
+async fn tools_update_can_clear_lsp_config() {
+    let node = crate::test_support::node_builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let lsp = |config: Option<String>| Tools {
+        tools_id: "lsp-config-clear".to_string(),
+        node_did: "did:key:z-lsp-config-clear".to_string(),
+        integrations: Some(IntegrationTools {
+            lsp: config.map(|config| LspTools {
+                config: Some(config),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let doc = lsp(Some(r#"{"idle_timeout_ms":1000}"#.to_string()));
+    write_tools_document(&access, &doc).await.unwrap();
+    async fn read(
+        access: &crate::store::config_client::ConfigAccess,
+    ) -> anyhow::Result<Option<Tools>> {
+        access
+            .transact_write("test.tools.read", |txn| {
+                Box::pin(async move {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        "did:key:z-lsp-config-clear",
+                        "lsp-config-clear",
+                    )
+                    .await?
+                    .map(|(_, value)| {
+                        serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                    })
+                    .transpose()
+                })
+            })
+            .await
+    }
+    let loaded: Tools = read(&access).await.unwrap().unwrap();
+    assert_eq!(
+        loaded
+            .integrations
+            .as_ref()
+            .unwrap()
+            .lsp
+            .as_ref()
+            .unwrap()
+            .config,
+        Some(r#"{"idle_timeout_ms":1000}"#.to_string())
+    );
+
+    write_tools_document(&access, &lsp(None)).await.unwrap();
+    let cleared: Tools = read(&access).await.unwrap().unwrap();
+    let cleared_config = cleared
+        .integrations
+        .as_ref()
+        .unwrap()
+        .lsp
+        .as_ref()
+        .and_then(|lsp| lsp.config.as_deref());
+    assert!(
+        cleared_config.is_none_or(str::is_empty),
+        "removing lsp config from desired state must clear the stored override: {:?}",
+        cleared_config
+    );
+}
+
+#[tokio::test]
+async fn tools_document_round_trips_read_only_commands() {
+    let node = crate::test_support::node_builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = Tools {
+        tools_id: "steward-readonly-allowlist".to_string(),
+        node_did: "did:key:z-test-allowlist".to_string(),
+        host: Some(HostTools {
+            bash: Some(BashTools {
+                read_only_commands: Some(vec!["jq".to_string(), "echo".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    write_tools_document(&access, &doc)
+        .await
+        .expect("write should persist the read_only_commands field");
+
+    let loaded: Tools = access
+        .transact_write("test.tools.read", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &doc.node_did,
+                    &doc.tools_id,
+                )
+                .await?
+                .map(|(_, value)| {
+                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                })
+                .transpose()
+            })
+        })
+        .await
+        .expect("read should succeed")
+        .expect("tools should exist");
+    assert_eq!(
+        loaded
+            .host
+            .as_ref()
+            .unwrap()
+            .bash
+            .as_ref()
+            .unwrap()
+            .read_only_commands,
+        Some(vec!["jq".to_string(), "echo".to_string()]),
+    );
+}
+
+#[tokio::test]
+async fn tools_document_round_trips_write_tools() {
+    let node = crate::test_support::node_builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        tool_name: "request_action".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: "Emit one ActionRequest describing a remediable drift.".to_string(),
+        fields: vec![
+            WriteToolField {
+                name: "drift_sig".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "summary".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "target_paths".to_string(),
+                required: false,
+                fill: None,
+            },
+        ],
+        output_obligation: None,
+    }];
+    let tools = Tools {
+        tools_id: "steward-write-tools".to_string(),
+        node_did: "did:key:z-test-write".to_string(),
+        datastore: Some(DatastoreTools {
+            datastore_tool_surface_ids: Some(vec!["surface".to_string()]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
+        "surface_id": "surface",
+        "node_did": "did:key:z-test-write",
+        "entries": decls,
+    }))
+    .unwrap();
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::DatastoreToolSurface,
+            add: serde_json::to_value(&surface).unwrap(),
+            update: serde_json::to_value(&surface).unwrap(),
+        },
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: serde_json::to_value(&tools).unwrap(),
+            update: serde_json::to_value(&tools).unwrap(),
+        },
+    ])
+    .unwrap();
+    access
+        .transact_write("test.tools.write", |txn| {
+            let plan = &plan;
+            let tools = &tools;
+            let surface = &surface;
+            let decls = &decls;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                let merged = super::merge_datastore_tool_surfaces(tools, [surface])?;
+                assert_eq!(
+                    merged.write_tools, *decls,
+                    "write_tools must expand from the referenced surface through the desired-state owner"
+                );
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn tools_document_round_trips_session_message_enablement() {
+    let node = crate::test_support::node_builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = Tools {
+        tools_id: "amy-background-tools".to_string(),
+        node_did: "did:key:z-test-background".to_string(),
+        agents: Some(AgentTools {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    write_tools_document(&access, &doc)
+        .await
+        .expect("write should persist the session-message enablement");
+
+    let loaded: Tools = access
+        .transact_write("test.tools.read", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &doc.node_did,
+                    &doc.tools_id,
+                )
+                .await?
+                .map(|(_, value)| {
+                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                })
+                .transpose()
+            })
+        })
+        .await
+        .expect("read should succeed")
+        .expect("tools should exist");
+    assert_eq!(loaded.agents.as_ref().unwrap().enabled, Some(true));
+}
+
+#[tokio::test]
+async fn agent_description_round_trip_with_explicit_owner_fixture() {
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let node_did = "did:key:z-test-desc";
+    crate::test_support::install_test_agent(&node, node_did, "amy-general").await;
+
+    let authored = serde_json::json!({
+        "agent_id": "amy-general",
+        "node_did": node_did,
+        "display_name": "Amy General",
+        "description": "A general-purpose assistant for research and writing.",
+        "context_id": null,
+        "inference_profile_id": "amy-general:inference",
+        "tags": null,
+    });
+    let sparse: Agent = serde_json::from_value(authored.clone()).unwrap();
+    assert_eq!(
+        sparse.context_id, None,
+        "null context_id must decode to None"
+    );
+    assert!(
+        sparse.tags.is_empty(),
+        "null tags must decode to the empty default"
+    );
+    assert!(sparse.enabled, "omitted enabled must default to true");
+    assert_eq!(
+        serde_json::to_value(&sparse).unwrap(),
+        serde_json::json!({
+            "agent_id": "amy-general",
+            "node_did": node_did,
+            "display_name": "Amy General",
+            "description": "A general-purpose assistant for research and writing.",
+            "inference_profile_id": "amy-general:inference",
+        })
+    );
+
+    let doc = Agent {
+        agent_id: "amy-general".to_string(),
+        node_did: node_did.to_string(),
+        display_name: Some("Amy General".to_string()),
+        description: Some("A general-purpose assistant for research and writing.".to_string()),
+        context_id: Some("amy-general:context".to_string()),
+        inference_profile_id: "amy-general:inference".to_string(),
+        enabled: true,
+        tags: Vec::new(),
+        created_at: None,
+    };
+    upsert_agent(&node, &doc)
+        .await
+        .expect("upsert should persist description fields");
+
+    let loaded = load_agent(&node, "amy-general")
+        .await
+        .expect("load should succeed")
+        .expect("agent should exist after upsert");
+    assert_eq!(
+        loaded.description,
+        Some("A general-purpose assistant for research and writing.".to_string()),
+    );
+    assert_eq!(loaded.context_id, doc.context_id);
+    assert_eq!(loaded.inference_profile_id, doc.inference_profile_id);
+    assert!(loaded.enabled);
+}
+
+fn access_node(
+    access: &crate::store::config_client::ConfigAccess,
+) -> &std::sync::Arc<defra_node::EmbeddedNode> {
+    access.local_node().expect("test helpers use local access")
+}
+
+#[tokio::test]
+async fn inference_retry_policy_fields_round_trip() {
+    let node = crate::test_support::node_builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let retry = InferenceRetryPolicy {
+        node_did: "did:key:z-test-retry".to_string(),
+        retry_policy_id: "retry-policy".to_string(),
+        display_name: Some("Retry Policy".to_string()),
+        max_transport_retries: Some(4),
+        backoff_ms: Some(vec![1_000, 5_000, 30_000]),
+        max_resample_retries: Some(2),
+        allow_repair: Some(false),
+        interactive_max_retries: Some(2),
+        ..Default::default()
+    };
+    let backend: crate::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
+        "node_did": "did:key:z-test-retry",
+        "backend_id": "backend",
+        "name": "Local",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:1/v1",
+        "auth": {"kind": "unauthenticated"}
+    }))
+    .unwrap();
+    let profile = InferenceProfile {
+        node_did: "did:key:z-test-retry".to_string(),
+        profile_id: "retry-profile".to_string(),
+        display_name: Some("Retry Profile".to_string()),
+        backend_id: "backend".to_string(),
+        model_name: "test-model".to_string(),
+        reasoning_effort: Some(crate::inference::resolved::ReasoningEffort::Max),
+        execution_id: Some("retry-execution".to_string()),
+        ..Default::default()
+    };
+    let execution = InferenceExecution {
+        node_did: "did:key:z-test-retry".to_string(),
+        execution_id: "retry-execution".to_string(),
+        retry_policy_id: Some("retry-policy".to_string()),
+        ..Default::default()
+    };
+
+    let access = crate::store::config_client::ConfigAccess::local(std::sync::Arc::new(node));
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceBackend,
+            add: serde_json::to_value(&backend).unwrap(),
+            update: serde_json::to_value(&backend).unwrap(),
+        },
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceRetryPolicy,
+            add: serde_json::to_value(&retry).unwrap(),
+            update: serde_json::to_value(&retry).unwrap(),
+        },
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceExecution,
+            add: serde_json::to_value(&execution).unwrap(),
+            update: serde_json::to_value(&execution).unwrap(),
+        },
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceProfile,
+            add: serde_json::to_value(&profile).unwrap(),
+            update: serde_json::to_value(&profile).unwrap(),
+        },
+    ])
+    .expect("retry chain plan must be valid");
+    access
+        .transact_write("test.retry_chain.write", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .expect("apply should persist the retry chain");
+
+    let loaded = load_inference_profile(
+        access_node(&access),
+        "did:key:z-test-retry",
+        "retry-profile",
+    )
+    .await
+    .expect("load should succeed")
+    .expect("profile should exist");
+    assert_eq!(
+        loaded.reasoning_effort,
+        Some(crate::inference::resolved::ReasoningEffort::Max)
+    );
+    assert_eq!(loaded.execution_id.as_deref(), Some("retry-execution"));
+}
+
+#[test]
+fn validate_accepts_well_formed_agent_target_documents() {
+    let code_entry = AgentTargetDocument {
+        target_id: "amy-code".to_string(),
+        node_did: "did:key:zParent".to_string(),
+        target_node_did: "did:key:zParent".to_string(),
+        agent_id: "amy-code".to_string(),
+        name: "Code assistant".to_string(),
+        description: None,
+        tags: Vec::new(),
+    };
+    let research_entry = AgentTargetDocument {
+        target_id: "amy-research".to_string(),
+        node_did: "did:key:zParent".to_string(),
+        target_node_did: "did:key:zDestination".to_string(),
+        agent_id: "amy-research".to_string(),
+        name: "amy-research".to_string(),
+        description: None,
+        tags: Vec::new(),
+    };
+    for entry in [&code_entry, &research_entry] {
+        let value = serde_json::to_value(entry).unwrap();
+        assert_eq!(
+            serde_json::from_value::<AgentTargetDocument>(value).unwrap(),
+            *entry
+        );
+    }
+    let doc = Tools {
+        tools_id: "test-tools".to_string(),
+        node_did: "did:test:test".to_string(),
+        agents: Some(AgentTools {
+            target_ids: vec!["amy-code".to_string(), "amy-research".to_string()],
+            enabled: Some(true),
+        }),
+        ..Default::default()
+    };
+    assert!(
+        doc.validate().is_ok(),
+        "well-formed agent target references must be accepted"
+    );
+}
+
+#[test]
+fn tools_validation_reports_every_violation() {
+    let doc: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "invalid-tools",
+        "node_did": "did:test:test",
+        "host": {"bash": {"mode": "ReadOnly", "max_output_chars": 0}},
+        "agents": {"target_ids": [""]}
+    }))
+    .unwrap();
+
+    let violations = doc.validation_violations();
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("agents.target_ids")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("host.bash.max_output_chars")));
+}
+
+#[test]
+fn validate_rejects_undeclared_agent_target_reference() {
+    let refs = ConfigReferences::from_documents(
+        "did:test:test",
+        vec![(
+            crate::Collection::Tools,
+            serde_json::json!({
+                "tools_id": "test-tools",
+                "node_did": "did:test:test",
+                "agents": {"target_ids": ["amy-code"], "enabled": true}
+            }),
+        )],
+    )
+    .unwrap();
+    let result = refs.validate();
+    assert!(
+        result.is_err(),
+        "undeclared agent target reference must be rejected"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("agents.target_ids"),
+        "error must mention agents.target_ids; got: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("AgentTarget"),
+        "error must mention the AgentTarget collection; got: {err_msg}"
+    );
+}
+
+#[test]
+fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
+    let correlation: WriteToolField = serde_json::from_value(serde_json::json!({
+        "name": "run_id",
+        "fill": "correlation"
+    }))
+    .expect("correlation fill");
+    assert_eq!(correlation.fill, Some(WriteToolFieldFill::Correlation));
+
+    let source: WriteToolField = serde_json::from_value(serde_json::json!({
+        "name": "expected_total",
+        "fill": {"source_field": "expected_total"}
+    }))
+    .expect("source-field fill");
+    assert_eq!(
+        source.fill,
+        Some(WriteToolFieldFill::SourceField("expected_total".into()))
+    );
+
+    for invalid in [
+        serde_json::json!({"name": "run_id", "fill": "Correlation"}),
+        serde_json::json!({"name": "run_id", "fill": {"source_field": "run-id"}}),
+        serde_json::json!({"name": "run_id", "fill": {"source_field": "run_id", "extra": true}}),
+    ] {
+        assert!(serde_json::from_value::<WriteToolField>(invalid).is_err());
+    }
+
+    let decls = vec![WriteToolDecl {
+        notification: None,
+        tool_name: "write_result".into(),
+        collection: "Result".into(),
+        description: String::new(),
+        fields: vec![WriteToolField {
+            name: "run_id".into(),
+            required: true,
+            fill: Some(WriteToolFieldFill::Correlation),
+        }],
+        output_obligation: None,
+    }];
+    assert!(validate_write_tools(&decls).is_err());
+}
+
+fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
+    use crate::Collection;
+    vec![
+        (
+            Collection::InferenceBackend,
+            serde_json::json!({"node_did":"owner","backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+        ),
+        (
+            Collection::InferenceProfile,
+            serde_json::json!({"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}),
+        ),
+        (
+            Collection::AgentContext,
+            serde_json::json!({"node_did":"owner","context_id":"context","tools_id":"tools","skill_ids":["skill"]}),
+        ),
+        (
+            Collection::Tools,
+            serde_json::json!({"node_did":"owner","tools_id":"tools"}),
+        ),
+        (
+            Collection::Skill,
+            serde_json::json!({"node_did":"owner","skill_id":"skill","name":"Skill","description":"Skill","instructions":"literal"}),
+        ),
+    ]
+}
+
+fn reference_agent() -> Agent {
+    serde_json::from_value(serde_json::json!({"node_did":"owner","agent_id":"agent","context_id":"context","inference_profile_id":"profile"})).unwrap()
+}
+
+#[test]
+fn agent_and_context_share_canonical_reference_closure() {
+    let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
+    reference_agent().validate_references(&refs).unwrap();
+    // Absence invokes context defaults, not an implicit tool or skill set.
+    let mut agent = reference_agent();
+    agent.context_id = None;
+    agent.validate_references(&refs).unwrap();
+    agent.inference_profile_id = "missing".into();
+    assert!(agent
+        .validate_references(&refs)
+        .unwrap_err()
+        .to_string()
+        .contains("InferenceProfile"));
+}
+
+#[test]
+fn default_agent_publication_matches_lean() {
+    use crate::Collection;
+    use serde_json::json;
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let cases = snapshot.configuration_scope_cases["default_agent"]
+        .as_array()
+        .unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let scope = case["scope"].as_str().unwrap();
+        let documents = vec![
+            (
+                Collection::InferenceBackend,
+                json!({"node_did":scope,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+            ),
+            (
+                Collection::InferenceProfile,
+                json!({"node_did":scope,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"node_did":scope,"context_id":"context"}),
+            ),
+            (
+                Collection::Agent,
+                json!({"node_did":case["agent_owner"],"agent_id":case["agent_id"],
+                    "context_id":case["context_id"],"inference_profile_id":"profile",
+                    "enabled":case["enabled"]}),
+            ),
+            (
+                Collection::Node,
+                json!({"node_did":scope,"default_agent_id":case["default_agent_id"]}),
+            ),
+        ];
+        let accepted = ConfigReferences::from_documents(scope, documents)
+            .and_then(|refs| refs.validate())
+            .is_ok();
+        assert_eq!(
+            accepted,
+            case["publishable"].as_bool().unwrap() && case["context_resolves"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn oauth_account_scope_matches_lean() {
+    use crate::inference::auth::credential::{
+        resolve_oauth_credential, upsert_oauth_credential, AccountPick,
+    };
+    use crate::inference::backends::provider::{BackendProviderKind, BackendProviderOauthExt};
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let lean = &snapshot.configuration_scope_cases["oauth_account"];
+    let kind_of = |value: &serde_json::Value| -> BackendProviderKind {
+        serde_json::from_value(value.clone()).unwrap()
+    };
+
+    let node = crate::inference::auth::credential::test_support::test_node().await;
+    for row in lean["rows"].as_array().unwrap() {
+        let provider = kind_of(&row["provider_kind"]).oauth_provider().unwrap();
+        let owner = row["owner"].as_str().unwrap();
+        let account = row["account"].as_str();
+        let credential = crate::inference::auth::credential::OAuthCredential {
+            doc_id: None,
+            credential_id: format!("{provider}:{owner}:{}", account.unwrap_or("original")),
+            node_did: owner.to_string(),
+            provider: provider.to_string(),
+            access_token: "access-TEST".to_string(),
+            refresh_token: "refresh-TEST".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: row["enabled"].as_bool().unwrap(),
+            account_ref: account.map(str::to_string),
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
+        };
+        upsert_oauth_credential(&node, &credential).await.unwrap();
+    }
+    let access = crate::store::config_client::ConfigAccess::local(node);
+
+    let cases = lean["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 6);
+    for case in cases {
+        let text = case["auth"].as_str().unwrap();
+        let auth: BackendAuth = serde_json::from_str(text).unwrap();
+        assert_eq!(serde_json::to_string(&auth).unwrap(), text, "{case}");
+        let scope = case["scope"].as_str().unwrap();
+        let stored_owner = case["stored_owner"].as_str().unwrap();
+        assert!(
+            !text.contains(scope) && !text.contains(stored_owner),
+            "{case}"
+        );
+        let resolved = match case["owner"].as_str() {
+            Some(owner) => {
+                assert!(matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
+                let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
+                let row = resolve_oauth_credential(
+                    &access,
+                    scope,
+                    provider,
+                    AccountPick::Reference(auth.oauth_account_ref()),
+                )
+                .await
+                .unwrap();
+                if let Some(row) = &row {
+                    assert_eq!(row.node_did, owner, "{case}");
+                }
+                row.map(
+                    |row| serde_json::json!({"owner": row.node_did, "account": row.account_ref}),
+                )
+            }
+            None => {
+                assert!(!matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
+                None
+            }
+        };
+        let expected = case["resolved"]
+            .as_object()
+            .map(|row| serde_json::json!({"owner": row["owner"], "account": row["account"]}));
+        assert_eq!(resolved, expected, "{case}");
+    }
+}
+
+#[test]
+fn unchanged_nested_links_are_validated_without_an_agent_write() {
+    for missing in [
+        crate::Collection::Tools,
+        crate::Collection::Skill,
+        crate::Collection::InferenceBackend,
+    ] {
+        let documents = reference_documents()
+            .into_iter()
+            .filter(|(collection, _)| *collection != missing);
+        let refs = ConfigReferences::from_documents("owner", documents).unwrap();
+        assert!(refs
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains(missing.graphql_type()));
+    }
+}
+
+#[test]
+fn reference_snapshot_rejects_foreign_roots_duplicates_and_malformed_rows() {
+    let mut documents = reference_documents();
+    documents[0].1["node_did"] = "foreign".into();
+    assert!(ConfigReferences::from_documents("owner", documents).is_err());
+    let mut documents = reference_documents();
+    documents.push(documents[0].clone());
+    assert!(ConfigReferences::from_documents("owner", documents)
+        .unwrap_err()
+        .to_string()
+        .contains("multiple live"));
+    // Genuinely malformed canonical backend row fails the backend validator.
+    let mut documents = reference_documents();
+    documents[0].1["auth"] = serde_json::json!({"kind":"api_key", "key":"key", "variable":"KEY"});
+    assert!(ConfigReferences::from_documents("owner", documents).is_err());
+}
+
+#[test]
+fn references_preserve_exact_ids_and_reject_present_blank_selections() {
+    let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
+    for selected in ["", " ", " context ", "missing"] {
+        let mut agent = reference_agent();
+        agent.context_id = Some(selected.into());
+        assert!(agent.validate_references(&refs).is_err(), "{selected:?}");
+    }
+}
+
+#[test]
+fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
+    let target = |destination| {
+        (
+            crate::Collection::AgentTarget,
+            serde_json::json!({"node_did":"owner","target_id":"worker","name":"worker","target_node_did":destination,"agent_id":"remote"}),
+        )
+    };
+    let refs = ConfigReferences::from_documents("owner", vec![target("owner")]).unwrap();
+    assert!(refs.validate().is_err());
+    let refs = ConfigReferences::from_documents("owner", vec![target("foreign")]).unwrap();
+    refs.validate().unwrap();
+}
+
+#[tokio::test]
+async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_corruption() {
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    for (owner, id, auth) in [
+        ("owner", "good", "unauthenticated"),
+        ("foreign", "bad", "invalid-auth"),
+    ] {
+        let owner = crate::store::graphql::escape_graphql_string(owner);
+        let id = crate::store::graphql::escape_graphql_string(id);
+        let auth = crate::store::graphql::escape_graphql_string(auth);
+        let result = node.execute(&format!(r#"mutation {{ create_InferenceBackend(input: {{node_did: "{owner}", backend_id: "{id}", name: "fixture", provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000/v1", auth: {{kind: "{auth}"}}, enabled: true}}) {{_docID}} }}"#)).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+    }
+    crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.reference_owner_isolation",
+        |txn| {
+            Box::pin(async move {
+                let refs = ConfigReferences::load_in_txn(txn, "owner").await?;
+                refs.validate()?;
+                assert!(refs.documents().any(|((collection, id), _)| *collection
+                    == crate::Collection::InferenceBackend
+                    && id == "good"));
+                assert!(!refs.documents().any(|((_, id), _)| id == "bad"));
+                Ok::<_, anyhow::Error>(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let result = node.execute(r#"mutation { update_InferenceBackend(filter: {node_did: {_eq: "owner"}, backend_id: {_eq: "good"}}, input: {auth: {kind: "invalid-auth"}}) {_docID} }"#).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let result = crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.reference_owned_corruption",
+        |txn| {
+            Box::pin(async move {
+                ConfigReferences::load_in_txn(txn, "owner")
+                    .await?
+                    .validate()
+            })
+        },
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "owned malformed configuration must fail closed"
+    );
+}

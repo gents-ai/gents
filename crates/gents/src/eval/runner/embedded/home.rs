@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
 
 // A full conformance run starts many embedded DefraDB nodes in parallel. On a
@@ -95,7 +95,7 @@ impl EmbeddedHome {
             "retained trial home {} is missing",
             dir.display()
         );
-        crate::storage_backend::require_existing_store(dir)?;
+        crate::store::local::storage_backend::require_existing_store(dir)?;
         let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_existing(dir.join("node.key"), None)
                 .context("loading the retained trial identity")?,
@@ -117,7 +117,7 @@ impl EmbeddedHome {
         let did = identity.did().to_string();
         let mut builder = EmbeddedNode::builder()
             .data_path(&path)
-            .with_regolith_options(crate::storage_backend::regolith_options())
+            .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(&did);
         if let Some(p2p) = &p2p {
             builder = builder.with_p2p(p2p(&path));
@@ -186,7 +186,7 @@ impl EmbeddedHome {
 
         let mut builder = EmbeddedNode::builder()
             .data_path(&self.path)
-            .with_regolith_options(crate::storage_backend::regolith_options())
+            .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(&self.did);
         if let Some(p2p) = &self.p2p {
             builder = builder.with_p2p(p2p(&self.path));

@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
-use gents::skills::prompt_slash_skill_selection;
+use gents::documents::skills::prompt_slash_skill_selection;
+use gents::request::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
 use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
@@ -153,7 +153,7 @@ pub(super) async fn validate_mailbox_submission_cause(
         }}"#,
         escape_graphql_string(item_id)
     );
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "validate mailbox submission cause",
@@ -239,9 +239,10 @@ async fn fetch_retry_lineage(
             }}
         }}"#
     );
-    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_retry_lineage")
-        .await
-        .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
+    let resp =
+        gents::store::graphql::graphql_with_transaction_retry(node, &query, "fetch_retry_lineage")
+            .await
+            .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
     let rows = resp
         .data
         .as_ref()

@@ -22,21 +22,25 @@ use crate::lean_vocab_test::{
     LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
     LeanPluginJobTarget, LeanPluginJobToolCall, LeanPluginJobWireCase, LeanPluginJobWireKind,
 };
-use gents::background_tools::ProcessControlScope;
 use gents::pack::home_install::{record_after_install_via, recorded_provenance, InstalledVia};
 use gents::pack::PackKind;
 use gents::plugin::data::StampContext;
 use gents::plugin::job_calls;
-use gents::plugin_job::admit::{
+use gents::tools::background::job::admit::{
     self, HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow,
 };
-use gents::plugin_job::control::{self, KillAction, KillCause, KillObservation};
-use gents::plugin_job::dispatch::{host_pin, split_address, unique_handle, Delivery, ToolCallView};
-use gents::plugin_job::driver;
-use gents::plugin_job::origin::call_origin;
-use gents::plugin_job::settings::{job_block_admissible, policy_valid, wire_targets_from};
-use gents::tool_call_lifecycle::{AwaitMode, ToolCallState, ToolRowKind};
-use gents::tool_surface::EndpointScope;
+use gents::tools::background::job::control::{self, KillAction, KillCause, KillObservation};
+use gents::tools::background::job::dispatch::{
+    host_pin, split_address, unique_handle, Delivery, ToolCallView,
+};
+use gents::tools::background::job::driver;
+use gents::tools::background::job::origin::call_origin;
+use gents::tools::background::job::settings::{
+    job_block_admissible, policy_valid, wire_targets_from,
+};
+use gents::tools::background::status::ProcessControlScope;
+use gents::tools::call::lifecycle::{AwaitMode, ToolCallState, ToolRowKind};
+use gents::tools::surface::EndpointScope;
 use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
 };
@@ -488,63 +492,65 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
             .map(|kill| kill.retry_key.as_str())
             .collect();
         expected_kills.sort_unstable();
-        let settled = match gents::plugin_job::admit::admit_step(&context, &job, &output) {
-            Ok(admitted) => {
-                assert!(expected.admitted, "{}: admitted a refused step", case.name);
-                assert!(!expected.dynamic_code_disabled, "{}", case.name);
-                assert_eq!(expected.code, None, "{}", case.name);
-                assert_eq!(
-                    Some(&admitted),
-                    expected_job.as_ref(),
-                    "{}: admitted row",
-                    case.name
-                );
-                assert_eq!(admitted.state, expected_state, "{}", case.name);
-                assert!(expected_kills.is_empty(), "{}: kill", case.name);
-                admitted
-            }
-            Err(refusal) => {
-                assert!(
-                    !expected.admitted,
-                    "{}: refused an admitted step",
-                    case.name
-                );
-                assert_eq!(
-                    refusal.code(),
-                    expected.code.as_deref(),
-                    "{}: refusal code",
-                    case.name
-                );
-                assert_eq!(
-                    refusal.refusal == gents::plugin_job::admit::Refusal::DynamicCodeDisabled,
-                    expected.dynamic_code_disabled,
-                    "{}: dynamic-source refusal detail",
-                    case.name
-                );
-                assert!(expected.job.is_none(), "{}", case.name);
-                assert_eq!(
-                    refusal.closed_row().state,
-                    expected_state,
-                    "{}: row state",
-                    case.name
-                );
-                let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
-                kills.sort_unstable();
-                assert_eq!(kills, expected_kills, "{}: killed children", case.name);
-                refusal.closed_row().clone()
-            }
-        };
+        let settled =
+            match gents::tools::background::job::admit::admit_step(&context, &job, &output) {
+                Ok(admitted) => {
+                    assert!(expected.admitted, "{}: admitted a refused step", case.name);
+                    assert!(!expected.dynamic_code_disabled, "{}", case.name);
+                    assert_eq!(expected.code, None, "{}", case.name);
+                    assert_eq!(
+                        Some(&admitted),
+                        expected_job.as_ref(),
+                        "{}: admitted row",
+                        case.name
+                    );
+                    assert_eq!(admitted.state, expected_state, "{}", case.name);
+                    assert!(expected_kills.is_empty(), "{}: kill", case.name);
+                    admitted
+                }
+                Err(refusal) => {
+                    assert!(
+                        !expected.admitted,
+                        "{}: refused an admitted step",
+                        case.name
+                    );
+                    assert_eq!(
+                        refusal.code(),
+                        expected.code.as_deref(),
+                        "{}: refusal code",
+                        case.name
+                    );
+                    assert_eq!(
+                        refusal.refusal
+                            == gents::tools::background::job::admit::Refusal::DynamicCodeDisabled,
+                        expected.dynamic_code_disabled,
+                        "{}: dynamic-source refusal detail",
+                        case.name
+                    );
+                    assert!(expected.job.is_none(), "{}", case.name);
+                    assert_eq!(
+                        refusal.closed_row().state,
+                        expected_state,
+                        "{}: row state",
+                        case.name
+                    );
+                    let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
+                    kills.sort_unstable();
+                    assert_eq!(kills, expected_kills, "{}: killed children", case.name);
+                    refusal.closed_row().clone()
+                }
+            };
         if let Some(trace) = &case.wire_trace {
             let durable = match trace.interruption.as_str() {
                 "before_kill" if !expected.admitted => &job,
                 "before_kill" | "after_kill" => &settled,
                 other => panic!("unknown interruption {other}"),
             };
-            let facts = gents::plugin_job::recovery::facts_from_durable_read(
+            let facts = gents::tools::background::job::recovery::facts_from_durable_read(
                 durable,
                 durable.state == JobState::Running,
                 durable.pin.as_ref().expect("wire trace has a durable pin"),
-                gents::plugin_job::recovery::DurableRead {
+                gents::tools::background::job::recovery::DurableRead {
                     session_stopped: trace.read.session_stopped,
                     now_millis: trace.read.now_millis,
                     available: if trace.read.available {
@@ -608,7 +614,7 @@ fn generated_plugin_job_adoption_cases_drive_adopt() {
                 expected,
             } => {
                 let call = tool_call(call);
-                match gents::plugin_job::dispatch::adopt(
+                match gents::tools::background::job::dispatch::adopt(
                     &context(ctx, job, out),
                     &call,
                     &row(job),
@@ -1260,7 +1266,7 @@ fn generated_plugin_job_lineage_cases_decode_strictly() {
 }
 
 /// `strip_secret_fields` drops a field whose upper-cased name contains one of
-/// these (`toolset::shared::command::is_secret_env_name`), so no job field may.
+/// these (`tools::native::shared::command::is_secret_env_name`), so no job field may.
 const SECRET_SUBSTRINGS: [&str; 4] = ["KEY", "SECRET", "TOKEN", "PASSWORD"];
 
 fn collect_field_names(value: &serde_json::Value, names: &mut BTreeSet<String>) {

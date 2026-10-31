@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use gents::agent::p2p_reconcile::session_hydration::{
+use gents::runtime::agent::p2p_reconcile::session_hydration::{
     apply_hydration_delivery, begin_hydration_request, can_admit_hydration_request,
     can_retry_hydration, can_start_hydration, decide_hydration, observe_hydration_progress,
     AppliedPairingRoute, ClientHydrationPhase, ClientHydrationProgress,
@@ -38,7 +38,7 @@ fn hydration_keys(count: usize, exact: bool) -> BTreeSet<SessionHydrationDocumen
 
 #[test]
 fn generated_session_hydration_durable_cases_match_storage_projection() {
-    use gents::agent::p2p_reconcile::session_hydration::{
+    use gents::runtime::agent::p2p_reconcile::session_hydration::{
         project_durable_hydration_progress, ClientHydrationRequestState,
     };
 
@@ -364,7 +364,7 @@ fn generated_session_hydration_progress_cases_match_observe() {
 
 #[test]
 fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
-    use gents::agent::p2p_reconcile::session_hydration::{
+    use gents::runtime::agent::p2p_reconcile::session_hydration::{
         project_durable_hydration_progress, ClientHydrationRequestState,
     };
     let message = SessionHydrationDocumentKey {

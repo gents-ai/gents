@@ -1,5 +1,5 @@
 use super::*;
-use crate::pack_archive::pack_dir;
+use crate::pack::archive::pack_dir;
 
 fn wat(src: &str) -> Vec<u8> {
     wat::parse_str(src).expect("WAT parses")
@@ -115,7 +115,7 @@ pub(crate) fn build_plugin_pack(
     .expect("write");
 
     let (bytes, _) = pack_dir(&root).expect("packing");
-    let pack = crate::pack_archive::PackArchive::from_bytes(&bytes).expect("reading back");
+    let pack = crate::pack::archive::PackArchive::from_bytes(&bytes).expect("reading back");
     let plugin = pack.plugin("plugin").expect("the plugin").clone();
     let afb_bytes = pack
         .plugin_artifact("plugin")
@@ -853,8 +853,8 @@ fn narrow_manifold_always_forces_listen_to_none() {
     );
 }
 
-fn job_tool_ref(job: Option<serde_json::Value>) -> crate::document_config::PluginToolRef {
-    crate::document_config::PluginToolRef {
+fn job_tool_ref(job: Option<serde_json::Value>) -> crate::documents::PluginToolRef {
+    crate::documents::PluginToolRef {
         plugin: "team/plugin".into(),
         digest: None,
         tool_calls: false,
@@ -894,7 +894,7 @@ fn plugin_without_job_block_keeps_the_plugin_tool_path() {
 fn job_resolutions() -> (
     tempfile::TempDir,
     Vec<(
-        crate::document_config::PluginToolRef,
+        crate::documents::PluginToolRef,
         Option<crate::plugin::store::InstalledPlugin>,
     )>,
 ) {
@@ -916,7 +916,7 @@ fn job_resolutions() -> (
 #[test]
 fn job_tools_are_bound_only_for_job_capable_plugins() {
     let (_home, resolutions) = job_resolutions();
-    let job_tools = crate::plugin_job::JobBinding::bind_all(&resolutions);
+    let job_tools = crate::tools::background::job::JobBinding::bind_all(&resolutions);
     assert_eq!(
         job_tools.keys().collect::<Vec<_>>(),
         vec!["plugin"],
@@ -935,7 +935,7 @@ fn job_tools_are_bound_only_for_job_capable_plugins() {
 fn plugin_child_call_naming_a_job_tool_is_hook_owned_child_refused() {
     let (_home, resolutions) = job_resolutions();
     let job_tools: std::collections::BTreeSet<String> =
-        crate::plugin_job::JobBinding::bind_all(&resolutions)
+        crate::tools::background::job::JobBinding::bind_all(&resolutions)
             .into_keys()
             .collect();
     assert!(!crate::plugin::tool_calls::supported("plugin", &job_tools));
@@ -944,7 +944,7 @@ fn plugin_child_call_naming_a_job_tool_is_hook_owned_child_refused() {
 
 #[test]
 fn plugin_job_keys_reexports_the_encoders_and_the_decoder() {
-    use crate::plugin_job::keys::{
+    use crate::tools::background::job::keys::{
         decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
     };
     let _ = (job_message_key, job_session_id);

@@ -1,6 +1,6 @@
 use super::rows::dedupe_paths;
 use super::*;
-use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
+use crate::store::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
 use rapidhash::RapidHashSet;
 use std::collections::BTreeSet;
@@ -47,7 +47,7 @@ struct PromptCompactionRow {
 pub(super) struct CompactionGenerationRow {
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     compaction_key: String,
     sequence: u32,
@@ -57,12 +57,12 @@ pub(super) struct CompactionGenerationRow {
     compacted_through_sequence: Option<u32>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     files_read: String,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     files_modified: String,
     #[serde(default)]
@@ -189,7 +189,7 @@ where
             ])
         })
         .collect::<Vec<_>>();
-    Ok(crate::rendered_request::sha256_canonical_json(
+    Ok(crate::inference::rendered_request::sha256_canonical_json(
         &serde_json::json!(projection),
     )?)
 }
@@ -372,7 +372,7 @@ pub(crate) struct NewExactSessionCompaction<'a> {
 pub(crate) async fn save_exact_compaction_entry(
     node: &std::sync::Arc<EmbeddedNode>,
     input: NewExactSessionCompaction<'_>,
-    reduction: crate::compaction::ExactReduction<'_>,
+    reduction: crate::inference::compaction::ExactReduction<'_>,
 ) -> Result<CompactionEntry> {
     save_compaction_entry_with_requester_did(
         node,
@@ -461,10 +461,10 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let escaped_request_id = &escaped_request_id;
     let escaped_request_doc_id = &escaped_request_doc_id;
     let requester_did_field = &requester_did_field;
-    crate::config_client::ConfigAccess::transact_local_idempotent(
+    crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::IdempotentTransactionRetry::Standard,
         "session.save_compaction_entry",
         move |txn| {
             Box::pin(async move {

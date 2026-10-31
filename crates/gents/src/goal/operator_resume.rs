@@ -1,9 +1,9 @@
 use super::*;
-use crate::config_client::ConfigApplyTxn;
-use crate::identity::NodeIdentity;
-use crate::lifecycle::materialize::{sign_request, RequestSigner};
-use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
-use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
+use crate::request::admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
+use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
+use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,7 +53,7 @@ async fn resume_goal_request_inner<'a>(
         crate::ConfigAccess::Local(local) => {
             let node = local.node();
             let did = ::identity::Did::new(identity.did().to_owned())?;
-            crate::config_client::ConfigAccess::transact_local_write(
+            crate::store::config_client::ConfigAccess::transact_local_write(
                 node,
                 Some(did),
                 "goal.resume_request",
@@ -171,7 +171,7 @@ async fn existing_resume_receipt_in_txn(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GoalResumeOnReceipt {
-    pub switch: Option<crate::config_client::SwitchReceipt>,
+    pub switch: Option<crate::store::config_client::SwitchReceipt>,
     pub resume: GoalResumeReceipt,
 }
 
@@ -194,7 +194,9 @@ pub async fn resume_goal_on_account<F>(
 where
     F: Fn(&str) -> Result<Vec<String>> + Sync + ?Sized,
 {
-    use crate::blocked_turn::{blocked_turn_from, stopped_request, BlockedReason, FailedCall};
+    use crate::goal::blocked_turn::{
+        blocked_turn_from, stopped_request, BlockedReason, FailedCall,
+    };
     anyhow::ensure!(
         identity.did() == node_did,
         "goal resume requires the target node's signing identity"
@@ -227,7 +229,7 @@ where
         Some(profile) => {
             let receipt = async {
                 let slots = plugin_slots(&profile)?;
-                crate::config_client::switch_profile_account(
+                crate::store::config_client::switch_profile_account(
                     access,
                     node_did,
                     &profile,
@@ -301,7 +303,7 @@ async fn stage_resume_inner(
 ) -> Result<GoalResumeReceipt> {
     let (goal, requests, parent_row) =
         resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
-    let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
+    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
     let agent = parent.agent_id.clone();
     if let Some(receipt) =
         existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await?
@@ -310,14 +312,14 @@ async fn stage_resume_inner(
     }
 
     if let Some(target_backend_id) = required_backend {
-        let references =
-            crate::document_config::ConfigReferences::load_in_txn(txn, node_did).await?;
-        let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, node_did, from_request_id)
-            .await?
-            .context("resume predecessor has no failed call")?;
+        let references = crate::documents::ConfigReferences::load_in_txn(txn, node_did).await?;
+        let mut call =
+            crate::goal::blocked_turn::last_failed_call_in_txn(txn, node_did, from_request_id)
+                .await?
+                .context("resume predecessor has no failed call")?;
         call.backend_id = Some(target_backend_id.to_owned());
         let agent_id = call.agent_id.as_deref().unwrap_or(parent.agent_id.as_str());
-        let profile_id = crate::blocked_turn::served_profile(&references, agent_id, &call)
+        let profile_id = crate::goal::blocked_turn::served_profile(&references, agent_id, &call)
             .context("profile that hit the limit is unavailable")?;
         let Some((_, backend)) = references.profile_with_backend(&profile_id)? else {
             anyhow::bail!("profile that hit the limit is unavailable");
@@ -330,17 +332,17 @@ async fn stage_resume_inner(
             backend.enabled,
             "target backend {target_backend_id:?} is disabled"
         );
-        if let crate::document_config::BackendAuth::NodeOAuth { account_ref } = &backend.auth {
-            use crate::backend_provider::BackendProviderOauthExt;
+        if let crate::documents::BackendAuth::NodeOAuth { account_ref } = &backend.auth {
+            use crate::inference::backends::provider::BackendProviderOauthExt;
             let provider = backend
                 .provider_kind
                 .oauth_provider()
                 .context("target backend has no OAuth provider")?;
-            let account = crate::oauth_credential::resolve_oauth_credential_in_txn(
+            let account = crate::inference::auth::credential::resolve_oauth_credential_in_txn(
                 txn,
                 node_did,
                 provider,
-                crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
+                crate::inference::auth::credential::AccountPick::Reference(account_ref.as_deref()),
             )
             .await?;
             anyhow::ensure!(
@@ -375,7 +377,7 @@ async fn stage_resume_inner(
     let now = Utc::now();
     let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let wrapup = post.wrapup_requested && !post.wrapup_completed;
-    let content = crate::trigger_engine::goal_source::continuation_prompt(&goal, None, wrapup);
+    let content = crate::triggers::engine::goal_source::continuation_prompt(&goal, None, wrapup);
     let session_hop =
         crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
     let mut create = prepare_goal_continuation(

@@ -326,7 +326,7 @@ where
 }
 
 pub(crate) struct ProjectionEngine {
-    pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
+    pub(crate) background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
     bound: BoundModelContext,
     sequencer: Arc<ProjectionSequencer>,
@@ -373,7 +373,7 @@ impl ProjectionEngine {
 
     pub(crate) fn with_background_executions(
         mut self,
-        executions: gents::hook::BackgroundExecutionRegistry,
+        executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Self {
         self.background_executions = executions;
         self
@@ -673,7 +673,7 @@ impl ProjectionEngine {
                 let chronology = messages.chronology.get(index).copied().flatten();
                 if let messages::MessageUpdate::UserMessage { text } = update {
                     let is_notification = durable_message_key(key, update.session_update_kind())
-                        .is_some_and(gents::background_completion::is_background_completion_notification_message_key);
+                        .is_some_and(gents::tools::background::completion::is_background_completion_notification_message_key);
                     if is_notification {
                         let planned = planned_durable.entry(key.clone()).or_default();
                         let sent_len = text
@@ -1437,7 +1437,7 @@ pub(crate) async fn resolve_bound_model_context(
 mod tests {
     use super::*;
     use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
-    use gents::graphql::ensure_no_errors;
+    use gents::store::graphql::ensure_no_errors;
 
     /// Child sessions here are started by receipts the fixture key signs.
     const NODE_DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
@@ -1453,7 +1453,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
 
@@ -1522,7 +1522,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
         let engine = ProjectionEngine::new(
@@ -1541,7 +1541,7 @@ mod tests {
         session: &str,
         request_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "{NODE_DID}", requester_did: "{NODE_DID}", agent_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
+        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "{NODE_DID}", requester_did: "{NODE_DID}", agent_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::store::graphql::escape_graphql_string(request_id), gents::store::graphql::escape_graphql_string(session))).await;
         ensure_no_errors(&result, "seed projection request").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":result.data}),
@@ -1560,15 +1560,15 @@ mod tests {
         tool_name: &str,
         message_sequence: i64,
     ) -> String {
-        let escaped_session = gents::graphql::escape_graphql_string(session_id);
-        let escaped_request = gents::graphql::escape_graphql_string(request_id);
-        let escaped_id = gents::graphql::escape_graphql_string(tool_call_id);
-        let escaped_name = gents::graphql::escape_graphql_string(tool_name);
+        let escaped_session = gents::store::graphql::escape_graphql_string(session_id);
+        let escaped_request = gents::store::graphql::escape_graphql_string(request_id);
+        let escaped_id = gents::store::graphql::escape_graphql_string(tool_call_id);
+        let escaped_name = gents::store::graphql::escape_graphql_string(tool_name);
         let request_doc_field = request_doc_id
             .map(|id| {
                 format!(
                     r#"request_doc_id: "{}""#,
-                    gents::graphql::escape_graphql_string(id)
+                    gents::store::graphql::escape_graphql_string(id)
                 )
             })
             .unwrap_or_default();
@@ -1608,11 +1608,11 @@ mod tests {
         calls: &[(&str, &str, &str)],
     ) {
         use gents::defra_node::QueryRequest;
-        use gents::graphql::single_mutation_document;
         use gents::session::canonical_rows::{
             output_segment_create_variables, transcript_message_create_variables,
             CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
         };
+        use gents::store::graphql::single_mutation_document;
         use gents_protocol::output::{
             MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment,
             OutputSource, OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration,
@@ -1742,12 +1742,14 @@ mod tests {
         child_request_id: &str,
         created_at: &str,
     ) {
-        let escaped_parent = gents::graphql::escape_graphql_string(parent_request_id);
-        let escaped_parent_doc = gents::graphql::escape_graphql_string(parent_request_doc_id);
-        let escaped_tool_call = gents::graphql::escape_graphql_string(parent_tool_call_id);
-        let escaped_tool_doc = gents::graphql::escape_graphql_string(parent_tool_call_doc_id);
-        let escaped_child = gents::graphql::escape_graphql_string(child_request_id);
-        let escaped_created = gents::graphql::escape_graphql_string(created_at);
+        let escaped_parent = gents::store::graphql::escape_graphql_string(parent_request_id);
+        let escaped_parent_doc =
+            gents::store::graphql::escape_graphql_string(parent_request_doc_id);
+        let escaped_tool_call = gents::store::graphql::escape_graphql_string(parent_tool_call_id);
+        let escaped_tool_doc =
+            gents::store::graphql::escape_graphql_string(parent_tool_call_doc_id);
+        let escaped_child = gents::store::graphql::escape_graphql_string(child_request_id);
+        let escaped_created = gents::store::graphql::escape_graphql_string(created_at);
         let mutation = format!(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
@@ -1851,9 +1853,10 @@ mod tests {
                 gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
             pre_compaction_input_tokens: None,
         };
-        let encoded =
-            gents::graphql::escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
-        let doc = gents::graphql::escape_graphql_string(doc);
+        let encoded = gents::store::graphql::escape_graphql_string(
+            &serde_json::to_string(&accounting).unwrap(),
+        );
+        let doc = gents::store::graphql::escape_graphql_string(doc);
         let response = engine.node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
             call_id: "context-call", request_id: "context-owner", request_doc_id: "{doc}",
             node_did: "did:test:grok-shim", call_kind: "inference", call_seq: 1,

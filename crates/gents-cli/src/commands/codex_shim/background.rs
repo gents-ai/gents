@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents::CancelBackgroundToolCallOutcome;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
@@ -134,7 +134,7 @@ fn spawn_background_tool_watcher_handle(
                             };
                             let access = ConfigAccess::local(state.node.clone());
                             let presentation =
-                                match gents::tool_call_lifecycle::load_tool_call_presentation(
+                                match gents::tools::call::lifecycle::load_tool_call_presentation(
                                     &access,
                                     tool_doc_id,
                                     node_did,
@@ -392,7 +392,7 @@ mod tests {
             "segment seed: {:?}",
             response.errors
         );
-        gents::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+        gents::store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -444,7 +444,9 @@ mod tests {
             fs_root: None,
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
             node_did: Arc::from("did:test:background-watcher"),
             agent_id: Arc::from("did:test:background-watcher:default"),
             id_counter: Arc::new(AtomicU64::new(1)),
@@ -505,7 +507,7 @@ mod tests {
             "seed AgentToolCall failed: {:?}",
             response.errors
         );
-        gents::graphql::single_mutation_document(&response, "create_AgentToolCall")
+        gents::store::graphql::single_mutation_document(&response, "create_AgentToolCall")
             .expect("tool mutation envelope")
             .expect("created tool row")["_docID"]
             .as_str()
@@ -704,7 +706,7 @@ mod tests {
                 .expect("embedded node"),
         );
         if schemas_before_start {
-            gents::schema::ensure_runtime_schemas(&node)
+            gents::store::schema::ensure_runtime_schemas(&node)
                 .await
                 .expect("runtime schemas");
         }
@@ -735,7 +737,7 @@ mod tests {
             .expect("watcher should make its initial observation")
             .expect("watcher should signal first query attempt");
         if !schemas_before_start {
-            gents::schema::ensure_runtime_schemas(&node)
+            gents::store::schema::ensure_runtime_schemas(&node)
                 .await
                 .expect("runtime schemas");
         }
@@ -803,7 +805,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(&node)
+        gents::store::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
 
@@ -897,10 +899,10 @@ mod tests {
     }
 
     async fn job_state(state: &ShimState, session: &str, call: &str) -> JobState {
-        gents::plugin_job::view::load_job_view(
+        gents::tools::background::job::view::load_job_view(
             &ConfigAccess::local(state.node.clone()),
             None,
-            gents::plugin_job::view::JobKey::Address {
+            gents::tools::background::job::view::JobKey::Address {
                 session_id: session.into(),
                 tool_call_id: call.into(),
             },

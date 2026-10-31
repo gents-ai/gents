@@ -25,12 +25,12 @@ pub(super) async fn load_header(
         vec![observed.clone()]
     } else {
         let requester = requester_did
-            .map(|did| format!(r#""{}""#, crate::graphql::escape_graphql_string(did)))
+            .map(|did| format!(r#""{}""#, crate::store::graphql::escape_graphql_string(did)))
             .unwrap_or_else(|| "null".into());
         let query = format!(
             r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
-            crate::graphql::escape_graphql_string(header_doc_id),
-            crate::graphql::escape_graphql_string(node_did)
+            crate::store::graphql::escape_graphql_string(header_doc_id),
+            crate::store::graphql::escape_graphql_string(node_did)
         );
         let response = access.query(&query, "load_canonical_header").await?;
         rows_value(&response, "AgentMessage")?
@@ -96,7 +96,7 @@ async fn coordinate_twins(
     let key = &header.message.message_key;
     let sequence = header.message.sequence;
     if cache.sessions.is_none() {
-        let escaped = crate::graphql::escape_graphql_string(key);
+        let escaped = crate::store::graphql::escape_graphql_string(key);
         let query = format!(
             r#"{{
             key_matches: AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }}

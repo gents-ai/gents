@@ -16,7 +16,7 @@ pub async fn observe_mailbox_item(
         !request.item_id.trim().is_empty(),
         "a mailbox item is required"
     );
-    gents::mailbox::load_mailbox_item(core.node(), &request.item_id)
+    gents::session::mailbox::load_mailbox_item(core.node(), &request.item_id)
         .await?
         .map(|item| mailbox_observation(requester, &item))
         .transpose()
@@ -24,7 +24,7 @@ pub async fn observe_mailbox_item(
 
 fn mailbox_observation(
     requester: &str,
-    item: &gents::mailbox::MailboxItem,
+    item: &gents::session::mailbox::MailboxItem,
 ) -> Result<MailboxItemObservation> {
     anyhow::ensure!(
         item.requester_did == requester,
@@ -187,15 +187,16 @@ mod tests {
 
     #[test]
     fn exact_observation_preserves_closed_items_and_rejects_foreign_readers() {
-        let mut item: gents::mailbox::MailboxItem = serde_json::from_value(serde_json::json!({
-            "_docID": "question", "item_key": "key", "requester_did": "reader",
-            "node_did": "node", "status": "open", "kind": "ask",
-            "action": "start_request", "title": "Question", "source_kind": "session",
-            "source_id": "session", "session_id": "session", "target_node_did": "node",
-            "target_agent_id": "agent", "created_at": "2026-10-28T00:00:00Z"
-        }))
-        .unwrap();
-        for status in gents::mailbox::MailboxStatus::ALL {
+        let mut item: gents::session::mailbox::MailboxItem =
+            serde_json::from_value(serde_json::json!({
+                "_docID": "question", "item_key": "key", "requester_did": "reader",
+                "node_did": "node", "status": "open", "kind": "ask",
+                "action": "start_request", "title": "Question", "source_kind": "session",
+                "source_id": "session", "session_id": "session", "target_node_did": "node",
+                "target_agent_id": "agent", "created_at": "2026-10-28T00:00:00Z"
+            }))
+            .unwrap();
+        for status in gents::session::mailbox::MailboxStatus::ALL {
             item.status = status.as_str().to_owned();
             let observation = mailbox_observation("reader", &item).unwrap();
             assert_eq!(observation.item.item_id, "question");

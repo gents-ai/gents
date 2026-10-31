@@ -23,7 +23,7 @@ pub async fn update_goal_fields_if_status(
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.update_controller_fields",
@@ -45,7 +45,7 @@ pub async fn update_goal_fields_if_status(
                     let updated = load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id)
                         .await?
                         .context("updated Goal row disappeared")?;
-                    crate::trigger_engine::durable::publish_goal_outcomes(
+                    crate::triggers::engine::durable::publish_goal_outcomes(
                         txn,
                         &updated.node_did,
                         &updated.goal_id,
@@ -95,7 +95,7 @@ pub async fn claim_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "goal.claim_continuation",
         &mutation,
@@ -144,7 +144,7 @@ pub async fn claim_retry_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "goal.claim_retry_continuation",
         &mutation,
@@ -158,8 +158,8 @@ pub async fn claim_retry_continuation(
 }
 
 pub(crate) async fn fence_goal_continuation_claim_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    request: &crate::watcher::AgentRequest,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    request: &crate::request::watcher::AgentRequest,
     now: &str,
 ) -> Result<bool> {
     if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {

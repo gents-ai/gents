@@ -175,7 +175,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 .context("init key path")?;
             let _identity = gents::KeyIdentity::load_or_create(key_path, None)?;
             let data = agent_home.join("data");
-            let node = gents::store_key::open_home_store_key(&agent_home, &data)
+            let node = gents::store::local::store_key::open_home_store_key(&agent_home, &data)
                 .await?
                 .encrypt(
                     gents::defra_node::EmbeddedNode::builder()

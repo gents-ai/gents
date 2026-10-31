@@ -5,8 +5,8 @@ use crate::cli::{
 use crate::commands::accounts::{snapshot, Snapshot};
 use crate::config_writes::ConfigAccess;
 use anyhow::{Context, Result};
-use gents::document_config::InferenceProfile;
-use gents::oauth_credential::{
+use gents::documents::InferenceProfile;
+use gents::inference::auth::credential::{
     backend_account, serving_account, AccountState, AccountSummary, ServingAccount,
 };
 use serde_json::{json, Value};
@@ -97,7 +97,7 @@ async fn list_candidates(
         crate::commands::accounts::request_usage_reads(
             identity.as_ref(),
             graphql,
-            gents::usage_observation::UsageTrigger::Cached,
+            gents::inference::usage_observation::UsageTrigger::Cached,
             None,
         )
         .await
@@ -108,7 +108,7 @@ async fn list_candidates(
     } else {
         Vec::new()
     };
-    let plan = gents::config_client::switch_candidates(
+    let plan = gents::store::config_client::switch_candidates(
         access,
         node_did,
         profile_id,
@@ -145,7 +145,10 @@ async fn set_profile(
             .iter()
             .find(|account| account.provider == provider && account.default)
             .with_context(|| {
-                gents::oauth_credential::enabled_accounts_note(provider, &snapshot.accounts)
+                gents::inference::auth::credential::enabled_accounts_note(
+                    provider,
+                    &snapshot.accounts,
+                )
             })?,
         (None, None) => unreachable!("handled above"),
     };
@@ -172,7 +175,7 @@ async fn set_account(
     plugin_slots: &[String],
 ) -> Result<Value> {
     let backend_id = backend_for_account(access, node_did, account, provider).await?;
-    let receipt = gents::config_client::switch_profile_account(
+    let receipt = gents::store::config_client::switch_profile_account(
         access,
         node_did,
         profile_id,
@@ -260,10 +263,11 @@ async fn write_checked(
             !moved || *state == AccountState::Enabled,
             "account {label:?} is {}; {}",
             state.as_str(),
-            gents::oauth_credential::enabled_accounts_note(provider, &snapshot.accounts)
+            gents::inference::auth::credential::enabled_accounts_note(provider, &snapshot.accounts)
         );
     }
-    let doc_id = gents::config_client::write_inference_profile_document(access, profile).await?;
+    let doc_id =
+        gents::store::config_client::write_inference_profile_document(access, profile).await?;
     let mut output = json!({"doc_id":doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
     if let Some(account) = account {
         output["account"] = serde_json::to_value(account)?;
@@ -277,7 +281,7 @@ async fn write_checked(
 async fn target(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let (access, _) = crate::resolve_config_access(home, graphql).await?;
     let node_did =
         super::binding::resolve_target_node_did(None, None, home, graphql, Some(&access)).await?;
@@ -411,12 +415,12 @@ pub(super) async fn profile_effort_warning(
     )
     .await
     .ok()?;
-    let backend = gents::document_config::InferenceBackend::from_value(&backend).ok()?;
+    let backend = gents::documents::InferenceBackend::from_value(&backend).ok()?;
     let observation =
         crate::shared::load_backend_observation(access, node_did, &profile.backend_id)
             .await
             .ok();
-    gents::config::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
+    gents::inference::resolved::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
 }
 
 #[cfg(test)]
@@ -439,11 +443,11 @@ mod tests {
     const DID: &str = "did:key:z6MkTestProfileAccounts";
     const CLAUDE: &str = "claude-subscription";
 
-    fn claude_sign_in(who: &str) -> gents::oauth_credential::OAuthCredential {
-        gents::claude_oauth::credential_from_login_tokens(
+    fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
+        gents::inference::auth::claude::credential_from_login_tokens(
             DID,
             CLAUDE,
-            &gents::claude_oauth::ClaudeLoginTokens {
+            &gents::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-SECRET-{who}"),
                 expires_in: Some(3600),
@@ -472,13 +476,13 @@ mod tests {
             "model_name": "model-x",
         }))
         .unwrap();
-        gents::config_client::write_inference_profile_document(access, &profile)
+        gents::store::config_client::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
 
     async fn seeded() -> (ConfigAccess, String, String) {
-        use gents::oauth_credential::{set_account_enabled, store_sign_in};
+        use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(
             crate::shared::test_support::node_builder()
                 .build()
@@ -507,16 +511,19 @@ mod tests {
                 json!({"kind": "api_key", "key": "key-SECRET"}),
             ),
         ] {
-            gents::config_client::write_inference_backend_document(
+            gents::store::config_client::write_inference_backend_document(
                 &access,
                 &serde_json::from_value(value).unwrap(),
             )
             .await
             .unwrap();
         }
-        gents::oauth_credential::upsert_oauth_credential_on(&access, &claude_sign_in("a"))
-            .await
-            .unwrap();
+        gents::inference::auth::credential::upsert_oauth_credential_on(
+            &access,
+            &claude_sign_in("a"),
+        )
+        .await
+        .unwrap();
         let b = store_sign_in(&access, claude_sign_in("b"), Some("label-b"))
             .await
             .unwrap();
@@ -526,7 +533,7 @@ mod tests {
         set_account_enabled(&access, DID, &c.credential.credential_id, false)
             .await
             .unwrap();
-        let backend_of = |sign_in: &gents::oauth_credential::SignIn| {
+        let backend_of = |sign_in: &gents::inference::auth::credential::SignIn| {
             format!(
                 "{CLAUDE}-{}",
                 sign_in.credential.account_ref.as_deref().unwrap()
@@ -634,13 +641,13 @@ mod tests {
     }
 
     async fn disable(access: &ConfigAccess, credential_id: &str) {
-        gents::oauth_credential::set_account_enabled(access, DID, credential_id, false)
+        gents::inference::auth::credential::set_account_enabled(access, DID, credential_id, false)
             .await
             .unwrap();
     }
 
     fn original_id() -> String {
-        gents::oauth_credential::oauth_credential_id(DID, CLAUDE)
+        gents::inference::auth::credential::oauth_credential_id(DID, CLAUDE)
     }
 
     #[tokio::test]
@@ -651,7 +658,7 @@ mod tests {
         grok.credential_id = format!("xai-oauth:{DID}:acct-g");
         grok.account_ref = Some("acct-g".into());
         grok.label = Some("label-b".into());
-        gents::oauth_credential::upsert_oauth_credential_on(&access, &grok)
+        gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
 
@@ -771,7 +778,7 @@ mod tests {
     #[tokio::test]
     async fn an_account_with_several_backends_is_ambiguous() {
         let (access, _, _) = seeded().await;
-        gents::config_client::write_inference_backend_document(
+        gents::store::config_client::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "claude-2",
@@ -870,18 +877,18 @@ mod tests {
             ),
         ]
         .into_iter()
-        .map(|(collection, value)| gents::config_client::DesiredStateApplyDocument {
+        .map(|(collection, value)| gents::store::config_client::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,
         })
         .collect();
-        let plan = gents::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+        let plan = gents::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
         access
             .transact_write("test.profile.agents", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    gents::config_client::apply_desired_state_plan(txn, plan)
+                    gents::store::config_client::apply_desired_state_plan(txn, plan)
                         .await
                         .map(|_| ())
                 })
@@ -904,7 +911,10 @@ mod tests {
         );
         assert_eq!(output["agents"], json!(["x", "y"]));
         assert_eq!(output["companions"], json!(["summ"]));
-        assert_eq!(output["cost"], json!(gents::config_client::SWITCH_COST));
+        assert_eq!(
+            output["cost"],
+            json!(gents::store::config_client::SWITCH_COST)
+        );
         let candidates: Vec<_> = output["candidates"]
             .as_array()
             .unwrap()
@@ -943,7 +953,10 @@ mod tests {
             json!("Move profile p-original to label-b (used by 2 agents)")
         );
         assert_eq!(output["agents"], json!(["x", "y"]));
-        assert_eq!(output["cost"], json!(gents::config_client::SWITCH_COST));
+        assert_eq!(
+            output["cost"],
+            json!(gents::store::config_client::SWITCH_COST)
+        );
         assert_eq!(output["companions_offered"], json!(["summ"]));
         assert_eq!(output["companions_moved"], json!([]));
         assert_eq!(stored(&access, "summ").await.unwrap().backend_id, "claude");
@@ -967,10 +980,10 @@ mod tests {
         grok.credential_id = format!("xai-oauth:{DID}:acct-g");
         grok.account_ref = Some("acct-g".into());
         grok.label = Some("label-g".into());
-        gents::oauth_credential::upsert_oauth_credential_on(&access, &grok)
+        gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
-        gents::config_client::write_inference_backend_document(
+        gents::store::config_client::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "xai-oauth-acct-g",
@@ -994,7 +1007,7 @@ mod tests {
     #[tokio::test]
     async fn set_account_moves_an_api_key_profile_and_counts_its_plugin_slots() {
         let (access, _, _) = seeded().await;
-        gents::config_client::write_inference_backend_document(
+        gents::store::config_client::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "openai-2",

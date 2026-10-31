@@ -1,10 +1,10 @@
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
-use gents::collection::Collection;
+use gents::store::collection::Collection;
 #[cfg(test)]
-use gents::config_client::apply_desired_state_plan;
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::apply_desired_state_plan;
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::InferenceBackend;
 #[cfg(test)]
 use std::sync::Arc;
@@ -77,7 +77,7 @@ pub async fn delete_inference_backend_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::document_config::{BackendAuth, BackendModelCatalog, InferenceProfile};
+    use gents::documents::{BackendAuth, BackendModelCatalog, InferenceProfile};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -107,13 +107,16 @@ mod tests {
             let backend = &backend;
             let catalog = catalog.clone();
             Box::pin(async move {
-                gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog).await
+                gents::inference::backends::registry::record_model_catalog_in_txn(
+                    txn, backend, catalog,
+                )
+                .await
             })
         })
         .await?;
         backend.name = "Renamed".into();
         upsert_inference_backend(&node, &backend).await?;
-        let observation = gents::backend_registry::lookup_backend_observation(
+        let observation = gents::inference::backends::registry::lookup_backend_observation(
             &node,
             &backend.node_did,
             &backend.backend_id,
@@ -126,7 +129,7 @@ mod tests {
         let profile: InferenceProfile = serde_json::from_value(json!({
             "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
-        gents::config_client::write_inference_profile_document(
+        gents::store::config_client::write_inference_profile_document(
             &ConfigAccess::local(node.clone()),
             &profile,
         )
@@ -142,13 +145,15 @@ mod tests {
             delete_inference_backend(&node, &other.node_did, "shared").await?,
             0
         );
-        assert!(gents::backend_registry::lookup_backend_observation(
-            &node,
-            &backend.node_did,
-            "shared"
-        )
-        .await?
-        .is_some());
+        assert!(
+            gents::inference::backends::registry::lookup_backend_observation(
+                &node,
+                &backend.node_did,
+                "shared"
+            )
+            .await?
+            .is_some()
+        );
         Ok(())
     }
 }

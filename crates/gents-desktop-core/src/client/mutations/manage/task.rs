@@ -2,10 +2,10 @@ use super::super::graphql::{escape_graphql_string, normalize_required};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use gents::collection::Collection;
-use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::document_config::{EventSource, Schedule, Task, Trigger};
+use gents::documents::{EventSource, Schedule, Task, Trigger};
+use gents::store::collection::Collection;
+use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::task_session_title;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -257,10 +257,13 @@ pub async fn fire_task_now(
         id = escape_graphql_string(agent_id),
         node_did = escape_graphql_string(node_did),
     );
-    let agent_response =
-        gents::graphql::graphql_with_transaction_retry(node, &agent_query, "fetch task agent")
-            .await
-            .with_context(|| format!("fetch agent for task {task_id}"))?;
+    let agent_response = gents::store::graphql::graphql_with_transaction_retry(
+        node,
+        &agent_query,
+        "fetch task agent",
+    )
+    .await
+    .with_context(|| format!("fetch agent for task {task_id}"))?;
     let agent_row = agent_response
         .data
         .as_ref()
@@ -452,7 +455,8 @@ fn render_task_invocation(
         task.goal_token_budget,
     )?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let (node_scope, ctx_scope) = gents::template::task_node_ctx(node_did, agent_id, &now);
+    let (node_scope, ctx_scope) =
+        gents::documents::template::task_node_ctx(node_did, agent_id, &now);
     let invocation_key = uuid::Uuid::new_v4().to_string();
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: node_did.into(),
@@ -460,7 +464,7 @@ fn render_task_invocation(
         source_collection: "Task".into(),
         source_doc_id: task_doc_id.into(),
     };
-    let fire_key = gents::lifecycle::task_fire_key(&identity);
+    let fire_key = gents::request::lifecycle::task_fire_key(&identity);
     let session_id = format!("trigger-session:{fire_key}");
     let request_id = format!("trigger-request:{fire_key}");
     let scope = gents::TemplateScope {
@@ -561,7 +565,7 @@ async fn enqueue_task_now(
 ) -> Result<String> {
     let owner = escape_graphql_string(&task_row.node_did);
     let task_id = escape_graphql_string(&task_row.task_id);
-    let response = gents::graphql::graphql_with_transaction_retry(node, &format!(
+    let response = gents::store::graphql::graphql_with_transaction_retry(node, &format!(
         r#"{{Task(filter: {{node_did: {{_eq: "{owner}"}}, task_id: {{_eq: "{task_id}"}}}}, limit: 2) {{_docID}}}}"#),
         "resolve desktop Task physical identity").await?;
     let rows = response
@@ -580,10 +584,10 @@ async fn enqueue_task_now(
             &invocation.node_did,
             &invocation.agent_id,
             &invocation.content,
-            gents::lifecycle::ExecutionOrigin::Interactive,
-            gents::lifecycle::TriggerLineage {
+            gents::request::lifecycle::ExecutionOrigin::Interactive,
+            gents::request::lifecycle::TriggerLineage {
                 trigger_kind: Some("manual".into()),
-                ..gents::lifecycle::TriggerLineage::default()
+                ..gents::request::lifecycle::TriggerLineage::default()
             },
             Some(&invocation.session_title),
             None,
@@ -594,12 +598,16 @@ async fn enqueue_task_now(
             None,
         )
         .await?;
-    Ok(
-        gents::lifecycle::write_task_delivery_local(node, actor, &invocation.fire, false, &create)
-            .await?
-            .request
-            .doc_id,
+    Ok(gents::request::lifecycle::write_task_delivery_local(
+        node,
+        actor,
+        &invocation.fire,
+        false,
+        &create,
     )
+    .await?
+    .request
+    .doc_id)
 }
 
 /// Operator override: the resulting `AgentRequest` carries
@@ -632,7 +640,7 @@ pub async fn fire_schedule_now(
         }}"#,
         node_did = escape_graphql_string(node_did),
     );
-    let trigger_response = gents::graphql::graphql_with_transaction_retry(
+    let trigger_response = gents::store::graphql::graphql_with_transaction_retry(
         node,
         &trigger_query,
         "fetch schedule triggers",
@@ -651,7 +659,7 @@ pub async fn fire_schedule_now(
             trigger.enabled
                 && matches!(
                     &trigger.source,
-                    gents::document_config::TriggerSource::Schedule { schedule_id: id }
+                    gents::documents::TriggerSource::Schedule { schedule_id: id }
                         if id == schedule_id
                 )
         });
@@ -685,10 +693,13 @@ pub async fn fire_schedule_now(
         id = escape_graphql_string(task_id),
         node_did = escape_graphql_string(node_did),
     );
-    let task_response =
-        gents::graphql::graphql_with_transaction_retry(node, &task_query, "fetch schedule task")
-            .await
-            .with_context(|| format!("fetch task for schedule {schedule_id}"))?;
+    let task_response = gents::store::graphql::graphql_with_transaction_retry(
+        node,
+        &task_query,
+        "fetch schedule task",
+    )
+    .await
+    .with_context(|| format!("fetch task for schedule {schedule_id}"))?;
     let task_row_json = task_response
         .data
         .as_ref()
@@ -770,7 +781,7 @@ pub async fn resolve_schedule_now_on(
         trigger.enabled
             && matches!(
                 &trigger.source,
-                gents::document_config::TriggerSource::Schedule { schedule_id: id }
+                gents::documents::TriggerSource::Schedule { schedule_id: id }
                     if id == schedule_id
             )
     });
@@ -800,7 +811,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:access-review-setup";
-        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let config: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -871,7 +882,7 @@ mod tests {
         gents::ensure_runtime_schemas(operator.as_ref()).await?;
         gents::ensure_runtime_schemas(&desktop).await?;
         let owner = "did:test:canonical-task-run";
-        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let config: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -1004,7 +1015,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "task shared-task is disabled");
-        let response = gents::graphql::graphql_with_transaction_retry(
+        let response = gents::store::graphql::graphql_with_transaction_retry(
             &node,
             "query { AgentRequest { _docID } }",
             "test.schedule_task_scope.requests",
@@ -1029,7 +1040,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:automation-a", "did:test:automation-b"] {
-            let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+            let config: gents::documents::PackConfig = serde_json::from_value(json!({
                 "node":{"node_did":owner},
                 "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
                 "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -1078,7 +1089,7 @@ mod tests {
             json!({"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":60}}),
         )?;
         upsert_schedule(&node, &schedule).await?;
-        trigger.source = gents::document_config::TriggerSource::Schedule {
+        trigger.source = gents::documents::TriggerSource::Schedule {
             schedule_id: "schedule".into(),
         };
         upsert_trigger(&node, &trigger).await?;

@@ -150,7 +150,7 @@ fn plugin_manifest(root: &Path, from: PackImportFrom) -> Result<Value> {
         PackImportFrom::Skill => {
             let text =
                 std::fs::read_to_string(root.join("SKILL.md")).context("reading SKILL.md")?;
-            let (front, _) = gents::skills::import::parse_skill_md(&text)?;
+            let (front, _) = gents::documents::skills::import::parse_skill_md(&text)?;
             json!({ "name": front.name, "description": front.description, "license": front.license })
         }
     })
@@ -310,7 +310,7 @@ fn import_parts(
 
 fn import_skill(dir: &Path, pack: &mut PackEdit, report: &mut Report) -> Result<()> {
     let text = std::fs::read_to_string(dir.join("SKILL.md")).context("reading SKILL.md")?;
-    let (front, _) = gents::skills::import::parse_skill_md(&text)?;
+    let (front, _) = gents::documents::skills::import::parse_skill_md(&text)?;
     let id = kebab(
         front
             .name
@@ -410,7 +410,7 @@ fn import_markdown_dir(
 fn write_prompt(pack: &PackEdit, path: &str, source: &Path) -> Result<()> {
     let text =
         std::fs::read_to_string(source).with_context(|| format!("reading {}", source.display()))?;
-    let (_, body) = gents::skills::import::parse_skill_md(&text)?;
+    let (_, body) = gents::documents::skills::import::parse_skill_md(&text)?;
     std::fs::write(pack.dir.join(path), body + "\n").with_context(|| format!("writing {path}"))
 }
 

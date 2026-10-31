@@ -338,22 +338,22 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ToolCallView,
         RequestResendResultView,
         SessionContextDetailsRequest,
-        gents::toolset::SessionContextDetails,
+        gents::tools::native::SessionContextDetails,
         WorkspaceListingView,
         DesktopObserverMetrics,
         InferenceProbeResult,
         InferenceDiscoveryFailure,
         InferenceDiscoveryResult,
-        gents::inference_setup::InferenceSetupCatalog,
-        gents::inference_setup::InferenceProviderOption,
-        gents::inference_setup::InferenceAuthOption,
-        gents::inference_setup::InferenceProviderId,
-        gents::inference_setup::InferenceAuthMethod,
-        gents::inference_setup::InferenceModelOption,
-        gents::inference_setup::InferenceModelRecommendation,
-        gents::inference_setup::RecommendedNumberControl,
-        gents::inference_setup::RecommendedIntegerControl,
-        gents::inference_setup::RecommendedReasoningControl,
+        gents::inference::backends::setup::InferenceSetupCatalog,
+        gents::inference::backends::setup::InferenceProviderOption,
+        gents::inference::backends::setup::InferenceAuthOption,
+        gents::inference::backends::setup::InferenceProviderId,
+        gents::inference::backends::setup::InferenceAuthMethod,
+        gents::inference::backends::setup::InferenceModelOption,
+        gents::inference::backends::setup::InferenceModelRecommendation,
+        gents::inference::backends::setup::RecommendedNumberControl,
+        gents::inference::backends::setup::RecommendedIntegerControl,
+        gents::inference::backends::setup::RecommendedReasoningControl,
         CodexLoginResult,
         CodexLoginUrl,
         GrokLoginResult,
@@ -737,7 +737,7 @@ fn media_commands_preserve_the_native_tag_in_generated_types() {
 
 #[test]
 fn eval_capture_types_preserve_native_wire_tags() {
-    use gents::document_config::EvalCapture;
+    use gents::documents::EvalCapture;
     let declaration = EvalCapture::decl();
     for capture in [
         EvalCapture::Schema {
@@ -764,7 +764,7 @@ fn eval_capture_types_preserve_native_wire_tags() {
 #[test]
 fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     let dir = tempfile::tempdir().expect("generated directory");
-    gents::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())
+    gents::session::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())
         .expect("notification export");
     let notification = std::fs::read_to_string(dir.path().join("NotificationIdentity.ts")).unwrap();
     assert!(
@@ -788,14 +788,14 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     assert!(effort.contains("high") && effort.contains("none"));
     let auth = std::fs::read_to_string(dir.path().join("BackendAuth.ts")).unwrap();
     for configured in [
-        gents::document_config::BackendAuth::Unauthenticated,
-        gents::document_config::BackendAuth::ApiKey {
+        gents::documents::BackendAuth::Unauthenticated,
+        gents::documents::BackendAuth::ApiKey {
             key: "secret".into(),
         },
-        gents::document_config::BackendAuth::Environment {
+        gents::documents::BackendAuth::Environment {
             variable: "API_KEY".into(),
         },
-        gents::document_config::BackendAuth::NodeOAuth { account_ref: None },
+        gents::documents::BackendAuth::NodeOAuth { account_ref: None },
     ] {
         let wire = serde_json::to_value(configured).unwrap();
         assert!(auth.contains(wire["kind"].as_str().unwrap()));

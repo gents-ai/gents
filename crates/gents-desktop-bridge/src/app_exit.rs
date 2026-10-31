@@ -146,7 +146,7 @@ mod tests {
         let config = crate::config::BridgeConfig {
             home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
             bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         };
         let policy = crate::state::resolve_policy(&config, None).expect("policy");

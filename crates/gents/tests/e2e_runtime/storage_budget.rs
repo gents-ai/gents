@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;
-use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::{CompactionStrategy, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
 
@@ -386,7 +386,7 @@ fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
 async fn load_transcripts(db: &TestDb, node_did: &str) -> Vec<String> {
     let mut transcripts = Vec::new();
     for session in 0..SESSIONS {
-        let messages = gents::trace_export::load_trace_transcript(
+        let messages = gents::observe::trace_export::load_trace_transcript(
             db.node.as_ref(),
             &session_id(session),
             node_did,
@@ -730,7 +730,9 @@ async fn boot_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> BootedAgent
 }
 
 async fn install_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) {
-    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     gents::ensure_node(node, owner).await.unwrap();
     let profile_id = format!("{AGENT_ID}:inference");
     let documents = [
@@ -765,11 +767,15 @@ async fn install_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) 
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.install_budget_backend", |txn| {
         let plan = &plan;
-        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();
-    gents::backend_registry::set_backend_probe_status(node, owner, BACKEND_ID, "healthy")
-        .await
-        .unwrap();
+    gents::inference::backends::registry::set_backend_probe_status(
+        node, owner, BACKEND_ID, "healthy",
+    )
+    .await
+    .unwrap();
 }

@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use gents::document_config::{Agent, PluginToolRef, Tools};
+use gents::documents::{Agent, PluginToolRef, Tools};
 use gents::pack::home_install::recorded_provenance;
 use gents::pack::{read_home_install, InstalledVia, PackKind};
 use gents::plugin::store::{parse_coordinate, read_record};
-use gents::tool_surface::{BashMode, FileToolMode};
+use gents::tools::surface::{BashMode, FileToolMode};
 use gents_protocol::job::PluginJobSettings;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -219,7 +219,7 @@ fn find_target<'a>(
     bundle: &'a ConfigExportBundle,
     agent: &Agent,
     id: &str,
-) -> Option<&'a gents::document_config::AgentTargetDocument> {
+) -> Option<&'a gents::documents::AgentTargetDocument> {
     bundle
         .config
         .agent_targets
@@ -323,7 +323,7 @@ fn reads_files_and_reaches_network(tools: &Tools) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::document_config::AgentContext;
+    use gents::documents::AgentContext;
     use gents::plugin::store::write_record;
 
     const NODE: &str = "did:key:node";
@@ -668,7 +668,7 @@ mod tests {
             node_did: NODE.into(),
             ..Tools::default()
         };
-        let (wired, _, report) = gents::document_config::wire_plugin(
+        let (wired, _, report) = gents::documents::wire_plugin(
             &empty,
             &context,
             &plugin,

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gents::config_client::{
+use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };

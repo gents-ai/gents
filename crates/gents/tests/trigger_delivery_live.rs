@@ -3,10 +3,10 @@
 mod support;
 
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{
+use gents::store::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
 use std::{
@@ -221,7 +221,7 @@ async fn configure(
         support::fixtures::configure_agent_tools(
             node, owner, behavior,
             Some("Follow the requested exact one-line response. This is a delivery qualification; never call tools.".into()),
-            gents::document_config::Tools {
+            gents::documents::Tools {
                 tools_id: format!("{behavior}:tools"), node_did: owner.into(), ..Default::default()
             }, Vec::new(),
         ).await;

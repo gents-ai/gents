@@ -6,9 +6,9 @@ use futures::FutureExt;
 use gents_protocol::row::AgentRequestRow;
 
 use super::EmbeddedHome;
-use crate::config_client::ConfigAccess;
 use crate::eval::runner::TrialLocator;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 const MAX_REQUESTS: usize = 1_000;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -36,7 +36,7 @@ pub async fn inspect_retained_requests(
     let trial_dir = retained_trial_dir(runs_dir, hint)?;
     let home_dir = trial_dir.join("home");
     let did = locator.trial_node_did.clone();
-    crate::storage_backend::drive_unsendable(runtime, move || async move {
+    crate::store::local::storage_backend::drive_unsendable(runtime, move || async move {
         let home = EmbeddedHome::open_for_inspection(&home_dir, &did)
             .await
             .with_context(|| {
@@ -170,7 +170,7 @@ mod tests {
         let node = std::sync::Arc::new(
             crate::defra_node::EmbeddedNode::builder()
                 .data_path(&path)
-                .with_regolith_options(crate::storage_backend::regolith_options())
+                .with_regolith_options(crate::store::local::storage_backend::regolith_options())
                 .with_node_identity_did(&did)
                 .build()
                 .await
@@ -195,7 +195,7 @@ resources:
             .await
             .unwrap();
         ConfigAccess::local(node.clone())
-            .add_collection(&crate::schema::AGENT_REQUEST_SCHEMA.replace(
+            .add_collection(&crate::store::schema::AGENT_REQUEST_SCHEMA.replace(
                 "type AgentRequest ",
                 &format!(
                     "type AgentRequest @policy(id: \"{}\", resource: \"requests\") ",
@@ -335,7 +335,7 @@ resources:
         assert!(!path.join("MANIFEST").exists());
         let node = crate::defra_node::EmbeddedNode::builder()
             .data_path(&path)
-            .with_regolith_options(crate::storage_backend::regolith_options())
+            .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(identity.did())
             .build()
             .await

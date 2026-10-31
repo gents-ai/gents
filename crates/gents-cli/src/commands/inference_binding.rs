@@ -9,19 +9,19 @@ pub(crate) async fn load_bound_profile(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
-) -> Result<gents::document_config::InferenceProfile> {
-    use gents::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
+) -> Result<gents::documents::InferenceProfile> {
+    use gents::store::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
     use gents::Collection;
     ConfigAccess::transact_local_write(node, None, "codex.bound_profile", |txn| {
         Box::pin(async move {
-            let agent: gents::document_config::Agent = serde_json::from_value(
+            let agent: gents::documents::Agent = serde_json::from_value(
                 read(txn, Collection::Agent, node_did, agent_id)
                     .await?
                     .map(|(_, value)| value)
                     .ok_or_else(|| anyhow!("agent {agent_id:?} missing for {node_did:?}"))?,
             )?;
             anyhow::ensure!(agent.enabled, "bound agent is disabled");
-            let profile: gents::document_config::InferenceProfile = serde_json::from_value(
+            let profile: gents::documents::InferenceProfile = serde_json::from_value(
                 read(
                     txn,
                     Collection::InferenceProfile,
@@ -33,7 +33,7 @@ pub(crate) async fn load_bound_profile(
                 .ok_or_else(|| anyhow!("bound inference profile missing"))?,
             )?;
             profile.validate()?;
-            let backend: gents::document_config::InferenceBackend = serde_json::from_value(
+            let backend: gents::documents::InferenceBackend = serde_json::from_value(
                 read(
                     txn,
                     Collection::InferenceBackend,
@@ -58,15 +58,19 @@ pub(crate) async fn load_bound_context_window(
     agent_id: &str,
 ) -> Result<i64> {
     let profile = load_bound_profile(node, node_did, agent_id).await?;
-    let backend = gents::backend_registry::lookup_backend(node, node_did, &profile.backend_id)
-        .await?
-        .ok_or_else(|| anyhow!("bound backend disappeared"))?;
-    let observation =
-        gents::backend_registry::lookup_backend_observation(node, node_did, &profile.backend_id)
-            .await?;
+    let backend =
+        gents::inference::backends::registry::lookup_backend(node, node_did, &profile.backend_id)
+            .await?
+            .ok_or_else(|| anyhow!("bound backend disappeared"))?;
+    let observation = gents::inference::backends::registry::lookup_backend_observation(
+        node,
+        node_did,
+        &profile.backend_id,
+    )
+    .await?;
     let credential_scope = matches!(
         backend.auth,
-        gents::document_config::BackendAuth::NodeOAuth { .. }
+        gents::documents::BackendAuth::NodeOAuth { .. }
     )
     .then_some(node_did);
     let catalog = observation

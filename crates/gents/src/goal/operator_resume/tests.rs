@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::config_client::{read_desired_state_record_in_txn, ConfigAccess};
+use crate::store::config_client::{read_desired_state_record_in_txn, ConfigAccess};
 use crate::Collection;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use serde_json::json;
@@ -141,7 +141,7 @@ async fn resume_on_moves_the_profile_and_publishes_one_child() {
 async fn resume_on_retry_returns_the_same_child() {
     let limited = Limited::new(&usage_limit()).await;
     let first = limited.resume_on(&limited.b).await.unwrap();
-    crate::oauth_credential::set_account_enabled(
+    crate::inference::auth::credential::set_account_enabled(
         &limited.access,
         limited.f.identity.did(),
         &limited.b_credential,
@@ -161,7 +161,7 @@ async fn resume_on_retry_returns_the_same_child() {
 async fn completed_resume_retry_does_not_switch_a_profile_moved_again() {
     let limited = Limited::new(&usage_limit()).await;
     let first = limited.resume_on(&limited.b).await.unwrap();
-    crate::config_client::switch_profile_account(
+    crate::store::config_client::switch_profile_account(
         &limited.access,
         limited.f.identity.did(),
         PROFILE,
@@ -196,7 +196,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 assert!(case.expected["children"].as_array().unwrap().is_empty());
                 assert_eq!(case.outcome, "unavailable");
                 let limited = Limited::new(&usage_limit()).await;
-                crate::config_client::switch_profile_account(
+                crate::store::config_client::switch_profile_account(
                     &limited.access,
                     limited.f.identity.did(),
                     PROFILE,
@@ -206,7 +206,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 )
                 .await
                 .unwrap();
-                crate::oauth_credential::set_account_enabled(
+                crate::inference::auth::credential::set_account_enabled(
                     &limited.access,
                     limited.f.identity.did(),
                     &limited.b_credential,
@@ -225,7 +225,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 assert_eq!(case.outcome, "recovered");
                 let limited = Limited::new(&usage_limit()).await;
                 let first = limited.resume_on(&limited.b).await.unwrap();
-                crate::oauth_credential::set_account_enabled(
+                crate::inference::auth::credential::set_account_enabled(
                     &limited.access,
                     limited.f.identity.did(),
                     &limited.b_credential,
@@ -246,7 +246,7 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
 #[tokio::test]
 async fn moved_profile_retry_rejects_a_disabled_target_account() {
     let limited = Limited::new(&usage_limit()).await;
-    crate::config_client::switch_profile_account(
+    crate::store::config_client::switch_profile_account(
         &limited.access,
         limited.f.identity.did(),
         PROFILE,
@@ -256,7 +256,7 @@ async fn moved_profile_retry_rejects_a_disabled_target_account() {
     )
     .await
     .unwrap();
-    crate::oauth_credential::set_account_enabled(
+    crate::inference::auth::credential::set_account_enabled(
         &limited.access,
         limited.f.identity.did(),
         &limited.b_credential,
@@ -275,7 +275,7 @@ async fn moved_profile_retry_rejects_a_disabled_target_account() {
 #[tokio::test]
 async fn moved_profile_retry_rejects_a_removed_target_account() {
     let limited = Limited::new(&usage_limit()).await;
-    crate::config_client::switch_profile_account(
+    crate::store::config_client::switch_profile_account(
         &limited.access,
         limited.f.identity.did(),
         PROFILE,
@@ -293,7 +293,8 @@ async fn moved_profile_retry_rejects_a_removed_target_account() {
             let did = did.clone();
             let credential = credential.clone();
             Box::pin(async move {
-                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential).await
+                crate::inference::auth::credential::remove_account_in_txn(txn, &did, &credential)
+                    .await
             })
         })
         .await

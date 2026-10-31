@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
-use gents::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
+use gents::session::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 
 use crate::cli::args::{
     MailboxAccessArgs, MailboxCommand, MailboxItemArgs, MailboxListArgs, MailboxReplyArgs,
@@ -38,7 +38,7 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         "MailboxItem is no longer open"
     );
     anyhow::ensure!(
-        item.parsed_action() == Some(gents::mailbox::MailboxAction::StartRequest),
+        item.parsed_action() == Some(gents::session::mailbox::MailboxAction::StartRequest),
         "MailboxItem does not accept request replies"
     );
     anyhow::ensure!(
@@ -68,7 +68,7 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
 
 async fn access_and_principal(
     args: &MailboxAccessArgs,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let principal =
         resolve_node_did(args.home.as_deref(), None).context("resolving mailbox node DID")?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -80,7 +80,7 @@ async fn list(args: MailboxListArgs) -> Result<()> {
         .ensure_supported("mailbox list", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
     let items = if let Some(node) = access.local_node() {
-        gents::mailbox::list_mailbox_items(
+        gents::session::mailbox::list_mailbox_items(
             node,
             &principal,
             (!args.all).then_some(MailboxStatus::Open),
@@ -122,7 +122,7 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
         .ensure_supported("mailbox dismiss", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
     let item = if let Some(node) = access.local_node() {
-        gents::mailbox::dismiss_mailbox_item(node, &args.doc_id, &principal).await?
+        gents::session::mailbox::dismiss_mailbox_item(node, &args.doc_id, &principal).await?
     } else {
         let before = load_item(&access, &args.doc_id)
             .await?
@@ -152,7 +152,7 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
 
 async fn load_item(access: &ConfigAccess, doc_id: &str) -> Result<Option<MailboxItem>> {
     if let Some(node) = access.local_node() {
-        return gents::mailbox::load_mailbox_item(node, doc_id).await;
+        return gents::session::mailbox::load_mailbox_item(node, doc_id).await;
     }
     let response = access
         .execute(&format!(

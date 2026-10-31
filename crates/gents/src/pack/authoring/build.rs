@@ -73,13 +73,13 @@ pub fn build_pack(
     }
     // A file-produced UX plugin the webview would refuse never gets packed;
     // an .afb-produced one is linted when its producer runs.
-    let refused: Vec<String> = crate::ux_plugin::lint_pack_dir(dir, &manifest.metadata.ux)?
+    let refused: Vec<String> = crate::plugin::ux::lint_pack_dir(dir, &manifest.metadata.ux)?
         .into_iter()
         .filter(|(_, findings)| !findings.is_empty())
         .map(|(name, findings)| {
             format!(
                 "ux plugin {name:?}: {}",
-                crate::ux_plugin::lint::describe(&findings)
+                crate::plugin::ux::lint::describe(&findings)
             )
         })
         .collect();
@@ -105,7 +105,7 @@ pub fn build_pack(
         .with_context(|| format!("staging the pack in {}", out_dir.display()))?;
     let header = {
         let mut writer = std::io::BufWriter::new(staged.as_file_mut());
-        let header = crate::pack_archive::write_pack(dir, &mut writer)
+        let header = crate::pack::archive::write_pack(dir, &mut writer)
             .with_context(|| format!("packing {}", dir.display()))?;
         std::io::Write::flush(&mut writer).context("writing the pack")?;
         header
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(report.size_bytes, std::fs::metadata(&out).unwrap().len());
 
         let packed =
-            crate::pack_archive::PackArchive::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
+            crate::pack::archive::PackArchive::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
         assert_eq!(packed.digest(), report.digest);
         let staging_left: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()

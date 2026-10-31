@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::{
     JobBudget, JobControlKind, JobControlOutcome, JobProgress, JobReadError, JobState,
@@ -260,7 +260,7 @@ async fn job_control_on_an_ended_job_row_is_already_terminal() {
 
 #[tokio::test]
 async fn job_control_routes_to_the_owner_without_a_replica_row() {
-    use gents::identity::{KeyIdentity, NodeIdentity};
+    use gents::store::identity::{KeyIdentity, NodeIdentity};
     use wiremock::matchers::{body_json, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     let server = MockServer::start().await;

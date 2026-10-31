@@ -137,7 +137,7 @@ pub async fn prepare_accepted_turn_as(
         });
         super::create_session_document(db.node.as_ref(), &session).await;
     } else if existing_session.is_some_and(|session| session.title.is_none()) {
-        let session_id = gents::graphql::escape_graphql_string(spec.session_id);
+        let session_id = gents::store::graphql::escape_graphql_string(spec.session_id);
         let title = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "text": "generated-title",
             "source": "generated"
@@ -255,7 +255,7 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
     if let Some(marker) = dynamic_marker {
         prepared.backend.enable_dynamic_followups(marker);
     }
-    use gents::config_client::{
+    use gents::store::config_client::{
         apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
         DesiredStateApplyPlan,
     };

@@ -1,6 +1,6 @@
 use super::*;
 use crate::lean_vocab_test::LeanRestartRowKind;
-use gents::tool_call_lifecycle::{AwaitMode, ToolRowKind};
+use gents::tools::call::lifecycle::{AwaitMode, ToolRowKind};
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
@@ -155,7 +155,7 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     assert_eq!(redrive.post_retry_count, Some(2));
     assert_eq!(redrive.retry_delay_seconds, Some(10));
     assert_eq!(
-        gents::lifecycle::background_wake_retry_delay(redrive.retry_count.unwrap() as i64)
+        gents::request::lifecycle::background_wake_retry_delay(redrive.retry_count.unwrap() as i64)
             .num_seconds(),
         redrive.retry_delay_seconds.unwrap() as i64
     );

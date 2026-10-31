@@ -1,7 +1,7 @@
 use super::contract_tests::{entry, goal};
 use super::*;
-use crate::config_client::ConfigAccess;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::config_client::ConfigAccess;
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -129,7 +129,7 @@ async fn persist_request(
         )
         .await
         .unwrap();
-    crate::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+    crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
 async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
@@ -198,7 +198,7 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
                 } else {
                     let response = txn.execute_with_variables("mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
                         &json!({"input":value})).await?;
-                    crate::graphql::created_doc_id(&response,"Goal")
+                    crate::store::graphql::created_doc_id(&response,"Goal")
                 }
             })
         }).await.unwrap();
@@ -206,10 +206,11 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     }
     if case["name"] == "later_complete_goal_cannot_complete_older_active_assignment" {
         let first_document = case["versions"][0]["document"].as_u64().unwrap();
-        let doc = crate::graphql::escape_graphql_string(&documents[&first_document]);
+        let doc = crate::store::graphql::escape_graphql_string(&documents[&first_document]);
         for index in 0..65 {
-            let objective =
-                crate::graphql::escape_graphql_string(&format!("History observation {index}"));
+            let objective = crate::store::graphql::escape_graphql_string(&format!(
+                "History observation {index}"
+            ));
             access
                 .write(
                     "test.goal_history_many_revisions",
@@ -227,7 +228,9 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
                 "test.retire_goal_history",
                 &format!(
                     "mutation {{delete_Goal(docID: \"{}\") {{_docID}}}}",
-                    crate::graphql::escape_graphql_string(&documents[&doc.as_u64().unwrap()])
+                    crate::store::graphql::escape_graphql_string(
+                        &documents[&doc.as_u64().unwrap()]
+                    )
                 ),
             )
             .await
@@ -236,8 +239,8 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     let response = access
         .execute(&format!(
             "{{AgentRequest(docID: \"{}\") {{{}}}}}",
-            crate::graphql::escape_graphql_string(&request_doc),
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::store::graphql::escape_graphql_string(&request_doc),
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -262,10 +265,10 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         "{}: retained history in the caller's transaction",
         case["name"]
     );
-    let handoff = crate::background_completion::turn_assignment_handoff(
+    let handoff = crate::tools::background::completion::turn_assignment_handoff(
         &node,
         &rows[0],
-        &crate::tool_call_lifecycle::CausedRequestTerminal::Completed {
+        &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
             output: "turn finished".into(),
         },
     )

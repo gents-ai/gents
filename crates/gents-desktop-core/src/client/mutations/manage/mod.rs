@@ -9,8 +9,8 @@ mod tools;
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
-use gents::collection::Collection;
-use gents::config_client::{
+use gents::store::collection::Collection;
+use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
 #[cfg(test)]

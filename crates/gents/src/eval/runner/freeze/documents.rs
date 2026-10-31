@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
 
 use super::refused;
-use crate::config_client::{
-    desired_state_document_digest, read_desired_state_record_in_txn, ConfigAccess,
-};
-use crate::document_config::{
+use crate::documents::{
     BackendAuth, EvalDefinition, InferenceBackend, InferenceExecution, InferenceProfile,
     InferenceRetryPolicy, InferenceSampling,
 };
 use crate::eval::runner::executor::InferenceBinding;
 use crate::eval::DefinitionRef;
+use crate::store::config_client::{
+    desired_state_document_digest, read_desired_state_record_in_txn, ConfigAccess,
+};
 use crate::Collection;
 
 pub(super) async fn read_document<T>(

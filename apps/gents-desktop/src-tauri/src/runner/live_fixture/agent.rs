@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     cli_tool, default_agent_id_for_node, default_inference_profile_id_for_agent,
     DocumentRuntimeOptions, Gents, InferenceBackend, NodeIdentity, ToolCeiling,
@@ -105,11 +105,11 @@ async fn seed_live_agent_documents(
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
 ) -> Result<LiveAgentDocs> {
-    use gents::config_client::{
+    use gents::documents::PackConfig;
+    use gents::store::config_client::{
         apply_desired_state_plan, load_inference_backend_in_txn, ConfigAccess,
         DesiredStateApplyPlan,
     };
-    use gents::document_config::PackConfig;
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
     let agent_id = default_agent_id_for_node(node_did);
@@ -203,7 +203,7 @@ fn live_backend_candidate(
     backend_id: &str,
     backend: &LiveBackendConfig,
 ) -> Result<InferenceBackend> {
-    use gents::document_config::BackendAuth;
+    use gents::documents::BackendAuth;
     let auth = match (&backend.api_key, &backend.api_key_env_var) {
         (Some(_), Some(_)) => anyhow::bail!("live backend must select one credential source"),
         (Some(key), None) => BackendAuth::ApiKey { key: key.clone() },

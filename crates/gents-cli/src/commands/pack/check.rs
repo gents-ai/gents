@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::pack_archive::{pack_dir, PackArchive};
+use gents::pack::archive::{pack_dir, PackArchive};
 use gents::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;
@@ -87,13 +87,13 @@ fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
     gents::pack::authoring::read_manifest(dir)
 }
 
-fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConfig> {
+fn load_config(archive: &PackArchive) -> Result<gents::documents::PackConfig> {
     gents::pack::authoring::load_config(archive)
 }
 
 async fn check_filters(
     dir: &Path,
-    config: &gents::document_config::PackConfig,
+    config: &gents::documents::PackConfig,
     problems: &mut Vec<String>,
 ) -> Result<()> {
     if config
@@ -112,7 +112,7 @@ async fn check_filters(
             .await?,
     );
     gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = gents::config_client::ConfigAccess::local(node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(node.clone());
     crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
     for source in &config.event_sources {
         let Some(filter) = source.filter.as_deref() else {

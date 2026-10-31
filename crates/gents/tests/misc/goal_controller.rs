@@ -9,7 +9,7 @@ use gents::goal::{
     set_goal, set_goal_from_access, update_goal_fields_if_status, CreateGoalForSessionError,
     CreateGoalForSessionOutcome, GoalStatus,
 };
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{
     ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource,
     UpdateSubscriptionSource,
@@ -39,7 +39,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-    let escaped = gents::graphql::escape_graphql_string(request_doc_id);
+    let escaped = gents::store::graphql::escape_graphql_string(request_doc_id);
     let response = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ node_did requester_did session_id execution_generation }} }}"#
     )).await;
@@ -56,7 +56,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
         Some(generation) => generation.to_owned(),
         None => {
             let generation = format!("goal-observation-{request_doc_id}");
-            let escaped_generation = gents::graphql::escape_graphql_string(&generation);
+            let escaped_generation = gents::store::graphql::escape_graphql_string(&generation);
             let response = db.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await;
             assert!(
                 !response.has_errors(),
@@ -68,7 +68,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
     };
     let sequence_response = db.node.execute(&format!(
         r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, order: {{ sequence: DESC }}, limit: 1) {{ sequence }} }}"#,
-        gents::graphql::escape_graphql_string(session_id), gents::graphql::escape_graphql_string(node_did)
+        gents::store::graphql::escape_graphql_string(session_id), gents::store::graphql::escape_graphql_string(node_did)
     )).await;
     let sequence = sequence_response
         .data
@@ -126,7 +126,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
         created.errors
     );
     let close_doc_id =
-        gents::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+        gents::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -173,12 +173,13 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
         "publish goal message: {:?}",
         created.errors
     );
-    let message_doc_id = gents::graphql::single_mutation_document(&created, "create_AgentMessage")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let message_doc_id =
+        gents::store::graphql::single_mutation_document(&created, "create_AgentMessage")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
     let terminal = gents_protocol::graphql::graphql_input_literal(
         &serde_json::to_value(TerminalOutput::Message { message_doc_id }).unwrap(),
     )
@@ -192,7 +193,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
 }
 
 async fn select_no_terminal_message(db: &TestDb, request_doc_id: &str) {
-    let escaped = gents::graphql::escape_graphql_string(request_doc_id);
+    let escaped = gents::store::graphql::escape_graphql_string(request_doc_id);
     let terminal = gents_protocol::graphql::graphql_input_literal(
         &serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap(),
     )
@@ -251,9 +252,9 @@ async fn publish_node_readiness(
             reason: behavior,
         }],
     };
-    let did = gents::graphql::escape_graphql_string(db.node_identity.did());
+    let did = gents::store::graphql::escape_graphql_string(db.node_identity.did());
     let snapshot_json =
-        gents::graphql::escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
+        gents::store::graphql::escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
     let updated_at = chrono::Utc::now().to_rfc3339();
     let response = db
         .node
@@ -273,7 +274,7 @@ async fn publish_node_readiness(
 }
 
 async fn publish_reconcile_phase(db: &TestDb, phase: &str) {
-    let did = gents::graphql::escape_graphql_string(db.node_identity.did());
+    let did = gents::store::graphql::escape_graphql_string(db.node_identity.did());
     let response = db
         .node
         .execute(&format!(
@@ -381,7 +382,7 @@ async fn seed_signed_terminal_request_in_session(
         )
         .await
         .unwrap();
-    let doc_id = gents::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let doc_id = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     set_request_lifecycle_state(db.node.as_ref(), &doc_id, state).await;
     doc_id
 }
@@ -399,7 +400,7 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
 struct GoalBackgroundHandoff {
     runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
     parent_doc_id: String,
-    background_executions: gents::hook::BackgroundExecutionRegistry,
+    background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     process_tool_call_id: String,
 }
 
@@ -454,11 +455,11 @@ async fn boot_goal_background_handoff_with_plans(
         did,
         behavior,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{behavior}:tools"),
             node_did: did.to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sh".into()]),
                     background_enabled: true,
@@ -487,7 +488,7 @@ async fn boot_goal_background_handoff_with_plans(
         crate::support::accepted_turn::boot_prepared_accepted_turn(db, prepared, agent).await;
     let parent_doc = crate::support::exact_request_doc_id(db.node.as_ref(), request_id).await;
     for _ in 0..200 {
-        let response = db.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents::graphql::escape_graphql_string(&parent_doc))).await;
+        let response = db.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents::store::graphql::escape_graphql_string(&parent_doc))).await;
         assert!(
             !response.has_errors(),
             "query running background process: {:?}",
@@ -521,7 +522,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     use crate::support::streaming_backend::{
         StreamChunk, StreamPlan, StreamResponse, StreamScript,
     };
-    use gents::llm::message::{Message, Text, ToolResultContent, UserContent};
+    use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
 
     let db = test_db("goal-real-process-wait-wake").await;
     let parent_request_id = "goal-real-process-parent";
@@ -574,7 +575,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     );
     let process = db.node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }} }}, limit: 1) {{ _docID tool_call_id lifecycle_state await_mode }} }}"#,
-        gents::graphql::escape_graphql_string(&parent_doc_id)
+        gents::store::graphql::escape_graphql_string(&parent_doc_id)
     )).await;
     assert!(!process.has_errors(), "process query: {:?}", process.errors);
     let process = &process.data.as_ref().unwrap()["AgentToolCall"][0];
@@ -679,7 +680,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         assert!(entered_path.exists() && !release_path.exists());
         let process = db.node.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-            gents::graphql::escape_graphql_string(&process_doc_id)
+            gents::store::graphql::escape_graphql_string(&process_doc_id)
         )).await;
         assert!(
             !process.has_errors(),
@@ -722,7 +723,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         loop {
             let response = db.node.execute(&format!(
                 r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID message_key node_did requester_did request_doc_id }} }}"#,
-                gents::graphql::escape_graphql_string(&notification_key)
+                gents::store::graphql::escape_graphql_string(&notification_key)
             )).await;
             assert!(!response.has_errors(), "notification query: {:?}", response.errors);
             let rows = response.data.as_ref().unwrap()["AgentMessage"].as_array().unwrap();
@@ -766,7 +767,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     );
     let wake_response = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id lifecycle_state execution_origin }} }}"#,
-        gents::graphql::escape_graphql_string(wake_doc_id)
+        gents::store::graphql::escape_graphql_string(wake_doc_id)
     )).await;
     assert!(
         !wake_response.has_errors(),
@@ -829,7 +830,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
     let process = db.node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state completion_notification_delivered_at }} }}"#,
-        gents::graphql::escape_graphql_string(&process_handle)
+        gents::store::graphql::escape_graphql_string(&process_handle)
     )).await;
     assert!(
         !process.has_errors(),
@@ -1768,7 +1769,7 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     // Canonical runtime schema bootstrap (AgentRequest, InferenceCall, Goal,
     // migrations): raw served nodes have an empty schema, matching
     // EmbeddedHome::open_with_identity's initialize_schemas path.
-    gents::schema::ensure_runtime_schemas(&node)
+    gents::store::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
     let endpoint = format!("http://{address}/api/v0/graphql");
@@ -2168,9 +2169,21 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
 #[tokio::test]
 async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
     for (name, state, reason) in [
-        ("folded", "superseded", gents::lifecycle::FOLDED_REASON),
-        ("replaced", "superseded", gents::lifecycle::REPLACED_REASON),
-        ("removed", "interrupted", gents::lifecycle::REMOVED_REASON),
+        (
+            "folded",
+            "superseded",
+            gents::request::lifecycle::FOLDED_REASON,
+        ),
+        (
+            "replaced",
+            "superseded",
+            gents::request::lifecycle::REPLACED_REASON,
+        ),
+        (
+            "removed",
+            "interrupted",
+            gents::request::lifecycle::REMOVED_REASON,
+        ),
     ] {
         let db = test_db(&format!("goal-retired-input-{name}")).await;
         let parent = seed_completed_request(&db, "execution-parent").await;
@@ -2319,7 +2332,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             }}) {{ _docID }} }}"#,
             escape_graphql_string(&parent_doc),
             escape_graphql_string(&parent_doc),
-            gents::graphql::escape_graphql_string(db.node_identity.did()),
+            gents::store::graphql::escape_graphql_string(db.node_identity.did()),
         );
         ConfigAccess::local(db.node.clone())
             .write("test.goal_failure_and_budget_usage", &usage)
@@ -2358,7 +2371,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await;
         let observed = db.node.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state status completion_notification_delivered_at }} }}"#,
-            gents::graphql::escape_graphql_string(&process_tool_call_id),
+            gents::store::graphql::escape_graphql_string(&process_tool_call_id),
         )).await;
         assert!(
             !observed.has_errors(),
@@ -2376,7 +2389,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             rows[0]["completion_notification_delivered_at"].is_string(),
             "the worker must publish its completion before ownership ends: {delivery}"
         );
-        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
+        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
         let observed = db.node.execute(
             "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID node_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
         ).await;
@@ -2814,11 +2827,11 @@ async fn seed_failed_call(
                     failure_reason: "{failure_reason}"
                 }}) {{ _docID }}
             }}"#,
-            call_id = gents::graphql::escape_graphql_string(call_id),
-            node_did = gents::graphql::escape_graphql_string(db.node_identity.did()),
-            call_kind = gents::graphql::escape_graphql_string(call_kind),
-            ended_at = gents::graphql::escape_graphql_string(ended_at),
-            failure_reason = gents::graphql::escape_graphql_string(failure_reason),
+            call_id = gents::store::graphql::escape_graphql_string(call_id),
+            node_did = gents::store::graphql::escape_graphql_string(db.node_identity.did()),
+            call_kind = gents::store::graphql::escape_graphql_string(call_kind),
+            ended_at = gents::store::graphql::escape_graphql_string(ended_at),
+            failure_reason = gents::store::graphql::escape_graphql_string(failure_reason),
         ))
         .await;
     assert!(
@@ -3450,7 +3463,7 @@ async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
     assert!(!response.has_errors(), "{:?}", response.errors);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-        gents::graphql::escape_graphql_string(request_id),
+        gents::store::graphql::escape_graphql_string(request_id),
     );
     let response = db.node.execute(&query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -3474,7 +3487,7 @@ async fn operator_resume_child_row(db: &TestDb, doc_id: &str) -> serde_json::Val
         caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
         request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash
     }} }}"#,
-        gents::graphql::escape_graphql_string(doc_id)
+        gents::store::graphql::escape_graphql_string(doc_id)
     );
     let response = db.node.execute(&query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -3857,7 +3870,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     let original = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
             request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
-        }} }}"#, gents::graphql::escape_graphql_string(&first.doc_id),
+        }} }}"#, gents::store::graphql::escape_graphql_string(&first.doc_id),
     )).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
     let mut forged = original.data.unwrap()["AgentRequest"][0].clone();
@@ -3866,7 +3879,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
         .node
         .execute(&format!(
             r#"mutation {{ delete_AgentRequest(docID: "{}") {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(&first.doc_id),
+            gents::store::graphql::escape_graphql_string(&first.doc_id),
         ))
         .await;
     assert!(!removed.has_errors(), "{:?}", removed.errors);
@@ -3927,11 +3940,16 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         let sibling = seed_operator_resume_parent(&db, "a-older").await;
         seed_operator_resume_parent(&db, "z-parent").await;
         let state = state
-            .map(|value| format!("\"{}\"", gents::graphql::escape_graphql_string(value)))
+            .map(|value| {
+                format!(
+                    "\"{}\"",
+                    gents::store::graphql::escape_graphql_string(value)
+                )
+            })
             .unwrap_or_else(|| "null".to_owned());
         let response = db.node.execute(&format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: {state} }}) {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(&sibling)
+            gents::store::graphql::escape_graphql_string(&sibling)
         )).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let before = set_goal(
@@ -4032,8 +4050,8 @@ async fn seed_goal_fields(
     goal: &gents::goal::GoalDocument,
     fields: &str,
 ) -> anyhow::Result<()> {
-    let doc_id = gents::graphql::escape_graphql_string(&goal.doc_id);
-    let node_did = gents::graphql::escape_graphql_string(&goal.node_did);
+    let doc_id = gents::store::graphql::escape_graphql_string(&goal.doc_id);
+    let node_did = gents::store::graphql::escape_graphql_string(&goal.node_did);
     let response = node.execute(&format!(
         r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     )).await;
@@ -4073,7 +4091,7 @@ async fn seed_same_second_canonical_goal_child(
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(parent_id),
+            gents::store::graphql::escape_graphql_string(parent_id),
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -4113,7 +4131,7 @@ async fn seed_same_second_canonical_goal_child(
         agent_id: crate::support::AGENT_NAME.to_owned(),
         session_id: SESSION.to_owned(),
         content: "The canonical continuation made durable progress".to_owned(),
-        execution_origin: gents::lifecycle::ExecutionOrigin::Scheduled,
+        execution_origin: gents::request::lifecycle::ExecutionOrigin::Scheduled,
         created_at: "2026-07-15T00:00:00Z".to_owned(),
     };
     let admission =
@@ -4173,7 +4191,7 @@ async fn seed_same_second_canonical_goal_child(
         &goal,
         &format!(
             "continuation_sequence: 1, last_continued_from_request_id: \"{}\"",
-            gents::graphql::escape_graphql_string(parent_id),
+            gents::store::graphql::escape_graphql_string(parent_id),
         ),
     )
     .await
@@ -4257,8 +4275,8 @@ async fn canonical_goal_json(db: &TestDb) -> serde_json::Value {
 }
 
 async fn reject_before_claim(db: &TestDb, doc_id: &str, reason: &str) {
-    let doc_id = gents::graphql::escape_graphql_string(doc_id);
-    let reason = gents::graphql::escape_graphql_string(reason);
+    let doc_id = gents::store::graphql::escape_graphql_string(doc_id);
+    let reason = gents::store::graphql::escape_graphql_string(reason);
     let response = db
         .node
         .execute(&format!(

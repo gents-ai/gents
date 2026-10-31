@@ -18,7 +18,7 @@ use super::wire::{
     TerminalOutcome,
 };
 use super::*;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::store::graphql::{ensure_no_errors, escape_graphql_string};
 use serde_json::json;
 
 fn text_block(text: &str) -> Value {
@@ -140,7 +140,7 @@ async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
             .await
             .expect("embedded node"),
     );
-    gents::schema::ensure_runtime_schemas(&node)
+    gents::store::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
     super::super::seed_test_agent_configuration(
@@ -361,7 +361,7 @@ async fn seed_canonical_text_message(
         .await;
     ensure_no_errors(&response, "seed canonical output segment").expect("seed segment");
     let close_doc_id =
-        gents::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+        gents::store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
             .expect("segment mutation envelope")
             .expect("created segment row")["_docID"]
             .as_str()

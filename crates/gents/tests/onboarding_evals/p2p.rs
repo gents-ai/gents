@@ -3,15 +3,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Result};
-use gents::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
-use gents::document_config::{DatastoreTools, InferenceSampling};
+use gents::documents::{DatastoreTools, InferenceSampling};
 use gents::eval::runner::embedded::EmbeddedHome;
-use gents::graphql::escape_graphql_string;
-use gents::llm::tool::Tool;
-use gents::p2p_tool::P2pTool;
+use gents::inference::llm::tool::Tool;
 use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
-use gents::tool_surface::ToolRuntimeContext;
-use gents::tool_surface::{BashMode, EndpointScope, FileToolMode, ToolPolicySurface};
+use gents::store::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::builtin::p2p::P2pTool;
+use gents::tools::surface::ToolRuntimeContext;
+use gents::tools::surface::{BashMode, EndpointScope, FileToolMode, ToolPolicySurface};
 use gents::{DocumentRuntimeOptions, ToolCeiling};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -296,7 +296,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             gents::default_inference_profile_id_for_agent(&target_ids.1);
         let mut profile = target.profile(&did);
         profile.profile_id = config.agents[0].inference_profile_id.clone();
-        profile.reasoning_effort = Some(gents::config::ReasoningEffort::High);
+        profile.reasoning_effort = Some(gents::inference::resolved::ReasoningEffort::High);
         profile.sampling_id = Some("p2p-eval-sampling".into());
         config.inference_profiles = vec![profile];
         config.inference_sampling = vec![InferenceSampling {
@@ -342,7 +342,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             case.expectation.as_str(),
             "idempotent_pairing" | "overlay_revoked"
         ) {
-            use gents::agent::p2p_reconcile::{
+            use gents::runtime::agent::p2p_reconcile::{
                 reconcile_peer_tick, EmbeddedRemoteP2pAdmin, EnrollmentEndpointEntry,
                 GraphqlEnrollmentStore, GraphqlPairingStateStore, PairingStateStore,
             };
@@ -493,7 +493,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             .iter()
             .filter(|r| r["peer_id"] == peer && r["source"] == "engineer")
             .collect();
-        let enrollment_active = gents::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
+        let enrollment_active = gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
             local.node.clone(),
             local.node_identity.clone(),
         )
@@ -596,7 +596,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         };
         let metrics = json!({"tool_calls":calls.len(),"failed_tool_calls":failed_calls,"errors_naming_next_call":actionable_errors,"tool_output_bytes":output_bytes});
         let capability_evidence = json!({
-            "protocol_sync_supported": gents::agent::p2p_reconcile::templates::admit_app_collections(["OAuthCredential".into()].into()).is_some(),
+            "protocol_sync_supported": gents::runtime::agent::p2p_reconcile::templates::admit_app_collections(["OAuthCredential".into()].into()).is_some(),
             "application_collection_grant": ["DeploymentNote"],
             "source_peer_certified": false,
             "sync_requires_known_document_ids": true,

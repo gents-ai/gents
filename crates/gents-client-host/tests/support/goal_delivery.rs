@@ -40,9 +40,9 @@ pub(super) async fn exercise(
         AgentRequest(filter:{{node_did:{{_eq:"{}"}},session_id:{{_eq:"{}"}},purpose:{{_eq:"normal"}}}})
             {{_docID request_id session_id content input admission_signature created_at valid_until}}
     }}"#,
-        gents::graphql::escape_graphql_string(&command),
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(&session)
+        gents::store::graphql::escape_graphql_string(&command),
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(&session)
     );
     let admitted = recovery.access.execute(&query).await?;
     let controls = admitted["data"]["AgentSessionGoalControl"]

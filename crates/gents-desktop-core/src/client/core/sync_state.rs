@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::{
     compare_client_replicated_schema, read_client_replicated_schema,
 };
 use gents::P2pSyncStatusSnapshot;

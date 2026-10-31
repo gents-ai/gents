@@ -17,7 +17,7 @@ use super::canonical_rows::{
 use super::output::replay_candidates::load_canonical_assistant_candidates;
 use super::output::replay_request::ReplayRequestReader;
 use super::output::CanonicalReplayScope;
-use crate::provider_context_reduction::{capture_source_boundary, SourceBoundary};
+use crate::turn::provider_context_reduction::{capture_source_boundary, SourceBoundary};
 
 use gents_loop::claude_messages_body::{
     replay_stage, select_replay, ReplayIssuer, ReplayTag, ReplayWire, TaggedAssistantRow,
@@ -109,14 +109,16 @@ impl ReplayFixture {
         storage: CaptureStorage,
         wire: Option<ReplayWire>,
     ) -> Option<CapturedRequest> {
-        use crate::rendered_request::{
+        use crate::inference::rendered_request::{
             build_rendered_completion_request, AssemblyBuildPath, AssemblyTrace,
             DefraRenderedRequestSink, RenderedRequestComponents, RenderedRequestContext,
         };
 
         let capture_scope = format!("{}.1", self.scope_kind);
         let uri = match source {
-            RenderedRequestSource::ClaudeCliSubscription => crate::claude_messages::MESSAGES_URI,
+            RenderedRequestSource::ClaudeCliSubscription => {
+                crate::inference::clients::claude_messages::MESSAGES_URI
+            }
             RenderedRequestSource::OpenAiChatCompletions => {
                 "https://api.openai.com/v1/chat/completions"
             }
@@ -172,7 +174,7 @@ impl ReplayFixture {
                 .await
                 .expect("corrupt capture row"),
             CaptureStorage::MissingDeltaBase => {
-                use crate::rendered_request::encoding::{
+                use crate::inference::rendered_request::encoding::{
                     encode_against, encode_container, encode_full, BaseWitness,
                 };
                 let mut value = body.clone();
@@ -279,7 +281,7 @@ impl ReplayFixture {
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
         let close_doc_id =
-            crate::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+            crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
                 .unwrap()
                 .unwrap()["_docID"]
                 .as_str()
@@ -395,7 +397,7 @@ impl ReplayFixture {
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
         let close_doc_id =
-            crate::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+            crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
                 .unwrap()
                 .unwrap()["_docID"]
                 .as_str()
@@ -564,20 +566,21 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
                 lifecycle_state: "pending", execution_origin: "interactive",
                 created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(REQUEST_ID),
-            crate::graphql::escape_graphql_string(NODE_DID),
-            crate::graphql::escape_graphql_string(SESSION_ID),
-            crate::graphql::escape_graphql_string(&now),
+            crate::store::graphql::escape_graphql_string(REQUEST_ID),
+            crate::store::graphql::escape_graphql_string(NODE_DID),
+            crate::store::graphql::escape_graphql_string(SESSION_ID),
+            crate::store::graphql::escape_graphql_string(&now),
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let request_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let request_commit_cid = crate::graphql::newest_document_composite_commit(
+    let request_doc_id =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let request_commit_cid = crate::store::graphql::newest_document_composite_commit(
         &node,
         &request_doc_id,
         "replay fixture request",
@@ -705,7 +708,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let close_doc_id =
-        crate::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+        crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -787,12 +790,13 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let header_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentMessage")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let header_doc_id =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentMessage")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
     let boundary = capture_source_boundary(
         &node,
         SESSION_ID,
@@ -958,18 +962,18 @@ async fn exact_capture_source_binds_canonical_assistant_across_request_versions(
         .await;
     assert!(projection.is_none());
     assert_eq!(observed.candidates().await.unwrap().len(), 1);
-    let later_deadline = crate::graphql::escape_graphql_string(
+    let later_deadline = crate::store::graphql::escape_graphql_string(
         &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     );
     let updated = observed
         .node
         .execute(&format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{later_deadline}" }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&observed.request_doc_id),
+            crate::store::graphql::escape_graphql_string(&observed.request_doc_id),
         ))
         .await;
     assert!(!updated.has_errors(), "{:?}", updated.errors);
-    let newest = crate::graphql::newest_document_composite_commit(
+    let newest = crate::store::graphql::newest_document_composite_commit(
         &observed.node,
         &observed.request_doc_id,
         "later replay request version",
@@ -1057,7 +1061,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         if content.iter().filter(|block| matches!(block, AssistantContent::Reasoning(_))).count() == 2
     ));
 
-    let tagged = crate::provider_input::replay::tag_canonical_history(&history);
+    let tagged = crate::turn::provider_input::replay::tag_canonical_history(&history);
     let projected = provider_view_tagged(tagged).unwrap();
     let rows = projected
         .iter()
@@ -1074,7 +1078,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
             }
         })
         .collect::<Vec<_>>();
-    let issuer = crate::llm::backend_client::claude_subscription_replay_issuer()
+    let issuer = crate::inference::llm::backend_client::claude_subscription_replay_issuer()
         .unwrap()
         .unwrap();
     let selected = select_replay(
@@ -1183,7 +1187,7 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
             id,
             content,
         }];
-        let issuer = crate::llm::backend_client::claude_subscription_replay_issuer()
+        let issuer = crate::inference::llm::backend_client::claude_subscription_replay_issuer()
             .unwrap()
             .unwrap();
         let selected = select_replay(
@@ -1246,7 +1250,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     let mut duplicate = fixture.header.clone();
     duplicate.sequence += 1;
     duplicate.message_key.push_str("-physical-duplicate");
-    let access = crate::config_client::ConfigAccess::local(fixture.node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(fixture.node.clone());
     access
         .transact_write("test.replay.duplicate_header", |txn| {
             let duplicate = duplicate.clone();
@@ -1393,19 +1397,20 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
                 lifecycle_state: "pending", execution_origin: "interactive",
                 created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(NODE_DID),
-            crate::graphql::escape_graphql_string(SESSION_ID),
-            crate::graphql::escape_graphql_string(&now),
+            crate::store::graphql::escape_graphql_string(NODE_DID),
+            crate::store::graphql::escape_graphql_string(SESSION_ID),
+            crate::store::graphql::escape_graphql_string(&now),
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let current_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let current_commit_cid = crate::graphql::newest_document_composite_commit(
+    let current_doc_id =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let current_commit_cid = crate::store::graphql::newest_document_composite_commit(
         &fixture.node,
         &current_doc_id,
         "replay fixture next request",
@@ -1516,18 +1521,18 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     }
 }
 
-async fn stored_agent_request(fixture: &ReplayFixture) -> crate::watcher::AgentRequest {
+async fn stored_agent_request(fixture: &ReplayFixture) -> crate::request::watcher::AgentRequest {
     let response = fixture
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(&fixture.request_doc_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::store::graphql::escape_graphql_string(&fixture.request_doc_id),
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = response.data.unwrap()["AgentRequest"][0].clone();
-    crate::watcher::AgentRequest::try_from(
+    crate::request::watcher::AgentRequest::try_from(
         serde_json::from_value::<gents_protocol::row::AgentRequestRow>(row).unwrap(),
     )
     .unwrap()
@@ -1545,13 +1550,13 @@ async fn replay_resolution_observes_capture_arriving_for_existing_header() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.expect("canonical resolver");
     assert!(resolve(vec![tag.clone()]).await.unwrap().is_empty());
@@ -1582,13 +1587,13 @@ async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.expect("canonical resolver");
     let estimate = resolve(vec![tag.clone()]).await.unwrap();
@@ -1646,13 +1651,13 @@ async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.clone().expect("canonical resolver");
     let (estimate, estimate_scans) = crate::session::count_request_output_scans(async {
@@ -1708,13 +1713,13 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
             attempt: candidate.coordinate.attempt,
         },
     };
-    let replay = crate::provider_input::replay::owned_replay_input(
+    let replay = crate::turn::provider_input::replay::owned_replay_input(
         fixture.node.clone(),
         stored_agent_request(&fixture).await,
         fixture.request_commit_cid.clone(),
         fixture.scope_kind,
         None,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.clone().expect("canonical resolver");
     let estimate = {
@@ -1804,7 +1809,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         .collect::<Vec<_>>();
     let filter = capture_keys
         .iter()
-        .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
+        .map(|key| format!("\"{}\"", crate::store::graphql::escape_graphql_string(key)))
         .collect::<Vec<_>>()
         .join(", ");
     let response = fixture
@@ -1821,22 +1826,23 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         .unwrap()
     {
         let version = row["capture_version"].as_u64().unwrap() as u32;
-        let record = crate::rendered_request::encoding::decode_capture_record(
+        let record = crate::inference::rendered_request::encoding::decode_capture_record(
             version,
             row["request_json"].as_str().unwrap(),
-            crate::rendered_request::CapturePayloadKind::RequestBody,
+            crate::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .unwrap();
-        if let crate::rendered_request::encoding::DecodedRecord::Tree(tree) = &record {
+        if let crate::inference::rendered_request::encoding::DecodedRecord::Tree(tree) = &record {
             assert!(
                 tree.height <= 1,
                 "fixture has at most one internal manifest level"
             );
             roots.insert(tree.root.doc_id.clone());
         }
-        for entry in crate::rendered_request::manifest_leaf_entries(fixture.node.as_ref(), record)
-            .await
-            .unwrap()
+        for entry in
+            crate::inference::rendered_request::manifest_leaf_entries(fixture.node.as_ref(), record)
+                .await
+                .unwrap()
         {
             if !roots.contains(&entry.doc_id) {
                 block_docs.insert(entry.doc_id);
@@ -1849,12 +1855,14 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
     );
     let expected_commit_statements = [roots.len(), block_docs.len()]
         .into_iter()
-        .map(|count| count.div_ceil(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH))
+        .map(|count| {
+            count.div_ceil(crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
+        })
         .sum::<usize>();
 
     let ((batched, commit_statements), capture_queries) =
         crate::session::count_capture_row_queries(
-            crate::rendered_request::commits::count_field_commit_statements(
+            crate::inference::rendered_request::commits::count_field_commit_statements(
                 super::output::replay_tags::resolve_canonical_replay_tags(
                     &fixture.node,
                     fixture.scope(),
@@ -1930,8 +1938,8 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
             ]}
         ]
     });
-    let layout = crate::rendered_request::encoding::capture_block_layout(&body).unwrap();
-    let chunks = crate::rendered_request::encoding::chunk_capture_layout(&layout);
+    let layout = crate::inference::rendered_request::encoding::capture_block_layout(&body).unwrap();
+    let chunks = crate::inference::rendered_request::encoding::chunk_capture_layout(&layout);
     let index = chunks
         .iter()
         .position(|chunk| {
@@ -1947,7 +1955,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         .expect("the marker is in this block");
     poisoned[at] = b'k';
     assert_ne!(
-        crate::rendered_request::encoding::block_content_key(&poisoned),
+        crate::inference::rendered_request::encoding::block_content_key(&poisoned),
         chunks[index].content_key
     );
     let created = fixture
@@ -1967,7 +1975,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let poisoned_doc =
-        crate::graphql::single_mutation_document(&created, "create_RenderedRequestBlock")
+        crate::store::graphql::single_mutation_document(&created, "create_RenderedRequestBlock")
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
@@ -1990,16 +1998,19 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         let stored = row["request_json"].as_str().unwrap();
         let mut pins_poison = false;
         for kind in [
-            crate::rendered_request::CapturePayloadKind::RequestBody,
-            crate::rendered_request::CapturePayloadKind::ProvenancePayload,
+            crate::inference::rendered_request::CapturePayloadKind::RequestBody,
+            crate::inference::rendered_request::CapturePayloadKind::ProvenancePayload,
         ] {
-            let record =
-                crate::rendered_request::encoding::decode_capture_record(version, stored, kind)
-                    .unwrap();
-            let entries =
-                crate::rendered_request::manifest_leaf_entries(fixture.node.as_ref(), record)
-                    .await
-                    .unwrap();
+            let record = crate::inference::rendered_request::encoding::decode_capture_record(
+                version, stored, kind,
+            )
+            .unwrap();
+            let entries = crate::inference::rendered_request::manifest_leaf_entries(
+                fixture.node.as_ref(),
+                record,
+            )
+            .await
+            .unwrap();
             pins_poison |= entries.iter().any(|entry| entry.doc_id == poisoned_doc);
         }
         referencing += pins_poison as usize;

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::drop_cleanup::DropCleanup;
+use gents::runtime::drop_cleanup::DropCleanup;
 use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -179,13 +179,15 @@ pub(super) async fn next_steering_request_after(
         .iter()
         .map(|row| row.doc_id.clone().expect("decoded physical identity"))
         .collect::<Vec<_>>();
-    let order = gents::config_client::ConfigAccess::transact_local_write(
+    let order = gents::store::config_client::ConfigAccess::transact_local_write(
         &state.node,
         None,
         "codex.active.steering_order",
         |txn| {
             let ids = &ids;
-            Box::pin(async move { gents::lifecycle::request_arrival_order(txn, ids).await })
+            Box::pin(
+                async move { gents::request::lifecycle::request_arrival_order(txn, ids).await },
+            )
         },
     )
     .await?;
@@ -242,7 +244,8 @@ fn next_steering_request(row: &AgentRequestRow) -> NextSteeringRequest {
 }
 
 fn steering_request_is_transparent(row: &AgentRequestRow) -> bool {
-    gents::lifecycle::folded_into(row).is_some() || gents::lifecycle::replaced_by(row).is_some()
+    gents::request::lifecycle::folded_into(row).is_some()
+        || gents::request::lifecycle::replaced_by(row).is_some()
 }
 
 pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
@@ -428,7 +431,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
 ) -> Result<()> {
     cancel_stream_control(connection, &thread.session_id, turn_id).await;
     let interrupted =
-        gents::session_message::interrupt_session(&state.node, &thread.scope()).await?;
+        gents::session::message::interrupt_session(&state.node, &thread.scope()).await?;
     trace::shim_event_fields(
         &state.trace_path,
         "turn_interrupt_caused_thread",
@@ -474,7 +477,7 @@ async fn load_thread_request_rows(
         thread_id,
         requester_did,
     ));
-    gents::config_client::ConfigAccess::transact_local_write(&state.node,None,"codex.active.rows",|txn| {
+    gents::store::config_client::ConfigAccess::transact_local_write(&state.node,None,"codex.active.rows",|txn| {
         let scope=&scope;
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
@@ -655,19 +658,19 @@ mod tests {
         let state =
             super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node = state.node.clone();
-        let node_did = gents::graphql::escape_graphql_string(state.node_did.as_ref());
-        let agent_id = gents::graphql::escape_graphql_string(state.agent_id.as_ref());
+        let node_did = gents::store::graphql::escape_graphql_string(state.node_did.as_ref());
+        let agent_id = gents::store::graphql::escape_graphql_string(state.agent_id.as_ref());
         for (id, purpose, created_at) in [
             ("normal-turn", "normal", "2026-09-25T00:00:00Z"),
             ("title-audit", "title-audit", "2026-09-25T00:00:01Z"),
         ] {
-            let id = gents::graphql::escape_graphql_string(id);
-            let purpose = gents::graphql::escape_graphql_string(purpose);
-            let created_at = gents::graphql::escape_graphql_string(created_at);
+            let id = gents::store::graphql::escape_graphql_string(id);
+            let purpose = gents::store::graphql::escape_graphql_string(purpose);
+            let created_at = gents::store::graphql::escape_graphql_string(created_at);
             let mutation = format!(
                 r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
             );
-            gents::config_client::ConfigAccess::write_local(
+            gents::store::config_client::ConfigAccess::write_local(
                 &node,
                 "codex.active.test_request",
                 &mutation,
@@ -746,7 +749,7 @@ mod tests {
                 steering,
             )],
         ] {
-            gents::config_client::ConfigAccess::transact_local_write(
+            gents::store::config_client::ConfigAccess::transact_local_write(
                 &state.node,
                 None,
                 "codex.active.test_history",

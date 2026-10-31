@@ -342,13 +342,13 @@ jobs:
           RUST_MIN_STACK: 16777216
         run: |
           cargo test -p gents --lib runtime_status::tests::
-          cargo test -p gents --lib toolset::tests::read_only_bash
-          cargo test -p gents --lib managed_exec::
+          cargo test -p gents --lib tools::native::tests::read_only_bash
+          cargo test -p gents --lib tools::exec::
           cargo test -p gents --lib artifact_
           # Live-output byte evidence for background tools must fail the PR
           # that breaks it, not the post-merge main run (#2686).
           cargo test -p gents --lib hook::tests::r4c_list_background_tools::
-          cargo test -p gents --lib callback::
+          cargo test -p gents --lib triggers::callback::
           cargo test -p gents --test onboarding_evals
           cargo test -p gents --test eval_runner_canary
           # Per-request store budgets: a capture, segment or write-drop

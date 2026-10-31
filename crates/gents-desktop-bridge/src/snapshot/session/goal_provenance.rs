@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use gents::config_client::ConfigRead;
 use gents::session::canonical_rows::TranscriptMessageRow;
+use gents::store::config_client::ConfigRead;
 use gents_desktop_core::client::CanonicalTranscriptDependencies;
 use gents_protocol::output::{
     origin::{resolve_origin, ObservedMessage},
@@ -50,7 +50,7 @@ async fn observe<'source, 'request>(
         let Some(doc) = request.doc_id.as_deref() else {
             continue;
         };
-        let owner = gents::lifecycle::input_message_owner(request);
+        let owner = gents::request::lifecycle::input_message_owner(request);
         let has_message = owner.as_ref().is_some_and(|(_, key)| {
             view.messages.iter().any(|message| {
                 message.message_key == *key
@@ -165,7 +165,7 @@ pub(crate) async fn attach(
         let Some(goal_id) = confirmed.by_request_doc_id.get(doc) else {
             continue;
         };
-        let owner = gents::lifecycle::input_message_owner(request);
+        let owner = gents::request::lifecycle::input_message_owner(request);
         let has_pending = snapshot
             .pending_turn
             .iter()
@@ -272,7 +272,7 @@ pub(super) async fn attach_messages(
         else {
             continue;
         };
-        let owner = gents::lifecycle::input_message_owner(request);
+        let owner = gents::request::lifecycle::input_message_owner(request);
         for message in messages.iter_mut() {
             if owner
                 .as_ref()

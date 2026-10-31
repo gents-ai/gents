@@ -1,0 +1,235 @@
+use super::set;
+use crate::runtime::agent::p2p_reconcile::{
+    engine::{
+        data_plane_desired_from_pairing_row, desired_from_pairing_row, EnrollmentEndpointEntry,
+        PairingStateRow,
+    },
+    single_string_eq,
+};
+
+pub(super) fn desired_row(template: Option<&str>, node_did: Option<&str>) -> PairingStateRow {
+    PairingStateRow {
+        node_did: node_did.map(str::to_string),
+        collections: None,
+        replicator_addresses: Some(vec!["addr1".into()]),
+        template: template.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn push_template_resolves_to_filter_without_subscription() {
+    let desired = desired_from_pairing_row(
+        desired_row(Some("conversation"), Some("did:key:bob")),
+        "did:key:self",
+    )
+    .expect("template resolves")
+    .expect("some desired layer");
+
+    assert!(
+        desired.collections.is_empty(),
+        "Push templates must not subscribe"
+    );
+    assert!(desired.replicator_collections.contains("AgentRequest"));
+    let pred = desired
+        .replicator_filter
+        .get("AgentRequest")
+        .expect("AgentRequest filter");
+    assert_eq!(
+        single_string_eq(pred),
+        Some(("requester_did", "did:key:bob"))
+    );
+}
+
+#[test]
+fn replicate_template_resolves_to_subscription_without_filter() {
+    let desired = desired_from_pairing_row(
+        desired_row(Some("agent-config"), Some("did:key:bob")),
+        "did:key:self",
+    )
+    .expect("template resolves")
+    .expect("some desired layer");
+
+    assert!(desired.collections.contains("Agent"));
+    assert_eq!(desired.collections, desired.replicator_collections);
+    assert!(
+        desired.replicator_filter.is_empty(),
+        "Replicate templates are unfiltered"
+    );
+}
+
+#[test]
+fn missing_and_unknown_templates_are_rejected() {
+    let missing = desired_from_pairing_row(desired_row(None, Some("did:key:bob")), "did:key:self")
+        .expect_err("missing template must not create routing authority");
+    assert!(missing.to_string().contains("missing its scope template"));
+
+    let unknown = desired_from_pairing_row(
+        desired_row(Some("not-a-template"), Some("did:key:bob")),
+        "did:key:self",
+    )
+    .expect_err("unknown template must not create routing authority");
+    assert!(unknown
+        .to_string()
+        .contains("unknown pairing scope template"));
+}
+
+#[test]
+fn agent_target_caller_template_filters_only_addressed_requests() {
+    let desired = desired_from_pairing_row(
+        desired_row(Some("agent-target-caller"), Some("did:key:host")),
+        "did:key:coord",
+    )
+    .expect("agent-target coordinator template resolves")
+    .expect("some desired layer");
+
+    assert!(desired.collections.is_empty());
+    assert_eq!(desired.replicator_collections, set(&["AgentRequest"]));
+    assert!(!desired.replicator_filter.contains_key("AgentToolCall"));
+    assert_eq!(
+        desired
+            .replicator_filter
+            .get("AgentRequest")
+            .and_then(single_string_eq),
+        Some(("node_did", "did:key:host"))
+    );
+}
+
+#[test]
+fn agent_target_host_template_filters_return_projection_to_requester() {
+    let desired = desired_from_pairing_row(
+        desired_row(Some("agent-target-host"), Some("did:key:coord")),
+        "did:key:host",
+    )
+    .expect("agent-target host template resolves")
+    .expect("some desired layer");
+
+    assert!(desired.collections.is_empty());
+    assert_eq!(
+        desired.replicator_collections,
+        set(&[
+            "AgentRequest",
+            "AgentSession",
+            "AgentOutputSegment",
+            "AgentMessage"
+        ])
+    );
+    assert_eq!(desired.replicator_filter.len(), 4);
+    for predicate in desired.replicator_filter.values() {
+        assert_eq!(
+            single_string_eq(predicate),
+            Some(("requester_did", "did:key:coord"))
+        );
+    }
+}
+
+#[test]
+fn app_collections_on_control_plane_path_soft_skips() {
+    let out = desired_from_pairing_row(
+        PairingStateRow {
+            node_did: Some("did:key:peer".to_string()),
+            collections: None,
+            replicator_addresses: Some(vec!["addr-b".to_string()]),
+            template: Some("app-collections".to_string()),
+            ..Default::default()
+        },
+        "did:key:self",
+    )
+    .expect("resolve ok");
+    assert!(
+        out.is_none(),
+        "app-collections is invalid for a control-plane row"
+    );
+}
+
+#[test]
+fn app_collections_row_resolves_row_collections_as_subscription_and_replicator() {
+    let signed_endpoint = EnrollmentEndpointEntry {
+        peer_id: "peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
+        address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
+    };
+    let layer = data_plane_desired_from_pairing_row(
+        PairingStateRow {
+            node_did: Some("did:key:self".to_string()),
+            collections: Some(vec!["ChangeProposed".to_string()]),
+            replicator_addresses: None,
+            template: Some("app-collections".to_string()),
+            ..Default::default()
+        },
+        &signed_endpoint,
+        "did:key:self",
+    )
+    .expect("resolve ok")
+    .expect("some layer");
+    assert!(layer.replicator_collections.contains("ChangeProposed"));
+    assert!(
+        layer.collections.contains("ChangeProposed"),
+        "app-collections must subscribe (Replicate)"
+    );
+    assert!(layer.replicator_filter.is_empty(), "unscoped => no filter");
+    assert!(layer.template_ids.contains("app-collections"));
+}
+
+#[test]
+fn app_collections_empty_collections_soft_skips() {
+    let signed_endpoint = EnrollmentEndpointEntry {
+        peer_id: "peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
+        address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
+    };
+    let out = data_plane_desired_from_pairing_row(
+        PairingStateRow {
+            node_did: Some("did:key:self".to_string()),
+            collections: Some(vec!["   ".to_string()]),
+            replicator_addresses: None,
+            template: Some("app-collections".to_string()),
+            ..Default::default()
+        },
+        &signed_endpoint,
+        "did:key:self",
+    )
+    .expect("resolve ok (soft-skip is Ok(None), not Err)");
+    assert!(
+        out.is_none(),
+        "empty/blank app-collections set must soft-skip to None"
+    );
+}
+
+#[test]
+fn foreign_node_did_still_hard_fails_whole_peer_load() {
+    let signed_endpoint = EnrollmentEndpointEntry {
+        peer_id: "peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
+        address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
+    };
+    let err = data_plane_desired_from_pairing_row(
+        PairingStateRow {
+            node_did: Some("did:key:someone-else".to_string()),
+            collections: Some(vec!["ChangeProposed".to_string()]),
+            replicator_addresses: None,
+            template: Some("app-collections".to_string()),
+            ..Default::default()
+        },
+        &signed_endpoint,
+        "did:key:self",
+    )
+    .expect_err("foreign node_did must hard-fail, not soft-skip");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("foreign") || msg.contains("someone-else") || msg.contains("refusing"),
+        "error should name the refusal: {msg}"
+    );
+}

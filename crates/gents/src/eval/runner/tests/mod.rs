@@ -5,9 +5,9 @@ use anyhow::anyhow;
 use serde_json::{json, Value};
 
 use super::*;
-use crate::document_config::EvalFixtureDocument;
-use crate::document_config::EvalFixtureFile;
-use crate::document_config::{EvalCase, EvalFixtures, EvalSplit};
+use crate::documents::EvalFixtureDocument;
+use crate::documents::EvalFixtureFile;
+use crate::documents::{EvalCase, EvalFixtures, EvalSplit};
 use crate::eval::checks::{Check, CheckDescription, CheckVerdict};
 use crate::eval::runner::freeze::tests::{Launching, OWNER};
 use crate::eval::{

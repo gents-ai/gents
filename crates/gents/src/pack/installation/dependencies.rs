@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 
 use super::{read_record, remove_record_in_txn, DriftPolicy, RemoveReport, RECORD};
 

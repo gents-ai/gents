@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::adapter_projection::AdapterProjectionKind;
-use gents::graphql::escape_graphql_string;
-use gents::run_timeline::{
+use gents::observe::adapter_projection::AdapterProjectionKind;
+use gents::observe::run_timeline::{
     RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent, TimelineRequestRow,
     TimelineToolCallEvent,
 };
+use gents::store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -275,7 +275,7 @@ pub(super) fn projection_binding_label(row: &ProjectionAcpBindingRow) -> &str {
     normalize_projection_binding_field(Some(&row.binding_id)).unwrap_or("<unnamed>")
 }
 
-use gents::document_config::parse_projection_resource_map;
+use gents::documents::parse_projection_resource_map;
 
 pub(super) async fn apply_projection_acp_read_filter(
     rows: RunTimelineRows,
@@ -736,7 +736,7 @@ mod tests {
     use std::sync::Arc;
 
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
-    use gents::run_timeline::{
+    use gents::observe::run_timeline::{
         TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
         TimelineRenderedRequestRef, TimelineSessionRow, TimelineToolCallRow,
     };

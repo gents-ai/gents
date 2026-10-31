@@ -23,7 +23,7 @@ async fn an_existing_listener_reservation_prevents_desktop_from_opening_the_stor
             home: HomePolicy::FixedRoot(temp.path().join("client")),
             bootstrap: BootstrapPolicy::PairedRemoteOnly,
             client_host: true,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         },
         None,
@@ -41,7 +41,7 @@ async fn an_existing_listener_reservation_prevents_desktop_from_opening_the_stor
     assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
     assert!(current_core(&app.state::<DesktopAppState>()).is_none());
     assert!(!paths.principal_metadata_path().exists());
-    let claim = gents::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+    let claim = gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     drop(claim);
     drop(listener);
     let (progress, receiver) = watch::channel(ClientStartProgress::Pending);
@@ -62,7 +62,7 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
             home: HomePolicy::FixedRoot(temp.path().join("client")),
             bootstrap: BootstrapPolicy::PairedRemoteOnly,
             client_host: true,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         },
         None,
@@ -129,7 +129,7 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     assert!(Arc::clone(&state.client_lifecycle)
         .try_lock_owned()
         .is_err());
-    let claim = gents::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+    let claim = gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     drop(claim);
     drop(exclusion);
 }

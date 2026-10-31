@@ -1,0 +1,258 @@
+use std::fmt;
+
+use chrono::{DateTime, Duration, Utc};
+
+use crate::inference::auth::credential::{
+    classify_oauth_auth_error, oauth_credential_id, OAuthAuthProblem, OAuthCredential, OAuthProduct,
+};
+
+pub const CLAUDE_OAUTH_PROVIDER: &str = "claude-subscription";
+pub const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+pub const CLAUDE_OAUTH_AUTHORIZE_URL: &str = "https://claude.com/cai/oauth/authorize";
+pub const CLAUDE_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+pub const CLAUDE_OAUTH_MANUAL_REDIRECT_URL: &str =
+    "https://platform.claude.com/oauth/code/callback";
+/// The subscription (claude.ai) scope set Claude Code requests. Not the
+/// API-key-creation scope.
+pub const CLAUDE_OAUTH_SCOPES: &str =
+    "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+pub const CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_CLAUDE_OAUTH_TOKEN_URL";
+
+pub const CLAUDE_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
+    name: "Claude",
+    backend_label: "Claude subscription backend",
+    login_command: "claude-login",
+    not_entitled_guidance:
+        "Check that the Claude plan includes Claude Code (Pro/Max), or use an API-key backend.",
+};
+
+pub fn normalize_provider(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        CLAUDE_OAUTH_PROVIDER.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub fn classify_claude_auth_error(
+    node_did: &str,
+    provider: &str,
+    problem: &OAuthAuthProblem,
+) -> String {
+    classify_oauth_auth_error(&CLAUDE_OAUTH_PRODUCT, node_did, provider, problem)
+}
+
+#[derive(Clone)]
+pub struct ClaudeLoginTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: Option<i64>,
+    pub scope: Option<String>,
+    pub account_id: Option<String>,
+    /// The organization and account ids of the token response, when present.
+    /// They form the provider account key. They are trusted only as far as the
+    /// TLS-protected token endpoint they came from, only recognize and
+    /// deduplicate an account, and are never an authorization, routing or
+    /// request header input.
+    pub organization_uuid: Option<String>,
+    pub account_uuid: Option<String>,
+}
+
+impl fmt::Debug for ClaudeLoginTokens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClaudeLoginTokens")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
+pub fn credential_from_login_tokens(
+    node_did: impl Into<String>,
+    provider: impl Into<String>,
+    tokens: &ClaudeLoginTokens,
+    now: DateTime<Utc>,
+) -> OAuthCredential {
+    let node_did = node_did.into();
+    let provider = provider.into();
+    let access_token_expires_at = tokens
+        .expires_in
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| now + Duration::seconds(seconds))
+        .unwrap_or_else(|| now + Duration::hours(1));
+    OAuthCredential {
+        doc_id: None,
+        credential_id: oauth_credential_id(&node_did, &provider),
+        node_did,
+        provider,
+        access_token: tokens.access_token.clone(),
+        refresh_token: tokens.refresh_token.clone(),
+        id_token: None,
+        account_id: tokens.account_id.clone(),
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at,
+        last_refresh: Some(now),
+        enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: tokens
+            .organization_uuid
+            .as_deref()
+            .zip(tokens.account_uuid.as_deref())
+            .map(|(organization, account)| format!("{organization}:{account}")),
+        label: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inference::auth::credential::OAuthAuthProblem;
+
+    #[test]
+    fn scopes_are_the_subscription_set() {
+        let scopes: Vec<&str> = CLAUDE_OAUTH_SCOPES.split(' ').collect();
+        assert_eq!(
+            scopes,
+            [
+                "user:profile",
+                "user:inference",
+                "user:sessions:claude_code",
+                "user:mcp_servers",
+                "user:file_upload"
+            ]
+        );
+        assert!(!CLAUDE_OAUTH_SCOPES.contains("org:create_api_key"));
+    }
+
+    #[test]
+    fn missing_credential_guidance_names_claude_login() {
+        let text = classify_claude_auth_error(
+            "did:key:z6MkTest",
+            CLAUDE_OAUTH_PROVIDER,
+            &OAuthAuthProblem::Missing,
+        );
+        assert!(
+            text.contains("gents claude-login --node-did did:key:z6MkTest"),
+            "{text}"
+        );
+        assert!(text.contains("Claude subscription backend"), "{text}");
+    }
+
+    #[test]
+    fn credential_from_login_tokens_uses_expires_in_and_fills_claude_shape() {
+        let now = chrono::Utc::now();
+        let tokens = ClaudeLoginTokens {
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            expires_in: Some(28800),
+            scope: Some(CLAUDE_OAUTH_SCOPES.into()),
+            account_id: Some("person@example.test".into()),
+            organization_uuid: None,
+            account_uuid: None,
+        };
+        let credential =
+            credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
+        assert_eq!(
+            credential.credential_id,
+            "claude-subscription:did:key:z6MkTest"
+        );
+        assert_eq!(
+            credential.access_token_expires_at,
+            now + chrono::Duration::seconds(28800)
+        );
+        assert_eq!(credential.id_token, None);
+        assert_eq!(
+            credential.account_id.as_deref(),
+            Some("person@example.test")
+        );
+        assert_eq!(credential.chatgpt_plan_type, None);
+        assert!(!credential.is_fedramp);
+        assert_eq!(credential.last_refresh, Some(now));
+        assert!(credential.enabled);
+    }
+
+    #[test]
+    fn credential_from_login_tokens_falls_back_to_one_hour() {
+        let now = chrono::Utc::now();
+        let tokens = ClaudeLoginTokens {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_in: None,
+            scope: None,
+            account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
+        };
+        let credential =
+            credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
+        assert_eq!(
+            credential.access_token_expires_at,
+            now + chrono::Duration::hours(1)
+        );
+    }
+
+    fn claude_login(
+        organization_uuid: Option<&str>,
+        account_uuid: Option<&str>,
+    ) -> OAuthCredential {
+        let tokens = ClaudeLoginTokens {
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            expires_in: Some(28800),
+            scope: None,
+            account_id: Some("account-1".into()),
+            organization_uuid: organization_uuid.map(str::to_owned),
+            account_uuid: account_uuid.map(str::to_owned),
+        };
+        credential_from_login_tokens(
+            "did:key:z6MkTest",
+            CLAUDE_OAUTH_PROVIDER,
+            &tokens,
+            chrono::Utc::now(),
+        )
+    }
+
+    #[test]
+    fn credential_from_login_tokens_keys_org_and_account() {
+        let credential = claude_login(Some("org-1"), Some("account-1"));
+        assert_eq!(
+            credential.provider_account_key.as_deref(),
+            Some("org-1:account-1")
+        );
+    }
+
+    #[test]
+    fn credential_from_login_tokens_without_both_ids_has_no_key() {
+        for (organization, account) in [(Some("org-1"), None), (None, Some("account-1"))] {
+            assert_eq!(
+                claude_login(organization, account).provider_account_key,
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn login_tokens_debug_redacts_both_tokens() {
+        let tokens = ClaudeLoginTokens {
+            access_token: "access-SECRET".into(),
+            refresh_token: "refresh-SECRET".into(),
+            expires_in: Some(28800),
+            scope: Some("user:profile".into()),
+            account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
+        };
+        let text = format!("{tokens:?}");
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(text.contains("<redacted>"), "{text}");
+        assert!(
+            text.contains("28800") && text.contains("user:profile"),
+            "{text}"
+        );
+    }
+}

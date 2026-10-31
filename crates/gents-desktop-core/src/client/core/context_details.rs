@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use gents::toolset::{LastRequestContextSnapshot, SessionContextDetails};
+use gents::tools::native::{LastRequestContextSnapshot, SessionContextDetails};
 use tokio::sync::Mutex;
 
 use super::{ClientCore, ConfigAccess};
@@ -56,7 +56,7 @@ impl ClientCore {
                 return Ok(Some(details));
             }
         }
-        let details = gents::toolset::load_session_context_details(
+        let details = gents::tools::native::load_session_context_details(
             access,
             node_did,
             requester_did,

@@ -4,14 +4,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_p2p_adapter::{P2PError, P2POperations as P2POps};
-use gents::agent::p2p_reconcile::enrollment::{
+use gents::runtime::agent::p2p_reconcile::enrollment::{
     active_request_visible, pending_request_satisfied, EnrollmentRequestAuthority,
 };
-use gents::agent::p2p_reconcile::enrollment_candidate::{
+use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
     confirm_network_admin_pin, local_enrollment_ticket, push_enrollment_request,
     sign_enrollment_request, verify_enrollment_offer, write_enrollment_request,
 };
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     decode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind, EnrollmentRequestRecord,

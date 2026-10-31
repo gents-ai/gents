@@ -192,7 +192,7 @@ pub async fn build_session_live_delta(
             if let [request] = matches.as_slice() {
                 let operator = core
                     .operator_observation_graphql(node_did)
-                    .map(gents::config_client::ConfigAccess::Graphql);
+                    .map(gents::store::config_client::ConfigAccess::Graphql);
                 let node_scope = core.transcript_node_scope(node_did);
                 let session = observed
                     .sessions

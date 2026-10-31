@@ -7,9 +7,9 @@ use gents_protocol::goal_control::{
 use super::*;
 #[cfg(test)]
 mod contract_tests;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::NodeIdentity;
 use crate::session::SessionOwnerRow;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::identity::NodeIdentity;
 
 pub(crate) const SOURCES: [&str; 3] = ["Goal", "AgentSession", "GoalObservation"];
 
@@ -331,16 +331,16 @@ pub(crate) async fn project_session_goal(
     requester_did: Option<&str>,
 ) -> Result<()> {
     ConfigAccess::transact_local_write(node, None, "goal.project_observation", |txn| Box::pin(async move {
-        crate::graphql::fence_arrivals(txn, "AgentSession").await?;
-        crate::graphql::fence_arrivals(txn, "Goal").await?;
-        crate::graphql::fence_arrivals(txn, "GoalObservation").await?;
+        crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
+        crate::store::graphql::fence_arrivals(txn, "Goal").await?;
+        crate::store::graphql::fence_arrivals(txn, "GoalObservation").await?;
         let Some(session) = crate::session::load_agent_session_row_in_txn(
             txn, identity.did(), session_id, requester_did,
         ).await? else { return Ok(()); };
         let goal = load_canonical_goal_in_txn(txn, identity.did(), session_id).await?;
         let goal = match goal {
             Some(goal) => {
-                let commit = crate::graphql::newest_document_composite_commit_in_txn(
+                let commit = crate::store::graphql::newest_document_composite_commit_in_txn(
                     txn, &goal.doc_id, "goal.project_observation",
                 ).await?.context("goal has no unambiguous composite revision")?;
                 Some(ObservedGoal {
@@ -390,7 +390,7 @@ pub(crate) async fn project_session_goal(
         };
         let response = txn.execute_with_variables(document, &variables).await?;
         let response = defra_node::QueryResponse::success(response["data"].clone());
-        crate::graphql::single_mutation_document(&response, field)?
+        crate::store::graphql::single_mutation_document(&response, field)?
             .context("goal observation write omitted its document")?;
         Ok(())
     })).await

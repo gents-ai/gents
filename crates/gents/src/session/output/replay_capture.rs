@@ -46,10 +46,11 @@ pub(super) async fn load_replay_capture_rows(
         }
     }
     let mut rows: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
-    for chunk in keys.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+    for chunk in keys.chunks(crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
+    {
         let filter = chunk
             .iter()
-            .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
+            .map(|key| format!("\"{}\"", crate::store::graphql::escape_graphql_string(key)))
             .collect::<Vec<_>>()
             .join(", ");
         let query = format!(
@@ -82,7 +83,7 @@ pub(super) async fn load_replay_capture_rows(
 pub(super) async fn preload_replay_capture_blocks(
     node: &EmbeddedNode,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
-    cache: &mut crate::rendered_request::CaptureReadCache,
+    cache: &mut crate::inference::rendered_request::CaptureReadCache,
 ) -> Result<()> {
     let mut manifests = Vec::new();
     let mut trees = Vec::new();
@@ -102,20 +103,22 @@ pub(super) async fn preload_replay_capture_blocks(
         else {
             continue;
         };
-        match crate::rendered_request::encoding::decode_capture_record(
+        match crate::inference::rendered_request::encoding::decode_capture_record(
             version,
             stored,
-            crate::rendered_request::CapturePayloadKind::RequestBody,
+            crate::inference::rendered_request::CapturePayloadKind::RequestBody,
         ) {
-            Ok(crate::rendered_request::encoding::DecodedRecord::Manifest { blocks }) => {
-                manifests.push(blocks)
+            Ok(crate::inference::rendered_request::encoding::DecodedRecord::Manifest {
+                blocks,
+            }) => manifests.push(blocks),
+            Ok(crate::inference::rendered_request::encoding::DecodedRecord::Tree(tree)) => {
+                trees.push(tree)
             }
-            Ok(crate::rendered_request::encoding::DecodedRecord::Tree(tree)) => trees.push(tree),
             _ => {}
         }
     }
-    crate::rendered_request::preload_manifest_blocks(node, &manifests, cache).await?;
-    crate::rendered_request::preload_manifest_trees(node, &trees, cache).await
+    crate::inference::rendered_request::preload_manifest_blocks(node, &manifests, cache).await?;
+    crate::inference::rendered_request::preload_manifest_trees(node, &trees, cache).await
 }
 
 /// Verify the one capture row the pass's batched read returned under
@@ -133,7 +136,7 @@ pub(super) async fn replay_capture_from_row(
     request_doc_id: &str,
     request_commits: &BTreeSet<String>,
     coordinate: CanonicalProviderCoordinate,
-    cache: &mut crate::rendered_request::CaptureReadCache,
+    cache: &mut crate::inference::rendered_request::CaptureReadCache,
 ) -> Result<Option<CanonicalReplayCapture>> {
     let Some([capture]) = capture_rows.get(capture_key).map(Vec::as_slice) else {
         return Ok(None);
@@ -158,7 +161,7 @@ pub(super) async fn replay_capture_from_row(
         Ok(verified) => Ok(verified),
         Err(error)
             if error
-                .downcast_ref::<crate::rendered_request::CaptureStoreReadError>()
+                .downcast_ref::<crate::inference::rendered_request::CaptureStoreReadError>()
                 .is_some() =>
         {
             Err(error)
@@ -173,7 +176,7 @@ pub(super) async fn replay_capture_from_row(
 /// A bad capture is re-read on every request of its session; one warning a
 /// minute, with the suppressed count, keeps it visible without flooding.
 fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
-    use crate::log_rate::{CallsiteRateLimiter, Decision, RateLimitConfig};
+    use crate::observe::log_rate::{CallsiteRateLimiter, Decision, RateLimitConfig};
     static LIMITER: std::sync::LazyLock<std::sync::Mutex<CallsiteRateLimiter<()>>> =
         std::sync::LazyLock::new(|| {
             std::sync::Mutex::new(CallsiteRateLimiter::new(RateLimitConfig {
@@ -215,7 +218,7 @@ async fn verify_replay_capture(
     request_doc_id: &str,
     request_commits: &BTreeSet<String>,
     coordinate: CanonicalProviderCoordinate,
-    cache: &mut crate::rendered_request::CaptureReadCache,
+    cache: &mut crate::inference::rendered_request::CaptureReadCache,
 ) -> Result<Option<CanonicalReplayCapture>> {
     let CanonicalProviderCoordinate {
         scope: capture_scope,
@@ -295,11 +298,11 @@ async fn verify_replay_capture(
     else {
         return Ok(None);
     };
-    let body = crate::rendered_request::decode_capture_json_embedded_cached(
+    let body = crate::inference::rendered_request::decode_capture_json_embedded_cached(
         node,
         capture_version,
         required_row_str(capture, "request_json")?,
-        crate::rendered_request::CapturePayloadKind::RequestBody,
+        crate::inference::rendered_request::CapturePayloadKind::RequestBody,
         cache,
     )
     .await?;

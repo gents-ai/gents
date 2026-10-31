@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
-    pub(crate) usage_cache: Arc<gents::usage_observation::UsageCache>,
+    pub(crate) usage_cache: Arc<gents::inference::usage_observation::UsageCache>,
     pub(crate) home: PathBuf,
     pub(crate) fs_root: Option<PathBuf>,
     pub(crate) node: Arc<EmbeddedNode>,
@@ -95,7 +95,7 @@ pub(crate) async fn bind_codex_shim(
     validate_bind_security(args.bind_addr, args.auth_token.as_deref())
         .map_err(CodexShimBindError::HostResource)?;
 
-    let codex_home = args.home.join(gents::home::CODEX_UI_DIR_NAME);
+    let codex_home = args.home.join(gents::store::local::home::CODEX_UI_DIR_NAME);
     let codex_log_dir = codex_home.join("log");
     fs::create_dir_all(&codex_log_dir)
         .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))
@@ -126,7 +126,7 @@ pub(crate) async fn bind_codex_shim(
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
-        graphql: gents::config_client::GraphqlEndpoint::as_principal(
+        graphql: gents::store::config_client::GraphqlEndpoint::as_principal(
             args.graphql.clone(),
             args.node_did.clone(),
         ),

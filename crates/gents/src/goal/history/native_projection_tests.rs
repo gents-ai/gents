@@ -1,6 +1,6 @@
 use super::*;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::NodeIdentity;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::identity::NodeIdentity;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -63,7 +63,8 @@ impl ConfigRead for NativeReader<'_, '_> {
     async fn execute_read(
         &self,
         query: &str,
-    ) -> std::result::Result<serde_json::Value, crate::config_client::ConfigClientError> {
+    ) -> std::result::Result<serde_json::Value, crate::store::config_client::ConfigClientError>
+    {
         let mut response = self.txn.execute(query).await?;
         if let Some((_, rest)) = query.split_once("cid: [") {
             let raw = rest.split_once(']').unwrap().0;
@@ -113,7 +114,7 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
                 "mutation($input: GoalMutationInputArg!) {create_Goal(input:$input) {_docID}}",
                 &serde_json::json!({"input":{"goal_id":"goal","node_did":owner,"session_id":"chat", "status":"active","objective":"retained objective","assignment_root_request_doc_id":"physical-root"}}),
             ).await?;
-            crate::graphql::created_doc_id(&response,"Goal")
+            crate::store::graphql::created_doc_id(&response,"Goal")
         })
     }).await.unwrap();
     for tokens in 1..=66 {

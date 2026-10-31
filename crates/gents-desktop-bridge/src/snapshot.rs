@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gents::agent::p2p_reconcile::session_hydration::{
+use gents::runtime::agent::p2p_reconcile::session_hydration::{
     ClientHydrationPhase, ClientHydrationProgress, SESSION_OWNERSHIP_MISMATCH,
 };
 use gents_desktop_core::client::{
@@ -205,10 +205,10 @@ async fn build_bootstrap_summary_raw(
 fn read_stored_init_config(
     node_home: &std::path::Path,
 ) -> (
-    Option<gents::home::StoredInitConfig<String, String>>,
+    Option<gents::store::local::home::StoredInitConfig<String, String>>,
     InitConfigStatus,
 ) {
-    let path = gents::home::init_config_path(node_home);
+    let path = gents::store::local::home::init_config_path(node_home);
     let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -216,11 +216,14 @@ fn read_stored_init_config(
         }
         Err(_) => return (None, InitConfigStatus::Unreadable),
     };
-    let config =
-        match serde_json::from_reader::<_, gents::home::StoredInitConfig<String, String>>(file) {
-            Ok(config) if !config.node_did.trim().is_empty() => config,
-            _ => return (None, InitConfigStatus::Unreadable),
-        };
+    let config = match serde_json::from_reader::<
+        _,
+        gents::store::local::home::StoredInitConfig<String, String>,
+    >(file)
+    {
+        Ok(config) if !config.node_did.trim().is_empty() => config,
+        _ => return (None, InitConfigStatus::Unreadable),
+    };
     (Some(config), InitConfigStatus::Configured)
 }
 

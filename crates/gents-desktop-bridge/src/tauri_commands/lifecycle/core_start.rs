@@ -29,7 +29,7 @@ pub(super) type ClientStartDelivery<T> = (anyhow::Result<T>, ClientLifecycleGuar
 
 pub(super) type ClientStartFailure = (
     BridgeError,
-    Option<gents::storage_backend::IncompatibleStore>,
+    Option<gents::store::local::storage_backend::IncompatibleStore>,
 );
 
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio
@@ -41,7 +41,7 @@ pub(super) type ClientStartFailure = (
 )]
 pub(super) async fn start_client_core_async(
     paths: gents_desktop_core::client::DesktopPaths,
-    store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
     lifecycle: ClientLifecycleGuard,
 ) -> Result<(ClientCore, ClientLifecycleGuard), ClientStartFailure> {
     let node_data_dir = paths.node_data_dir().to_path_buf();
@@ -149,7 +149,7 @@ pub(super) fn classify_client_start_error(
     error: &anyhow::Error,
     node_data_dir: &std::path::Path,
 ) -> ClientStartFailure {
-    match gents::storage_backend::incompatible_store(error.as_ref(), node_data_dir) {
+    match gents::store::local::storage_backend::incompatible_store(error.as_ref(), node_data_dir) {
         Some(store) => (
             BridgeError::new(BridgeErrorCode::IncompatibleLocalStore, store.to_string()),
             Some(store),

@@ -386,7 +386,7 @@ async fn finished_job(
 /// A background job's result reaches its session as a `<tool-completion>`
 /// message, not as the tool call's reply (that is the receipt).
 async fn completion_result(graphql: &str, session_id: &str, tool_call_id: &str) -> Result<String> {
-    let access = gents::config_client::ConfigAccess::Graphql(
+    let access = gents::store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(graphql),
     );
     let marker = format!("<tool-completion tool_call_id=\"{tool_call_id}\"");

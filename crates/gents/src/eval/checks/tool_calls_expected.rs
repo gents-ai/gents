@@ -98,9 +98,9 @@ impl Check for ToolCallsExpected {
                 };
                 let result = decode(&call.result);
                 let receipt = result.get("config_execution").and_then(|value| {
-                    serde_json::from_value::<crate::self_config::ConfigExecutionReceipt>(
-                        value.clone(),
-                    )
+                    serde_json::from_value::<
+                        crate::tools::builtin::self_config::ConfigExecutionReceipt,
+                    >(value.clone())
                     .ok()
                 });
                 let read_only = match result.get("config_execution") {
@@ -108,13 +108,15 @@ impl Check for ToolCallsExpected {
                         .is_some_and(|receipt| receipt.version == 1 && !receipt.mutation_entered),
                     None => {
                         (call.tool_failure_class.as_deref() == Some("argumentInvalid")
-                            && serde_json::from_value::<crate::self_config::ConfigCommandParams>(
-                                decode(&call.args),
-                            )
+                            && serde_json::from_value::<
+                                crate::tools::builtin::self_config::ConfigCommandParams,
+                            >(decode(&call.args))
                             .is_err())
                             || (call.status.as_deref().or(call.lifecycle_state.as_deref())
                                 == Some("completed")
-                                && crate::self_config::is_help_call(&decode(&call.args)))
+                                && crate::tools::builtin::self_config::is_help_call(&decode(
+                                    &call.args,
+                                )))
                     }
                 };
                 if !read_only {

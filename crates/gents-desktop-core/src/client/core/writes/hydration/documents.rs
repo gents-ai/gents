@@ -30,13 +30,13 @@ pub(super) async fn load_local_hydration_start_evidence(
     session_id: &str,
     node_did: &str,
 ) -> Result<LocalHydrationStartEvidence> {
-    let requester_did = gents::graphql::escape_graphql_string(requester_did);
-    let session_id = gents::graphql::escape_graphql_string(session_id);
-    let node_did = gents::graphql::escape_graphql_string(node_did);
+    let requester_did = gents::store::graphql::escape_graphql_string(requester_did);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+    let node_did = gents::store::graphql::escape_graphql_string(node_did);
     let scope = format!(
         "requester_did: {{ _eq: \"{requester_did}\" }}, node_did: {{ _eq: \"{node_did}\" }}, session_id: {{ _eq: \"{session_id}\" }}"
     );
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{
@@ -54,9 +54,9 @@ fn local_hydration_start_evidence_from_response(
     response: &defra_node::QueryResponse,
 ) -> Result<LocalHydrationStartEvidence> {
     let owned_session_present =
-        !gents::graphql::rows::<HydrationDocIdRow>(response, "AgentSession")?.is_empty();
+        !gents::store::graphql::rows::<HydrationDocIdRow>(response, "AgentSession")?.is_empty();
     let nonterminal_request_present =
-        gents::graphql::rows::<AgentRequestRow>(response, "AgentRequest")?
+        gents::store::graphql::rows::<AgentRequestRow>(response, "AgentRequest")?
             .iter()
             .any(|row| {
                 !row.lifecycle_state
@@ -76,7 +76,7 @@ pub(super) async fn load_local_hydration_documents(
     verified_manifest: Option<&BTreeSet<SessionHydrationDocumentKey>>,
 ) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let query = local_hydration_query(requester_did, session_id, node_did, verified_manifest);
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "query local session hydration documents",
@@ -107,9 +107,9 @@ fn local_hydration_query(
     node_did: &str,
     verified_manifest: Option<&BTreeSet<SessionHydrationDocumentKey>>,
 ) -> String {
-    let requester_did = gents::graphql::escape_graphql_string(requester_did);
-    let session_id = gents::graphql::escape_graphql_string(session_id);
-    let node_did = gents::graphql::escape_graphql_string(node_did);
+    let requester_did = gents::store::graphql::escape_graphql_string(requester_did);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+    let node_did = gents::store::graphql::escape_graphql_string(node_did);
     let fields = HYDRATION_COLLECTIONS
         .into_iter()
         .map(|(name, collection)| {
@@ -117,7 +117,7 @@ fn local_hydration_query(
                 .into_iter()
                 .flatten()
                 .filter(|key| key.collection == collection)
-                .map(|key| format!("\"{}\"", gents::graphql::escape_graphql_string(&key.doc_id)))
+                .map(|key| format!("\"{}\"", gents::store::graphql::escape_graphql_string(&key.doc_id)))
                 .collect::<Vec<_>>()
                 .join(",");
             let session_filter = format!("session_id: {{ _eq: \"{session_id}\" }}");
@@ -140,7 +140,7 @@ fn local_hydration_documents_from_response(
 ) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let mut ids = BTreeSet::new();
     for (collection_name, collection) in HYDRATION_COLLECTIONS {
-        for row in gents::graphql::rows::<HydrationDocIdRow>(response, collection_name)? {
+        for row in gents::store::graphql::rows::<HydrationDocIdRow>(response, collection_name)? {
             if let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) {
                 ids.insert(SessionHydrationDocumentKey { collection, doc_id });
             }
@@ -157,12 +157,12 @@ pub(super) async fn load_hydration_server_state(
     node_did: &str,
     node_identity: &crate::client::principal_identity::PrincipalIdentity,
 ) -> Result<(
-    gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
+    gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
     Option<String>,
 )> {
-    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
+    use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
     let expected_request_key = format!("{peer_id}:{session_id}");
-    let request_key = gents::graphql::escape_graphql_string(&expected_request_key);
+    let request_key = gents::store::graphql::escape_graphql_string(&expected_request_key);
     let query = format!(
         r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{
             request_key requester_did node_did session_id status status_detail
@@ -170,7 +170,7 @@ pub(super) async fn load_hydration_server_state(
             outcome_signer_did outcome_signature
         }} }}"#
     );
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "query session hydration request",

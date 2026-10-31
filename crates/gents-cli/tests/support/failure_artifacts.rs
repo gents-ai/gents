@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::file_lock::FileLock;
+use gents::store::local::file_lock::FileLock;
 
 use crate::support::process::ServeProcess;
 

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::config_client::load_inference_backend_in_txn;
-use gents::usage_observation::{usage_for_backend, UsageObservation};
+use gents::inference::usage_observation::{usage_for_backend, UsageObservation};
+use gents::store::config_client::load_inference_backend_in_txn;
 use gents_codex_protocol as codex;
 use serde_json::json;
 
@@ -284,14 +284,18 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use gents::config_client::{
+    use gents::defra_node::EmbeddedNode;
+    use gents::documents::{AdvertisedModel, BackendAuth, BackendModelCatalog};
+    use gents::inference::auth::credential::{
+        oauth_credential_id, upsert_oauth_credential, OAuthCredential,
+    };
+    use gents::inference::usage_observation::account_usage::{
+        UsageReport, UsageSource, UsageWindow,
+    };
+    use gents::inference::usage_observation::{load_usage, record_usage, UsageAccount};
+    use gents::store::config_client::{
         write_inference_backend_document, write_inference_profile_document,
     };
-    use gents::defra_node::EmbeddedNode;
-    use gents::document_config::{AdvertisedModel, BackendAuth, BackendModelCatalog};
-    use gents::oauth_credential::{oauth_credential_id, upsert_oauth_credential, OAuthCredential};
-    use gents::usage_observation::account_usage::{UsageReport, UsageSource, UsageWindow};
-    use gents::usage_observation::{load_usage, record_usage, UsageAccount};
     use gents::{
         record_model_catalog_in_txn, BackendProviderKind, InferenceBackend, InferenceProfile,
     };
@@ -315,7 +319,9 @@ mod tests {
             fs_root: None,
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
             node_did: Arc::from(DID),
             agent_id: Arc::from("default"),
             id_counter: Arc::new(AtomicU64::new(1)),
@@ -571,10 +577,12 @@ mod tests {
                     source: UsageSource::Header,
                     observed_at: Utc::now(),
                 }],
-                plan: Some(gents::usage_observation::account_usage::UsagePlan {
-                    name: "tier-a".into(),
-                    observed_at: Utc::now(),
-                }),
+                plan: Some(
+                    gents::inference::usage_observation::account_usage::UsagePlan {
+                        name: "tier-a".into(),
+                        observed_at: Utc::now(),
+                    },
+                ),
                 ..UsageReport::default()
             },
         )

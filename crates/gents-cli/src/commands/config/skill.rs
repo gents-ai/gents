@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::document_config::SkillDocument;
-use gents::graphql::escape_graphql_string;
+use gents::documents::SkillDocument;
+use gents::store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::*;
@@ -187,7 +187,7 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
     Ok(())
 }
 
-use gents::skills::import::load_skill_source;
+use gents::documents::skills::import::load_skill_source;
 
 fn skill_id_from_dir(dir: &std::path::Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy();

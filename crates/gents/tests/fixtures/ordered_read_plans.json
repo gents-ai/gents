@@ -339,7 +339,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/background_completion_diagnostics.rs",
+      "path": "crates/gents/src/tools/background/diagnostics.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, message_key: { _like: \"background-completion-notification:%\" } }, order: { created_at: DESC }, limit: $GENTS_NOTIFICATION_SCAN_LIMIT$"
     },
@@ -352,7 +352,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/background_completion_diagnostics.rs",
+      "path": "crates/gents/src/tools/background/diagnostics.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" }, request_doc_id: { _in: [$GENTS_request_doc_ids$] }, message_key: { _like: \"background-completion-notification:%\" } }, order: { created_at: DESC }, limit: $GENTS_NOTIFICATION_SCAN_LIMIT$"
     },
@@ -366,7 +366,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/background_completion_diagnostics.rs",
+      "path": "crates/gents/src/tools/background/diagnostics.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, $GENTS_session_filter$ execution_origin: { _eq: \"scheduled\" } }, order: [{ created_at: DESC }, { request_id: DESC }], limit: $GENTS_WAKE_SCAN_LIMIT$"
     },
@@ -380,7 +380,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/blocked_turn.rs",
+      "path": "crates/gents/src/goal/blocked_turn.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" }, request_id: { _eq: \"$GENTS_request_id$\" }, call_state: { _eq: \"failed\" } }, order: [{ ended_at: DESC }, { attempt: DESC }], limit: 1"
     },
@@ -393,7 +393,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/callback/documents.rs",
+      "path": "crates/gents/src/triggers/callback/documents.rs",
       "collection": "CallbackInvocation",
       "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, lifecycle_state: { _eq: \"failed\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
     },
@@ -407,7 +407,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/callback/documents.rs",
+      "path": "crates/gents/src/triggers/callback/documents.rs",
       "collection": "CallbackInvocation",
       "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, lifecycle_state: { _eq: \"succeeded\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
     },
@@ -421,7 +421,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/completion_factory.rs",
+      "path": "crates/gents/src/turn/completion_factory.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_0$\" } }, { agent_id: { _eq: \"$GENTS_1$\" } }, { session_id: { _eq: \"$GENTS_2$\" } }, { model_name: { _eq: \"$GENTS_3$\" } }, { call_kind: { _eq: \"inference\" } } ] }, order: [{ queued_at: DESC }, { call_seq: DESC }], limit: $GENTS_CALIBRATION_CALL_SCAN$"
     },
@@ -460,7 +460,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/lifecycle/claim.rs",
+      "path": "crates/gents/src/request/lifecycle/claim.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { $GENTS_scope$ }, order: { sequence: DESC }, limit: 1"
     },
@@ -475,7 +475,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/lifecycle/queue/atomic_inputs.rs",
+      "path": "crates/gents/src/request/lifecycle/queue/atomic_inputs.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { session_id: { _eq: \"$GENTS_escaped_session_id$\" }, node_did: { _eq: \"$GENTS_escaped_node_did$\" } }, order: [{ node_did: DESC }, { session_id: DESC }, { sequence: DESC }], limit: 1"
     },
@@ -488,7 +488,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/lifecycle/recovery.rs",
+      "path": "crates/gents/src/request/lifecycle/recovery.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, _and: [ { requester_did: { _neq: null } }, { requester_did: { _neq: \"$GENTS_escaped_node_did$\" } } ], lifecycle_state: { _in: $GENTS_terminal_states$ }, terminal_redrive_attempts: { _lt: $GENTS_cap$ } }, order: [{ terminalized_at: ASC }, { request_id: ASC }], limit: $GENTS_limit$"
     },
@@ -503,7 +503,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/provider_context_reduction.rs",
+      "path": "crates/gents/src/turn/provider_context_reduction.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { $GENTS_session_scope$ }, order: { sequence: DESC }, limit: 1"
     },
@@ -518,7 +518,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/provider_context_reduction.rs",
+      "path": "crates/gents/src/turn/provider_context_reduction.rs",
       "collection": "RenderedRequest",
       "arguments": "filter: { request_doc_id: { _eq: \"$GENTS_0$\" } capture_scope: { _like: \"inference.%\" } turn_index: { _ge: $GENTS_1$ } provenance_json: { _like: \"%$GENTS_2$%\" } }, order: [{ turn_index: DESC }, { attempt: DESC }], limit: 64"
     },
@@ -532,7 +532,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/run_timeline_fetch.rs",
+      "path": "crates/gents/src/observe/run_timeline_fetch.rs",
       "collection": "AgentToolCall",
       "arguments": "filter: { request_id: { _in: [$GENTS_request_list$] } }, order: { started_at: ASC }, limit: $GENTS_limit$"
     },
@@ -545,7 +545,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/run_timeline_fetch.rs",
+      "path": "crates/gents/src/observe/run_timeline_fetch.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { request_id: { _in: [$GENTS_request_list$] }, call_kind: { _eq: \"inference\" } }, order: { started_at: ASC }, limit: $GENTS_limit$"
     },
@@ -558,7 +558,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/run_timeline_fetch/request_loaders.rs",
+      "path": "crates/gents/src/observe/run_timeline_fetch/request_loaders.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { purpose: { _eq: \"normal\" }, request_id: { _eq: \"$GENTS_0$\" } }, order: { created_at: DESC }, limit: 2"
     },
@@ -585,7 +585,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/discovery.rs",
+      "path": "crates/gents/src/session/message/discovery.rs",
       "collection": "AgentSession",
       "arguments": "filter: {_and: [$GENTS_0$]}, order: [{created_at: DESC}, {session_id: DESC}, {node_did: DESC}], limit: $GENTS_PAGE_SIZE$"
     },
@@ -598,7 +598,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/inspection.rs",
+      "path": "crates/gents/src/session/message/inspection.rs",
       "collection": "AgentMessage",
       "arguments": "filter: {$GENTS_scope$$GENTS_bounds$$GENTS_role$}, order: {sequence: DESC}, limit: $GENTS_0$"
     },
@@ -619,7 +619,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/inspection.rs",
+      "path": "crates/gents/src/session/message/inspection.rs",
       "collection": "AgentRequest",
       "arguments": "filter: {$GENTS_scope$, purpose: {_eq: \"normal\"}, lifecycle_state: {_eq: \"pending\"}}, order: [{created_at: ASC}, {request_id: ASC}], limit: $GENTS_0$"
     },
@@ -636,7 +636,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/inspection.rs",
+      "path": "crates/gents/src/session/message/inspection.rs",
       "collection": "AgentToolCall",
       "arguments": "filter: {$GENTS_scope$, lifecycle_state: {_in: [\"pending\", \"running\"]}}, order: {started_at: ASC}, limit: $GENTS_0$"
     },
@@ -653,7 +653,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/context_budget.rs",
+      "path": "crates/gents/src/tools/native/context_budget.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { session_id: { _eq: \"$GENTS_session_id$\" } } ] }, order: { created_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
     },
@@ -667,7 +667,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/context_budget.rs",
+      "path": "crates/gents/src/tools/native/context_budget.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { agent_id: { _eq: \"$GENTS_agent_id$\" } }, { call_kind: { _eq: \"inference\" } }, { request_id: { _in: [$GENTS_list$] } } ] }, order: { queued_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
     },
@@ -682,7 +682,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/observation.rs",
+      "path": "crates/gents/src/tools/native/session_history/observation.rs",
       "collection": "AgentRequest",
       "arguments": "filter: {$GENTS_filter$}, order: {_docID: ASC}, limit: $GENTS_limit$"
     },
@@ -703,7 +703,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/snapshot.rs",
+      "path": "crates/gents/src/tools/native/session_history/snapshot.rs",
       "collection": "AgentSession",
       "arguments": "filter: {node_did: {_eq: \"$GENTS_0$\"}}, order: [{created_at: DESC},{session_id: DESC}], limit: $GENTS_limit$"
     },
@@ -716,7 +716,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/observation.rs",
+      "path": "crates/gents/src/tools/native/session_history/observation.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { node_did: {_eq: \"$GENTS_0$\"}, request_doc_id: {_eq: \"$GENTS_1$\"}, call_kind: {_eq: \"inference\"} }, order: [{queued_at: DESC}, {call_seq: DESC}, {call_id: DESC}], limit: 1"
     },
@@ -729,7 +729,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/context_calls.rs",
+      "path": "crates/gents/src/tools/native/session_history/context_calls.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { _and: [ {node_did: {_eq: \"$GENTS_0$\"}}, {call_kind: {_eq: \"inference\"}}, {session_id: {_eq: \"$GENTS_1$\"}} $GENTS_cursor_filter$ ] }, order: [{queued_at: DESC}, {call_seq: DESC}, {call_id: DESC}, {_docID: DESC}], limit: $GENTS_CONTEXT_CALL_LIMIT$"
     },
@@ -756,7 +756,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/context_calls.rs",
+      "path": "crates/gents/src/tools/native/session_history/context_calls.rs",
       "collection": "InferenceCall",
       "arguments": "filter: {$GENTS_legacy$, request_doc_id: {_in: [$GENTS_ids$]}}, order: [{queued_at: DESC}, {call_seq: DESC}, {call_id: DESC}, {_docID: DESC}], limit: $GENTS_CONTEXT_CALL_LIMIT$"
     },
@@ -775,7 +775,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/discovery.rs",
+      "path": "crates/gents/src/tools/native/session_history/discovery.rs",
       "collection": "AgentMessage",
       "arguments": "filter: {$GENTS_0$,session_id: {_eq: $GENTS_1$}$GENTS_bound$},order: {sequence: ASC},limit: $GENTS_SEARCH_MESSAGE_PAGE$"
     },
@@ -790,7 +790,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/discovery.rs",
+      "path": "crates/gents/src/tools/native/session_history/discovery.rs",
       "collection": "AgentMessage",
       "arguments": "filter: {$GENTS_0$,session_id: {_eq: $GENTS_1$}$GENTS_bounds$},order: {sequence: ASC},limit: $GENTS_2$"
     },
@@ -805,7 +805,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/toolset/session_history/discovery.rs",
+      "path": "crates/gents/src/tools/native/session_history/discovery.rs",
       "collection": "AgentSession",
       "arguments": "filter: $GENTS_condition$, order: [{created_at: DESC},{session_id: DESC}], limit: 100"
     },
@@ -817,7 +817,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/trigger_engine/event_delivery.rs",
+      "path": "crates/gents/src/triggers/engine/event_delivery.rs",
       "collection": "$GENTS_0$",
       "arguments": "filter:$GENTS_filter$,order:{_docID:ASC},limit:$GENTS_1$"
     },
@@ -831,7 +831,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/trigger_engine/event_delivery.rs",
+      "path": "crates/gents/src/triggers/engine/event_delivery.rs",
       "collection": "$GENTS_0$",
       "arguments": "filter:$GENTS_filter$,order:{_docID:ASC},limit:$GENTS_GROUP_RECOVERY_PAGE_SIZE$"
     },
@@ -845,7 +845,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/trigger_engine/event_delivery/source_scan.rs",
+      "path": "crates/gents/src/triggers/engine/event_delivery/source_scan.rs",
       "collection": "$GENTS_collection$",
       "arguments": "filter: $GENTS_filter$, order: { _docID: ASC }, limit: $GENTS_SOURCE_SCAN_PAGE_SIZE$"
     },

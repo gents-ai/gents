@@ -14,7 +14,7 @@ pub(super) async fn load(
     request: &AgentRequestRow,
 ) -> Result<Option<ContextSample>> {
     let Some(observation) =
-        gents::toolset::load_pinned_request_context_observation(node, request).await?
+        gents::tools::native::load_pinned_request_context_observation(node, request).await?
     else {
         return Ok(None);
     };
@@ -39,7 +39,7 @@ pub(super) async fn load(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::graphql::{ensure_no_errors, escape_graphql_string};
+    use gents::store::graphql::{ensure_no_errors, escape_graphql_string};
     use serde_json::json;
 
     #[tokio::test]
@@ -51,7 +51,9 @@ mod tests {
             .build()
             .await
             .unwrap();
-        gents::schema::ensure_runtime_schemas(&node).await.unwrap();
+        gents::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let mut requests = Vec::new();
         for content in ["first", "second"] {
             let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "same-label", node_did: "owner", requester_did: "requester", session_id: "session", agent_id: "behavior", content: "{content}", lifecycle_state: "pending"}}) {{_docID}} }}"#)).await;
@@ -76,7 +78,7 @@ mod tests {
         ensure_no_errors(&response, "seed physical inference context").unwrap();
         assert_eq!(load(&node, &requests[0]).await.unwrap().unwrap().used, 975);
         assert!(load(&node, &requests[1]).await.unwrap().is_none());
-        assert!(gents::toolset::load_request_context_observation(
+        assert!(gents::tools::native::load_request_context_observation(
             &node,
             "owner",
             Some("requester"),

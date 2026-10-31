@@ -1,7 +1,7 @@
 use super::*;
 use crate::tests::support::{boot_core, create_session, create_tool_call, seed_job_row, OPERATOR};
 use crate::types::RenderedToolCallView;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::job::{
     JobBudget, JobOrigin, JobOutcome, JobPauseReason, JobProgress, JobState,
 };

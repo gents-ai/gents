@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
 use defra_node::EmbeddedNode;
-use gents::collection::Collection;
-use gents::config_client::{
+use gents::store::collection::Collection;
+use gents::store::config_client::{
     apply_desired_state_plan, list_inference_profiles_in_txn, read_desired_state_record_in_txn,
 };
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::InferenceProfile;
 #[cfg(test)]
 use std::sync::Arc;
@@ -19,8 +19,8 @@ pub async fn select_agent_model_on(
     agent_id: &str,
     backend_id: &str,
     model_name: &str,
-    reasoning_effort: Option<gents::config::ReasoningEffort>,
-    service_tier: Option<gents::config::ServiceTier>,
+    reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
+    service_tier: Option<gents::inference::resolved::ServiceTier>,
 ) -> Result<InferenceProfile> {
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
     access
@@ -168,7 +168,7 @@ mod tests {
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"unauthenticated"}
         }))?;
-        gents::config_client::write_inference_backend_document(&access, &backend).await?;
+        gents::store::config_client::write_inference_backend_document(&access, &backend).await?;
         let original: InferenceProfile = serde_json::from_value(json!({
             "node_did":owner,"profile_id":"shared","backend_id":"backend",
             "model_name":"original","reasoning_effort":"high",
@@ -262,7 +262,7 @@ mod tests {
                 "first",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
+                Some(gents::inference::resolved::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -274,11 +274,14 @@ mod tests {
             "first",
             "backend",
             "original",
-            Some(gents::config::ReasoningEffort::High),
-            Some(gents::config::ServiceTier::Fast),
+            Some(gents::inference::resolved::ReasoningEffort::High),
+            Some(gents::inference::resolved::ServiceTier::Fast),
         )
         .await?;
-        assert_eq!(fast.service_tier, Some(gents::config::ServiceTier::Fast));
+        assert_eq!(
+            fast.service_tier,
+            Some(gents::inference::resolved::ServiceTier::Fast)
+        );
         assert_ne!(fast.profile_id, original.profile_id);
         assert_eq!(
             select_agent_model_on(
@@ -287,8 +290,8 @@ mod tests {
                 "first",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
-                Some(gents::config::ServiceTier::Fast),
+                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::inference::resolved::ServiceTier::Fast),
             )
             .await?,
             fast
@@ -299,20 +302,21 @@ mod tests {
             "first",
             "backend",
             "original",
-            Some(gents::config::ReasoningEffort::High),
-            Some(gents::config::ServiceTier::Default),
+            Some(gents::inference::resolved::ReasoningEffort::High),
+            Some(gents::inference::resolved::ServiceTier::Default),
         )
         .await?;
         assert_eq!(
             standard.service_tier,
-            Some(gents::config::ServiceTier::Default)
+            Some(gents::inference::resolved::ServiceTier::Default)
         );
         let unsupported = serde_json::from_value(json!({
             "node_did":owner,"backend_id":"unsupported","name":"Unsupported",
             "provider_kind":"AnthropicApiKey","endpoint":"https://api.anthropic.com/v1",
             "auth":{"kind":"api_key","key":"fixture"}
         }))?;
-        gents::config_client::write_inference_backend_document(&access, &unsupported).await?;
+        gents::store::config_client::write_inference_backend_document(&access, &unsupported)
+            .await?;
         assert!(select_agent_model_on(
             &access,
             owner,
@@ -320,7 +324,7 @@ mod tests {
             "unsupported",
             "original",
             None,
-            Some(gents::config::ServiceTier::Fast),
+            Some(gents::inference::resolved::ServiceTier::Fast),
         )
         .await
         .is_err());
@@ -331,8 +335,8 @@ mod tests {
                 "first",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
-                Some(gents::config::ServiceTier::Default),
+                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::inference::resolved::ServiceTier::Default),
             )
             .await?,
             standard
@@ -344,7 +348,7 @@ mod tests {
                 "second",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
+                Some(gents::inference::resolved::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -364,7 +368,7 @@ mod tests {
         let backend = serde_json::from_value(
             json!({"node_did":"did:test:owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
         )?;
-        gents::config_client::write_inference_backend_document(
+        gents::store::config_client::write_inference_backend_document(
             &ConfigAccess::local(node.clone()),
             &backend,
         )
@@ -392,7 +396,7 @@ mod tests {
                 assert_eq!(retained.max_output_tokens, Some(100));
                 assert_eq!(
                     retained.reasoning_effort,
-                    Some(gents::config::ReasoningEffort::High)
+                    Some(gents::inference::resolved::ReasoningEffort::High)
                 );
                 Ok::<_, anyhow::Error>(())
             })

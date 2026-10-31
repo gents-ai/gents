@@ -26,7 +26,7 @@ async fn fixed_root_homes_do_not_collide() {
             snapshot_grants: SnapshotGrants::chat_package(),
             managed_server: ManagedServerPolicy::Disabled,
             client_host: false,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
         },
         None,
     )
@@ -92,7 +92,7 @@ async fn local_runtime_allowed_binds_fixed_node_home() {
             snapshot_grants: SnapshotGrants::all(),
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
         },
         None,
     )

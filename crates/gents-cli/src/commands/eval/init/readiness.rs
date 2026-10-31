@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::ConfigAccess;
 use gents_protocol::row::{project_node_readiness, NodeReadinessRow, ProjectedAgentReadiness};
 

@@ -1,4 +1,4 @@
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::write_manual_agent_request;
 use serde_json::Value;
 

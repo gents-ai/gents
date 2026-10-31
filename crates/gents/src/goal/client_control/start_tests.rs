@@ -1,8 +1,8 @@
 use super::contract_tests::{persist_command, receipt};
 use super::*;
-use crate::agent::p2p_reconcile::session_goal_control::process_command;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::KeyIdentity;
+use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::identity::KeyIdentity;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
@@ -158,7 +158,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             time(case.requested["created_at"].as_u64().unwrap()),
             AgentRequestAdmissionRecord::local_self(identity.did()),
         );
-        initial.input = crate::lifecycle::prepare_user_message_input(
+        initial.input = crate::request::lifecycle::prepare_user_message_input(
             &access,
             identity.did(),
             SESSION,

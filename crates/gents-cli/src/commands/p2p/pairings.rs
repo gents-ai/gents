@@ -108,7 +108,7 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
             let transport_peer_ids = replicator_addresses
                 .iter()
                 .filter_map(|address| {
-                    gents::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
+                    gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
                         .ok()
                         .map(|endpoint| endpoint.peer_id().to_string())
                 })
@@ -250,7 +250,7 @@ fn peer_id_from_address_like_peer(value: &str) -> Option<String> {
 }
 
 fn is_push_template(template: Option<&str>) -> bool {
-    use gents::agent::p2p_reconcile::{resolve_template, Delivery};
+    use gents::runtime::agent::p2p_reconcile::{resolve_template, Delivery};
     template
         .and_then(resolve_template)
         .map(|t| t.delivery == Delivery::Push)
@@ -380,7 +380,7 @@ mod tests {
             transport_peer_ids: addresses
                 .iter()
                 .filter_map(|address| {
-                    gents::agent::p2p_reconcile::TransportEndpoint::parse(*address)
+                    gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(*address)
                         .ok()
                         .map(|endpoint| endpoint.peer_id().to_string())
                 })

@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::load::scenario_config;
 use super::manifest::ScenarioManifest;
 use super::prepare;
-use gents::graphql::validate_collection_identifier;
+use gents::store::graphql::validate_collection_identifier;
 
 pub(super) fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
     let config = scenario_config(manifest)?;
@@ -139,13 +139,14 @@ pub(super) fn validate_prompt_tool_contracts(
             .and_then(|datastore| datastore.enable_defra_query)
             .unwrap_or(false)
         {
-            advertised.insert(gents::defra_query::DEFRA_QUERY_TOOL_NAME.to_string());
+            advertised
+                .insert(gents::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME.to_string());
         }
         if datastore
             .and_then(|settings| settings.write_collections.as_ref())
             .is_some_and(|collections| !collections.is_empty())
         {
-            advertised.insert(gents::application_write::WRITE_TOOL_NAME.to_string());
+            advertised.insert(gents::plugin::application_write::WRITE_TOOL_NAME.to_string());
         }
         for surface_id in datastore
             .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
@@ -290,7 +291,7 @@ pub(super) fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
     let mut result_collections = BTreeSet::new();
     for result in &manifest.expect.result_documents {
         validate_collection_identifier(&result.collection)?;
-        gents::graphql::validate_graphql_name(&result.correlation_field)?;
+        gents::store::graphql::validate_graphql_name(&result.correlation_field)?;
         if result.fields.is_empty() {
             bail!(
                 "expect.result_documents entry for {} must select at least one field",
@@ -298,7 +299,7 @@ pub(super) fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
             );
         }
         for field in &result.fields {
-            gents::graphql::validate_graphql_name(field)?;
+            gents::store::graphql::validate_graphql_name(field)?;
         }
         if !result_collections.insert(&result.collection) {
             bail!(
@@ -327,7 +328,7 @@ pub(super) fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
             bail!("trigger {trigger_id} has both a fixed request count and a request count source");
         }
         validate_collection_identifier(&source.collection)?;
-        gents::graphql::validate_graphql_name(&source.correlation_field)?;
+        gents::store::graphql::validate_graphql_name(&source.correlation_field)?;
         match (
             source
                 .match_field
@@ -341,10 +342,10 @@ pub(super) fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
                 .filter(|value| !value.is_empty()),
         ) {
             (Some(match_field), Some(_)) => {
-                gents::graphql::validate_graphql_name(match_field)?;
+                gents::store::graphql::validate_graphql_name(match_field)?;
             }
             (None, None) => {
-                gents::graphql::validate_graphql_name(&source.expected_count_field)?;
+                gents::store::graphql::validate_graphql_name(&source.expected_count_field)?;
             }
             _ => {
                 bail!(
@@ -397,7 +398,7 @@ pub(super) fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
             &expected.work_unit_id_field,
             &expected.owned_paths_field,
         ] {
-            gents::graphql::validate_graphql_name(field)?;
+            gents::store::graphql::validate_graphql_name(field)?;
         }
     }
     if let Some(fan_in) = &manifest.expect.fan_in {

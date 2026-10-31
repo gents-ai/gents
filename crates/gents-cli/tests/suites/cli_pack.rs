@@ -207,7 +207,10 @@ fn offline_pack_install_with_a_documents_dependency_holds_one_store_claim() -> R
         "the documents dependency was not installed: {denial}"
     );
 
-    let _held = gents::home::lock_store(&setup.home, &gents::home::default_data_dir(&setup.home))?;
+    let _held = gents::store::local::home::lock_store(
+        &setup.home,
+        &gents::store::local::home::default_data_dir(&setup.home),
+    )?;
     let denial = run_cli_failure_stderr(setup.tempdir.path(), &install_args)?;
     anyhow::ensure!(
         denial.contains("another Gents runtime")

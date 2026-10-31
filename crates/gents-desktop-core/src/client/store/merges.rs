@@ -771,9 +771,7 @@ impl ClientStore {
 #[cfg(test)]
 mod overlay_tests {
     use super::*;
-    use gents::document_config::{
-        Agent, InferenceBackend, InferenceBackendObservation, Node, Task,
-    };
+    use gents::documents::{Agent, InferenceBackend, InferenceBackendObservation, Node, Task};
     use gents_protocol::output::{
         MessagePublication, MessageRole, OutputOutcome, TranscriptMessage,
     };

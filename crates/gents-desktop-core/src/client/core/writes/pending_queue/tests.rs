@@ -8,10 +8,10 @@ use super::*;
 
 #[test]
 fn authored_edit_uses_the_send_skill_parser() {
-    let mut edit = gents::lifecycle::PendingQueueEdit {
+    let mut edit = gents::request::lifecycle::PendingQueueEdit {
         expected_request_doc_ids: vec!["request".into()],
         selected_request_doc_ids: vec!["request".into()],
-        messages: vec![gents::lifecycle::PendingMessageEdit {
+        messages: vec![gents::request::lifecycle::PendingMessageEdit {
             request_doc_id: "request".into(),
             content: "/skill review\nPlease review".into(),
             authored_input: Some(Default::default()),
@@ -66,7 +66,7 @@ async fn generated_accepted_receipt_survives_projection_refresh_failure() {
     let before = store.projection_revision().store_version;
     let receipt = applied_receipt();
     let accepted = merge_accepted_edit_projection(
-        &ConfigAccess::Graphql(gents::config_client::GraphqlEndpoint::anonymous(
+        &ConfigAccess::Graphql(gents::store::config_client::GraphqlEndpoint::anonymous(
             "invalid endpoint",
         )),
         store.as_ref(),

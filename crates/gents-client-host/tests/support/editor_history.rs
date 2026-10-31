@@ -402,10 +402,10 @@ async fn canonical_action_doc_id(
             _docID node_did session_id request_id request_doc_id requester_did
             tool_call_key tool_call_id tool_name lifecycle_state
         }} }}"#,
-            gents::graphql::escape_graphql_string(node),
-            gents::graphql::escape_graphql_string(session),
-            gents::graphql::escape_graphql_string(request_doc_id),
-            gents::graphql::escape_graphql_string(ACTION_CALL_ID),
+            gents::store::graphql::escape_graphql_string(node),
+            gents::store::graphql::escape_graphql_string(session),
+            gents::store::graphql::escape_graphql_string(request_doc_id),
+            gents::store::graphql::escape_graphql_string(ACTION_CALL_ID),
         ))
         .await?;
     let rows: Vec<gents_protocol::row::AgentToolCallRow> =
@@ -440,8 +440,8 @@ pub(super) async fn verified_requests(
 ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(session),
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =

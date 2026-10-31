@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigApplyTxn;
+use crate::store::config_client::ConfigApplyTxn;
 use gents_protocol::request_input::GoalAssignmentInput;
 
 pub(super) fn continuation_reference_matches(
@@ -75,7 +75,7 @@ fn continuation_reference(
 
 pub(super) fn continuation_assignment(
     goal: &GoalDocument,
-    parent: &crate::watcher::AgentRequest,
+    parent: &crate::request::watcher::AgentRequest,
     receipt_doc: Option<&str>,
 ) -> Result<GoalAssignmentInput> {
     continuation_reference(

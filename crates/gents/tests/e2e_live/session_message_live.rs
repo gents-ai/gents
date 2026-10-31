@@ -5,20 +5,20 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents::agent::p2p_reconcile::resolve_template;
-use gents::agent::p2p_reconcile::templates::{
-    AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
-};
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{
+use gents::documents::{
     Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, InferenceSampling,
     Tools,
 };
 use gents::goal::{set_goal, GoalStatus};
-use gents::graphql::escape_graphql_string;
-use gents::run_timeline_fetch::load_run_timeline_rows;
-use gents::toolset::{
+use gents::observe::run_timeline_fetch::load_run_timeline_rows;
+use gents::runtime::agent::p2p_reconcile::resolve_template;
+use gents::runtime::agent::p2p_reconcile::templates::{
+    AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
+};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::native::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
 };
 use gents::{
@@ -351,7 +351,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
 
-    gents::backend_registry::probe_and_promote_enabled_backends(&db.node).await;
+    gents::inference::backends::registry::probe_and_promote_enabled_backends(&db.node).await;
     let loaded_agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
@@ -3743,7 +3743,7 @@ fn assert_standard_backgrounding_tool_surfaces(
     assert_eq!(
         parent_surface.included.get("agent"),
         Some(&{
-            let mut names = gents::toolset::AGENT_TOOL_NAMES
+            let mut names = gents::tools::native::AGENT_TOOL_NAMES
                 .iter()
                 .map(|name| name.to_string())
                 .collect::<Vec<_>>();
@@ -3886,7 +3886,7 @@ async fn apply_fixture_documents(
     node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,
 ) {
-    use gents::config_client::{
+    use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 

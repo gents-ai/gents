@@ -1,12 +1,12 @@
 use super::*;
-use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-use crate::config_client::{
+use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+use crate::inference::auth::credential::{preset_account_backend, store_sign_in};
+use crate::request::admission::verify_runtime_local_control_receipt;
+use crate::store::config_client::{
     apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::identity::KeyIdentity;
-use crate::oauth_credential::{preset_account_backend, store_sign_in};
-use crate::request_admission::verify_runtime_local_control_receipt;
+use crate::store::identity::KeyIdentity;
 use crate::Collection;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use serde_json::{json, Value};
@@ -28,7 +28,7 @@ pub(crate) struct Fixture {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<KeyIdentity>,
     pub goal: GoalDocument,
-    pub parent: crate::watcher::AgentRequest,
+    pub parent: crate::request::watcher::AgentRequest,
     _temp: tempfile::TempDir,
 }
 impl Fixture {
@@ -55,7 +55,9 @@ impl Fixture {
                 .await
                 .unwrap(),
         );
-        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         crate::test_support::install_test_agent(&node, identity.did(), "contract-behavior").await;
         let goal = set_goal(
             &node,
@@ -108,7 +110,7 @@ impl Fixture {
             execute(&node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
         }
         let rows = request_rows(&node).await;
-        let parent = crate::watcher::AgentRequest::try_from(
+        let parent = crate::request::watcher::AgentRequest::try_from(
             rows.into_iter().find(|r| r.request_id == PARENT).unwrap(),
         )
         .unwrap();
@@ -212,10 +214,10 @@ impl Fixture {
             .unwrap();
         let mut accounts = Vec::new();
         for who in ["a", "b"] {
-            let credential = crate::claude_oauth::credential_from_login_tokens(
+            let credential = crate::inference::auth::claude::credential_from_login_tokens(
                 &did,
                 CLAUDE_OAUTH_PROVIDER,
-                &crate::claude_oauth::ClaudeLoginTokens {
+                &crate::inference::auth::claude::ClaudeLoginTokens {
                     access_token: format!("access-SECRET-{who}"),
                     refresh_token: format!("refresh-SECRET-{who}"),
                     expires_in: Some(3600),
@@ -482,5 +484,5 @@ pub(crate) async fn execute(node: &EmbeddedNode, query: &str) {
 pub(crate) async fn request_rows(node: &EmbeddedNode) -> Vec<AgentRequestRow> {
     let response=node.execute(&format!("{{ AgentRequest(order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    crate::graphql::rows(&response, "AgentRequest").unwrap()
+    crate::store::graphql::rows(&response, "AgentRequest").unwrap()
 }

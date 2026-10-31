@@ -1,8 +1,10 @@
 use super::*;
 use crate::config_writes::write_agent_document;
-use gents::config_client::{write_inference_backend_document, write_inference_profile_document};
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::AdvertisedModel;
+use gents::documents::AdvertisedModel;
+use gents::store::config_client::{
+    write_inference_backend_document, write_inference_profile_document,
+};
 use gents::{record_model_catalog_in_txn, BackendProviderKind};
 use gents_protocol::row::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
@@ -518,7 +520,7 @@ async fn model_change_copies_controls_and_preserves_shared_profiles_and_noop() {
         gents::load_agent(&node, "selected").await.unwrap().unwrap(),
         selected
     );
-    let escaped = gents::graphql::escape_graphql_string(&selected.inference_profile_id);
+    let escaped = gents::store::graphql::escape_graphql_string(&selected.inference_profile_id);
     let response = node.execute(&format!(r#"mutation {{ update_InferenceProfile(filter: {{node_did: {{_eq: "did:test:codex-shim"}}, profile_id: {{_eq: "{escaped}"}}}}, input: {{sampling_id:"missing"}}) {{_docID}} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     assert!(apply_model_selection(

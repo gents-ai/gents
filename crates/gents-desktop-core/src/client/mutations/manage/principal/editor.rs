@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{
+use gents::store::config_client::{
     patch::{SelfConfigPatch, SelfConfigTarget},
     read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn,
 };
@@ -61,7 +61,7 @@ async fn read_in_txn(
         read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
             .await?
             .context("This configuration no longer exists. Reopen Runtime Settings.")?;
-    let composite = gents::graphql::newest_document_composite_commit_in_txn(
+    let composite = gents::store::graphql::newest_document_composite_commit_in_txn(
         txn,
         &document_id,
         "client.settings.read",
@@ -127,7 +127,7 @@ pub async fn save_backend_authentication_on(
     node_did: &str,
     id: &str,
     expected: &ConfigEditorRevision,
-    auth: &gents::document_config::BackendAuth,
+    auth: &gents::documents::BackendAuth,
 ) -> Result<()> {
     let patch = vec![("auth".to_owned(), Some(serde_json::to_value(auth)?))];
     access.transact_write("client.backend.authentication.save", |txn| {
@@ -202,7 +202,7 @@ pub async fn save_config_editor_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -352,7 +352,7 @@ mod tests {
         let access = fixture().await?;
         let (revision, original) =
             read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
-        let replacement = gents::document_config::BackendAuth::ApiKey {
+        let replacement = gents::documents::BackendAuth::ApiKey {
             key: "replacement-private-key".into(),
         };
         save_backend_authentication_on(
@@ -373,7 +373,7 @@ mod tests {
             "did:test:editor",
             "backend",
             &revision,
-            &gents::document_config::BackendAuth::Unauthenticated
+            &gents::documents::BackendAuth::Unauthenticated
         )
         .await
         .is_err());

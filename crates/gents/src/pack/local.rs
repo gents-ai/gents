@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use crate::pack_archive::{write_pack, PackArchive, EXTENSION};
-use crate::pack_store::PackStore;
+use crate::pack::archive::{write_pack, PackArchive, EXTENSION};
+use crate::pack::store::PackStore;
 use anyhow::{Context, Result};
 
 #[derive(Debug, PartialEq, Eq)]

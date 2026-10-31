@@ -3,14 +3,14 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::toolset::{load_session_inference_observation, SessionTokenUsage};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::tools::native::{load_session_inference_observation, SessionTokenUsage};
 use serde_json::{json, Value};
 
 use crate::caused_sessions::{load_caused_sessions, SessionScope};
 
 fn context_info(
-    observation: &gents::toolset::SessionInferenceObservation,
+    observation: &gents::tools::native::SessionInferenceObservation,
     configured_window: u64,
 ) -> Result<Value> {
     let Some(context) = observation.latest_context.as_ref() else {
@@ -71,8 +71,8 @@ pub(super) async fn session_info(
     let mut context = context_info(&observation, context_window)?;
     let details = match observation.latest_context.as_ref() {
         Some(snapshot) => {
-            gents::toolset::load_session_context_details(
-                &gents::config_client::ConfigAccess::local(node.clone()),
+            gents::tools::native::load_session_context_details(
+                &gents::store::config_client::ConfigAccess::local(node.clone()),
                 node_did,
                 Some(node_did),
                 session,

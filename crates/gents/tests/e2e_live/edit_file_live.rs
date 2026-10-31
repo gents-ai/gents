@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::document_config::{FileTools, HostTools, Tools};
+use gents::documents::{FileTools, HostTools, Tools};
 use gents::NodeIdentity;
 use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 

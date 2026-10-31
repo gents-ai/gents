@@ -27,7 +27,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         );
         let (namespace, name) = dependency
             .split_once('/')
-            .unwrap_or((crate::pack_archive::DEFAULT_NAMESPACE, dependency.as_str()));
+            .unwrap_or((crate::pack::archive::DEFAULT_NAMESPACE, dependency.as_str()));
         anyhow::ensure!(
             is_valid_pack_name(namespace) && is_valid_pack_name(name),
             "dependency {dependency:?} is not a valid pack coordinate"

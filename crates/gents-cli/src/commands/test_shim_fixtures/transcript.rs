@@ -1,10 +1,10 @@
 use defra_node::EmbeddedNode;
 use gents::defra_node::QueryRequest;
-use gents::graphql::single_mutation_document;
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use gents::store::graphql::single_mutation_document;
 #[cfg(unix)]
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter,
@@ -172,7 +172,7 @@ pub(in crate::commands) async fn next_request_sequence(
     node: &EmbeddedNode,
     request_doc_id: &str,
 ) -> u32 {
-    let request_doc_id = gents::graphql::escape_graphql_string(request_doc_id);
+    let request_doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{request_doc_id}"}}}}, limit: 2) {{session_id}} }}"#
@@ -187,7 +187,7 @@ pub(in crate::commands) async fn next_request_sequence(
         .as_array()
         .unwrap();
     assert_eq!(requests.len(), 1, "fixture request scope must be exact");
-    let session_id = gents::graphql::escape_graphql_string(
+    let session_id = gents::store::graphql::escape_graphql_string(
         requests[0]["session_id"].as_str().expect("fixture session"),
     );
     let response = node

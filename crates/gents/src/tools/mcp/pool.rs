@@ -1,0 +1,913 @@
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::future::Future;
+use std::net::Ipv4Addr;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use reqwest::header::{HeaderName, HeaderValue};
+use rmcp::{
+    model::{CallToolRequestParams, CallToolResult, ListToolsResult},
+    transport::streamable_http_client::StreamableHttpClientTransportConfig,
+    RoleClient, ServiceExt,
+};
+use tokio::sync::RwLock;
+use tracing::Instrument;
+
+mod resume;
+
+pub use resume::McpResumeStats;
+use resume::SessionResumePolicy;
+
+pub const NODE_DID_HEADER: &str = "x-node-did";
+
+const MCP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+type ListToolsFuture = Pin<Box<dyn Future<Output = Result<ListToolsResult>> + Send + 'static>>;
+type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send + 'static>>;
+type ConnectFuture = Pin<Box<dyn Future<Output = Result<McpConnection>> + Send + 'static>>;
+type ListToolsFn = dyn Fn() -> ListToolsFuture + Send + Sync;
+type CallToolFn = dyn Fn(CallToolRequestParams) -> CallToolFuture + Send + Sync;
+type ConnectFn = dyn Fn(String, String, Option<String>, RapidHashMap<String, String>) -> ConnectFuture
+    + Send
+    + Sync;
+type TraceContextHeadersFn = dyn Fn() -> RapidHashMap<String, String> + Send + Sync;
+
+struct McpConnection {
+    endpoint: String,
+    node_did_header: Option<String>,
+    trace_context_headers: RapidHashMap<String, String>,
+    list_tools_fn: Box<ListToolsFn>,
+    call_tool_fn: Box<CallToolFn>,
+    last_used: std::sync::Mutex<std::time::Instant>,
+    resume_policy: Arc<SessionResumePolicy>,
+}
+
+impl McpConnection {
+    fn touch(&self) {
+        *self.last_used.lock().expect("last_used lock") = std::time::Instant::now();
+    }
+
+    fn idle_longer_than(&self, ttl: std::time::Duration) -> bool {
+        self.last_used.lock().expect("last_used lock").elapsed() > ttl
+    }
+
+    fn resume_poisoned(&self) -> bool {
+        self.resume_policy.is_poisoned()
+    }
+}
+
+fn fresh_last_used() -> std::sync::Mutex<std::time::Instant> {
+    std::sync::Mutex::new(std::time::Instant::now())
+}
+
+fn wrap_connection<S>(
+    endpoint: String,
+    client: rmcp::service::RunningService<RoleClient, S>,
+    resume_policy: Arc<SessionResumePolicy>,
+) -> McpConnection
+where
+    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
+{
+    let client = Arc::new(client);
+    let c1 = Arc::clone(&client);
+    let c2 = Arc::clone(&client);
+
+    McpConnection {
+        endpoint,
+        node_did_header: None,
+        trace_context_headers: RapidHashMap::new(),
+        last_used: fresh_last_used(),
+        resume_policy,
+        list_tools_fn: Box::new(move || {
+            let c = Arc::clone(&c1);
+            Box::pin(async move {
+                c.peer()
+                    .list_tools(None)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("list_tools: {e}"))
+            })
+        }),
+        call_tool_fn: Box::new(move |params| {
+            let c = Arc::clone(&c2);
+            Box::pin(async move {
+                c.peer()
+                    .call_tool(params)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("call_tool: {e}"))
+            })
+        }),
+    }
+}
+
+fn streamable_http_transport_config(
+    endpoint: &str,
+    node_did_header: Option<&str>,
+    trace_context_headers: &RapidHashMap<String, String>,
+) -> Result<StreamableHttpClientTransportConfig> {
+    let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint.to_string());
+    let mut headers = std::collections::HashMap::new();
+    if let Some(node_did) = node_did_header {
+        headers.insert(
+            HeaderName::from_static(NODE_DID_HEADER),
+            HeaderValue::from_str(node_did).context("invalid node DID header value")?,
+        );
+    }
+    insert_trace_context_headers(&mut headers, trace_context_headers);
+    if !headers.is_empty() {
+        config = config.custom_headers(headers);
+    }
+    Ok(config)
+}
+
+fn insert_trace_context_headers(
+    headers: &mut std::collections::HashMap<HeaderName, HeaderValue>,
+    trace_context_headers: &RapidHashMap<String, String>,
+) {
+    for (name, value) in trace_context_headers {
+        let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = HeaderValue::from_str(value.as_str()) else {
+            continue;
+        };
+        headers.entry(name).or_insert(value);
+    }
+}
+
+async fn connect_mcp_service(
+    service_id: &str,
+    endpoint: &str,
+    node_did_header: Option<&str>,
+    trace_context_headers: RapidHashMap<String, String>,
+    resume_stats: Arc<McpResumeStats>,
+) -> Result<McpConnection> {
+    let mut config =
+        streamable_http_transport_config(endpoint, node_did_header, &trace_context_headers)?;
+    let resume_policy = Arc::new(SessionResumePolicy::new(service_id, resume_stats));
+    config.retry_config = Arc::clone(&resume_policy)
+        as Arc<dyn rmcp::transport::common::client_side_sse::SseRetryPolicy>;
+    let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
+    let client = ()
+        .serve(transport)
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}"))?;
+    let mut connection = wrap_connection(endpoint.to_string(), client, resume_policy);
+    connection.node_did_header = node_did_header.map(ToOwned::to_owned);
+    connection.trace_context_headers = trace_context_headers;
+    Ok(connection)
+}
+
+fn default_connect_fn(stats: ResumeStatsRegistry) -> Arc<ConnectFn> {
+    Arc::new(
+        move |service_id: String,
+              endpoint: String,
+              node_did_header: Option<String>,
+              trace_context_headers: RapidHashMap<String, String>| {
+            let resume_stats = stats.stats_for(&service_id);
+            Box::pin(async move {
+                connect_mcp_service(
+                    &service_id,
+                    &endpoint,
+                    node_did_header.as_deref(),
+                    trace_context_headers,
+                    resume_stats,
+                )
+                .await
+            })
+        },
+    )
+}
+
+#[derive(Clone, Default)]
+struct ResumeStatsRegistry {
+    inner: Arc<std::sync::Mutex<RapidHashMap<String, Arc<McpResumeStats>>>>,
+}
+
+impl ResumeStatsRegistry {
+    fn stats_for(&self, service_id: &str) -> Arc<McpResumeStats> {
+        let mut guard = self.inner.lock().expect("resume stats lock");
+        Arc::clone(guard.entry(service_id.to_string()).or_default())
+    }
+}
+
+#[derive(Clone)]
+pub struct McpPool {
+    owner_node_did: Option<String>,
+    inner: Arc<RwLock<RapidHashMap<ParkKey, Arc<McpConnection>>>>,
+    connect_fn: Arc<ConnectFn>,
+    trace_context_headers_fn: Arc<TraceContextHeadersFn>,
+    idle_ttl: Option<std::time::Duration>,
+    resume_stats: ResumeStatsRegistry,
+    park: Arc<std::sync::Mutex<RapidHashMap<ParkKey, ParkState>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ParkKey {
+    owner_node_did: Option<String>,
+    service_id: String,
+    endpoint: String,
+    node_did_header: Option<String>,
+}
+
+impl ParkKey {
+    fn new(service_id: &str, endpoint: &str, node_did_header: Option<&str>) -> Self {
+        Self {
+            owner_node_did: None,
+            service_id: service_id.to_string(),
+            endpoint: endpoint.to_string(),
+            node_did_header: node_did_header.map(ToOwned::to_owned),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ParkState {
+    strikes: u32,
+    last_strike: tokio::time::Instant,
+    parked_until: tokio::time::Instant,
+    connect_in_flight: bool,
+    safe_read_retry_credit: bool,
+}
+
+const MCP_PARK_BASE: std::time::Duration = std::time::Duration::from_secs(1);
+const MCP_PARK_MAX: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const MCP_STRIKE_DECAY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+enum DialReservation {
+    Unreserved,
+    Reserved {
+        park: Arc<std::sync::Mutex<RapidHashMap<ParkKey, ParkState>>>,
+        key: ParkKey,
+    },
+}
+
+impl Drop for DialReservation {
+    fn drop(&mut self) {
+        let Self::Reserved { park, key } = self else {
+            return;
+        };
+        let Ok(mut park) = park.lock() else {
+            return;
+        };
+        if let Some(state) = park.get_mut(key) {
+            state.connect_in_flight = false;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParkAdmission {
+    Normal,
+    SafeReadRetry,
+}
+
+pub const DEFAULT_MCP_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+impl McpPool {
+    pub fn new() -> Self {
+        let resume_stats = ResumeStatsRegistry::default();
+        Self {
+            owner_node_did: None,
+            inner: Arc::new(RwLock::new(RapidHashMap::new())),
+            connect_fn: default_connect_fn(resume_stats.clone()),
+            trace_context_headers_fn: Arc::new(
+                crate::observe::runtime_trace::current_trace_context_headers,
+            ),
+            idle_ttl: Some(DEFAULT_MCP_IDLE_TTL),
+            resume_stats,
+            park: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),
+        }
+    }
+
+    pub fn for_agent(&self, node_did: &str) -> Self {
+        let mut pool = self.clone();
+        pool.owner_node_did = Some(node_did.to_string());
+        pool
+    }
+
+    fn scoped_key(&self, service: &str, endpoint: &str, header: Option<&str>) -> ParkKey {
+        let mut key = ParkKey::new(service, endpoint, header);
+        key.owner_node_did = self.owner_node_did.clone();
+        key
+    }
+
+    /// Configure idle connection retirement for this host pool. This does not
+    /// set an individual MCP service's connection or call timeout.
+    pub fn with_idle_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.idle_ttl = Some(ttl);
+        self
+    }
+
+    pub fn resume_stats(&self, service_id: &str) -> Arc<McpResumeStats> {
+        self.resume_stats.stats_for(service_id)
+    }
+
+    #[cfg(test)]
+    fn new_with_connector<F, Fut>(connector: F) -> Self
+    where
+        F: Fn(String, String, Option<String>, RapidHashMap<String, String>) -> Fut
+            + Send
+            + Sync
+            + 'static,
+        Fut: Future<Output = Result<McpConnection>> + Send + 'static,
+    {
+        Self {
+            owner_node_did: None,
+            inner: Arc::new(RwLock::new(RapidHashMap::new())),
+            connect_fn: Arc::new(
+                move |service_id, endpoint, node_did_header, trace_headers| {
+                    Box::pin(connector(
+                        service_id,
+                        endpoint,
+                        node_did_header,
+                        trace_headers,
+                    ))
+                },
+            ),
+            trace_context_headers_fn: Arc::new(
+                crate::observe::runtime_trace::current_trace_context_headers,
+            ),
+            idle_ttl: None,
+            resume_stats: ResumeStatsRegistry::default(),
+            park: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_trace_context_headers<F>(mut self, headers: F) -> Self
+    where
+        F: Fn() -> RapidHashMap<String, String> + Send + Sync + 'static,
+    {
+        self.trace_context_headers_fn = Arc::new(headers);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_list_tools_handler<F, Fut>(handler: F) -> Self
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ListToolsResult>> + Send + 'static,
+    {
+        Self::new_with_tool_handlers(handler, |_| async {
+            anyhow::bail!("call_tool was not expected")
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_tool_handlers<F, Fut, C, CFut>(handler: F, call: C) -> Self
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ListToolsResult>> + Send + 'static,
+        C: Fn(CallToolRequestParams) -> CFut + Send + Sync + 'static,
+        CFut: Future<Output = Result<CallToolResult>> + Send + 'static,
+    {
+        let call = Arc::new(call);
+        let handler = Arc::new(handler);
+        Self::new_with_connector(
+            move |service_id, endpoint, node_did_header, trace_headers| {
+                let handler = Arc::clone(&handler);
+                let call = Arc::clone(&call);
+                async move {
+                    let service_id_for_list = service_id.clone();
+                    let endpoint_for_list = endpoint.clone();
+                    Ok(McpConnection {
+                        endpoint,
+                        node_did_header,
+                        trace_context_headers: trace_headers,
+                        last_used: fresh_last_used(),
+                        resume_policy: SessionResumePolicy::detached(&service_id),
+                        list_tools_fn: Box::new(move || {
+                            let handler = Arc::clone(&handler);
+                            let service_id = service_id_for_list.clone();
+                            let endpoint = endpoint_for_list.clone();
+                            Box::pin(async move { handler(service_id, endpoint).await })
+                        }),
+                        call_tool_fn: Box::new(move |params| {
+                            let call = Arc::clone(&call);
+                            Box::pin(async move { call(params).await })
+                        }),
+                    })
+                }
+            },
+        )
+    }
+
+    pub async fn list_tools(&self, service_id: &str, endpoint: &str) -> Result<ListToolsResult> {
+        self.list_tools_with_node_did(service_id, endpoint, None)
+            .await
+    }
+
+    pub async fn list_tools_with_node_did(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        node_did: Option<&str>,
+    ) -> Result<ListToolsResult> {
+        self.list_tools_with_limits(
+            service_id,
+            endpoint,
+            node_did,
+            MCP_CONNECT_TIMEOUT,
+            MCP_LIST_TOOLS_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn list_tools_with_limits(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        node_did: Option<&str>,
+        connect_timeout: std::time::Duration,
+        discovery_timeout: std::time::Duration,
+    ) -> Result<ListToolsResult> {
+        async {
+            let connection = self
+                .get_or_connect(
+                    service_id,
+                    endpoint,
+                    node_did,
+                    ParkAdmission::Normal,
+                    connect_timeout,
+                )
+                .await?;
+            match self
+                .list_tools_once(service_id, &connection, discovery_timeout)
+                .await
+            {
+                Ok(result) => {
+                    tracing::Span::current().record("tool_count", result.tools.len() as i64);
+                    Ok(result)
+                }
+                Err(error) => {
+                    tracing::Span::current().record("retried", true);
+                    tracing::warn!(
+                        service_id = %service_id,
+                        error = %error,
+                        "MCP list_tools failed, evicting connection and retrying"
+                    );
+                    self.remove(service_id).await;
+                    let connection = self
+                        .get_or_connect(
+                            service_id,
+                            endpoint,
+                            node_did,
+                            ParkAdmission::SafeReadRetry,
+                            connect_timeout,
+                        )
+                        .await?;
+                    let result = self
+                        .list_tools_once(service_id, &connection, discovery_timeout)
+                        .await?;
+                    tracing::Span::current().record("tool_count", result.tools.len() as i64);
+                    Ok(result)
+                }
+            }
+        }
+        .instrument(tracing::info_span!(
+            "mcp.list_tools",
+            service_id = %service_id,
+            endpoint = %endpoint,
+            node_did_bound = node_did.is_some(),
+            retried = false,
+            tool_count = tracing::field::Empty,
+        ))
+        .await
+    }
+
+    /// Dispatch failures are not retried because calls can repeat side effects without idempotency evidence.
+    pub async fn call_tool(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<CallToolResult> {
+        self.call_tool_with_node_did(service_id, endpoint, tool_name, arguments, None)
+            .await
+    }
+
+    pub async fn call_tool_with_node_did(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        node_did: Option<&str>,
+    ) -> Result<CallToolResult> {
+        self.call_tool_with_connect_timeout(
+            service_id,
+            endpoint,
+            tool_name,
+            arguments,
+            node_did,
+            MCP_CONNECT_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn call_tool_with_connect_timeout(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        node_did: Option<&str>,
+        connect_timeout: std::time::Duration,
+    ) -> Result<CallToolResult> {
+        let argument_count = argument_count(&arguments);
+        async {
+            let connection = self
+                .get_or_connect(
+                    service_id,
+                    endpoint,
+                    node_did,
+                    ParkAdmission::Normal,
+                    connect_timeout,
+                )
+                .await?;
+            let result = self
+                .call_tool_once(&connection, build_call_tool_params(tool_name, arguments))
+                .await;
+            if let Ok(result) = &result {
+                tracing::Span::current()
+                    .record("mcp_result_is_error", result.is_error.unwrap_or(false));
+            }
+            result
+        }
+        .instrument(tracing::info_span!(
+            "mcp.call_tool",
+            service_id = %service_id,
+            endpoint = %endpoint,
+            tool_name = %tool_name,
+            node_did_bound = node_did.is_some(),
+            argument_count = argument_count as i64,
+            mcp_result_is_error = tracing::field::Empty,
+        ))
+        .await
+    }
+
+    pub async fn remove(&self, service_id: &str) {
+        let mut guard = self.inner.write().await;
+        guard.retain(|key, _| {
+            key.service_id != service_id || key.owner_node_did != self.owner_node_did
+        });
+    }
+
+    async fn list_tools_once(
+        &self,
+        service_id: &str,
+        connection: &McpConnection,
+        timeout: std::time::Duration,
+    ) -> Result<ListToolsResult> {
+        tokio::time::timeout(timeout, (connection.list_tools_fn)())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "MCP list_tools on '{service_id}' timed out after {}s",
+                    timeout.as_secs()
+                )
+            })?
+    }
+
+    async fn call_tool_once(
+        &self,
+        connection: &McpConnection,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResult> {
+        (connection.call_tool_fn)(params).await
+    }
+
+    async fn get_or_connect(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        node_did: Option<&str>,
+        park_admission: ParkAdmission,
+        connect_timeout: std::time::Duration,
+    ) -> Result<Arc<McpConnection>> {
+        let key = self.scoped_key(service_id, endpoint, node_did);
+        let node_did_header = node_did.map(ToOwned::to_owned);
+        let trace_context_headers = (self.trace_context_headers_fn)();
+        {
+            let guard = self.inner.read().await;
+            if let Some(conn) = guard.get(&key) {
+                if conn.endpoint == endpoint
+                    && conn.node_did_header == node_did_header
+                    && conn.trace_context_headers == trace_context_headers
+                    && !self.idle_ttl.is_some_and(|ttl| conn.idle_longer_than(ttl))
+                    && !conn.resume_poisoned()
+                {
+                    conn.touch();
+                    return Ok(Arc::clone(conn));
+                }
+            }
+        }
+
+        let mut poison_detected_for_key = None;
+        {
+            let mut guard = self.inner.write().await;
+            if let Some(conn) = guard.get(&key) {
+                let old_endpoint = conn.endpoint.clone();
+                let old_node_did_header = conn.node_did_header.clone();
+                let endpoint_changed = conn.endpoint != endpoint;
+                let node_did_changed = conn.node_did_header != node_did_header;
+                let trace_context_changed = conn.trace_context_headers != trace_context_headers;
+                let idle_ttl_expired = self.idle_ttl.is_some_and(|ttl| conn.idle_longer_than(ttl));
+                let resume_poisoned = conn.resume_poisoned();
+                if !endpoint_changed
+                    && !node_did_changed
+                    && !trace_context_changed
+                    && !idle_ttl_expired
+                    && !resume_poisoned
+                {
+                    conn.touch();
+                    return Ok(Arc::clone(conn));
+                }
+                tracing::info!(
+                    service_id,
+                    old_endpoint = %conn.endpoint,
+                    new_endpoint = %endpoint,
+                    endpoint_changed,
+                    node_did_changed,
+                    trace_context_changed,
+                    idle_ttl_expired,
+                    resume_poisoned,
+                    "MCP connection context changed, reconnecting"
+                );
+                if resume_poisoned {
+                    self.resume_stats
+                        .stats_for(service_id)
+                        .session_reinits
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    guard.retain(|key, _| {
+                        key.service_id != service_id || key.owner_node_did != self.owner_node_did
+                    });
+                    poison_detected_for_key = Some((old_endpoint, old_node_did_header));
+                }
+            }
+        }
+
+        let park_node_did_header = node_did_header.clone();
+        let _dial_reservation = self.reserve_dial_if_struck(
+            service_id,
+            endpoint,
+            park_node_did_header.as_deref(),
+            park_admission,
+        )?;
+        if let Some((poisoned_endpoint, poisoned_node_did_header)) = poison_detected_for_key {
+            self.record_strike(
+                service_id,
+                &poisoned_endpoint,
+                poisoned_node_did_header.as_deref(),
+                "session poisoned (resume terminal)",
+                true,
+            );
+        }
+
+        tracing::info!(service_id, endpoint, "connecting MCP client");
+        let connection = match tokio::time::timeout(
+            connect_timeout,
+            (self.connect_fn)(
+                service_id.to_string(),
+                endpoint.to_string(),
+                node_did_header,
+                trace_context_headers,
+            ),
+        )
+        .await
+        {
+            Err(_elapsed) => {
+                self.record_connect_failure(service_id, endpoint, park_node_did_header.as_deref());
+                anyhow::bail!(
+                    "MCP connect to '{service_id}' ({endpoint}) timed out after {}s",
+                    connect_timeout.as_secs()
+                );
+            }
+            Ok(Err(error)) => {
+                self.record_connect_failure(service_id, endpoint, park_node_did_header.as_deref());
+                return Err(error);
+            }
+            Ok(Ok(connection)) => connection,
+        };
+
+        let mut guard = self.inner.write().await;
+        let connection = Arc::new(connection);
+        guard.insert(key, Arc::clone(&connection));
+        Ok(connection)
+    }
+
+    fn reserve_dial_if_struck(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        node_did_header: Option<&str>,
+        admission: ParkAdmission,
+    ) -> Result<DialReservation> {
+        let mut park = self.park.lock().expect("park lock");
+        let key = self.scoped_key(service_id, endpoint, node_did_header);
+        if let Some(state) = park.get_mut(&key) {
+            let now = tokio::time::Instant::now();
+            if now < state.parked_until {
+                if admission == ParkAdmission::SafeReadRetry
+                    && state.safe_read_retry_credit
+                    && !state.connect_in_flight
+                {
+                    state.safe_read_retry_credit = false;
+                    state.connect_in_flight = true;
+                    return Ok(DialReservation::Reserved {
+                        park: Arc::clone(&self.park),
+                        key,
+                    });
+                }
+                anyhow::bail!(
+                    "MCP service '{service_id}' endpoint '{endpoint}' is parked for {:?} after \
+                     {} consecutive connection/session failures (#639)",
+                    state.parked_until - now,
+                    state.strikes
+                );
+            }
+            if state.connect_in_flight {
+                anyhow::bail!(
+                    "MCP service '{service_id}' endpoint '{endpoint}' connect already in flight \
+                     after {} consecutive connection/session failures (#639)",
+                    state.strikes
+                );
+            }
+            state.connect_in_flight = true;
+            return Ok(DialReservation::Reserved {
+                park: Arc::clone(&self.park),
+                key,
+            });
+        }
+        Ok(DialReservation::Unreserved)
+    }
+
+    fn record_connect_failure(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        node_did_header: Option<&str>,
+    ) {
+        self.resume_stats
+            .stats_for(service_id)
+            .connect_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_strike(
+            service_id,
+            endpoint,
+            node_did_header,
+            "connect failed",
+            false,
+        );
+    }
+
+    fn record_strike(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        node_did_header: Option<&str>,
+        reason: &'static str,
+        safe_read_retry_credit: bool,
+    ) {
+        let mut park = self.park.lock().expect("park lock");
+        let now = tokio::time::Instant::now();
+        let state = park
+            .entry(self.scoped_key(service_id, endpoint, node_did_header))
+            .or_insert_with(|| ParkState {
+                strikes: 0,
+                last_strike: now,
+                parked_until: now,
+                connect_in_flight: false,
+                safe_read_retry_credit: false,
+            });
+        if now.saturating_duration_since(state.last_strike) > MCP_STRIKE_DECAY {
+            state.strikes = 0;
+            state.safe_read_retry_credit = false;
+        }
+        state.strikes = state.strikes.saturating_add(1);
+        state.last_strike = now;
+        state.safe_read_retry_credit = safe_read_retry_credit;
+        let horizon = MCP_PARK_BASE
+            .saturating_mul(2u32.saturating_pow(state.strikes.saturating_sub(1).min(30)))
+            .min(MCP_PARK_MAX);
+        state.parked_until = now + horizon;
+        tracing::warn!(
+            service_id,
+            endpoint,
+            node_did_bound = node_did_header.is_some(),
+            reason,
+            strikes = state.strikes,
+            park_seconds = horizon.as_secs(),
+            "MCP service struck; new connects parked (#639)"
+        );
+    }
+}
+
+impl Default for McpPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn argument_count(arguments: &serde_json::Value) -> usize {
+    match arguments {
+        serde_json::Value::Object(map) => map.len(),
+        serde_json::Value::Null => 0,
+        _ => 1,
+    }
+}
+
+fn build_call_tool_params(tool_name: &str, arguments: serde_json::Value) -> CallToolRequestParams {
+    let json_args = match arguments {
+        serde_json::Value::Object(map) => Some(map),
+        serde_json::Value::Null => None,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("input".to_string(), other);
+            Some(map)
+        }
+    };
+
+    let mut params = CallToolRequestParams::new(tool_name.to_string());
+    if let Some(args) = json_args {
+        params = params.with_arguments(args);
+    }
+    params
+}
+
+pub fn resolve_mcp_url(
+    service_hostname: &str,
+    service_tailscale_ip: &str,
+    service_lan_ip: &str,
+    mcp_port: u16,
+    mcp_path: &str,
+    local_hostname: &str,
+    local_subnet_cidr: Option<&str>,
+) -> String {
+    let path = normalize_mcp_path(mcp_path);
+
+    if !service_hostname.is_empty() && service_hostname == local_hostname {
+        return format!("http://127.0.0.1:{mcp_port}{path}");
+    }
+
+    if !service_lan_ip.is_empty() {
+        if let Some(cidr) = local_subnet_cidr {
+            if ip_in_cidr(service_lan_ip, cidr) {
+                return format!("http://{service_lan_ip}:{mcp_port}{path}");
+            }
+        }
+    }
+
+    let host = if !service_tailscale_ip.is_empty() {
+        service_tailscale_ip
+    } else if !service_lan_ip.is_empty() {
+        service_lan_ip
+    } else {
+        service_hostname
+    };
+
+    format!("http://{host}:{mcp_port}{path}")
+}
+
+fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
+    let Some((network, prefix)) = cidr.split_once('/') else {
+        return false;
+    };
+    let Ok(ip_addr) = ip.parse::<Ipv4Addr>() else {
+        return false;
+    };
+    let Ok(net_addr) = network.parse::<Ipv4Addr>() else {
+        return false;
+    };
+    let Ok(prefix_len) = prefix.parse::<u32>() else {
+        return false;
+    };
+    if prefix_len > 32 {
+        return false;
+    }
+
+    let mask = if prefix_len == 0 {
+        0u32
+    } else {
+        !0u32 << (32 - prefix_len)
+    };
+    (u32::from(ip_addr) & mask) == (u32::from(net_addr) & mask)
+}
+
+fn normalize_mcp_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+#[cfg(test)]
+mod tests;

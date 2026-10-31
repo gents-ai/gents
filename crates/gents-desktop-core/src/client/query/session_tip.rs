@@ -18,7 +18,7 @@ pub async fn load_session_tip_store(
 }
 
 pub async fn load_session_tip_store_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
     let query = tip_query(request, false)?;
@@ -36,7 +36,7 @@ pub async fn load_session_live_store(
 }
 
 pub async fn load_session_live_store_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
     let query = tip_query(request, true)?;
@@ -77,7 +77,7 @@ pub struct RequestPromptFact {
 }
 
 fn input_owner(request: &AgentRequestRow) -> Result<(String, String, bool)> {
-    let (owner, key) = gents::lifecycle::input_message_owner(request)
+    let (owner, key) = gents::request::lifecycle::input_message_owner(request)
         .context("prompt lookup lacks physical request")?;
     let own = request.doc_id.as_deref() == Some(owner.as_str());
     Ok((owner, key, own))
@@ -104,7 +104,7 @@ pub async fn load_request_prompt_ownership(
 }
 
 pub async fn load_request_prompt_ownership_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     requests: &[AgentRequestRow],
 ) -> Result<RequestPromptOwnership> {
     let mut facts = RequestPromptOwnership::default();
@@ -299,7 +299,7 @@ fn decode_prompt_ownership(
                     .first()
                     .filter(|row| {
                         let input = request.input.clone().unwrap_or_default();
-                        !gents::lifecycle::is_runtime_control_message(
+                        !gents::request::lifecycle::is_runtime_control_message(
                             &input,
                             row["message_key"].as_str().unwrap_or_default(),
                         )
@@ -437,7 +437,7 @@ fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     #[tokio::test]
@@ -588,7 +588,7 @@ mod tests {
             ),
             superseded_by_request: Some("req-head".into()),
             superseded_by_request_doc_id: Some("head".into()),
-            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
             ..request("folded")
         };
         let requests = [request("head"), folded];
@@ -684,7 +684,7 @@ mod tests {
             lifecycle_state: Some(RequestLifecycleState::Superseded),
             superseded_by_request: Some(head.request_id.clone()),
             superseded_by_request_doc_id: head.doc_id.clone(),
-            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
             ..head.clone()
         }));
         let unique = prompt_ownership_batch_query(&requests).unwrap();
@@ -822,7 +822,7 @@ mod tests {
             input: queue("head"),
             superseded_by_request: Some("head".into()),
             superseded_by_request_doc_id: Some("doc-head".into()),
-            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
             ..row("folded", RequestLifecycleState::Superseded, "reader")
         };
         let foreign = AgentRequestRow {

@@ -208,7 +208,7 @@ async fn wait_for_child_request(node: &Arc<EmbeddedNode>) -> gents_protocol::row
                     .and_then(|data| data["AgentRequest"].as_array())
                     .and_then(|rows| rows.first());
                 if let Some(scope) = scope {
-                    gents::tool_call_lifecycle::load_tool_call_presentation(
+                    gents::tools::call::lifecycle::load_tool_call_presentation(
                         &gents::ConfigAccess::local(node.clone()),
                         tool_doc_id,
                         scope["node_did"].as_str().unwrap_or_default(),
@@ -412,7 +412,7 @@ async fn native_child_controls_and_usage_follow_physical_lineage() {
         );
     }
     let node = &service.config.node;
-    let did = gents::graphql::escape_graphql_string(&service.config.node_did);
+    let did = gents::store::graphql::escape_graphql_string(&service.config.node_did);
     let child = wait_for_child_request(node).await;
     let child_session = child.session_id.as_deref().unwrap();
     let child_process = wait_for_running_bash_handle(node.as_ref(), child_session).await;

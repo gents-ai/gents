@@ -148,7 +148,7 @@ async fn create_owned_request_with_times_and_requester(
                 {execution_fields}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -219,7 +219,7 @@ async fn create_queue_request(
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -695,7 +695,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         gents::sign_agent_request_create(identity, &mut create)
             .await
             .unwrap();
-        gents::config_client::ConfigAccess::write_local(
+        gents::store::config_client::ConfigAccess::write_local(
             &db.node,
             "conformance.signed_completion_wake",
             &create.graphql_mutation().unwrap(),

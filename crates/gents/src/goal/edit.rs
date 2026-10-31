@@ -53,7 +53,7 @@ pub(crate) async fn edit_active_goal(
 }
 
 pub(super) async fn stage_goal_edit(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     observed: &GoalDocument,
     fields: &GoalEdit,
     origin: GoalEditOrigin,

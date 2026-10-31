@@ -12,7 +12,7 @@ use axum::{
 };
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
-use gents::rendered_request::RenderedCompletionRequest;
+use gents::inference::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -510,7 +510,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     let response = node
         .execute(&format!(
             r#"query {{ _commits(docID: "{}") {{ cid fieldName }} }}"#,
-            gents::graphql::escape_graphql_string(&request_doc_id)
+            gents::store::graphql::escape_graphql_string(&request_doc_id)
         ))
         .await;
     if response.has_errors() {
@@ -532,8 +532,9 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .context("seeded AgentRequest has no composite commit cid")?;
-    let escaped_request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
-    let escaped_request_commit_cid = gents::graphql::escape_graphql_string(&request_commit_cid);
+    let escaped_request_doc_id = gents::store::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_request_commit_cid =
+        gents::store::graphql::escape_graphql_string(&request_commit_cid);
     for (suffix, attempt, call_id, call_seq, created_at) in [
         ("a0", 0, "call-cap-1", 1, "2026-08-07T12:00:02Z"),
         ("a1", 1, "call-cap-2", 2, "2026-08-07T12:00:04Z"),
@@ -586,8 +587,8 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                         created_at: "{created_at}"
                     }}) {{ _docID }}
                 }}"#,
-                request_json = gents::graphql::escape_graphql_string(&request_json),
-                provenance = gents::graphql::escape_graphql_string(&provenance),
+                request_json = gents::store::graphql::escape_graphql_string(&request_json),
+                provenance = gents::store::graphql::escape_graphql_string(&provenance),
                 escaped_request_doc_id = escaped_request_doc_id,
                 escaped_request_commit_cid = escaped_request_commit_cid,
             ),
@@ -601,10 +602,11 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
     let mut first_capture_key = String::new();
     for turn in 0..2usize {
         let capture_scope = "inference.1".to_string();
-        let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-            gents::rendered_request::AssemblyBuildPath::Budgeted,
-            Vec::new(),
-        );
+        let assembly_trace =
+            gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+                gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
+                Vec::new(),
+            );
         let mut payload = serde_json::to_value(&assembly_trace)?;
         payload["threaded_tool_results"] = json!([{
             "tool_call_id": "native-result",
@@ -612,7 +614,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             "padding": "p".repeat(4096 + turn * 512)
         }]);
         let rendered = RenderedCompletionRequest {
-            capture_key: gents::rendered_request::capture_key(
+            capture_key: gents::inference::rendered_request::capture_key(
                 "did:test:amy",
                 "session-cap-v2",
                 "",
@@ -620,7 +622,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 turn,
                 0,
             )?,
-            capture_version: gents::rendered_request::CAPTURE_VERSION,
+            capture_version: gents::inference::rendered_request::CAPTURE_VERSION,
             request_doc_id: String::new(),
             request_commit_cid: String::new(),
             request_id: "req-cap-v2".into(),
@@ -632,7 +634,8 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             agent_id: "amy".into(),
             session_id: "session-cap-v2".into(),
             model_name: "test-model".into(),
-            source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+            source:
+                gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
             request_json: json!({
                 "model":"test-model",
                 "messages":[{"role":"user","content":"x".repeat(8192 + turn * 512)}]
@@ -642,7 +645,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             tool_choice_json: Value::Null,
             sampling_json: Value::Null,
             provenance_json: serde_json::to_value(
-                gents::rendered_request::ProvenanceManifest::captured_only(
+                gents::inference::rendered_request::ProvenanceManifest::captured_only(
                     capture_scope,
                     None,
                     None,
@@ -655,8 +658,9 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         if turn == 0 {
             first_capture_key = rendered.capture_key.clone();
         }
-        let canonical_provenance =
-            gents::rendered_request::canonical_json_string(&rendered.provenance_payload_json)?;
+        let canonical_provenance = gents::inference::rendered_request::canonical_json_string(
+            &rendered.provenance_payload_json,
+        )?;
         if turn == 0 {
             let container = json!({
                 "gents_capture_json": 1,
@@ -677,11 +681,11 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                         request_json: "{request_json}", provenance_json: "{provenance}",
                         created_at: "2026-10-07T00:00:0{turn}Z"
                     }}) {{ _docID }} }}"#,
-                    capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
-                    request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
-                    session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
-                    request_json = gents::graphql::escape_graphql_string(&container.to_string()),
-                    provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
+                    capture_key = gents::store::graphql::escape_graphql_string(&rendered.capture_key),
+                    request_id = gents::store::graphql::escape_graphql_string(&rendered.request_id),
+                    session_id = gents::store::graphql::escape_graphql_string(&rendered.session_id),
+                    request_json = gents::store::graphql::escape_graphql_string(&container.to_string()),
+                    provenance = gents::store::graphql::escape_graphql_string(&canonical_provenance),
                 ),
             )
             .await?;
@@ -690,7 +694,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         let first_row = node
             .execute(&format!(
                 r#"{{RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{_docID}}}}"#,
-                gents::graphql::escape_graphql_string(&first_capture_key)
+                gents::store::graphql::escape_graphql_string(&first_capture_key)
             ))
             .await;
         anyhow::ensure!(!first_row.has_errors(), "{:?}", first_row.errors);
@@ -701,7 +705,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         let base_cid = node
             .execute(&format!(
                 r#"{{_commits(docID:"{}"){{cid fieldName}}}}"#,
-                gents::graphql::escape_graphql_string(&first_doc_id)
+                gents::store::graphql::escape_graphql_string(&first_doc_id)
             ))
             .await;
         anyhow::ensure!(!base_cid.has_errors(), "{:?}", base_cid.errors);
@@ -757,11 +761,11 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                     request_json: "{request_json}", provenance_json: "{provenance}",
                     created_at: "2026-10-07T00:00:0{turn}Z"
                 }}) {{ _docID }} }}"#,
-                capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
-                request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
-                session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
-                request_json = gents::graphql::escape_graphql_string(&container.to_string()),
-                provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
+                capture_key = gents::store::graphql::escape_graphql_string(&rendered.capture_key),
+                request_id = gents::store::graphql::escape_graphql_string(&rendered.request_id),
+                session_id = gents::store::graphql::escape_graphql_string(&rendered.session_id),
+                request_json = gents::store::graphql::escape_graphql_string(&container.to_string()),
+                provenance = gents::store::graphql::escape_graphql_string(&canonical_provenance),
             ),
         )
         .await?;
@@ -771,8 +775,8 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
 
 async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<()> {
     let capture_scope = "inference.1".to_string();
-    let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-        gents::rendered_request::AssemblyBuildPath::Budgeted,
+    let assembly_trace = gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+        gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
         Vec::new(),
     );
     let mut provenance_payload = serde_json::to_value(&assembly_trace)?;
@@ -781,9 +785,9 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         "native_tool_output": {"ok": true, "exit_code": 3},
         "padding": "q".repeat(6 * 1024)
     }]);
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
     sink.capture(RenderedCompletionRequest {
-        capture_key: gents::rendered_request::capture_key(
+        capture_key: gents::inference::rendered_request::capture_key(
             "did:test:amy",
             "session-cap-manifest",
             "",
@@ -791,7 +795,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
             0,
             0,
         )?,
-        capture_version: gents::rendered_request::CAPTURE_VERSION,
+        capture_version: gents::inference::rendered_request::CAPTURE_VERSION,
         request_doc_id: String::new(),
         request_commit_cid: String::new(),
         request_id: "req-cap-manifest".into(),
@@ -803,7 +807,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         agent_id: "amy".into(),
         session_id: "session-cap-manifest".into(),
         model_name: "test-model".into(),
-        source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+        source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
         request_json: json!({
             "model": "test-model",
             "messages": [{"role": "user", "content": "manifest capture"}]
@@ -813,7 +817,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
         provenance_json: serde_json::to_value(
-            gents::rendered_request::ProvenanceManifest::captured_only(
+            gents::inference::rendered_request::ProvenanceManifest::captured_only(
                 capture_scope,
                 None,
                 None,
@@ -1566,7 +1570,7 @@ async fn initialized_trace_node(
         .context("loading initialized trace identity")?;
 
     let data = agent_home.join("data");
-    gents::store_key::open_home_store_key(agent_home, &data)
+    gents::store::local::store_key::open_home_store_key(agent_home, &data)
         .await?
         .encrypt(
             EmbeddedNode::builder()
@@ -1616,7 +1620,7 @@ async fn exec_variables_doc_id(
         .execute_request(gents::defra_node::QueryRequest::new(query).with_variables(variables))
         .await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
-    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))?
+    gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))?
         .and_then(|row| row["_docID"].as_str().map(ToOwned::to_owned))
         .with_context(|| format!("{collection} mutation omitted document"))
 }
@@ -1950,7 +1954,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "AgentRequest",
     )
     .await?;
-    let observed = gents::graphql::escape_graphql_string(&root_request_doc_id);
+    let observed = gents::store::graphql::escape_graphql_string(&root_request_doc_id);
     let commit_response = node
         .execute(&format!(
             r#"{{ _commits(docID: "{observed}") {{cid fieldName}} }}"#
@@ -2630,7 +2634,7 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
     for session_id in ["session-acp", "session-forged-child"] {
         let predicate = format!(
             r#"session_id: {{ _eq: "{}" }}"#,
-            gents::graphql::escape_graphql_string(session_id)
+            gents::store::graphql::escape_graphql_string(session_id)
         );
         if query.contains(&predicate) {
             rows.retain(|row| row["session_id"].as_str() == Some(session_id));
@@ -2642,7 +2646,7 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
         for requester_did in ["did:test:amy", "did:test:reviewer"] {
             let predicate = format!(
                 r#"requester_did: {{ _eq: "{}" }}"#,
-                gents::graphql::escape_graphql_string(requester_did)
+                gents::store::graphql::escape_graphql_string(requester_did)
             );
             if query.contains(&predicate) {
                 rows.retain(|row| row["requester_did"].as_str() == Some(requester_did));

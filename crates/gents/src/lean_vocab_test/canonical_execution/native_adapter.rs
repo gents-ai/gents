@@ -12,7 +12,7 @@ use gents_protocol::output::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 use crate::lean_vocab_test::{
     CanonicalExecutionAdapter, ExecutionFuture, LeanAuxiliaryKind,
@@ -162,36 +162,36 @@ fn auxiliary_publication_candidate(
 async fn create_signed_fixture_request(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
-    spec: crate::lifecycle::RequestSpec,
-) -> Result<crate::watcher::AgentRequest> {
-    let create = crate::lifecycle::build_signed_request(
+    spec: crate::request::lifecycle::RequestSpec,
+) -> Result<crate::request::watcher::AgentRequest> {
+    let create = crate::request::lifecycle::build_signed_request(
         spec,
-        crate::lifecycle::RequestSigner::Identity(identity),
+        crate::request::lifecycle::RequestSigner::Identity(identity),
     )
     .await?;
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "test.native_execution.create_signed_request",
         &create
-            .graphql_mutation_selecting(crate::watcher::AGENT_REQUEST_FIELDS)
+            .graphql_mutation_selecting(crate::request::watcher::AGENT_REQUEST_FIELDS)
             .map_err(anyhow::Error::msg)?,
     )
     .await?;
-    crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
+    crate::request::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
         .context("native request create omitted its physical identity")
 }
 
 async fn claim_fixture_request(
     node: Arc<EmbeddedNode>,
     node_did: &str,
-    request: crate::watcher::AgentRequest,
+    request: crate::request::watcher::AgentRequest,
     duration: u64,
     generation: String,
     now: DateTime<Utc>,
     processing: bool,
 ) -> Result<()> {
     let request_doc_id = request.doc_id.clone();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         node_did,
@@ -208,7 +208,7 @@ async fn claim_fixture_request(
     );
     drop(lifecycle);
     if processing {
-        crate::lifecycle::RequestLifecycle::begin_owned_execution_durable_with_clock(
+        crate::request::lifecycle::RequestLifecycle::begin_owned_execution_durable_with_clock(
             &node,
             &request_doc_id,
             &generation,
@@ -265,42 +265,44 @@ impl NativeCanonicalExecution {
             outcome == "dead",
             "modeled corrupt revocation outcome changed"
         );
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
             !response.has_errors(),
             "read revocation request: {:?}",
             response.errors
         );
-        let observed = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native revocation request disappeared")?;
-        let result = crate::lifecycle::revoke_execution_preserving_output_at(
+        let observed =
+            crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+                .context("native revocation request disappeared")?;
+        let result = crate::request::lifecycle::revoke_execution_preserving_output_at(
             &self.node,
             &observed,
-            crate::lifecycle::RequestTerminalOutcome::Dead,
+            crate::request::lifecycle::RequestTerminalOutcome::Dead,
             "canonical output integrity failure",
             &symbolic_generation(expected_generation),
             &symbolic_generation(fresh_generation),
             self.fixture_time(now)?,
         )
         .await?;
-        if matches!(result, crate::lifecycle::TerminalizeResult::Lost) {
+        if matches!(result, crate::request::lifecycle::TerminalizeResult::Lost) {
             return self.observe(false).await;
         }
         let response = self.node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state terminal_output }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
             !response.has_errors(),
             "read revoked request: {:?}",
             response.errors
         );
-        let persisted = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native revoked request disappeared")?;
+        let persisted =
+            crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+                .context("native revoked request disappeared")?;
         let expected_selection = match selection {
             LeanTerminalSelection::NoMessage => gents_protocol::output::TerminalOutput::NoMessage,
             LeanTerminalSelection::Message { id } => {
@@ -382,9 +384,9 @@ impl NativeCanonicalExecution {
             },
         };
         let rendered =
-            crate::tool_call_lifecycle::delivery::render_presentation(&raw, &presentation)?;
+            crate::tools::call::lifecycle::delivery::render_presentation(&raw, &presentation)?;
         let physical = self.physical_tool(document)?.to_owned();
-        let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        let mut tool = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
             self.node.clone(),
             &physical,
             &self.node_did,
@@ -404,7 +406,7 @@ impl NativeCanonicalExecution {
         if !accepted {
             return self.observe(false).await;
         }
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let segments = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -480,7 +482,7 @@ impl NativeCanonicalExecution {
         items: &[crate::lean_vocab_test::LeanCanonicalRecoveryItem],
     ) -> Result<LeanCanonicalExecutionObservation> {
         if outcome == "interrupted" {
-            crate::interrupt::interrupt_request_by_doc_id(
+            crate::request::interrupt::interrupt_request_by_doc_id(
                 &self.node,
                 &self.request_doc_id,
                 &self.node_did,
@@ -488,25 +490,26 @@ impl NativeCanonicalExecution {
             )
             .await?;
         }
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
             !response.has_errors(),
             "read recovery request: {:?}",
             response.errors
         );
-        let observed = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-            .context("native recovery request disappeared")?;
+        let observed =
+            crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+                .context("native recovery request disappeared")?;
         let expiry = observed
             .execution_lease_expires_at
             .as_deref()
             .context("native recovery request omitted deadline")?;
         let choice = match selection {
             LeanTerminalSelection::NoMessage => {
-                crate::lifecycle::RecoverySelectionChoice::NoMessage
+                crate::request::lifecycle::RecoverySelectionChoice::NoMessage
             }
             LeanTerminalSelection::Message { id } => {
                 let accepted_key = self.message_ids.iter().find_map(|(physical, symbolic)| {
@@ -524,17 +527,17 @@ impl NativeCanonicalExecution {
                         .map(|closing| -> Result<String> {
                             let source =
                                 self.provider_segment(closing, expected_generation)?.source;
-                            crate::streaming::canonical::partial_message_key(
+                            crate::request::streaming::canonical::partial_message_key(
                                 &self.request_doc_id,
                                 &source,
                             )
                         })
                         .transpose()?)
                     .unwrap_or_else(|| format!("lean-unmapped-recovery-message-{id}"));
-                crate::lifecycle::RecoverySelectionChoice::MessageKey(key)
+                crate::request::lifecycle::RecoverySelectionChoice::MessageKey(key)
             }
         };
-        let result = crate::lifecycle::recover_expired_generation_with_facts(
+        let result = crate::request::lifecycle::recover_expired_generation_with_facts(
             &self.node,
             &observed,
             &symbolic_generation(expected_generation),
@@ -550,10 +553,12 @@ impl NativeCanonicalExecution {
         )
         .await;
         match result {
-            Ok(crate::lifecycle::RecoveryResult::Lost) => return self.observe(false).await,
+            Ok(crate::request::lifecycle::RecoveryResult::Lost) => {
+                return self.observe(false).await
+            }
             Err(error)
                 if error
-                    .downcast_ref::<crate::lifecycle::RecoverySelectionRejected>()
+                    .downcast_ref::<crate::request::lifecycle::RecoverySelectionRejected>()
                     .is_some()
                     || error
                         .downcast_ref::<gents_protocol::output::ReconstructionError>()
@@ -562,7 +567,7 @@ impl NativeCanonicalExecution {
                 return self.observe(false).await;
             }
             Err(error) => return Err(error.context("native terminal recovery owner failed")),
-            Ok(crate::lifecycle::RecoveryResult::Won { .. }) => {}
+            Ok(crate::request::lifecycle::RecoveryResult::Won { .. }) => {}
         }
         let segments = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
@@ -626,7 +631,7 @@ impl NativeCanonicalExecution {
                         .provider_segment(&item.closing, expected_generation)
                         .ok()?
                         .source;
-                    let key = crate::streaming::canonical::partial_message_key(
+                    let key = crate::request::streaming::canonical::partial_message_key(
                         &self.request_doc_id,
                         &source,
                     )
@@ -655,7 +660,7 @@ impl NativeCanonicalExecution {
     }
 
     async fn refresh_output(&mut self) -> Result<()> {
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let segments = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -1116,8 +1121,8 @@ impl NativeCanonicalExecution {
             .node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} terminal_output }} }}"#,
-                crate::graphql::escape_graphql_string(&self.request_doc_id),
-                crate::request_admission::SIGNED_REQUEST_FIELDS,
+                crate::store::graphql::escape_graphql_string(&self.request_doc_id),
+                crate::request::admission::SIGNED_REQUEST_FIELDS,
             ))
             .await;
         anyhow::ensure!(
@@ -1125,22 +1130,23 @@ impl NativeCanonicalExecution {
             "observe native request: {:?}",
             response.errors
         );
-        let row: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
+        let row: AgentRequestRow = crate::store::graphql::first_row(&response, "AgentRequest")?
             .context("native request disappeared")?;
         if let Some((_, parent_doc_id)) = &self.title_parent {
-            let parent = crate::graphql::escape_graphql_string(parent_doc_id);
-            let response = crate::graphql::graphql_with_transaction_retry(
+            let parent = crate::store::graphql::escape_graphql_string(parent_doc_id);
+            let response = crate::store::graphql::graphql_with_transaction_retry(
                 &self.node,
                 &format!(r#"{{
                     AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 1) {{ {} }}
                     AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
                     AgentMessage(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
-                }}"#, crate::request_admission::SIGNED_REQUEST_FIELDS),
+                }}"#, crate::request::admission::SIGNED_REQUEST_FIELDS),
                 "test.native_execution.title_parent",
             ).await?;
-            let parent: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
-                .context("title parent disappeared")?;
-            crate::request_admission::verify_historical_auxiliary_receipt(&row, &parent)?;
+            let parent: AgentRequestRow =
+                crate::store::graphql::first_row(&response, "AgentRequest")?
+                    .context("title parent disappeared")?;
+            crate::request::admission::verify_historical_auxiliary_receipt(&row, &parent)?;
             anyhow::ensure!(
                 parent.lifecycle_state == Some(RequestLifecycleState::Completed),
                 "title execution changed its terminal parent"
@@ -1177,7 +1183,7 @@ impl NativeCanonicalExecution {
             .as_deref()
             .map(|deadline| self.modeled_time(deadline))
             .transpose()?;
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let tools = self.node.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID request_doc_id lifecycle_state message_sequence await_mode stuck_since }} }}"#,
         )).await;
@@ -1387,21 +1393,23 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             crate::ensure_runtime_schemas(&node).await?;
             crate::test_support::install_test_agent(&node, &node_did, "general").await;
-            let request_identity = |logical_id: String| crate::lifecycle::RequestIdentity {
-                requester_did: None,
-                request_id: logical_id,
-                node_did: node_did.clone(),
-                agent_id: "general".to_owned(),
-                session_id: initial_session_id.clone(),
-                content: "lean native execution".to_owned(),
-                execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
-                created_at: seed_creation_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            };
+            let request_identity =
+                |logical_id: String| crate::request::lifecycle::RequestIdentity {
+                    requester_did: None,
+                    request_id: logical_id,
+                    node_did: node_did.clone(),
+                    agent_id: "general".to_owned(),
+                    session_id: initial_session_id.clone(),
+                    content: "lean native execution".to_owned(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: seed_creation_time
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                };
             let parent = if let Some(binding) = title_binding {
                 let parent = create_signed_fixture_request(
                     &node,
                     identity.as_ref(),
-                    crate::lifecycle::RequestSpec::new(
+                    crate::request::lifecycle::RequestSpec::new(
                         gents_protocol::request_admission::RequestPurpose::Normal,
                         request_identity(format!("lean-request-{}", binding.parent_logical)),
                         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
@@ -1410,7 +1418,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     ),
                 )
                 .await?;
-                let verified = crate::request_admission::verify_fresh_local_self_request(
+                let verified = crate::request::admission::verify_fresh_local_self_request(
                     &node,
                     identity.as_ref(),
                     &parent,
@@ -1431,16 +1439,16 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 .await?;
                 anyhow::ensure!(
                     matches!(
-                        crate::lifecycle::terminalize_owned_at(
+                        crate::request::lifecycle::terminalize_owned_at(
                             &node,
                             &parent.doc_id,
                             generation,
-                            crate::lifecycle::RequestTerminalOutcome::Completed,
+                            crate::request::lifecycle::RequestTerminalOutcome::Completed,
                             gents_protocol::output::TerminalOutput::NoMessage,
                             seed_creation_time,
                         )
                         .await?,
-                        crate::lifecycle::TerminalizeResult::Won
+                        crate::request::lifecycle::TerminalizeResult::Won
                     ),
                     "native title parent did not terminalize"
                 );
@@ -1449,18 +1457,18 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 None
             };
             let spec = match &parent {
-                None => crate::lifecycle::RequestSpec::new(
+                None => crate::request::lifecycle::RequestSpec::new(
                     gents_protocol::request_admission::RequestPurpose::Normal,
                     request_identity(request_id.clone()),
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did),
                 ),
-                Some(parent) => crate::lifecycle::RequestSpec {
-                    parent: Some(crate::lifecycle::ParentLink {
+                Some(parent) => crate::request::lifecycle::RequestSpec {
+                    parent: Some(crate::request::lifecycle::ParentLink {
                         parent_request_id: parent.request_id.clone(),
                         parent_request_doc_id: parent.doc_id.clone(),
                         ..Default::default()
                     }),
-                    ..crate::lifecycle::RequestSpec::new(
+                    ..crate::request::lifecycle::RequestSpec::new(
                         seed.purpose.into(),
                         request_identity(request_id.clone()),
                         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
@@ -1475,22 +1483,22 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             let fixture_epoch_seconds = FIXTURE_EPOCH_SECONDS;
             let now = fixture_time_at(fixture_epoch_seconds, seed.lease.now)?;
             let expiry = fixture_time_at(fixture_epoch_seconds, seed.lease.effective_expiry)?;
-            let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
+            let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
             anyhow::ensure!(
                 !lookup.has_errors(),
                 "read native pending request: {:?}",
                 lookup.errors
             );
-            let row = crate::graphql::first_row::<AgentRequestRow>(&lookup, "AgentRequest")?
+            let row = crate::store::graphql::first_row::<AgentRequestRow>(&lookup, "AgentRequest")?
                 .context("native signed request disappeared")?;
             anyhow::ensure!(
                 row.lifecycle_state == Some(RequestLifecycleState::Pending),
                 "native signed request was not pending"
             );
-            let queued: crate::watcher::AgentRequest = row.try_into()?;
+            let queued: crate::request::watcher::AgentRequest = row.try_into()?;
             let verified = match seed.purpose {
                 LeanRequestPurpose::Normal => {
-                    crate::request_admission::verify_fresh_local_self_request(
+                    crate::request::admission::verify_fresh_local_self_request(
                         &node,
                         identity.as_ref(),
                         &queued,
@@ -1499,10 +1507,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await
                 }
                 LeanRequestPurpose::TitleAudit | LeanRequestPurpose::AccessReview => {
-                    crate::request_admission::AgentRequestAdmissionVerifier::new(
+                    crate::request::admission::AgentRequestAdmissionVerifier::new(
                         node.clone(),
                         identity.clone(),
-                        crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+                        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
                     )
                     .verify_fresh_at(&queued, "general", now)
                     .await
@@ -1519,14 +1527,15 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 seed.lease.request == RequestLifecycleState::Processing,
             )
             .await?;
-            let claimed = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
+            let claimed = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::store::graphql::escape_graphql_string(&request_doc_id), crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
             anyhow::ensure!(
                 !claimed.has_errors(),
                 "read native owned request: {:?}",
                 claimed.errors
             );
-            let claimed = crate::graphql::first_row::<AgentRequestRow>(&claimed, "AgentRequest")?
-                .context("native owned request disappeared")?;
+            let claimed =
+                crate::store::graphql::first_row::<AgentRequestRow>(&claimed, "AgentRequest")?
+                    .context("native owned request disappeared")?;
             anyhow::ensure!(
                 claimed.lifecycle_state == Some(seed.lease.request)
                     && claimed.execution_generation.as_deref()
@@ -1550,9 +1559,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             }
             let scoped_session = node.execute(&format!(
                 r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id node_did requester_did agent_id created_at observation }} }}"#,
-                crate::graphql::escape_graphql_string(&session_id),
-                crate::graphql::escape_graphql_string(&node_did),
-                crate::graphql::escape_graphql_string(&node_did),
+                crate::store::graphql::escape_graphql_string(&session_id),
+                crate::store::graphql::escape_graphql_string(&node_did),
+                crate::store::graphql::escape_graphql_string(&node_did),
             )).await;
             anyhow::ensure!(
                 !scoped_session.has_errors(),
@@ -1560,7 +1569,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 scoped_session.errors
             );
             let sessions: Vec<gents_protocol::session::AgentSession> =
-                crate::graphql::rows(&scoped_session, "AgentSession")?;
+                crate::store::graphql::rows(&scoped_session, "AgentSession")?;
             let [session] = sessions.as_slice() else {
                 anyhow::bail!("real claim did not create one exact requester-scoped session")
             };
@@ -1633,7 +1642,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     expected_deadline,
                     ..
                 } => {
-                    let outcome = crate::lifecycle::renew_execution_lease_once_at(
+                    let outcome = crate::request::lifecycle::renew_execution_lease_once_at(
                         &native.node,
                         &native.request_doc_id,
                         &symbolic_generation(*generation),
@@ -1644,7 +1653,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     native
                         .observe(matches!(
                             outcome,
-                            crate::lifecycle::RenewalAttemptOutcome::Committed
+                            crate::request::lifecycle::RenewalAttemptOutcome::Committed
                         ))
                         .await
                 }
@@ -1659,7 +1668,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         "append output cannot close a source"
                     );
                     let prepared = native.provider_segment(record, *generation)?;
-                    let doc_id = crate::streaming::canonical::append_provider_segment_at(
+                    let doc_id = crate::request::streaming::canonical::append_provider_segment_at(
                         &native.node,
                         &symbolic_generation(*generation),
                         &prepared,
@@ -1670,7 +1679,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(value) => value,
                         Err(error)
                             if error
-                                .downcast_ref::<crate::streaming::canonical::ProviderAppendRejection>()
+                                .downcast_ref::<crate::request::streaming::canonical::ProviderAppendRejection>()
                                 .is_some()
                                 || owner_error_is(&error, "output source does not match its request purpose") =>
                         {
@@ -1693,7 +1702,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     );
                     let physical = native.physical_tool(*document)?.to_owned();
                     let prepared = native.tool_output_segment(record, *document, &physical)?;
-                    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+                    let tool = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
                         native.node.clone(),
                         &physical,
                         &native.node_did,
@@ -1703,7 +1712,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await?
                     .context("accepted physical tool disappeared before output append")?;
                     let binding = tool.tool_output_binding()?;
-                    let receipt = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+                    let receipt = crate::tools::call::lifecycle::delivery::append_tool_output_at(
                         &binding,
                         &prepared.payload,
                         native.fixture_time(record.created_at)?,
@@ -1714,7 +1723,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(receipt) => receipt,
                         Err(error)
                             if error
-                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                                .downcast_ref::<crate::tools::call::lifecycle::delivery::ToolOutputAppendRejection>()
                                 .is_some() =>
                         {
                             return native.observe(false).await;
@@ -1735,7 +1744,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let nested_node = Arc::clone(&node);
                     let generation = symbolic_generation(*generation);
                     let now = native.fixture_time(*now)?;
-                    let attempted = crate::config_client::ConfigAccess::transact_local_write(
+                    let attempted = crate::store::config_client::ConfigAccess::transact_local_write(
                         &node,
                         None,
                         "lean.same_task_holder",
@@ -1744,7 +1753,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             let generation = generation.clone();
                             let node = Arc::clone(&nested_node);
                             Box::pin(async move {
-                                crate::streaming::canonical::append_provider_segment_at(
+                                crate::request::streaming::canonical::append_provider_segment_at(
                                     &node,
                                     &generation,
                                     &prepared,
@@ -1759,8 +1768,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     match attempted {
                         Err(error)
                             if matches!(
-                                error.downcast_ref::<crate::config_client::ConfigClientError>(),
-                                Some(crate::config_client::ConfigClientError::Reentrant(_))
+                                error
+                                    .downcast_ref::<crate::store::config_client::ConfigClientError>(
+                                    ),
+                                Some(crate::store::config_client::ConfigClientError::Reentrant(_))
                             ) =>
                         {
                             native.observe(false).await
@@ -1820,15 +1831,16 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         "native dispatch adapter has no external denial injection"
                     );
                     let physical = native.physical_tool(*call)?.to_owned();
-                    let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
-                        native.node.clone(),
-                        &physical,
-                        &native.node_did,
-                        &native.session_id,
-                        Some(&native.node_did),
-                    )
-                    .await?
-                    .context("accepted physical tool disappeared before dispatch")?;
+                    let mut tool =
+                        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+                            native.node.clone(),
+                            &physical,
+                            &native.node_did,
+                            &native.session_id,
+                            Some(&native.node_did),
+                        )
+                        .await?
+                        .context("accepted physical tool disappeared before dispatch")?;
                     match tool
                         .start_running_at(native.fixture_time(*now)?, &symbolic_generation(*generation))
                         .await
@@ -1836,7 +1848,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(()) => native.observe(true).await,
                         Err(error)
                             if error
-                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolDispatchRejection>()
+                                .downcast_ref::<crate::tools::call::lifecycle::delivery::ToolDispatchRejection>()
                                 .is_some() =>
                         {
                             native.observe(false).await
@@ -1852,11 +1864,15 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     ..
                 } => {
                     let outcome = match outcome.as_str() {
-                        "completed" => crate::lifecycle::RequestTerminalOutcome::Completed,
-                        "failed" => crate::lifecycle::RequestTerminalOutcome::Failed,
-                        "interrupted" => crate::lifecycle::RequestTerminalOutcome::Interrupted,
-                        "dead" => crate::lifecycle::RequestTerminalOutcome::Dead,
-                        "superseded" => crate::lifecycle::RequestTerminalOutcome::Superseded,
+                        "completed" => crate::request::lifecycle::RequestTerminalOutcome::Completed,
+                        "failed" => crate::request::lifecycle::RequestTerminalOutcome::Failed,
+                        "interrupted" => {
+                            crate::request::lifecycle::RequestTerminalOutcome::Interrupted
+                        }
+                        "dead" => crate::request::lifecycle::RequestTerminalOutcome::Dead,
+                        "superseded" => {
+                            crate::request::lifecycle::RequestTerminalOutcome::Superseded
+                        }
                         other => anyhow::bail!("unknown modeled terminal outcome: {other}"),
                     };
                     let selection = match selection {
@@ -1878,7 +1894,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             }
                         }
                     };
-                    let result = crate::lifecycle::terminalize_owned_at(
+                    let result = crate::request::lifecycle::terminalize_owned_at(
                         &native.node,
                         &native.request_doc_id,
                         &symbolic_generation(*generation),
@@ -1891,7 +1907,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(value) => value,
                         Err(error)
                             if error
-                                .downcast_ref::<crate::lifecycle::ToolAccountingRejection>()
+                                .downcast_ref::<crate::request::lifecycle::ToolAccountingRejection>(
+                                )
                                 .is_some()
                                 || owner_error_is(
                                     &error,
@@ -1903,7 +1920,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Err(error) => return Err(error),
                     };
                     native
-                        .observe(!matches!(result, crate::lifecycle::TerminalizeResult::Lost))
+                        .observe(!matches!(
+                            result,
+                            crate::request::lifecycle::TerminalizeResult::Lost
+                        ))
                         .await
                 }
                 LeanCanonicalExecutionOperation::CompleteForegroundTool {
@@ -1945,15 +1965,16 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let physical_parent = native
                         .physical_tool(admission.parent_tool_document)?
                         .to_owned();
-                    let mut parent = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
-                        Arc::clone(&native.node),
-                        &physical_parent,
-                        &native.node_did,
-                        &native.session_id,
-                        Some(&native.node_did),
-                    )
-                    .await?
-                    .context("spawned admission parent disappeared")?;
+                    let mut parent =
+                        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+                            Arc::clone(&native.node),
+                            &physical_parent,
+                            &native.node_did,
+                            &native.session_id,
+                            Some(&native.node_did),
+                        )
+                        .await?
+                        .context("spawned admission parent disappeared")?;
                     anyhow::ensure!(
                         parent.execution_generation()
                             == Some(symbolic_generation(*generation).as_str()),
@@ -1961,7 +1982,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     );
                     let child = parent
                         .admit_spawned_background_child_at(
-                            crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
+                            crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission {
                                 tool_name: admission.operation.clone(),
                                 deadline_at: native.fixture_time(admission.deadline)?,
                                 selected_tool_identity: None,
@@ -2004,7 +2025,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         "replicate native segment: {:?}",
                         response.errors
                     );
-                    let doc_id = crate::graphql::created_doc_id(
+                    let doc_id = crate::store::graphql::created_doc_id(
                         &serde_json::json!({ "data": response.data }),
                         "AgentOutputSegment",
                     )?;
@@ -2065,25 +2086,27 @@ impl NativeCanonicalExecution {
             Some(SourceClose::Closed {
                 outcome: OutputOutcome::Complete,
                 ..
-            }) => crate::streaming::canonical::ProviderAttemptClose::AuxiliaryComplete,
+            }) => crate::request::streaming::canonical::ProviderAttemptClose::AuxiliaryComplete,
             Some(SourceClose::Closed {
                 outcome: OutputOutcome::Partial,
                 ..
-            }) => crate::streaming::canonical::ProviderAttemptClose::Partial,
+            }) => crate::request::streaming::canonical::ProviderAttemptClose::Partial,
             Some(SourceClose::Retracted) => {
-                crate::streaming::canonical::ProviderAttemptClose::Retracted
+                crate::request::streaming::canonical::ProviderAttemptClose::Retracted
             }
             _ => anyhow::bail!("auxiliary close must carry a closure"),
         };
-        let result = crate::streaming::canonical::close_provider_attempt_at(
+        let result = crate::request::streaming::canonical::close_provider_attempt_at(
             &self.node,
             &symbolic_generation(generation),
             &prepared,
             close,
-            Some(crate::streaming::canonical::ProviderPartialCandidate {
-                closing: prepared.clone(),
-                header: None,
-            }),
+            Some(
+                crate::request::streaming::canonical::ProviderPartialCandidate {
+                    closing: prepared.clone(),
+                    header: None,
+                },
+            ),
             self.fixture_time(now)?,
         )
         .await;
@@ -2092,7 +2115,7 @@ impl NativeCanonicalExecution {
             Ok(Some(_)) => anyhow::bail!("auxiliary close published a header"),
             Err(error)
                 if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
+                    .downcast_ref::<crate::request::streaming::canonical::ProviderCloseRejection>()
                     .is_some()
                     || error
                         .downcast_ref::<gents_protocol::output::ReconstructionError>()
@@ -2106,8 +2129,8 @@ impl NativeCanonicalExecution {
             }
             Err(error) => return Err(error.context("native CloseAuxiliary owner failed")),
         }
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
-        let response = crate::config_client::ConfigAccess::local(self.node.clone())
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
+        let response = crate::store::config_client::ConfigAccess::local(self.node.clone())
             .execute(&format!(
                 r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
                 crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -2149,7 +2172,7 @@ impl NativeCanonicalExecution {
             .map(|message| self.protocol_message(message, *writer_generation))
             .transpose()?;
         if let Some(header) = header.as_mut() {
-            header.message_key = crate::streaming::canonical::partial_message_key(
+            header.message_key = crate::request::streaming::canonical::partial_message_key(
                 &self.request_doc_id,
                 &closing.source,
             )?;
@@ -2188,17 +2211,19 @@ impl NativeCanonicalExecution {
                     }
                 }
                 Ok(message)
-            }) as crate::streaming::canonical::PartialHeaderFactory
+            }) as crate::request::streaming::canonical::PartialHeaderFactory
         });
-        let result = crate::streaming::canonical::close_provider_attempt_at(
+        let result = crate::request::streaming::canonical::close_provider_attempt_at(
             &self.node,
             &symbolic_generation(generation),
             &closing,
-            crate::streaming::canonical::ProviderAttemptClose::Partial,
-            Some(crate::streaming::canonical::ProviderPartialCandidate {
-                closing: closing.clone(),
-                header: header_factory,
-            }),
+            crate::request::streaming::canonical::ProviderAttemptClose::Partial,
+            Some(
+                crate::request::streaming::canonical::ProviderPartialCandidate {
+                    closing: closing.clone(),
+                    header: header_factory,
+                },
+            ),
             self.fixture_time(now)?,
         )
         .await;
@@ -2206,7 +2231,7 @@ impl NativeCanonicalExecution {
             Ok(message_doc_id) => message_doc_id,
             Err(error)
                 if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
+                    .downcast_ref::<crate::request::streaming::canonical::ProviderCloseRejection>()
                     .is_some()
                     || error
                         .downcast_ref::<gents_protocol::output::ReconstructionError>()
@@ -2217,7 +2242,7 @@ impl NativeCanonicalExecution {
             Err(error) => return Err(error.context("native ClosePartial owner failed")),
         };
 
-        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let request = crate::store::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
             crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -2246,7 +2271,7 @@ impl NativeCanonicalExecution {
                 .insert(doc_id.clone(), message.key.clone());
             self.canonical_message_keys.insert(
                 doc_id,
-                crate::streaming::canonical::partial_message_key(
+                crate::request::streaming::canonical::partial_message_key(
                     &self.request_doc_id,
                     &closing.source,
                 )?,
@@ -2335,9 +2360,8 @@ impl NativeCanonicalExecution {
         } else {
             reconstruct_message(&observed, &[], &[], &header)?
         };
-        let encoded = Arc::new(crate::streaming::native_encoding::encode_native_message(
-            &expected,
-        )?);
+        let encoded =
+            Arc::new(crate::request::streaming::native_encoding::encode_native_message(&expected)?);
         let expected_native = expected.clone();
         let final_flush = sealed;
         let background_calls = admissions
@@ -2365,10 +2389,10 @@ impl NativeCanonicalExecution {
                     .map_or(now, |admission| admission.deadline),
             )?
             .to_rfc3339();
-        let published = crate::streaming::canonical::publish_provider_turn_at(
+        let published = crate::request::streaming::canonical::publish_provider_turn_at(
             &self.node,
             &symbolic_generation(generation),
-            crate::streaming::canonical::ProviderPublicationPlan {
+            crate::request::streaming::canonical::ProviderPublicationPlan {
                 final_flush: Some(final_flush),
                 message_key: message.key.clone(),
                 encoded,
@@ -2384,14 +2408,14 @@ impl NativeCanonicalExecution {
             Ok(value) => value,
             Err(error)
                 if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
+                    .downcast_ref::<crate::request::streaming::canonical::ProviderCloseRejection>()
                     .is_some() =>
             {
                 return self.observe(false).await;
             }
             Err(error)
                 if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderReplayRejection>()
+                    .downcast_ref::<crate::request::streaming::canonical::ProviderReplayRejection>()
                     .is_some()
                     || owner_error_is(
                         &error,
@@ -2465,7 +2489,7 @@ impl NativeCanonicalExecution {
                 .node
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode }} }}"#,
-                    crate::graphql::escape_graphql_string(&accepted.tool_call_doc_id),
+                    crate::store::graphql::escape_graphql_string(&accepted.tool_call_doc_id),
                 ))
                 .await;
             anyhow::ensure!(
@@ -3020,7 +3044,7 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
     let prepared = native
         .tool_output_segment(record, *document, &physical)
         .unwrap();
-    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let tool = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
         native.node.clone(),
         &physical,
         &native.node_did,
@@ -3031,15 +3055,20 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
     .unwrap()
     .expect("dispatched generated tool has a physical lifecycle");
     let binding = tool.tool_output_binding().unwrap();
-    let physical = crate::graphql::escape_graphql_string(&physical);
+    let physical = crate::store::graphql::escape_graphql_string(&physical);
     for (label, deadline_value) in [("missing", None), ("malformed", Some("not-a-deadline"))] {
         let deadline_field = deadline_value
-            .map(|value| format!("\"{}\"", crate::graphql::escape_graphql_string(value)))
+            .map(|value| {
+                format!(
+                    "\"{}\"",
+                    crate::store::graphql::escape_graphql_string(value)
+                )
+            })
             .unwrap_or_else(|| "null".to_owned());
         let mutation = format!(
             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{physical}" }} }}, input: {{ deadline_at: {deadline_field} }}) {{ _docID }} }}"#
         );
-        let changed = crate::config_client::ConfigAccess::write_local(
+        let changed = crate::store::config_client::ConfigAccess::write_local(
             &native.node,
             "test.generated_tool_append_invalid_deadline",
             &mutation,
@@ -3062,7 +3091,7 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
             Some(1),
             "{label} deadline fixture must update exactly one physical tool"
         );
-        let error = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+        let error = crate::tools::call::lifecycle::delivery::append_tool_output_at(
             &binding,
             &prepared.payload,
             native.fixture_time(record.created_at).unwrap(),
@@ -3076,7 +3105,8 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         );
         assert!(
             error
-                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                .downcast_ref::<crate::tools::call::lifecycle::delivery::ToolOutputAppendRejection>(
+                )
                 .is_none(),
             "{label} deadline is an integrity error, not a modeled rejection: {error:#}"
         );
@@ -3093,8 +3123,10 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
 
 #[tokio::test]
 async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
-    use crate::config_client::ConfigApplyTxn;
-    use crate::lifecycle::{RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome};
+    use crate::request::lifecycle::{
+        RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome,
+    };
+    use crate::store::config_client::ConfigApplyTxn;
 
     let case = crate::lean_vocab_test::lean_contract_snapshot()
         .canonical_execution_gate_cases
@@ -3163,19 +3195,19 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     native.query_document = *query_document;
     let node = Arc::clone(&native.node);
     let request_doc_id = native.request_doc_id.clone();
-    let request = crate::graphql::escape_graphql_string(&request_doc_id);
+    let request = crate::store::graphql::escape_graphql_string(&request_doc_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} }} }}"#,
-        crate::watcher::AGENT_REQUEST_FIELDS,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
     );
-    let row = crate::graphql::graphql_with_transaction_retry(
+    let row = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &query,
         "test.generated_renewal_gate_stale_request",
     )
     .await
     .unwrap();
-    let stale: AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
+    let stale: AgentRequestRow = crate::store::graphql::first_row(&row, "AgentRequest")
         .unwrap()
         .expect("generated native request");
     let stale_expiry = stale.execution_lease_expires_at.as_deref().unwrap();
@@ -3200,7 +3232,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     let holder = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
     let renewed = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        crate::lifecycle::renew_execution_lease_once_at(
+        crate::request::lifecycle::renew_execution_lease_once_at(
             &node,
             &request_doc_id,
             &physical_generation,
@@ -3214,7 +3246,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     assert_eq!(renewed, RenewalAttemptOutcome::Committed);
     assert_eq!(native.observe(true).await.unwrap(), *expected_after_renewal);
     holder.commit().await.unwrap();
-    let recovered = crate::lifecycle::recover_expired_generation_with_facts(
+    let recovered = crate::request::lifecycle::recover_expired_generation_with_facts(
         &node,
         &stale,
         &physical_generation,
@@ -3316,13 +3348,13 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     assert!(before.in_flight);
     assert_eq!(before.tool_stuck_since, None);
 
-    let doc_id = crate::graphql::escape_graphql_string(&native.request_doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(&native.request_doc_id);
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(
         filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
         input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#
     );
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         &native.node,
         "test.native_in_flight_negative_control",
         &mutation,
@@ -3410,7 +3442,7 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
                 response.errors
             );
         }
-        let actual = crate::background_tools::canonical_tool_output(
+        let actual = crate::tools::background::status::canonical_tool_output(
             &native.node,
             &physical_tool,
             &native.request_doc_id,

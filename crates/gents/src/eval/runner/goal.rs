@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::document_config::{EvalCapture, EvalCase};
+use crate::documents::{EvalCapture, EvalCase};
 use crate::eval::checks::captured_rows_count::{required_rows, CapturedRowsCount};
 use crate::eval::checks::{range_label, Check};
 use crate::eval::runner::executor::Capture;

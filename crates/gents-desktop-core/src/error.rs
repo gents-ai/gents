@@ -118,15 +118,16 @@ impl BridgeError {
     }
 
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
-        if gents::graphql::is_storage_full(error.as_ref()) {
+        if gents::store::graphql::is_storage_full(error.as_ref()) {
             return Self::storage_full();
         }
         if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
             return classified.clone();
         }
-        let transport = gents::config_client::TransactionFailure::config_client_error(&error)
-            .and_then(gents::config_client::ConfigClientError::transport_error)
-            .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
+        let transport =
+            gents::store::config_client::TransactionFailure::config_client_error(&error)
+                .and_then(gents::store::config_client::ConfigClientError::transport_error)
+                .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
         let message = error.to_string();
         let Some(transport) = transport else {
             return Self::untyped(message);
@@ -232,8 +233,9 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        let access =
-            gents::config_client::ConfigAccess::graphql(format!("{endpoint}/api/v0/graphql"));
+        let access = gents::store::config_client::ConfigAccess::graphql(format!(
+            "{endpoint}/api/v0/graphql"
+        ));
         let error = access
             .transact_readonly("test.desktop_transport", |_txn| {
                 Box::pin(async { Ok::<_, anyhow::Error>(()) })
@@ -247,9 +249,10 @@ mod tests {
 
     #[tokio::test]
     async fn classify_config_query_transport_uses_typed_protocol_source() {
-        let endpoint =
-            gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:0/api/v0/graphql");
-        let result = gents::config_client::query_graphql_with_options(
+        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(
+            "http://127.0.0.1:0/api/v0/graphql",
+        );
+        let result = gents::store::config_client::query_graphql_with_options(
             &endpoint,
             "{__typename}",
             gents_protocol::graphql::GraphqlRequestOptions {

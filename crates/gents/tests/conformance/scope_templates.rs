@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
-use gents::agent::p2p_reconcile::templates::{
+use gents::runtime::agent::p2p_reconcile::templates::{
     admit_app_collections, builtin_templates, equality_filter, filter_conditions, resolve_template,
     scope_filter, single_string_eq, Delivery, FilterPredicate, Scope, ScopeTemplate,
     NODE_DIRECTORY_COLLECTION,
 };
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::{
     client_route_collections, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
     CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
 };
@@ -65,7 +65,7 @@ async fn route_selects_request(
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _and: [{{ _docID: {{ _eq: "{}" }} }}, {filter}] }}) {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(request_doc_id),
+            gents::store::graphql::escape_graphql_string(request_doc_id),
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -85,7 +85,7 @@ async fn store_request_row(
         .map(|(field, value)| {
             format!(
                 r#"{field}: "{}""#,
-                gents::graphql::escape_graphql_string(value)
+                gents::store::graphql::escape_graphql_string(value)
             )
         })
         .collect::<Vec<_>>()
@@ -96,7 +96,7 @@ async fn store_request_row(
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    gents::graphql::single_mutation_document(&response, "create_AgentRequest")
+    gents::store::graphql::single_mutation_document(&response, "create_AgentRequest")
         .expect("stored request mutation")
         .and_then(|document| document["_docID"].as_str())
         .expect("stored request identity")

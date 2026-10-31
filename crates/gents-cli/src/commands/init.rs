@@ -4,16 +4,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
-};
-use gents::document_config::{
+use gents::documents::{
     Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
     InferenceExecution, SurfaceToolDecl, Tools,
 };
-use gents::self_config::engineer_self_config;
+use gents::store::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
+};
+use gents::tools::builtin::self_config::engineer_self_config;
 use gents::{
     default_agent_id_for_node, default_inference_profile_id_for_agent, load_agent, load_node,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity, BashMode,
@@ -72,7 +72,7 @@ pub(crate) fn lock_init_store(
     home_dir: &Path,
     data_dir: &Path,
     overwrite: bool,
-) -> Result<gents::home::StoreLock> {
+) -> Result<gents::store::local::home::StoreLock> {
     let user_home = std::env::home_dir();
     lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
 }
@@ -82,7 +82,7 @@ pub(crate) fn lock_init_store_for_user(
     data_dir: &Path,
     overwrite: bool,
     user_home: Option<&Path>,
-) -> Result<gents::home::StoreLock> {
+) -> Result<gents::store::local::home::StoreLock> {
     let home = if overwrite {
         crate::overwritable_home(home_dir, user_home)?
     } else {
@@ -91,24 +91,25 @@ pub(crate) fn lock_init_store_for_user(
     let Some(home) = home else {
         fs::create_dir_all(data_dir)
             .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-        return Ok(gents::home::lock_store(home_dir, data_dir)?);
+        return Ok(gents::store::local::home::lock_store(home_dir, data_dir)?);
     };
     let data_dir = overwrite_data_dir(home_dir, &home, data_dir)?;
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let lock = gents::home::lock_store(home_dir, &data_dir)?;
+    let lock = gents::store::local::home::lock_store(home_dir, &data_dir)?;
     let overwritten_encryption = read_init_config(&home)
         .ok()
         .flatten()
         .and_then(|config| config.store_encryption)
         .or_else(|| {
-            gents::store_key::upgrade::pending_record(&data_dir)
+            gents::store::local::store_key::upgrade::pending_record(&data_dir)
                 .ok()
                 .flatten()
         });
     dangerously_overwrite_home(&home, lock.path())?;
     if let Some(record) = overwritten_encryption {
-        if let Err(error) = record.delete_key(&gents::store_key::home_key_file(&home)) {
+        if let Err(error) = record.delete_key(&gents::store::local::store_key::home_key_file(&home))
+        {
             tracing::warn!(home = %home.display(), error = %gents_protocol::error_chain::ErrorChain(&error),
                 "could not remove the overwritten home's store key");
         }
@@ -236,7 +237,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         .await
         .context("creating or loading node identity key")?;
 
-    gents::storage_backend::reject_legacy_store(&data_dir)?;
+    gents::store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
         home: home_dir.to_string_lossy().to_string(),
         node_name: args.node_name.clone(),
@@ -258,7 +259,8 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         &mut stored,
     )
     .await?;
-    let mut node_builder = gents::store_key::persistent_builder(&data_dir, &store_key)?;
+    let mut node_builder =
+        gents::store::local::store_key::persistent_builder(&data_dir, &store_key)?;
     if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
         node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
     }
@@ -274,8 +276,8 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         .context("init requires claimed local DefraDB access")?
         .clone();
     let result = async {
-        gents::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
-        gents::store_key::upgrade::finish(&data_dir)?;
+        gents::store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
+        gents::store::local::store_key::upgrade::finish(&data_dir)?;
         let summary = initialize_runtime_home(
             &access,
             &args,
@@ -349,14 +351,14 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
     result
 }
 
-fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
-    (sign_in.result == gents::oauth_credential::SignInResult::Added
+fn added_account_note(sign_in: &gents::inference::auth::credential::SignIn) -> Option<String> {
+    (sign_in.result == gents::inference::auth::credential::SignInResult::Added
         && sign_in.credential.account_ref.is_some())
     .then(|| {
         format!(
             "This sign-in was stored as another account, {}. The backend set up here runs on \
              the provider's original account; see `gents accounts`.",
-            gents::oauth_credential::effective_account_label(&sign_in.credential)
+            gents::inference::auth::credential::effective_account_label(&sign_in.credential)
         )
     })
 }
@@ -410,12 +412,12 @@ async fn maybe_inline_grok_login(
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return InlineGrokLoginState::Unauthenticated;
     }
-    let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
-    match gents::oauth_credential::resolve_oauth_credential(
+    let provider = gents::inference::clients::xai_grok::normalize_provider("xai-oauth");
+    match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         &provider,
-        gents::oauth_credential::AccountPick::Reference(None),
+        gents::inference::auth::credential::AccountPick::Reference(None),
     )
     .await
     {
@@ -482,13 +484,14 @@ async fn maybe_inline_claude_login(
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return InlineClaudeLoginState::Unauthenticated;
     }
-    let provider =
-        gents::claude_oauth::normalize_provider(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER);
-    match gents::oauth_credential::resolve_oauth_credential(
+    let provider = gents::inference::auth::claude::normalize_provider(
+        gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+    );
+    match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         &provider,
-        gents::oauth_credential::AccountPick::Reference(None),
+        gents::inference::auth::credential::AccountPick::Reference(None),
     )
     .await
     {
@@ -539,12 +542,12 @@ async fn maybe_inline_codex_login(
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return InlineCodexLoginState::Unauthenticated;
     }
-    let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
-    match gents::oauth_credential::resolve_oauth_credential(
+    let provider = gents::inference::clients::chatgpt_codex::normalize_provider("chatgpt-codex");
+    match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         &provider,
-        gents::oauth_credential::AccountPick::Reference(None),
+        gents::inference::auth::credential::AccountPick::Reference(None),
     )
     .await
     {
@@ -597,7 +600,7 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_root: Option<&'a Path>,
     pub(crate) reset: bool,
-    pub(crate) store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    pub(crate) store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
 }
 
 struct HomeIdentityOptions<'a> {
@@ -657,7 +660,7 @@ pub(crate) async fn write_identity_only_home_metadata(
     let tool_ceiling = tool_ceiling_for_package(options.tool_package);
     let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
         .map(|path| path.to_string_lossy().to_string());
-    gents::storage_backend::reject_legacy_store(&data_dir)?;
+    gents::store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
         home: options.home.to_string_lossy().to_string(),
         node_name: options.node_name.to_string(),
@@ -705,19 +708,23 @@ pub(crate) async fn write_identity_only_home_metadata(
 async fn initialize_home_store(
     home: &Path,
     data_path: &Path,
-    choice: gents::store_key::StoreKeyCustodyChoice,
+    choice: gents::store::local::store_key::StoreKeyCustodyChoice,
     stored: &mut StoredInitConfig,
-) -> Result<gents::store_key::StoreKey> {
-    let key_file = gents::store_key::home_key_file(home);
+) -> Result<gents::store::local::store_key::StoreKey> {
+    let key_file = gents::store::local::store_key::home_key_file(home);
     let record = match read_init_config(home)? {
         Some(_) => {
-            let key =
-                gents::store_key::open_home_store_key_with_custody(home, data_path, choice).await?;
+            let key = gents::store::local::store_key::open_home_store_key_with_custody(
+                home, data_path, choice,
+            )
+            .await?;
             stored.store_encryption =
                 read_init_config(home)?.and_then(|config| config.store_encryption);
             return Ok(key);
         }
-        None => gents::store_key::StoreEncryption::prepare(choice, &key_file, data_path)?,
+        None => {
+            gents::store::local::store_key::StoreEncryption::prepare(choice, &key_file, data_path)?
+        }
     };
     stored.store_encryption = Some(record.clone());
     write_init_config(home, stored)?;
@@ -879,7 +886,7 @@ async fn initialize_runtime_home(
     let tools_id = default_tools_id_for_agent(&default_agent_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
-    let explicit_workspace_policy = gents::tool_surface::load_workspace_root_policy(node, None)
+    let explicit_workspace_policy = gents::tools::surface::load_workspace_root_policy(node, None)
         .await?
         .configured;
     let pinned_tool_root = explicit_workspace_policy
@@ -966,7 +973,7 @@ async fn initialize_runtime_home(
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
         tags: if args.engineer {
-            vec![gents::self_config::ENGINEER_AGENT_TAG.to_string()]
+            vec![gents::tools::builtin::self_config::ENGINEER_AGENT_TAG.to_string()]
         } else {
             Vec::new()
         },
@@ -1217,7 +1224,7 @@ fn engineer_tools(
         display_name: Some("Engineer escalations".to_string()),
         enabled: true,
         entries: Some(vec![SurfaceToolDecl::Create(
-            gents::mailbox::canonical_mailbox_write_decl(),
+            gents::session::mailbox::canonical_mailbox_write_decl(),
         )]),
         created_at: None,
         tags: Vec::new(),
@@ -1483,7 +1490,7 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
 
-    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
+    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::store::local::home::StoreLock> {
         lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
     }
 
@@ -1557,7 +1564,7 @@ mod tests {
         assert!(real.join("data").is_dir());
         for alias in [link.join("data"), real.join("data")] {
             assert!(
-                gents::home::lock_store(&real, &alias).is_err(),
+                gents::store::local::home::lock_store(&real, &alias).is_err(),
                 "{alias:?} takes the lock init holds"
             );
         }
@@ -1596,11 +1603,11 @@ mod tests {
         let held = lock_init_store(&home, &data, false).expect("init locks a fresh store");
         assert!(data.is_dir());
         assert!(
-            gents::home::lock_store(&home, &data).is_err(),
+            gents::store::local::home::lock_store(&home, &data).is_err(),
             "a runtime cannot open the store while init runs"
         );
         drop(held);
-        gents::home::lock_store(&home, &data).expect("init releases the store");
+        gents::store::local::home::lock_store(&home, &data).expect("init releases the store");
     }
 
     #[test]
@@ -1614,7 +1621,7 @@ mod tests {
 
         let user_home = temp.path().join("user");
         fs::create_dir_all(&user_home).unwrap();
-        let runtime = gents::home::lock_store(&home, &data).unwrap();
+        let runtime = gents::store::local::home::lock_store(&home, &data).unwrap();
         assert!(
             overwrite(&home, &user_home).is_err(),
             "a store a runtime has open is not wiped"
@@ -1631,7 +1638,7 @@ mod tests {
             "the held lock file survives the wipe"
         );
         assert!(
-            gents::home::lock_store(&home, &data).is_err(),
+            gents::store::local::home::lock_store(&home, &data).is_err(),
             "the lock init holds is the one a runtime would take"
         );
     }
@@ -1684,7 +1691,7 @@ mod tests {
         publish_home_config(&access, &owner, "Agent", &agent_id, true, documents)
             .await
             .unwrap();
-        gents::backend_registry::set_backend_probe_status_with_last_probe(
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
             &backend_id,
@@ -1706,11 +1713,14 @@ mod tests {
             .iter()
             .find(|resolved| resolved.agent_id == agent_id)
             .expect("init default agent resolves");
-        assert_eq!(resolved.max_turns, gents::config::DEFAULT_MAX_TURNS);
+        assert_eq!(
+            resolved.max_turns,
+            gents::inference::resolved::DEFAULT_MAX_TURNS
+        );
         assert_eq!(resolved.max_turns, 1_000);
         assert_eq!(
             resolved.max_turns_provenance,
-            gents::config::MaxTurnsProvenance::Default
+            gents::inference::resolved::MaxTurnsProvenance::Default
         );
     }
 
@@ -1735,7 +1745,7 @@ mod tests {
         let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
             .await
             .expect("a fresh home initializes");
-        gents::backend_registry::set_backend_probe_status_with_last_probe(
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
             &summary.backend_id,
@@ -1749,12 +1759,12 @@ mod tests {
             .self_config_categories
             .expect("the configurator grant names its categories");
         assert!(categories.iter().any(|category| category == "profile"));
-        let tools = gents::self_config::build_self_config_tools(
+        let tools = gents::tools::builtin::self_config::build_self_config_tools(
             std::sync::Arc::default(),
             node.clone(),
             owner.clone(),
             Some(identity.clone()),
-            &gents::tool_surface::SelfConfigToolConfig {
+            &gents::tools::surface::SelfConfigToolConfig {
                 enabled: true,
                 agent_id: summary.default_agent_id.clone(),
                 categories: categories.into_iter().collect(),
@@ -1764,7 +1774,7 @@ mod tests {
         );
         let config = tools
             .iter()
-            .find(|tool| tool.name() == gents::self_config::CONFIG_TOOL_NAME)
+            .find(|tool| tool.name() == gents::tools::builtin::self_config::CONFIG_TOOL_NAME)
             .expect("the configurator registers its config tool");
         config
             .call(
@@ -1789,13 +1799,13 @@ mod tests {
         assert_eq!(resolved.max_turns, 250);
         assert_eq!(
             resolved.max_turns_provenance,
-            gents::config::MaxTurnsProvenance::ExecutionProfile
+            gents::inference::resolved::MaxTurnsProvenance::ExecutionProfile
         );
     }
 
     async fn explain_initialized_default_agent(
         engineer: bool,
-    ) -> gents::tool_surface::ToolSurfaceExplanation {
+    ) -> gents::tools::surface::ToolSurfaceExplanation {
         let temp = tempfile::tempdir().unwrap();
         let identity: Arc<dyn gents::NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
@@ -1816,7 +1826,7 @@ mod tests {
         let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
             .await
             .expect("a fresh home initializes");
-        gents::backend_registry::set_backend_probe_status_with_last_probe(
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
             &summary.backend_id,
@@ -1844,7 +1854,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_engineer_gets_the_p2p_tool_and_other_presets_do_not() {
-        let p2p = gents::p2p_tool::P2P_TOOL_NAME;
+        let p2p = gents::tools::builtin::p2p::P2P_TOOL_NAME;
 
         let engineer = explain_initialized_default_agent(true).await;
         assert!(

@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use super::manifest::{
 use super::results::graphql_rows;
 use super::tool_calls::verify_stage_tool_sequences;
 use crate::graphql_access::post_graphql;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 
 #[derive(Debug, Clone)]
@@ -74,16 +74,18 @@ async fn sourced_trigger_request_count(
                 source.collection, source.expected_count_field
             )
         })?;
-        let count =
-            gents::graphql::canonical_positive_count(value, gents::MAX_EVENT_TRIGGER_GROUP_DOCS)
-                .with_context(|| {
-                    format!(
-                        "{}.{} must be a canonical positive integer <= {}",
-                        source.collection,
-                        source.expected_count_field,
-                        gents::MAX_EVENT_TRIGGER_GROUP_DOCS
-                    )
-                })?;
+        let count = gents::store::graphql::canonical_positive_count(
+            value,
+            gents::MAX_EVENT_TRIGGER_GROUP_DOCS,
+        )
+        .with_context(|| {
+            format!(
+                "{}.{} must be a canonical positive integer <= {}",
+                source.collection,
+                source.expected_count_field,
+                gents::MAX_EVENT_TRIGGER_GROUP_DOCS
+            )
+        })?;
         if expected.is_some_and(|prior| prior != count) {
             bail!(
                 "{}.{} is inconsistent for correlation {correlation}",

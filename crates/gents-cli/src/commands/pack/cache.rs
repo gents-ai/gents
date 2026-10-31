@@ -3,11 +3,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use gents::file_lock::FileLock;
 use gents::pack::materialize::{
     cache_root, cache_root_disposition, lock_exclusive, prune_stale_asset_cache, CacheRelease,
 };
 use gents::pack::{HomePackInstall, PackKind};
+use gents::store::local::file_lock::FileLock;
 
 use crate::cli::PackPruneArgs;
 
@@ -42,9 +42,9 @@ pub(super) fn prepare_recorded_cache(
     let (namespace, name) = super::split_namespace(coordinate);
     let expected = cache_root(Path::new(""), namespace, name, &record.digest)?;
     let recorded = Path::new(&record.assets);
-    let unscoped = Path::new(gents::home::PACKS_DIR_NAME)
+    let unscoped = Path::new(gents::store::local::home::PACKS_DIR_NAME)
         .join(name)
-        .join(gents::pack_archive::digest_hex(&record.digest)?);
+        .join(gents::pack::archive::digest_hex(&record.digest)?);
     anyhow::ensure!(
         recorded == expected || recorded == unscoped,
         "{coordinate}'s recorded asset path {} does not match {}",
@@ -62,7 +62,7 @@ pub(super) fn prepare_recorded_cache(
     let lock = lock_exclusive(parent)?;
     let disposition = cache_root_disposition(&root, || {
         if recorded == unscoped {
-            let archive = gents::pack_store::PackStore::new(home).open(&record.digest)?;
+            let archive = gents::pack::store::PackStore::new(home).open(&record.digest)?;
             anyhow::ensure!(
                 archive.manifest().metadata.namespace == namespace
                     && archive.manifest().name == name,
@@ -148,7 +148,7 @@ mod tests {
 
         assert_eq!(
             report["removed_digests"],
-            json!([gents::pack_archive::digest_hex(sources[0].0.digest()).unwrap()])
+            json!([gents::pack::archive::digest_hex(sources[0].0.digest()).unwrap()])
         );
         assert!(!sources[0].1.exists());
         assert!(sources[1].1.exists());
@@ -168,7 +168,7 @@ mod tests {
                 root.parent().unwrap(),
                 home.path().join("packs/.materialized/acme").join(name)
             );
-            assert!(gents::pack_store::PackStore::new(home.path())
+            assert!(gents::pack::store::PackStore::new(home.path())
                 .open(pack.digest())
                 .is_ok());
         }
@@ -187,7 +187,7 @@ mod tests {
         assert!(error.to_string().contains("no materialized asset cache"));
         assert!(!home
             .path()
-            .join(gents::home::PACKS_DIR_NAME)
+            .join(gents::store::local::home::PACKS_DIR_NAME)
             .join(".materialized")
             .exists());
     }

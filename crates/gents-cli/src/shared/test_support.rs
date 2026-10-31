@@ -9,7 +9,9 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
     defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
 }
 
-pub(crate) async fn seed_unsent_xai_effort(owner: &str) -> gents::config_client::ConfigAccess {
+pub(crate) async fn seed_unsent_xai_effort(
+    owner: &str,
+) -> gents::store::config_client::ConfigAccess {
     let node = std::sync::Arc::new(
         crate::shared::test_support::node_builder()
             .build()
@@ -29,7 +31,7 @@ pub(crate) async fn seed_unsent_xai_effort(owner: &str) -> gents::config_client:
             .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
-    gents::config_client::ConfigAccess::local(node)
+    gents::store::config_client::ConfigAccess::local(node)
 }
 
 pub(crate) fn xai_effort_backend(owner: &str) -> Value {
@@ -55,17 +57,16 @@ pub(crate) fn xai_effort_profile(owner: &str) -> Value {
 async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()> {
     let node = std::sync::Arc::new(node_builder().build().await?);
     gents::ensure_runtime_schemas(&node).await?;
-    let backend: gents::document_config::InferenceBackend =
-        serde_json::from_value(serde_json::json!({
-            "node_did":"did:key:catalog-owner", "backend_id":"catalog-backend", "name":"Catalog",
-            "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
-            "auth":{"kind":"unauthenticated"}
-        }))?;
+    let backend: gents::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
+        "node_did":"did:key:catalog-owner", "backend_id":"catalog-backend", "name":"Catalog",
+        "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
+        "auth":{"kind":"unauthenticated"}
+    }))?;
     gents::ensure_node(&node, &backend.node_did).await?;
     let access = gents::ConfigAccess::local(node.clone());
-    gents::config_client::write_inference_backend_document(&access, &backend).await?;
+    gents::store::config_client::write_inference_backend_document(&access, &backend).await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
-        let catalog: gents::document_config::BackendModelCatalog =
+        let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
                 "node_did":null, "observed_at":observed_at,
                 "models":[{"model_name":"retained-model"}]
@@ -75,8 +76,10 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog)
-                        .await
+                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                        txn, backend, catalog,
+                    )
+                    .await
                 })
             })
             .await?;

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
-use crate::file_lock::FileLock;
-use crate::pack_archive::PackArchive;
+use crate::pack::archive::PackArchive;
+use crate::store::local::file_lock::FileLock;
 
 /// Who installed a pack: the operator through the CLI, or the model through
 /// self-configuration.
@@ -116,7 +116,7 @@ pub fn materialize_asset_pack(
 }
 
 fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
-    let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let (namespace, name) = crate::pack::registry::split_pack_coordinate(coordinate);
     anyhow::ensure!(
         is_valid_pack_name(namespace) && is_valid_pack_name(name),
         "invalid pack coordinate {coordinate:?}"
@@ -127,7 +127,7 @@ fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
 fn record_path(home: &Path, coordinate: &str) -> Result<PathBuf> {
     let (namespace, name) = checked_coordinate(coordinate)?;
     Ok(home
-        .join(crate::home::PACK_INSTALLS_DIR_NAME)
+        .join(crate::store::local::home::PACK_INSTALLS_DIR_NAME)
         .join(namespace)
         .join(format!("{name}.json")))
 }
@@ -194,7 +194,7 @@ pub struct SkippedHomeInstall {
 pub fn list_home_installs_with_skips(
     home: &Path,
 ) -> Result<(Vec<HomePackInstall>, Vec<SkippedHomeInstall>)> {
-    let root = home.join(crate::home::PACK_INSTALLS_DIR_NAME);
+    let root = home.join(crate::store::local::home::PACK_INSTALLS_DIR_NAME);
     if !root.is_dir() {
         return Ok((Vec::new(), Vec::new()));
     }
@@ -235,7 +235,7 @@ pub fn list_home_installs_with_skips(
 }
 
 pub fn list_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
-    let root = home.join(crate::home::PACK_INSTALLS_DIR_NAME);
+    let root = home.join(crate::store::local::home::PACK_INSTALLS_DIR_NAME);
     if !root.is_dir() {
         return Ok(Vec::new());
     }
@@ -298,7 +298,7 @@ mod tests {
         write_home_install(home.path(), &sample("zeta/tools")).unwrap();
         let newer = home
             .path()
-            .join(crate::home::PACK_INSTALLS_DIR_NAME)
+            .join(crate::store::local::home::PACK_INSTALLS_DIR_NAME)
             .join("acme")
             .join("future.json");
         std::fs::write(&newer, b"{\"coordinate\": 7, \"from\": \"a newer gents\"}").unwrap();
@@ -323,7 +323,7 @@ mod tests {
         json["kind"] = "retired_fixture".into();
         let retired = home
             .path()
-            .join(crate::home::PACK_INSTALLS_DIR_NAME)
+            .join(crate::store::local::home::PACK_INSTALLS_DIR_NAME)
             .join("fixture")
             .join("retired.json");
         std::fs::write(&retired, serde_json::to_vec(&json).unwrap()).unwrap();

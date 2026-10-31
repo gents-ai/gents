@@ -1,0 +1,1349 @@
+use rapidhash::{HashSetExt, RapidHashSet};
+
+use bytes::Bytes;
+use futures::{FutureExt, StreamExt};
+use rig::completion::{CompletionRequest, ToolDefinition};
+use rig::http_client;
+use rig::streaming::RawStreamingChoice;
+use serde_json::{json, Value};
+
+use super::fixtures::*;
+use super::sse_body::{stream_sse_body, stream_sse_body_observed};
+use super::*;
+use crate::inference::llm::message::{
+    AssistantContent, Image, Message, ReasoningContent, ToolCall, ToolFunction, ToolResultContent,
+    UserContent,
+};
+
+#[test]
+fn cumulative_usage_keeps_start_counters_and_requires_message_stop() {
+    let start = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":0,\"cache_read_input_tokens\":64,\"cache_creation_input_tokens\":36,\"output_tokens\":1}}}\n\n";
+    let delta = "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":20}}\n\n";
+    let snapshot: Value =
+        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+    for (name, stop) in [
+        (
+            "messages_cumulative",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        ),
+        ("messages_eof", ""),
+    ] {
+        let case = snapshot["provider_usage_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let expected: gents_protocol::usage::TokenUsage =
+            serde_json::from_value(case["observations"][0].clone()).unwrap();
+        let events =
+            parse_messages_sse(&format!("{start}{delta}{stop}"), &RapidHashSet::new()).unwrap();
+        let response = events
+            .iter()
+            .find_map(|event| match event {
+                RawStreamingChoice::FinalResponse(response) => Some(response),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(response.token_usage, expected, "{name}");
+        assert_eq!(
+            response.usage.unwrap().input_tokens,
+            expected.input_tokens.unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn identity_matches_lean_body_witness_head() {
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        assert_eq!(case.system[0], CLAUDE_CODE_IDENTITY, "{}", case.name);
+    }
+}
+
+#[test]
+fn lean_effort_cases_drive_the_real_messages_request() {
+    for case in crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases() {
+        let mut request = echo_request();
+        request.additional_params = Some(json!({
+            (ADVERTISED_REASONING_EFFORTS_PARAM): case.supported_efforts,
+            "output_config": {"effort": case.effort, "untrusted": true},
+            "thinking": {"type": "enabled", "budget_tokens": 999},
+            "temperature": 0.5,
+        }));
+        let body = build_messages_body("claude-sonnet-5", &request).unwrap();
+        assert_eq!(
+            body["output_config"]["effort"].as_str(),
+            case.selected_effort.as_deref(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            body.get("thinking").is_some(),
+            case.selected_effort.is_some()
+        );
+        assert!(body.get("temperature").is_none());
+        assert!(body.get(ADVERTISED_REASONING_EFFORTS_PARAM).is_none());
+        assert!(body["output_config"].get("untrusted").is_none());
+        if case.selected_effort.is_some() {
+            assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+        }
+    }
+}
+
+fn request_from_native(
+    preamble: Option<&str>,
+    history: Vec<Message>,
+    tools: Vec<ToolDefinition>,
+) -> CompletionRequest {
+    let rig_history = crate::inference::llm::rig_compat::to_rig_messages(&history);
+    CompletionRequest {
+        model: None,
+        preamble: preamble.map(str::to_string),
+        chat_history: rig::OneOrMany::many(rig_history).expect("at least one row"),
+        documents: Vec::new(),
+        tools,
+        temperature: None,
+        max_tokens: Some(128),
+        tool_choice: None,
+        additional_params: None,
+        output_schema: None,
+    }
+}
+
+fn echo_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "echo".into(),
+        description: "echo".into(),
+        parameters: json!({"type":"object","properties":{}}),
+    }
+}
+
+fn echo_request() -> CompletionRequest {
+    request_from_native(
+        Some("You are helpful."),
+        vec![Message::user("use echo")],
+        vec![echo_tool()],
+    )
+}
+
+fn request_with_system_rows() -> CompletionRequest {
+    request_from_native(
+        Some("You are helpful."),
+        vec![
+            Message::System {
+                content: "workspace context".into(),
+            },
+            Message::user("use echo"),
+        ],
+        vec![echo_tool()],
+    )
+}
+
+#[test]
+fn messages_body_includes_gents_tools_and_system() {
+    let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
+    assert_eq!(body["model"], "claude-sonnet-5");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["max_tokens"], 128);
+    assert_eq!(body["tools"][0]["name"], "echo");
+    assert_eq!(body["system"][1]["text"], "You are helpful.");
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert_messages_body_has_no_sampling(&body);
+}
+
+#[test]
+fn messages_body_system_leads_with_claude_code_identity_then_preamble() {
+    let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
+    let system = body["system"].as_array().expect("system array");
+    assert_eq!(system.len(), 2, "{body}");
+    assert_eq!(system[0]["type"], "text");
+    assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
+    assert_eq!(system[1]["type"], "text");
+    assert_eq!(system[1]["text"], "You are helpful.");
+}
+
+#[test]
+fn messages_body_system_is_identity_only_without_preamble() {
+    for preamble in [None, Some(String::new()), Some("   ".to_string())] {
+        let mut request = echo_request();
+        request.preamble = preamble;
+        let body = build_messages_body("claude-sonnet-5", &request).unwrap();
+        let system = body["system"].as_array().expect("system array");
+        assert_eq!(system.len(), 1, "{body}");
+        assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
+    }
+}
+
+#[test]
+fn messages_body_routes_system_rows_after_identity_and_preamble() {
+    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
+    let system = body["system"].as_array().expect("system");
+    assert_eq!(system.len(), 3, "{body}");
+    assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
+    assert_eq!(system[1]["text"], "You are helpful.");
+    assert_eq!(system[2]["text"], "workspace context");
+    assert_eq!(body["messages"].as_array().expect("messages").len(), 1);
+    assert_eq!(body["messages"][0]["role"], "user");
+}
+
+#[test]
+fn messages_body_marks_two_cache_breakpoints() {
+    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
+    let system = body["system"].as_array().expect("system");
+    assert_eq!(system.last().unwrap()["cache_control"]["type"], "ephemeral");
+    assert!(system[0].get("cache_control").is_none());
+    let last_message = body["messages"].as_array().unwrap().last().unwrap().clone();
+    let last_block = last_message["content"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(last_block["cache_control"]["type"], "ephemeral");
+}
+
+#[test]
+fn messages_body_omits_sampling_even_when_request_sets_it() {
+    let mut request = echo_request();
+    request.temperature = Some(0.7);
+    request.additional_params = Some(json!({
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "top_k": 40,
+        "seed": 1,
+        "min_p": 0.05,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.1,
+    }));
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
+    assert_messages_body_has_no_sampling(&body);
+    assert_eq!(body["tools"][0]["name"], "echo");
+}
+
+const MESSAGES_BODY_ALLOWED_KEYS: &[&str] = &[
+    "model",
+    "max_tokens",
+    "stream",
+    "messages",
+    "tools",
+    "system",
+];
+
+fn assert_messages_body_has_no_sampling(body: &Value) {
+    let keys: Vec<&String> = body.as_object().expect("object body").keys().collect();
+    assert!(
+        keys.iter()
+            .all(|key| MESSAGES_BODY_ALLOWED_KEYS.contains(&key.as_str())),
+        "unexpected Messages key: {body}"
+    );
+    for forbidden in [
+        "temperature",
+        "top_p",
+        "top_k",
+        "seed",
+        "min_p",
+        "frequency_penalty",
+        "presence_penalty",
+    ] {
+        assert!(
+            body.get(forbidden).is_none(),
+            "{forbidden} must not appear on Claude Messages: {body}"
+        );
+    }
+}
+
+#[test]
+fn messages_body_threads_tool_result() {
+    let request = request_from_native(
+        None,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![AssistantContent::ToolCall(ToolCall::new(
+                    "toolu_1".into(),
+                    ToolFunction::new("echo".into(), json!({})),
+                ))],
+            },
+            Message::User {
+                content: vec![UserContent::tool_result(
+                    "toolu_1",
+                    vec![ToolResultContent::text("ECHOED")],
+                )],
+            },
+        ],
+        vec![echo_tool()],
+    );
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
+    assert_eq!(body["messages"][0]["content"][0]["type"], "tool_use");
+    assert_eq!(body["messages"][1]["content"][0]["type"], "tool_result");
+    assert_eq!(body["messages"][1]["content"][0]["content"], "ECHOED");
+}
+
+#[test]
+fn tool_result_images_reach_the_wire_body() {
+    let image = |data: &str, mime: &str| {
+        ToolResultContent::Image(Image {
+            data: crate::inference::llm::message::DocumentSourceKind::Base64(data.into()),
+            media_type: crate::inference::llm::message::ImageMediaType::from_mime_type(mime),
+            detail: None,
+            additional_params: None,
+        })
+    };
+    let request = request_from_native(
+        None,
+        vec![
+            Message::user("draw it"),
+            Message::Assistant {
+                id: None,
+                content: vec![AssistantContent::ToolCall(ToolCall::new(
+                    "toolu_1".into(),
+                    ToolFunction::new("echo".into(), json!({})),
+                ))],
+            },
+            Message::User {
+                content: vec![UserContent::tool_result(
+                    "toolu_1",
+                    vec![
+                        ToolResultContent::text(r#"{"height":2,"width":2}"#),
+                        image("iVBORw0KGgo=", "image/png"),
+                        image("PHN2Zy8+", "image/svg+xml"),
+                    ],
+                )],
+            },
+        ],
+        vec![echo_tool()],
+    );
+    let bearer =
+        crate::inference::clients::claude_subscription::ApiKeyBearer::new("placeholder-key");
+    let wire = captured_request(&bearer, &request);
+    let (_, body) = wire.split_once("\r\n\r\n").expect("HTTP body");
+    let body: Value = serde_json::from_str(body).expect("JSON body");
+    assert_eq!(
+        body["messages"][2]["content"][0]["content"],
+        json!([
+            {"type": "text", "text": r#"{"height":2,"width":2}"#},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=",
+            }},
+            {"type": "text", "text": gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED},
+        ])
+    );
+}
+
+fn png_header(width: u32, height: u32) -> String {
+    use base64::Engine as _;
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    bytes.extend(width.to_be_bytes());
+    bytes.extend(height.to_be_bytes());
+    bytes.extend([8, 6, 0, 0, 0]);
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn tool_result_images_on_the_wire(images: &[String]) -> Vec<Value> {
+    let mut history = vec![Message::user("draw them")];
+    for (index, data) in images.iter().enumerate() {
+        let id = format!("toolu_{index}");
+        history.push(Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(ToolCall::new(
+                id.clone(),
+                ToolFunction::new("echo".into(), json!({})),
+            ))],
+        });
+        history.push(Message::User {
+            content: vec![UserContent::tool_result(
+                id,
+                vec![ToolResultContent::Image(Image {
+                    data: crate::inference::llm::message::DocumentSourceKind::Base64(data.clone()),
+                    media_type: Some(crate::inference::llm::message::ImageMediaType::PNG),
+                    detail: None,
+                    additional_params: None,
+                })],
+            )],
+        });
+    }
+    let request = request_from_native(None, history, vec![echo_tool()]);
+    let bearer =
+        crate::inference::clients::claude_subscription::ApiKeyBearer::new("placeholder-key");
+    let wire = captured_request(&bearer, &request);
+    let (_, body) = wire.split_once("\r\n\r\n").expect("HTTP body");
+    let body: Value = serde_json::from_str(body).expect("JSON body");
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().unwrap().clone())
+        .filter(|block| block["type"] == "tool_result")
+        .map(|block| block["content"].clone())
+        .collect()
+}
+
+fn wire_image(data: &str) -> Value {
+    json!([{"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": data,
+    }}])
+}
+
+fn wire_note(note: &str) -> Value {
+    json!([{"type": "text", "text": note}])
+}
+
+#[test]
+fn an_image_over_claudes_side_limit_becomes_a_note() {
+    let images = [
+        png_header(9000, 4000),
+        png_header(3000, 3000),
+        "iVBORw0KGgo=".into(),
+    ];
+    assert_eq!(
+        tool_result_images_on_the_wire(&images),
+        vec![
+            wire_note("[image omitted: 9000×4000 px exceeds Claude's 8000 px limit; ask the tool for a smaller view]"),
+            wire_image(&images[1]),
+            wire_image(&images[2]),
+        ]
+    );
+}
+
+#[test]
+fn past_twenty_images_each_is_held_to_two_thousand_px() {
+    let mut images = vec![png_header(3000, 1000)];
+    images.extend((0..20).map(|_| png_header(2000, 2000)));
+    let wire = tool_result_images_on_the_wire(&images);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: 3000×1000 px exceeds Claude's 2000 px limit for requests with more than 20 images; ask the tool for a smaller view]")
+    );
+    assert_eq!(
+        wire[1..],
+        images[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+
+    let twenty = &images[..20];
+    assert_eq!(
+        tool_result_images_on_the_wire(twenty)[0],
+        wire_image(&twenty[0])
+    );
+}
+
+#[test]
+fn past_twenty_large_images_the_newest_twenty_are_sent() {
+    let large: Vec<String> = (0..21).map(|_| png_header(3000, 3000)).collect();
+    let wire = tool_result_images_on_the_wire(&large);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: 3000×3000 px exceeds Claude's 2000 px limit for requests with more than 20 images; ask the tool for a smaller view]")
+    );
+    assert_eq!(
+        wire[1..],
+        large[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+
+    let mut mixed: Vec<String> = (0..20).map(|_| png_header(100, 100)).collect();
+    mixed.push(png_header(3000, 3000));
+    let wire = tool_result_images_on_the_wire(&mixed);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: a Claude request with an image over 2000 px carries at most 20 images and later ones were kept; ask the tool again to see it]")
+    );
+    assert_eq!(
+        wire[1..],
+        mixed[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+}
+
+#[test]
+fn past_the_image_count_the_oldest_images_become_notes() {
+    let images: Vec<String> = (0..101).map(|side| png_header(side + 1, 1)).collect();
+    let wire = tool_result_images_on_the_wire(&images);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: a Claude request carries at most 100 images and later ones were kept; ask the tool again to see it]")
+    );
+    assert_eq!(
+        wire[1..],
+        images[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+}
+
+#[test]
+fn messages_body_omits_tools_key_when_surface_is_empty() {
+    let mut request = echo_request();
+    request.tools.clear();
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
+    assert!(body.get("tools").is_none(), "{body}");
+    let with_tools = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
+    assert_eq!(with_tools["tools"][0]["name"], "echo");
+    assert_eq!(with_tools["tools"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn sse_maps_echo_and_rejects_bash() {
+    let sse = r#"
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_stop
+data: {"type":"message_stop"}
+"#;
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let events = parse_messages_sse(sse, &surface).expect("map");
+    assert!(matches!(
+        &events[0],
+        RawStreamingChoice::ToolCall(call) if call.name == "echo" && call.id == "toolu_1"
+    ));
+
+    let bash = sse.replace("echo", "Bash");
+    let err = parse_messages_sse(&bash, &surface).expect_err("Bash");
+    assert!(err.to_string().contains("Bash"), "{err}");
+}
+
+fn sse_tool_use_block(id: &str, name: &str, start_input: &str, deltas: &[&str]) -> String {
+    let mut sse = format!(
+        "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{id}\",\"name\":\"{name}\",\"input\":{start_input}}}}}\n\n"
+    );
+    for partial in deltas {
+        let escaped = serde_json::to_string(partial).expect("escape partial_json");
+        sse.push_str(&format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":{escaped}}}}}\n\n"
+        ));
+    }
+    sse.push_str(
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+    );
+    sse
+}
+
+fn tool_call_arguments(events: &[RawStreamingChoice<ClaudeStreamResponse>]) -> Value {
+    match &events[0] {
+        RawStreamingChoice::ToolCall(call) => call.arguments.clone(),
+        other => panic!("expected ToolCall first, got {other:?}"),
+    }
+}
+
+#[test]
+fn sse_tool_use_deltas_yield_exact_arguments() {
+    let sse = sse_tool_use_block("toolu_1", "echo", "{}", &["{\"text\":", " \"hi\"}"]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let events = parse_messages_sse(&sse, &surface).expect("parse");
+    assert_eq!(tool_call_arguments(&events), json!({"text": "hi"}));
+
+    let single = sse_fixture_tool_use("toolu_1", "echo", "{\"text\":\"hi\"}");
+    let events = parse_messages_sse(&single, &surface).expect("parse fixture");
+    assert_eq!(tool_call_arguments(&events), json!({"text": "hi"}));
+}
+
+#[test]
+fn sse_tool_use_without_deltas_uses_start_input() {
+    let sse = sse_tool_use_block("toolu_1", "echo", "{\"text\":\"hi\"}", &[]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let events = parse_messages_sse(&sse, &surface).expect("parse");
+    assert_eq!(tool_call_arguments(&events), json!({"text": "hi"}));
+}
+
+#[test]
+fn sse_tool_use_with_no_input_at_all_is_empty_object() {
+    let sse = sse_tool_use_block("toolu_1", "echo", "{}", &[]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let events = parse_messages_sse(&sse, &surface).expect("parse");
+    assert_eq!(tool_call_arguments(&events), json!({}));
+}
+
+#[test]
+fn sse_tool_use_with_unparseable_input_fails_closed() {
+    let sse = sse_fixture_tool_use("toolu_1", "echo", "{\"text\":");
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let err = parse_messages_sse(&sse, &surface).expect_err("truncated json");
+    assert!(
+        err.to_string().contains("fail-closed: malformed tool_use"),
+        "{err}"
+    );
+}
+
+#[test]
+fn sse_duplicate_tool_use_id_fails_closed() {
+    let mut sse = sse_tool_use_block("toolu_1", "echo", "{}", &["{}"]);
+    sse.push_str(&sse_tool_use_block("toolu_1", "echo", "{}", &["{}"]));
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let err = parse_messages_sse(&sse, &surface).expect_err("duplicate id");
+    assert!(
+        err.to_string()
+            .contains("fail-closed: duplicate tool_use id toolu_1"),
+        "{err}"
+    );
+}
+
+#[test]
+fn sse_overlapping_tool_use_block_fails_closed() {
+    let first = sse_tool_use_block("toolu_1", "echo", "{}", &[]);
+    let (start, _stop) = first.split_once("event: content_block_stop").expect("stop");
+    let mut sse = start.to_string();
+    sse.push_str(&sse_tool_use_block("toolu_2", "echo", "{}", &[]));
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let err = parse_messages_sse(&sse, &surface).expect_err("overlap");
+    assert!(
+        err.to_string()
+            .contains("fail-closed: overlapping tool_use block toolu_2"),
+        "{err}"
+    );
+}
+
+#[test]
+fn sse_message_stop_flushes_pending_tool_before_final() {
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let mut state = MessagesSseState::new(surface);
+    let mut events = Vec::new();
+    let block = sse_tool_use_block("toolu_1", "echo", "{}", &["{\"text\":\"hi\"}"]);
+    let without_stop = block
+        .split_once("event: content_block_stop")
+        .expect("block ends with content_block_stop")
+        .0
+        .to_string();
+    for line in without_stop.lines() {
+        events.extend(state.push_line(line).expect("push"));
+    }
+    assert!(events.is_empty(), "{events:?}");
+    for line in "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".lines() {
+        events.extend(state.push_line(line).expect("push"));
+    }
+    assert!(
+        matches!(
+            &events[..],
+            [RawStreamingChoice::ToolCall(call), RawStreamingChoice::FinalResponse(_)]
+                if call.arguments == json!({"text": "hi"})
+        ),
+        "{events:?}"
+    );
+    let trailing = state.finish().expect("finish");
+    assert!(trailing.is_empty(), "no second FinalResponse: {trailing:?}");
+}
+
+#[test]
+fn push_line_yields_text_before_the_body_ends() {
+    let mut state = MessagesSseState::new(RapidHashSet::new());
+    assert!(state
+        .push_line("event: content_block_delta")
+        .unwrap()
+        .is_empty());
+    let events = state
+        .push_line(
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}"#,
+        )
+        .unwrap();
+    assert!(
+        events.is_empty(),
+        "a data line is not complete until the blank line"
+    );
+    let events = state.push_line("").unwrap();
+    assert!(matches!(&events[..], [RawStreamingChoice::Message(t)] if t == "hel"));
+    let events = state.finish().unwrap();
+    assert!(matches!(
+        &events[..],
+        [RawStreamingChoice::FinalResponse(_)]
+    ));
+}
+
+#[test]
+fn sse_error_event_becomes_provider_error() {
+    let sse = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n";
+    let err = parse_messages_sse(sse, &RapidHashSet::new()).expect_err("error event");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("overloaded_error") && msg.contains("Overloaded"),
+        "{msg}"
+    );
+}
+
+fn event_key(event: &RawStreamingChoice<ClaudeStreamResponse>) -> String {
+    match event {
+        RawStreamingChoice::Message(text) => format!("text:{text}"),
+        RawStreamingChoice::ToolCall(call) => {
+            format!("tool:{}:{}:{}", call.id, call.name, call.arguments)
+        }
+        RawStreamingChoice::FinalResponse(response) => format!("final:{:?}", response.usage),
+        other => format!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn chunk_boundaries_do_not_change_the_event_sequence() {
+    let sse = format!(
+        "{}{}",
+        sse_fixture_text("hello world"),
+        sse_fixture_tool_use("toolu_1", "echo", "{\"text\":\"hi\"}")
+    );
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
+    let whole: Vec<String> = parse_messages_sse(&sse, &surface)
+        .unwrap()
+        .iter()
+        .map(event_key)
+        .collect();
+    for chunk_len in [1usize, 3, 7, 64, 4096] {
+        let chunks: Vec<Result<Bytes, http_client::Error>> = sse
+            .as_bytes()
+            .chunks(chunk_len)
+            .map(|c| Ok(Bytes::copy_from_slice(c)))
+            .collect();
+        let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter(chunks));
+        let events: Vec<String> = stream_sse_body(body, MessagesSseState::new(surface.clone()))
+            .map(|e| event_key(&e.expect("event")))
+            .collect()
+            .await;
+        assert_eq!(events, whole, "chunk_len={chunk_len}");
+    }
+}
+
+#[tokio::test]
+async fn split_multibyte_sse_signature_retains_exact_utf8() {
+    let sse = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"署名\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+    assert!(sse
+        .as_bytes()
+        .windows(3)
+        .any(|bytes| bytes == "署".as_bytes()));
+    let chunks = sse
+        .as_bytes()
+        .chunks(1)
+        .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+        .collect::<Vec<Result<Bytes, http_client::Error>>>();
+    let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter(chunks));
+    let events = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream_sse_body(body, MessagesSseState::new(RapidHashSet::new())).collect::<Vec<_>>(),
+    )
+    .await
+    .expect("bounded SSE decode");
+    assert!(events.iter().any(|event| match event {
+        Ok(RawStreamingChoice::Reasoning { content, .. }) => matches!(
+            crate::inference::llm::rig_compat::from_rig_reasoning_part(content),
+            ReasoningContent::Text { signature: Some(signature), .. } if signature == "署名"
+        ),
+        _ => false,
+    }));
+    assert!(events.iter().all(Result::is_ok));
+}
+
+#[tokio::test]
+async fn malformed_utf8_fails_after_prior_valid_sse_events() {
+    let mut bytes = sse_fixture_text("prior").into_bytes();
+    bytes.extend_from_slice(b"data: \xff\n\n");
+    let body: http_client::sse::BoxedStream =
+        Box::pin(futures::stream::once(async { Ok(Bytes::from(bytes)) }));
+    let events = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream_sse_body(body, MessagesSseState::new(RapidHashSet::new())).collect::<Vec<_>>(),
+    )
+    .await
+    .expect("bounded SSE decode");
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Ok(RawStreamingChoice::Message(text)) if text == "prior")));
+    assert!(events
+        .last()
+        .expect("decoder error")
+        .as_ref()
+        .unwrap_err()
+        .to_string()
+        .contains("invalid UTF-8"));
+}
+
+#[tokio::test]
+async fn first_text_event_is_observable_before_the_body_is_exhausted() {
+    let (tx, rx) = futures::channel::mpsc::unbounded::<Result<Bytes, http_client::Error>>();
+    let body: http_client::sse::BoxedStream = Box::pin(rx);
+    let mut events = Box::pin(stream_sse_body(
+        body,
+        MessagesSseState::new(RapidHashSet::new()),
+    ));
+    tx.unbounded_send(Ok(Bytes::from(sse_fixture_text("first"))))
+        .unwrap();
+    let first = events.next().await.expect("event").expect("ok");
+    assert!(matches!(first, RawStreamingChoice::Message(ref t) if t == "first"));
+    tx.unbounded_send(Ok(Bytes::from_static(
+        b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    )))
+    .unwrap();
+    drop(tx);
+    let rest: Vec<_> = events.collect().await;
+    assert!(matches!(
+        rest.last().unwrap().as_ref().unwrap(),
+        RawStreamingChoice::FinalResponse(_)
+    ));
+}
+
+#[tokio::test]
+async fn cancellation_drains_received_signature_without_polling_provider_again() {
+    use crate::inference::rendered_request::scope::{
+        arm, claim_pending, current_audit_sender, drain_ready_audit, scope_request, test_scope,
+        CaptureScopeKind,
+    };
+    use crate::inference::rendered_request::{
+        AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
+    };
+    use gents_loop::provider_audit::ClaudeAuditEvent;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::task::Poll;
+
+    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = test_scope(
+        RenderedRequestContext {
+            request_doc_id: "doc-audit".into(),
+            request_commit_cid: "bafy-audit".into(),
+            request_id: "req-audit".into(),
+            node_did: "did:key:agent".into(),
+            requester_did: String::new(),
+            agent_id: "behavior".into(),
+            session_id: "session".into(),
+            model_name: "claude".into(),
+            provider_family: None,
+        },
+        sink,
+    );
+    scope_request(scope, async {
+        arm(
+            CaptureScopeKind::Inference,
+            0,
+            0,
+            AssemblyTrace::from_effective_messages(
+                AssemblyBuildPath::Budgeted,
+                Vec::new(),
+            ),
+        )
+        .unwrap();
+        claim_pending().expect("armed provider attempt");
+        let sender = current_audit_sender().expect("exact attempt sender");
+        let polls = Arc::new(AtomicUsize::new(0));
+        let body_polls = Arc::clone(&polls);
+        let mut first = Some(Bytes::from_static(
+            b"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"partial-sig\"}}\n\n",
+        ));
+        let body: http_client::sse::BoxedStream =
+            Box::pin(futures::stream::poll_fn(move |_| {
+                body_polls.fetch_add(1, Ordering::SeqCst);
+                match first.take() {
+                    Some(chunk) => Poll::Ready(Some(Ok(chunk))),
+                    None => Poll::Pending,
+                }
+            }));
+        let mut stream = Box::pin(stream_sse_body_observed(
+            body,
+            MessagesSseState::new(RapidHashSet::new()),
+            Some(sender),
+        ));
+        assert!(stream.next().now_or_never().is_none());
+        let before_drain = polls.load(Ordering::SeqCst);
+        let received = drain_ready_audit().await;
+        assert_eq!(polls.load(Ordering::SeqCst), before_drain);
+        assert_eq!(received.len(), 2);
+        assert!(matches!(received[0].event, ClaudeAuditEvent::BlockStart { index: 0, .. }));
+        assert!(matches!(
+            &received[1].event,
+            ClaudeAuditEvent::Signature { index: 0, fragment } if fragment == "partial-sig"
+        ));
+        drop(stream);
+    })
+    .await;
+}
+
+#[test]
+fn thinking_start_emits_ordered_audit_observations() {
+    use gents_loop::provider_audit::ClaudeAuditEvent;
+
+    let mut state = MessagesSseState::new(RapidHashSet::new());
+    state
+        .push_line(
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"start\",\"signature\":\"initial\"}}",
+        )
+        .unwrap();
+    state.push_line("").unwrap();
+    assert!(matches!(
+        state.take_audit_events().as_slice(),
+        [
+            ClaudeAuditEvent::BlockStart { index: 0, .. },
+            ClaudeAuditEvent::ThinkingText { index: 0, fragment: text },
+            ClaudeAuditEvent::Signature { index: 0, fragment: signature },
+        ] if text == "start" && signature == "initial"
+    ));
+    state
+        .push_line(
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"-delta\"}}",
+        )
+        .unwrap();
+    state.push_line("").unwrap();
+    assert!(matches!(
+        state.take_audit_events().as_slice(),
+        [ClaudeAuditEvent::Signature { fragment, .. }] if fragment == "-delta"
+    ));
+}
+
+#[test]
+fn generated_claude_wire_start_cases_drive_native_parser() {
+    use crate::lean_vocab_test::{
+        lean_prompt_assembly_claude_wire_start_cases, LeanClaudeReasoningPart,
+        LeanClaudeStreamBlock,
+    };
+
+    let cases = lean_prompt_assembly_claude_wire_start_cases();
+    assert!(!cases.is_empty(), "Lean emitted no Claude wire-start cases");
+    for case in cases {
+        let mut block = json!({"type":"thinking","thinking":case.start.thinking});
+        if case.start.signature_present {
+            block["signature"] = case.start.signature.clone();
+        }
+        let mut sse = format!(
+            "data: {}\n\n",
+            json!({"type":"content_block_start","index":case.start.index,"content_block":block})
+        );
+        for event in &case.later {
+            let index = event.index.expect("modeled Claude block index");
+            let payload = match event.kind.as_str() {
+                "signatureDelta" => json!({
+                    "type":"content_block_delta", "index":index,
+                    "delta":{"type":"signature_delta", "signature":event.fragment.as_deref().expect("modeled signature")}
+                }),
+                "thinkingDelta" => json!({
+                    "type":"content_block_delta", "index":index,
+                    "delta":{"type":"thinking_delta", "thinking":event.fragment.as_deref().expect("modeled thinking")}
+                }),
+                "contentStop" => json!({"type":"content_block_stop", "index":index}),
+                other => panic!("{}: unsupported modeled wire event {other}", case.name),
+            };
+            sse.push_str(&format!("data: {payload}\n\n"));
+        }
+        let parsed = parse_messages_sse_typed(&sse, &RapidHashSet::new());
+        match case.expected.kind.as_str() {
+            "wireError" => assert!(
+                matches!(
+                    parsed,
+                    Err(MessagesParseError::MalformedThinking {
+                        cause: ThinkingParseCause::Malformed(
+                            "thinking start signature is not text"
+                        )
+                    })
+                ),
+                "{}",
+                case.name
+            ),
+            "contentError" => {
+                let expected = case
+                    .expected
+                    .error
+                    .as_deref()
+                    .expect("modeled content error");
+                assert_eq!(expected, "signatureOrder", "{}", case.name);
+                assert!(
+                    matches!(
+                        parsed,
+                        Err(MessagesParseError::MalformedThinking {
+                            cause: ThinkingParseCause::SignatureOrder
+                        })
+                    ),
+                    "{}",
+                    case.name
+                );
+            }
+            "ok" => {
+                let events = parsed.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                let observed: Vec<LeanClaudeStreamBlock> = events
+                    .iter()
+                    .filter_map(|event| {
+                        let RawStreamingChoice::Reasoning { content, .. } = event else {
+                            return None;
+                        };
+                        let ReasoningContent::Text { text, signature } =
+                            crate::inference::llm::rig_compat::from_rig_reasoning_part(content)
+                        else {
+                            panic!("{}: modeled text reasoning", case.name)
+                        };
+                        Some(LeanClaudeStreamBlock {
+                            kind: "reasoning".into(),
+                            value: None,
+                            parts: Some(vec![LeanClaudeReasoningPart {
+                                kind: "text".into(),
+                                payload: text,
+                                signature,
+                            }]),
+                            id: None,
+                            name: None,
+                            arguments: None,
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    observed,
+                    case.expected
+                        .content
+                        .as_ref()
+                        .expect("modeled content")
+                        .as_slice(),
+                    "{}",
+                    case.name
+                );
+            }
+            other => panic!("{}: unknown modeled wire outcome {other}", case.name),
+        }
+    }
+}
+
+#[test]
+fn non_success_error_carries_status_request_id_and_bounded_body_prefix() {
+    let err = non_success_error(
+        reqwest::StatusCode::BAD_REQUEST,
+        Some("req_123"),
+        &body_prefix(b"  {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"temperature\"}}\n"),
+    );
+    let text = err.to_string();
+    assert!(text.contains("HTTP 400 Bad Request"), "{text}");
+    assert!(text.contains("(request-id req_123)"), "{text}");
+    assert!(
+        text.ends_with(
+            " body={\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"temperature\"}}"
+        ),
+        "{text}"
+    );
+
+    let long = vec![b'x'; NON_SUCCESS_BODY_PREFIX_BYTES * 3];
+    assert_eq!(body_prefix(&long).len(), NON_SUCCESS_BODY_PREFIX_BYTES);
+
+    let bare = non_success_error(reqwest::StatusCode::TOO_MANY_REQUESTS, None, "").to_string();
+    assert!(bare.ends_with("(request-id -)"), "{bare}");
+    assert!(!bare.contains("body="), "{bare}");
+}
+
+#[tokio::test]
+async fn transport_429_usage_cap_reports_reset_time() {
+    let _guard = lock_fixtures_for_test().await;
+    let url = crate::inference::clients::provider_http::tests::one_shot_server(
+        "429 Too Many Requests",
+        &[
+            ("retry-after", "6000"),
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            ("anthropic-ratelimit-unified-reset", "1790354400"),
+        ],
+        r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011CeoNrgs1EJvDwA2YxXE7R"}"#,
+    )
+    .await;
+    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access");
+    let err = stream_messages_at(
+        &url,
+        "claude-sonnet-5",
+        &echo_request(),
+        RapidHashSet::new(),
+        &bearer,
+        &ReqwestClient::new(),
+        None,
+    )
+    .await
+    .err()
+    .expect("429");
+    let classified = crate::inference::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(err),
+    )
+    .error;
+    assert!(!classified.is_retryable());
+    assert_eq!(
+        classified.to_string(),
+        "provider usage limit reached (resets at 2026-09-25T16:40:00Z): \
+         This request would exceed your account's rate limit. Please try again later."
+    );
+    assert_eq!(bearer.invalidations(), 0);
+}
+
+#[tokio::test]
+async fn transport_401_invalidates_the_bearer_once() {
+    let _guard = lock_fixtures_for_test().await;
+    let (url, handle) = crate::inference::auth::credential::test_support::one_shot_token_server(
+        401,
+        r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
+    )
+    .await;
+    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access-STALE");
+    let err = stream_messages_at(
+        &url,
+        "claude-sonnet-5",
+        &echo_request(),
+        RapidHashSet::new(),
+        &bearer,
+        &ReqwestClient::new(),
+        None,
+    )
+    .await
+    .err()
+    .expect("401");
+    assert!(err.to_string().contains("401"), "{err}");
+    assert_eq!(bearer.invalidations(), 1);
+    let request = handle.await.expect("request");
+    assert!(
+        request
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("authorization: Bearer access-STALE")),
+        "{request}"
+    );
+}
+
+fn captured_request<S>(bearer: &S, request: &CompletionRequest) -> String
+where
+    S: crate::inference::auth::credential::BearerSource,
+{
+    let _guard = blocking_lock_fixtures_for_test();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            let (url, handle) = crate::inference::auth::credential::test_support::one_shot_token_server(
+                401,
+                r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
+            )
+            .await;
+            let _ = stream_messages_at(
+                &url,
+                "claude-sonnet-5",
+                request,
+                RapidHashSet::new(),
+                bearer,
+                &ReqwestClient::new(),
+                None,
+            )
+            .await;
+            handle.await.expect("request")
+        })
+}
+
+#[test]
+fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
+    let bearer =
+        crate::inference::clients::claude_subscription::ApiKeyBearer::new("placeholder-key");
+    let request = captured_request(&bearer, &echo_request());
+    let has = |expected: &str| {
+        request
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case(expected))
+    };
+    assert!(has("authorization: Bearer placeholder-key"), "{request}");
+    assert!(has("anthropic-version: 2023-06-01"), "{request}");
+    assert!(
+        !request
+            .lines()
+            .any(|line| line.to_ascii_lowercase().starts_with("anthropic-beta")),
+        "{request}"
+    );
+}
+
+#[test]
+fn sign_in_request_keeps_the_oauth_beta() {
+    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access");
+    let request = captured_request(&bearer, &echo_request());
+    assert!(
+        request
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("anthropic-beta: oauth-2025-04-20")),
+        "{request}"
+    );
+}
+
+#[tokio::test]
+async fn unsupported_replay_body_is_a_permanent_request_error() {
+    let request = unsupported_replay_request();
+    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("unused");
+    let error = stream_messages_at(
+        "http://127.0.0.1:1",
+        "claude-sonnet-5",
+        &request,
+        RapidHashSet::new(),
+        &bearer,
+        &ReqwestClient::new(),
+        None,
+    )
+    .await
+    .err()
+    .expect("unsupported replay block");
+    assert!(matches!(error, CompletionError::RequestError(_)), "{error}");
+    let classified = crate::inference::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(error),
+    )
+    .error;
+    assert!(matches!(
+        classified,
+        crate::error::InferenceError::PermanentFailure { .. }
+    ));
+}
+
+fn unsupported_replay_request() -> CompletionRequest {
+    request_from_native(
+        None,
+        vec![Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Image(Image::default())],
+        }],
+        vec![],
+    )
+}
+
+#[test]
+fn unsupported_replay_preflight_is_a_permanent_request_error() {
+    let counter = crate::turn::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::ClaudeCliSubscription,
+        crate::OpenAiWireApi::ChatCompletions,
+        "claude-sonnet-5",
+    );
+    let error = gents_loop::loop_stream::completion_request_input_components(
+        &unsupported_replay_request(),
+        &counter,
+    )
+    .expect_err("unsupported replay block");
+    assert!(
+        matches!(
+            &error,
+            rig::agent::StreamingError::Completion(CompletionError::RequestError(_))
+        ),
+        "{error}"
+    );
+    assert!(matches!(
+        crate::inference::llm::rig_compat::classify_completion_error(&error).error,
+        crate::error::InferenceError::PermanentFailure { .. }
+    ));
+}
+
+#[test]
+fn usage_wiring_claude_live_messages_records_unified_headers() {
+    let _guard = blocking_lock_fixtures_for_test();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            let node = crate::inference::auth::credential::test_support::test_node().await;
+            let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+                std::sync::Arc::default();
+            let account = crate::inference::usage_observation::UsageAccount::Backend {
+                node_did: "did:key:z6MkUsageWireClaudeLive".into(),
+                provider: "ClaudeCliSubscription".into(),
+                backend_id: "backend-usage-claude".into(),
+                connection: "connection-claude".into(),
+            };
+            let url = crate::inference::clients::provider_http::tests::one_shot_server(
+                "200 OK",
+                &[
+                    ("anthropic-ratelimit-unified-5h-utilization", "0.25"),
+                    ("anthropic-ratelimit-unified-5h-reset", "1790354400"),
+                ],
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )
+            .await;
+            let bearer =
+                crate::inference::clients::claude_subscription::StaticBearer::new("access-TEST");
+            let _ = stream_messages_at(
+                &url,
+                "claude-sonnet-5",
+                &echo_request(),
+                RapidHashSet::new(),
+                &bearer,
+                &ReqwestClient::new(),
+                Some(crate::inference::usage_observation::UsageReporter::new(
+                    cache.clone(),
+                    node.clone(),
+                    account.clone(),
+                )),
+            )
+            .await;
+
+            let stored = crate::inference::clients::provider_http::tests::stored_usage_eventually(
+                &cache, &node, &account,
+            )
+            .await
+            .expect("usage recorded");
+            let window = &stored.report.windows[0];
+            assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
+        });
+}
+
+#[test]
+fn refusal_stop_reason_surfaces_as_a_distinct_error() {
+    // Recorded Claude Messages SSE for a content-free refusal: the model reads
+    // the prompt (message_start usage), opens no content block, and closes the
+    // turn with stop_reason "refusal" and zero output tokens. Without explicit
+    // handling the owned loop would see an empty turn and resample until its
+    // transport budget was spent, reporting an opaque "no visible output".
+    let sse = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_refusal\",",
+        "\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],",
+        "\"stop_reason\":null,\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",",
+        "\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let parsed = parse_messages_sse_typed(sse, &RapidHashSet::new());
+    match parsed {
+        Err(MessagesParseError::ProviderRefusal { request_id }) => {
+            assert_eq!(request_id, "-", "no request-id header in this fixture");
+        }
+        other => panic!("expected a ProviderRefusal error, got {other:?}"),
+    }
+
+    // The refusal is surfaced to the loop as a provider error whose text the
+    // retry classifier recognizes as permanent, so it is not resampled.
+    let rendered = CompletionError::from(MessagesParseError::ProviderRefusal {
+        request_id: "-".into(),
+    })
+    .to_string();
+    assert!(
+        rendered.contains("stop_reason: refusal"),
+        "provider error text carries the refusal marker: {rendered}"
+    );
+}
+
+#[test]
+fn structured_output_schema_is_sent_next_to_the_reasoning_effort() {
+    let mut request = echo_request();
+    request.additional_params = Some(json!({
+        (ADVERTISED_REASONING_EFFORTS_PARAM): ["low", "high"],
+        "output_config": {"effort": "high"},
+    }));
+    let schema = schemars::json_schema!({
+        "type": "object",
+        "properties": {"goal": {"type": "string"}},
+        "required": ["goal"],
+    });
+    request.output_schema = Some(schema.clone());
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
+    assert_eq!(body["output_config"]["effort"], "high");
+    assert_eq!(
+        body["output_config"]["format"],
+        json!({"type": "json_schema", "schema": schema.as_value()})
+    );
+}
+
+#[test]
+fn an_unsendable_structured_output_schema_is_an_error_not_a_dropped_field() {
+    let mut request = echo_request();
+    request.output_schema = Some(schemars::Schema::from(true));
+    let error = build_messages_body("claude-sonnet-5", &request)
+        .expect_err("a non-object schema cannot be sent as output_config.format");
+    assert!(
+        error.to_string().contains("structured output requested"),
+        "{error}"
+    );
+}

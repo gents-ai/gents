@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::pack::archive::{pack_dir, PackArchive};
 use crate::pack::{declared_paths, PackKind, PackManifest};
-use crate::pack_archive::{pack_dir, PackArchive};
 
 pub const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
 
@@ -161,7 +161,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::PackConfig> {
+pub fn load_config(archive: &PackArchive) -> Result<crate::documents::PackConfig> {
     let config = crate::pack::load_pack_config(
         archive.manifest(),
         &crate::pack::PackInstallOptions {
@@ -170,7 +170,7 @@ pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::Pack
         &|path| archive.asset(path).map(Vec::from),
         &|_| None,
     )?;
-    crate::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
+    crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
     Ok(config)
 }
 
@@ -196,13 +196,13 @@ fn check_ux_plugins(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Stri
     if manifest.metadata.ux.is_empty() {
         return;
     }
-    match crate::ux_plugin::lint_pack_dir(dir, &manifest.metadata.ux) {
+    match crate::plugin::ux::lint_pack_dir(dir, &manifest.metadata.ux) {
         Ok(findings) => {
             for (name, findings) in findings {
                 if !findings.is_empty() {
                     problems.push(format!(
                         "ux plugin {name:?} is refused by the static lint:\n{}",
-                        crate::ux_plugin::lint::describe(&findings)
+                        crate::plugin::ux::lint::describe(&findings)
                     ));
                 }
             }
@@ -258,7 +258,7 @@ mod tests {
         assert!(report.pack.is_none(), "native check must reject the link");
         assert!(!report.problems.is_empty());
         assert!(
-            crate::pack_archive::pack_dir(&dir).is_err(),
+            crate::pack::archive::pack_dir(&dir).is_err(),
             "pack writer must reject the same external manifest link"
         );
     }

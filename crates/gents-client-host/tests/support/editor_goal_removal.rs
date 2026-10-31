@@ -68,7 +68,7 @@ pub async fn verify(
     node: &str,
     author: &str,
 ) -> Result<Value> {
-    let node_literal = gents::graphql::escape_graphql_string(node);
+    let node_literal = gents::store::graphql::escape_graphql_string(node);
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_literal}"}}, purpose: {{_eq: "normal"}}}}) {{ {} interrupt_requested_at }} Goal(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ intent_json }} }}"#,
         gents::SIGNED_REQUEST_FIELDS,

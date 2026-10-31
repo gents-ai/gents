@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::Mutex;
 
 use super::store::InstalledPlugin;
-use crate::managed_exec::{
+use crate::tools::exec::{
     spawn_managed_process, ManagedExecKind, ManagedProcess, SpawnManagedProcessRequest,
 };
 
@@ -101,7 +101,7 @@ impl Services {
             input.insert("service".into(), service.data.clone());
             return Ok(());
         }
-        let archive = crate::pack_store::PackStore::new(home).open(digest)?;
+        let archive = crate::pack::store::PackStore::new(home).open(digest)?;
         anyhow::ensure!(
             archive
                 .manifest()
@@ -118,7 +118,7 @@ impl Services {
                 input,
             ).map(|_| ());
         }
-        let root = home.join(crate::home::PLUGIN_SERVICES_DIR_NAME);
+        let root = home.join(crate::store::local::home::PLUGIN_SERVICES_DIR_NAME);
         std::fs::create_dir_all(&root)?;
         let state = tempfile::Builder::new()
             .prefix("run-")
@@ -567,7 +567,7 @@ wait"#
             .contains("service exited"));
         assert!(!home
             .path()
-            .join(crate::home::PLUGIN_SERVICES_DIR_NAME)
+            .join(crate::store::local::home::PLUGIN_SERVICES_DIR_NAME)
             .exists());
     }
 
@@ -621,8 +621,8 @@ wait"#
                 serde_json::to_vec(&manifest).unwrap(),
             )
             .unwrap();
-            let (bytes, _) = crate::pack_archive::pack_dir(source.path()).unwrap();
-            let stored = crate::pack_store::PackStore::new(home.path())
+            let (bytes, _) = crate::pack::archive::pack_dir(source.path()).unwrap();
+            let stored = crate::pack::store::PackStore::new(home.path())
                 .import(bytes.as_slice(), None)
                 .unwrap();
             let mut record: InstalledPlugin = serde_json::from_value(serde_json::json!({
@@ -653,7 +653,7 @@ wait"#
         }
         assert!(!home
             .path()
-            .join(crate::home::PLUGIN_SERVICES_DIR_NAME)
+            .join(crate::store::local::home::PLUGIN_SERVICES_DIR_NAME)
             .exists());
     }
 

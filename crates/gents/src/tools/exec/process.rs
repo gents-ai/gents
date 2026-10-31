@@ -1,0 +1,603 @@
+use rapidhash::RapidHashMap;
+use std::path::PathBuf;
+#[cfg(windows)]
+use std::process::Stdio;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use tokio::io::AsyncWriteExt;
+#[cfg(windows)]
+use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
+
+use crate::tools::background::status::LiveToolOutputWriter;
+
+use super::output::ManagedExecOutcome;
+
+mod capture;
+#[cfg(windows)]
+mod job_object;
+#[cfg(unix)]
+mod process_group;
+mod registry;
+#[cfg(unix)]
+mod spawn;
+
+use capture::join_capture_after_child_exit;
+#[cfg(unix)]
+use capture::spawn_native_capped as spawn_optional_capped;
+#[cfg(not(unix))]
+use capture::spawn_optional_capped;
+#[cfg(windows)]
+pub(crate) use job_object::FailedJobOwner;
+#[cfg(windows)]
+use job_object::{job_has_no_live_processes, terminate_job, ManagedChildJob};
+#[cfg(unix)]
+use process_group::{terminate_process_group, ManagedChild};
+use registry::ActiveExecGuard;
+#[cfg(unix)]
+use spawn::spawn_child;
+
+pub(crate) use registry::{active_executor_snapshots, ManagedExecKind};
+
+#[derive(Debug)]
+pub(crate) struct ManagedExecRequest {
+    pub(crate) argv: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) deadline_at: Option<DateTime<Utc>>,
+    pub(crate) cancellation_token: CancellationToken,
+    pub(crate) max_output_bytes: usize,
+    pub(crate) stdin: Vec<u8>,
+    pub(crate) environment: Option<RapidHashMap<String, String>>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) live_output: Option<LiveToolOutputWriter>,
+}
+
+#[cfg(unix)]
+pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExecOutcome {
+    let Some((program, args)) = request.argv.split_first() else {
+        return ManagedExecOutcome::SpawnFailed {
+            error: "managed exec argv must not be empty".to_string(),
+        };
+    };
+
+    let recorder = super::ownership::current_process_recorder();
+    super::ownership::record_spawn_attempt(recorder.as_ref());
+    let mut child = match spawn_child(
+        program,
+        args,
+        &request.cwd,
+        request.environment.as_ref(),
+        !request.stdin.is_empty(),
+    ) {
+        Ok(child) => ManagedChild::new(child),
+        Err(error) => {
+            super::ownership::record_confirmed_exit(recorder.as_ref());
+            return ManagedExecOutcome::SpawnFailed {
+                error: error.to_string(),
+            };
+        }
+    };
+
+    let pid = child.pgid();
+    let _active = pid.map(|pid| {
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            ManagedExecKind::ForegroundCommand,
+        )
+    });
+    let recorded_identity =
+        pid.and_then(|pid| super::ownership::record_spawned(recorder.as_ref(), pid));
+
+    if !request.stdin.is_empty() {
+        if let Some(mut stdin) = child.inner.stdin.take() {
+            let input = request.stdin;
+            tokio::spawn(async move {
+                let _ = stdin.write_all(&input).await;
+            });
+        }
+    }
+
+    let stdout = child.inner.stdout.take();
+    let stderr = child.inner.stderr.take();
+    let max_output_bytes = request.max_output_bytes;
+    let stdout_task = spawn_optional_capped(
+        stdout,
+        max_output_bytes,
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stdout,
+            )
+        }),
+    );
+    let stderr_task = spawn_optional_capped(
+        stderr,
+        max_output_bytes,
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stderr,
+            )
+        }),
+    );
+
+    let mut wait = Box::pin(child.inner.wait());
+    let deadline = sleep_until_deadline(request.deadline_at);
+    tokio::pin!(deadline);
+
+    let outcome_kind = tokio::select! {
+        biased;
+        _ = request.cancellation_token.cancelled() => OutcomeKind::Cancelled,
+        _ = &mut deadline => OutcomeKind::TimedOut,
+        status = &mut wait => {
+            match status {
+                Ok(status) => {
+                    drop(wait);
+                    child.mark_finished(true);
+                    let (stdout, stderr) = tokio::join!(
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
+                    );
+                    return ManagedExecOutcome::Exited {
+                        code: status.code(),
+                        stdout: stdout.bytes,
+                        stderr: stderr.bytes,
+                        stdout_truncated: stdout.truncated,
+                        stderr_truncated: stderr.truncated,
+                    };
+                }
+                Err(error) => {
+                    drop(wait);
+                    super::ownership::record_failure_decision(recorder.as_ref());
+                    // A failed wait is not exit evidence. Preserve the exact recorded identity
+                    // for the existing stop owner instead of signalling a possibly reused group.
+                    child.mark_finished(true);
+                    super::ownership::record_unconfirmed_spawn_failure(recorder.as_ref());
+                    let _ = tokio::join!(
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
+                    );
+                    return ManagedExecOutcome::SpawnFailed {
+                        error: format!("waiting for managed exec failed: {error}"),
+                    };
+                }
+            }
+        }
+    };
+
+    drop(wait);
+    let kill = terminate_process_group(&mut child).await;
+    child.mark_finished(kill.reaped);
+    if let Some(identity) = recorded_identity {
+        if matches!(
+            identity
+                .await_signalled_group_exit(super::ownership::KILL_GRACE)
+                .await,
+            super::ownership::ProcessObservation::Exited
+        ) {
+            super::ownership::record_confirmed_exit(recorder.as_ref());
+        }
+    }
+    let (stdout, stderr) = tokio::join!(
+        join_capture_after_child_exit(stdout_task),
+        join_capture_after_child_exit(stderr_task),
+    );
+
+    match outcome_kind {
+        OutcomeKind::TimedOut => ManagedExecOutcome::TimedOut {
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
+            kill,
+        },
+        OutcomeKind::Cancelled => ManagedExecOutcome::Cancelled {
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
+            kill,
+        },
+    }
+}
+
+#[cfg(windows)]
+pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExecOutcome {
+    let Some((program, args)) = request.argv.split_first() else {
+        return ManagedExecOutcome::SpawnFailed {
+            error: "managed exec argv must not be empty".to_string(),
+        };
+    };
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(&request.cwd)
+        .stdin(if request.stdin.is_empty() {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(environment) = request.environment.as_ref() {
+        command.env_clear().envs(environment);
+    }
+
+    let recorder = super::ownership::current_process_recorder();
+    super::ownership::record_spawn_attempt(recorder.as_ref());
+    let fallback_owner = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let retained_fallback = fallback_owner.clone();
+    let fallback_program = program.clone();
+    let fallback_name = request.tool_name.clone();
+    let mut child = match ManagedChildJob::spawn(&mut command, |owner| {
+        super::ownership::record_failure_decision(recorder.as_ref());
+        if !recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.retain_failed_job(owner.clone()))
+        {
+            let id = registry::retain_failed_service(
+                owner,
+                fallback_program,
+                fallback_name,
+                ManagedExecKind::ForegroundCommand,
+            );
+            *retained_fallback
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
+        }
+    })
+    .await
+    {
+        Ok(child) => child,
+        Err(error) => {
+            if error.cleanup_confirmed {
+                super::ownership::record_confirmed_exit(recorder.as_ref());
+                if let Some(recorder) = recorder.as_ref() {
+                    recorder.release_failed_job();
+                }
+                let id = *fallback_owner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(id) = id {
+                    registry::stop_failed_service(id).await;
+                }
+            } else {
+                super::ownership::record_unconfirmed_spawn_failure(recorder.as_ref());
+            }
+            return ManagedExecOutcome::SpawnFailed {
+                error: error.error.to_string(),
+            };
+        }
+    };
+
+    let pid = child.pid();
+    let _active = pid.map(|pid| {
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            ManagedExecKind::ForegroundCommand,
+        )
+    });
+
+    if !request.stdin.is_empty() {
+        if let Some(mut stdin) = child.child_mut().stdin.take() {
+            let input = request.stdin;
+            tokio::spawn(async move {
+                let _ = stdin.write_all(&input).await;
+            });
+        }
+    }
+
+    let stdout = child.child_mut().stdout.take();
+    let stderr = child.child_mut().stderr.take();
+    let max_output_bytes = request.max_output_bytes;
+    let stdout_task = spawn_optional_capped(
+        stdout,
+        max_output_bytes,
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stdout,
+            )
+        }),
+    );
+    let stderr_task = spawn_optional_capped(
+        stderr,
+        max_output_bytes,
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stderr,
+            )
+        }),
+    );
+
+    let job = child.job();
+    let mut wait = Box::pin(child.child_mut().wait());
+    let deadline = sleep_until_deadline(request.deadline_at);
+    tokio::pin!(deadline);
+
+    let outcome_kind = tokio::select! {
+        biased;
+        _ = request.cancellation_token.cancelled() => OutcomeKind::Cancelled,
+        _ = &mut deadline => OutcomeKind::TimedOut,
+        status = &mut wait => {
+            match status {
+                Ok(status) => {
+                    drop(wait);
+                    child.mark_finished(true);
+                    let (stdout, stderr) = tokio::join!(
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
+                    );
+                    return ManagedExecOutcome::Exited {
+                        code: status.code(),
+                        stdout: stdout.bytes,
+                        stderr: stderr.bytes,
+                        stdout_truncated: stdout.truncated,
+                        stderr_truncated: stderr.truncated,
+                    };
+                }
+                Err(error) => {
+                    drop(wait);
+                    super::ownership::record_failure_decision(recorder.as_ref());
+                    let owner = child.into_failed_owner();
+                    let retained_in_tool = recorder.as_ref().is_some_and(|recorder| recorder.retain_failed_job(owner.clone()));
+                    let fallback_id = if retained_in_tool { None } else {
+                        Some(registry::retain_failed_service(owner.clone(), program.clone(), request.tool_name.clone(), ManagedExecKind::ForegroundCommand))
+                    };
+                    if owner.stop_and_confirm().await {
+                        super::ownership::record_confirmed_exit(recorder.as_ref());
+                        if let Some(recorder) = recorder.as_ref() { recorder.release_failed_job(); }
+                        if let Some(id) = fallback_id { registry::stop_failed_service(id).await; }
+                    } else {
+                        super::ownership::record_unconfirmed_spawn_failure(recorder.as_ref());
+                    }
+                    let _ = tokio::join!(
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
+                    );
+                    return ManagedExecOutcome::SpawnFailed {
+                        error: format!("waiting for managed exec failed: {error}"),
+                    };
+                }
+            }
+        }
+    };
+
+    let kill = terminate_job(job, &mut wait).await;
+    drop(wait);
+    child.mark_finished(kill.reaped);
+    if kill.kill_signal_sent && kill.reaped && job_has_no_live_processes(job) {
+        super::ownership::record_confirmed_exit(recorder.as_ref());
+    } else {
+        let owner = child.into_failed_owner();
+        if !recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.retain_failed_job(owner.clone()))
+        {
+            registry::retain_failed_service(
+                owner,
+                program.clone(),
+                request.tool_name.clone(),
+                ManagedExecKind::ForegroundCommand,
+            );
+        }
+    }
+    let (stdout, stderr) = tokio::join!(
+        join_capture_after_child_exit(stdout_task),
+        join_capture_after_child_exit(stderr_task),
+    );
+
+    match outcome_kind {
+        OutcomeKind::TimedOut => ManagedExecOutcome::TimedOut {
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
+            kill,
+        },
+        OutcomeKind::Cancelled => ManagedExecOutcome::Cancelled {
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
+            kill,
+        },
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+pub(crate) async fn run_managed_exec(_request: ManagedExecRequest) -> ManagedExecOutcome {
+    ManagedExecOutcome::SpawnFailed {
+        error: "ManagedExec process-tree termination is not yet supported on this platform"
+            .to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OutcomeKind {
+    TimedOut,
+    Cancelled,
+}
+
+#[derive(Debug)]
+pub(crate) struct SpawnManagedProcessRequest {
+    pub(crate) argv: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) environment: Option<RapidHashMap<String, String>>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) kind: ManagedExecKind,
+}
+
+pub(crate) struct ManagedProcess {
+    #[cfg(unix)]
+    child: ManagedChild,
+    #[cfg(windows)]
+    child: ManagedChildJob,
+    pub(crate) stdin: Option<tokio::process::ChildStdin>,
+    pub(crate) stdout: Option<tokio::process::ChildStdout>,
+    pub(crate) stderr: Option<tokio::process::ChildStderr>,
+    _guard: Option<ActiveExecGuard>,
+}
+
+impl ManagedProcess {
+    pub(crate) fn has_exited(&mut self) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            self.child.has_exited()
+        }
+        #[cfg(windows)]
+        {
+            self.child
+                .child_mut()
+                .try_wait()
+                .map(|status| status.is_some())
+        }
+    }
+
+    pub(crate) async fn terminate(&mut self) {
+        #[cfg(unix)]
+        {
+            self.child.terminate_service().await;
+        }
+        #[cfg(windows)]
+        {
+            let job = self.child.job();
+            {
+                let mut wait = Box::pin(self.child.child_mut().wait());
+                let _ = terminate_job(job, &mut wait).await;
+            }
+            self.child.mark_finished(true);
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(crate) async fn spawn_managed_process(
+    request: SpawnManagedProcessRequest,
+) -> Result<ManagedProcess, String> {
+    let Some((program, args)) = request.argv.split_first() else {
+        return Err("managed exec argv must not be empty".to_string());
+    };
+
+    let mut child = spawn_child(
+        program,
+        args,
+        &request.cwd,
+        request.environment.as_ref(),
+        true,
+    )
+    .map(ManagedChild::new)
+    .map_err(|error| error.to_string())?;
+    let pid = child.pgid();
+    let guard = pid.map(|pid| {
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            request.kind,
+        )
+    });
+    Ok(ManagedProcess {
+        stdin: child.inner.stdin.take(),
+        stdout: child.inner.stdout.take(),
+        stderr: child.inner.stderr.take(),
+        child,
+        _guard: guard,
+    })
+}
+
+#[cfg(windows)]
+pub(crate) async fn spawn_managed_process(
+    request: SpawnManagedProcessRequest,
+) -> Result<ManagedProcess, String> {
+    let Some((program, args)) = request.argv.split_first() else {
+        return Err("managed exec argv must not be empty".to_string());
+    };
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(&request.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(environment) = request.environment.as_ref() {
+        command.env_clear().envs(environment);
+    }
+    let failed_service = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let retained_service = failed_service.clone();
+    let argv0 = program.clone();
+    let tool_name = request.tool_name.clone();
+    let kind = request.kind;
+    let mut child = match ManagedChildJob::spawn(&mut command, move |owner| {
+        let id = registry::retain_failed_service(owner, argv0, tool_name, kind);
+        *retained_service
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
+    })
+    .await
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let id = *failed_service
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(id) = id {
+                if error.cleanup_confirmed {
+                    registry::stop_failed_service(id).await;
+                } else {
+                    return Err(format!(
+                        "{} (unconfirmed managed executor {id})",
+                        error.error
+                    ));
+                }
+            }
+            return Err(error.error.to_string());
+        }
+    };
+    let pid = child.pid();
+    let guard = pid.map(|pid| {
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            request.kind,
+        )
+    });
+    Ok(ManagedProcess {
+        stdin: child.child_mut().stdin.take(),
+        stdout: child.child_mut().stdout.take(),
+        stderr: child.child_mut().stderr.take(),
+        child,
+        _guard: guard,
+    })
+}
+
+#[cfg(all(not(unix), not(windows)))]
+pub(crate) async fn spawn_managed_process(
+    _request: SpawnManagedProcessRequest,
+) -> Result<ManagedProcess, String> {
+    Err("ManagedExec process-tree termination is not yet supported on this platform".to_string())
+}
+
+async fn sleep_until_deadline(deadline_at: Option<DateTime<Utc>>) {
+    let Some(deadline_at) = deadline_at else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    let now = Utc::now();
+    if now >= deadline_at {
+        return;
+    }
+    let duration = (deadline_at - now).to_std().unwrap_or(Duration::ZERO);
+    tokio::time::sleep(duration).await;
+}

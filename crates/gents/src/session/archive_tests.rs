@@ -38,12 +38,14 @@ fn authorized_archive_transitions_match_executed_model() {
     assert!(checked > 0 && checked_restored_generation);
 }
 
-async fn key(home: &std::path::Path, name: &str) -> crate::identity::KeyIdentity {
+async fn key(home: &std::path::Path, name: &str) -> crate::store::identity::KeyIdentity {
     let path = home.join(format!("{name}.key"));
-    tokio::task::spawn_blocking(move || crate::identity::KeyIdentity::load_or_create(path, None))
-        .await
-        .unwrap()
-        .unwrap()
+    tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(path, None)
+    })
+    .await
+    .unwrap()
+    .unwrap()
 }
 
 async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<AgentSession> {
@@ -77,7 +79,7 @@ async fn create_session(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> R
                     latest_request: {request_doc_id: "physical", request_id: "running",
                         lifecycle_state: "processing"}}
             }) {_docID} }"#).await?;
-            Ok::<_, anyhow::Error>(crate::graphql::created_doc_id(&result, "AgentSession")?)
+            Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(&result, "AgentSession")?)
         }),
     ).await
 }
@@ -92,7 +94,7 @@ async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
                 agent_id: "engineer", lifecycle_state: "processing", content: "Original input",
                 created_at: "2026-01-01T00:00:00Z"
             }) {_docID} }"#).await?;
-            let physical = crate::graphql::created_doc_id(&value, "AgentRequest")?;
+            let physical = crate::store::graphql::created_doc_id(&value, "AgentRequest")?;
             txn.execute(&format!(r#"mutation {{ update_AgentSession(
                 filter: {{session_id: {{_eq: "archive-session"}}, node_did: {{_eq: "runtime"}}}},
                 input: {{observation: {{last_activity_at: "2026-01-02T00:00:00Z", preview: "working",
@@ -348,7 +350,7 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() {
         .await
         .unwrap();
     create_session(&node, &actor).await.unwrap();
-    let access = ConfigAccess::Graphql(crate::config_client::GraphqlEndpoint::as_principal(
+    let access = ConfigAccess::Graphql(crate::store::config_client::GraphqlEndpoint::as_principal(
         endpoint,
         actor.did(),
     ));

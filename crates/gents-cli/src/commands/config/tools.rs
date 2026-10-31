@@ -1,10 +1,10 @@
 use crate::cli::{AgentTargetEntryArgs, ToolsSetArgs};
 use anyhow::{Context, Result};
-use gents::config_client::{
+use gents::documents::{AgentTargetDocument, Tools};
+use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use gents::document_config::{AgentTargetDocument, Tools};
 use gents::Collection;
 use serde_json::json;
 

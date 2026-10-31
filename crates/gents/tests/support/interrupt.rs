@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use gents::defra_node::{EmbeddedNode, QueryResponse};
-use gents::graphql::escape_graphql_string;
 use gents::session::canonical_rows::{
     decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::output::live::reconstruct_dense_prefix;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::OutputSource;
@@ -259,7 +259,7 @@ async fn create_runtime_request_inner(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
     create.input = input;
-    create.max_retries = i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
+    create.max_retries = i64::from(gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
     create.valid_until = valid_until.map(str::to_string);
     create.caused_by_source_doc_id = caused_by_source_doc_id.map(str::to_string);
     gents::sign_agent_request_create_as_registered_target(&mut create)

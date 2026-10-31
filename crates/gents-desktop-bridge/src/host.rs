@@ -133,7 +133,7 @@ impl ClientHost {
                 encode(record.is_managed_runtime())
             }
             ClientCommand::InferenceCatalog {} => {
-                encode(gents::inference_setup::inference_setup_catalog())
+                encode(gents::inference::backends::setup::inference_setup_catalog())
             }
             ClientCommand::InferenceSetupState { node_did } => {
                 let record = self.require_connected_runtime(&node_did).await?;
@@ -249,7 +249,7 @@ impl ClientHost {
                             "Connect this local runtime before managing its accounts.",
                         )
                     })?;
-                gents::oauth_credential::set_account_enabled(
+                gents::inference::auth::credential::set_account_enabled(
                     &access,
                     &request.node_did,
                     &request.credential_id,
@@ -273,7 +273,7 @@ impl ClientHost {
                             "Connect this local runtime before managing its accounts.",
                         )
                     })?;
-                gents::oauth_credential::set_account_label(
+                gents::inference::auth::credential::set_account_label(
                     &access,
                     &request.node_did,
                     &request.credential_id,

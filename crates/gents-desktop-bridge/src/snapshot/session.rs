@@ -2,9 +2,9 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gents::config_client::ConfigAccess;
-use gents::plugin_job::view::{load_job_view, JobKey};
 use gents::session::canonical_rows::TranscriptMessageRow;
+use gents::store::config_client::ConfigAccess;
+use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
 };
@@ -73,15 +73,15 @@ pub(super) fn message_is_runtime_control(
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
-    gents::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
+    gents::request::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
 }
 
 pub(super) fn request_origin_view(
     store: &ClientStore,
     request: &AgentRequestRow,
 ) -> Option<RequestOriginView> {
-    use gents::lifecycle::RequestOrigin;
-    Some(match gents::lifecycle::request_origin(request) {
+    use gents::request::lifecycle::RequestOrigin;
+    Some(match gents::request::lifecycle::request_origin(request) {
         RequestOrigin::Person => return None,
         RequestOrigin::SessionMessage {
             parent_request_doc_id,
@@ -95,7 +95,7 @@ pub(super) fn request_origin_view(
             RequestOriginView::SessionMessage {
                 display_body: parent
                     .and_then(|parent| {
-                        gents::lifecycle::session_message_display_body(request, parent)
+                        gents::request::lifecycle::session_message_display_body(request, parent)
                     })
                     .map(str::to_owned),
                 sender_node_did: parent
@@ -133,7 +133,7 @@ pub(super) fn message_origin(
     if message.role != gents_protocol::output::MessageRole::User {
         return None;
     }
-    if gents::background_completion::is_background_completion_notification_message_key(
+    if gents::tools::background::completion::is_background_completion_notification_message_key(
         &message.message_key,
     ) {
         return Some(RequestOriginView::BackgroundCompletion);
@@ -145,7 +145,7 @@ pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> boo
     request
         .input
         .as_ref()
-        .is_some_and(gents::lifecycle::is_background_completion_request)
+        .is_some_and(gents::request::lifecycle::is_background_completion_request)
 }
 
 pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
@@ -235,7 +235,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     context_store: Option<&ClientStore>,
     prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
     hydration_observation: Option<(
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         Option<String>,
     )>,
     context_totals_exact: bool,

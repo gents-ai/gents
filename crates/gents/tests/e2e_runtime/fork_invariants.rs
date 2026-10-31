@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use gents::graphql::escape_graphql_string;
 use gents::session::canonical_rows::{
     decode_transcript_message_row, output_segment_create_variables,
     transcript_message_create_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use gents::session::{fork, fork_via_http, ForkError, ForkParams};
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::output::*;
 
 use crate::support::snapshots::{
@@ -134,7 +134,7 @@ async fn import_scoped_message(
 }
 
 fn created_id(response: &defra_node::QueryResponse, collection: &str) -> String {
-    gents::graphql::single_mutation_document(response, collection)
+    gents::store::graphql::single_mutation_document(response, collection)
         .unwrap()
         .unwrap()["_docID"]
         .as_str()
@@ -288,7 +288,7 @@ async fn fork_via_http_uses_same_header_contract() {
     setup(&node, "parent-http").await;
     let source = import_message(&node, "parent-http", 1, MessageRole::User, "u", true).await;
     let outcome = fork_via_http(
-        &gents::config_client::GraphqlEndpoint::anonymous(endpoint),
+        &gents::store::config_client::GraphqlEndpoint::anonymous(endpoint),
         params("parent-http", 1),
     )
     .await

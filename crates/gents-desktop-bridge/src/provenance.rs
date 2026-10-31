@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::graphql_string_list_literal;
-use gents::session::{public_request_filter, session_scope_filter};
-use gents::session_origin::{
+use gents::session::origin::{
     group_caused, lineage, single_caused, starting_request, SessionLink, SessionScope,
 };
-use gents::toolset::is_session_message_tool;
+use gents::session::{public_request_filter, session_scope_filter};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::graphql_string_list_literal;
+use gents::tools::native::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
@@ -109,7 +109,7 @@ fn text(row: &Value, field: &str) -> Option<String> {
 }
 
 /// The request that opened `link.scope`'s session from `link`'s cause, as
-/// `gents::session_origin::starting_request` selects it (C7, Lean
+/// `gents::session::origin::starting_request` selects it (C7, Lean
 /// `DurableLineage.openingRequest`); `session_provenance` and the lineage
 /// cases both read it here.
 async fn opening_request(
@@ -212,7 +212,7 @@ async fn caused_calls(
         .collect())
 }
 
-fn turn_senders(lineage: &gents::session_origin::SessionLineage) -> Vec<(String, &SessionLink)> {
+fn turn_senders(lineage: &gents::session::origin::SessionLineage) -> Vec<(String, &SessionLink)> {
     let links = lineage
         .started_by
         .iter()
@@ -302,7 +302,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use gents::graphql::escape_graphql_string;
+    use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
     async fn run(
@@ -312,7 +312,7 @@ mod tests {
     ) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")
@@ -512,7 +512,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            gents::schema::ensure_runtime_schemas(node.as_ref())
+            gents::store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
             let ids = seed_lineage_case(&node, case, did).await;

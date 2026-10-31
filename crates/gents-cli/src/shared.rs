@@ -40,7 +40,8 @@ pub(crate) struct InitSummary {
     pub(crate) created_default_agent: bool,
 }
 
-pub(crate) type StoredInitConfig = gents::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
+pub(crate) type StoredInitConfig =
+    gents::store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CodexShimHealth {
@@ -218,7 +219,7 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) exported_at: String,
     pub(crate) access_mode: String,
     #[serde(flatten)]
-    pub(crate) config: gents::document_config::PackConfig,
+    pub(crate) config: gents::documents::PackConfig,
 }
 
 impl ConfigExportBundle {
@@ -254,7 +255,7 @@ impl Serialize for ConfigApplyCounts {
 }
 
 impl ConfigApplyCounts {
-    pub(crate) fn from_config(config: &gents::document_config::PackConfig) -> anyhow::Result<Self> {
+    pub(crate) fn from_config(config: &gents::documents::PackConfig) -> anyhow::Result<Self> {
         let value = serde_json::to_value(config)?;
         let mut counts = Self::default();
         for collection in Collection::ALL {
@@ -316,21 +317,21 @@ pub(crate) struct ConfigApplyReport {
 }
 
 pub(crate) async fn load_backend_observation(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     backend_id: &str,
-) -> anyhow::Result<gents::document_config::InferenceBackendObservation> {
+) -> anyhow::Result<gents::documents::InferenceBackendObservation> {
     let query = format!(
         "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
-        gents::graphql::escape_graphql_string(node_did),
-        gents::graphql::escape_graphql_string(backend_id),
+        gents::store::graphql::escape_graphql_string(node_did),
+        gents::store::graphql::escape_graphql_string(backend_id),
     );
     let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;
     anyhow::ensure!(
         rows.len() == 1,
         "backend observation is missing or ambiguous"
     );
-    gents::backend_registry::decode_backend_observation(rows[0].clone())
+    gents::inference::backends::registry::decode_backend_observation(rows[0].clone())
 }
 
 #[cfg(test)]

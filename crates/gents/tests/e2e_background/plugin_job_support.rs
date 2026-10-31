@@ -1,18 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gents::document_config::{AgentTools, IntegrationTools, PluginToolRef, Tools};
+use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
 use gents::eval::runner::embedded::EmbeddedHome;
+use gents::pack::archive::{pack_dir, PackArchive};
 use gents::pack::{
     install_prepared_document_pack, load_pack_config, prepare_document_pack_install, DriftPolicy,
     InstalledVia, PackInferenceBindings, PackInstallOptions,
 };
-use gents::pack_archive::{pack_dir, PackArchive};
-use gents::plugin_job::job::{
+use gents::tools::background::job::job::{
     JobChildState, JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn,
     JobState, JobStepOutput, JobView, PluginJobSettings,
 };
-use gents::plugin_job::view::{load_job_view, JobKey};
+use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, NodeIdentity};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -431,7 +431,7 @@ async fn scripted_job_adopts_one_child_and_completes() {
     let response = ConfigAccess::local(h.db.node.clone())
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
-            gents::graphql::escape_graphql_string(&row_doc_id),
+            gents::store::graphql::escape_graphql_string(&row_doc_id),
         ))
         .await
         .expect("read the job row");

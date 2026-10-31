@@ -1,0 +1,136 @@
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
+
+use super::{
+    emit_create_workspace_plan, emit_freeze_workspace_base_plan, execute_create_workspace_plan,
+    execute_freeze_workspace_base_plan, isolated_workspace_upsert_mutation,
+    repository_placement_upsert_mutation, workspace_placement_upsert_mutation, ActionJournalEntry,
+    CreateWorkspaceAction, CreateWorkspaceOutcome, CreationPolicy, FreezeWorkspaceBaseAction,
+    HostExecutorContext, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind,
+    CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
+};
+use crate::store::config_client::ConfigAccess;
+
+fn repository_id(path: &Path, principal_did: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(principal_did.as_bytes());
+    hasher.update([0]);
+    hasher.update(path.as_os_str().as_encoded_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    format!("local-repository-{}", &digest[..24])
+}
+
+async fn upsert_repository_placement(
+    access: &ConfigAccess,
+    repository_id: &str,
+    principal_did: &str,
+    path: &Path,
+) -> Result<()> {
+    let placement = RepositoryPlacementRef {
+        repository_id: repository_id.to_owned(),
+        owner_node_did: principal_did.to_owned(),
+        host_path: path.to_owned(),
+        enabled: true,
+    };
+    let mutation =
+        repository_placement_upsert_mutation(&placement, &chrono::Utc::now().to_rfc3339())?;
+    access
+        .write("workspace.repository_placement.upsert", &mutation)
+        .await?;
+    Ok(())
+}
+
+async fn flush_workspace_documents(
+    access: &ConfigAccess,
+    documents: &MemoryWorkspaceDocuments,
+) -> Result<()> {
+    if documents.workspaces.is_empty() && documents.placements.is_empty() {
+        return Ok(());
+    }
+    access
+        .transact_write("workspace.documents.flush", move |txn| {
+            Box::pin(async move {
+                for workspace in documents.workspaces.values() {
+                    txn.execute(&isolated_workspace_upsert_mutation(workspace))
+                        .await?;
+                }
+                let now = chrono::Utc::now().to_rfc3339();
+                for placement in documents.placements.values() {
+                    txn.execute(&workspace_placement_upsert_mutation(placement, &now))
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+}
+
+pub async fn provision_read_only_workspace(
+    access: &ConfigAccess,
+    repository_path: &Path,
+    head_sha: &str,
+    principal_did: &str,
+) -> Result<CreateWorkspaceOutcome> {
+    let repository_path = std::fs::canonicalize(repository_path).with_context(|| {
+        format!(
+            "canonicalizing repository placement {}",
+            repository_path.display()
+        )
+    })?;
+    let repository_id = repository_id(&repository_path, principal_did);
+    upsert_repository_placement(access, &repository_id, principal_did, &repository_path).await?;
+
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let branch = format!("gents-review-{}", &workspace_id[..12]);
+    let plan = emit_create_workspace_plan(CreateWorkspaceAction {
+        path_capability: super::WorkspacePathCapability::exact_paths(Vec::new())?,
+        workspace_id: workspace_id.clone(),
+        work_unit_id: workspace_id.clone(),
+        repository_id: repository_id.clone(),
+        base_sha: head_sha.to_owned(),
+        branch,
+        creation_policy: CreationPolicy::GitWorktreeDiff,
+        adapter: WorkspaceAdapterKind::GitWorktree,
+        clone_artifacts: None,
+    });
+    let mut documents = MemoryWorkspaceDocuments::default();
+    let mut journal = Vec::<ActionJournalEntry>::new();
+    let capabilities = [
+        CAP_CREATE_WORKSPACE,
+        CAP_OBSERVE_DIRTY_BASE,
+        CAP_SEAL_WORKSPACE,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let outcome = {
+        let mut context = HostExecutorContext {
+            owner_node_did: principal_did.to_owned(),
+            repository: RepositoryPlacementRef {
+                repository_id,
+                owner_node_did: principal_did.to_owned(),
+                host_path: repository_path.clone(),
+                enabled: true,
+            },
+            ceiling: Some(&repository_path),
+            capabilities,
+            writer_principal: principal_did.to_owned(),
+            integrator_principal: principal_did.to_owned(),
+            caused_by_invocation_id: format!("graph-workspace-{workspace_id}"),
+            caused_by_correlation: workspace_id,
+            documents: &mut documents,
+        };
+        execute_create_workspace_plan(&plan, &mut journal, &mut context).and_then(|created| {
+            let freeze = emit_freeze_workspace_base_plan(FreezeWorkspaceBaseAction {
+                workspace_id: created.workspace.workspace_id,
+                base_sha: created.workspace.base_sha,
+            });
+            execute_freeze_workspace_base_plan(&freeze, &mut Vec::new(), &mut context)
+        })
+    };
+    flush_workspace_documents(access, &documents).await?;
+    outcome.map_err(|error| anyhow::anyhow!(error.to_string()))
+}

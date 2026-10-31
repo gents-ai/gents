@@ -134,7 +134,7 @@ pub(super) async fn save(
     let reviewer = if request.mode == Mode::AutoReview {
         // Configuring the Task may use only the existing signer cache; opening
         // the permission picker must not unlock a runtime identity.
-        if !gents::identity::can_mint_defradb_bearer(&local.key.node_did) {
+        if !gents::store::identity::can_mint_defradb_bearer(&local.key.node_did) {
             return Err(BridgeError::new(BridgeErrorCode::Unsupported,
                 "Open Runtime Settings to connect this runtime's configuration before choosing Approve for me."));
         }
@@ -279,7 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_disconnected_runtime_cannot_stage_its_reviewer_in_the_client_replica() {
-        use gents::config_client::{
+        use gents::store::config_client::{
             apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
             DesiredStateApplyPlan,
         };
@@ -287,7 +287,7 @@ mod tests {
 
         let (core, _temp) = crate::tests::support::boot_core().await;
         let owner = core.node_identity().did();
-        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let config: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -431,7 +431,7 @@ mod tests {
         )
         .unwrap();
         assert!(workspace::get(&home, &other_key).unwrap().is_none());
-        assert!(!gents::identity::can_mint_defradb_bearer(&owner));
+        assert!(!gents::store::identity::can_mint_defradb_bearer(&owner));
         let unavailable = save(
             &core,
             WorkspacePermissionsSaveRequest {

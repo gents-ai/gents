@@ -2,14 +2,14 @@ use rapidhash::RapidHashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::session::load_latest_request_in_txn;
-pub(crate) use gents::session_origin::SessionScope;
-use gents::session_origin::{
+pub(crate) use gents::session::origin::SessionScope;
+use gents::session::origin::{
     lineage, load_session, started_by, starting_request, SessionLink, REQUEST_FIELDS,
 };
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
@@ -240,7 +240,7 @@ fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
 pub(crate) mod fixtures {
     use std::collections::BTreeMap;
 
-    use gents::graphql::escape_graphql_string;
+    use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
     use serde_json::Value;
 
@@ -359,7 +359,7 @@ pub(crate) mod fixtures {
     ) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")
@@ -629,7 +629,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            gents::schema::ensure_runtime_schemas(node.as_ref())
+            gents::store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
             let ids = fixtures::seed_lineage_case(&node, case, did).await;

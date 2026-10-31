@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
-use gents::graphql::escape_graphql_string;
-use gents::lifecycle::{
+use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use gents::inference::rendered_request::{decode_capture_json, CapturePayloadKind};
+use gents::request::lifecycle::{
     pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
 };
-use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::rendered_request::{decode_capture_json, CapturePayloadKind};
+use gents::store::config_client::{
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
+use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, Gents, ReasoningEffort, SamplingConfig, ToolCeiling};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -79,7 +79,7 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(did),
     );
-    create.input = gents::lifecycle::prepare_user_message_input(
+    create.input = gents::request::lifecycle::prepare_user_message_input(
         &ConfigAccess::local(db.node.clone()),
         did,
         SESSION,
@@ -94,7 +94,10 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
             &create.graphql_mutation().map_err(anyhow::Error::msg)?,
         )
         .await?;
-    Ok(gents::graphql::created_doc_id(&result, "AgentRequest")?)
+    Ok(gents::store::graphql::created_doc_id(
+        &result,
+        "AgentRequest",
+    )?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

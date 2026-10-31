@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use crate::config_client::ConfigRead;
-use crate::document_config::{Agent, AgentContext, Tools};
-use crate::graphql::escape_graphql_string;
+use crate::documents::{Agent, AgentContext, Tools};
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
 
 /// Check the surviving document graph before retiring plugin files. Pack
 /// removal calls this inside its transaction after proposed document deletions;
@@ -60,7 +60,7 @@ where
 async fn selected_plugin_references<R>(
     access: &R,
     owner: &str,
-) -> Result<Vec<(String, String, crate::document_config::PluginToolRef)>>
+) -> Result<Vec<(String, String, crate::documents::PluginToolRef)>>
 where
     R: ConfigRead + ?Sized,
 {

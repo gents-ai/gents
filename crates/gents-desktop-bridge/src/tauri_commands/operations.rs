@@ -4,9 +4,9 @@ use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
-use gents::backend_registry::{list_all_backends, lookup_backend_observation};
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::inference::backends::registry::{list_all_backends, lookup_backend_observation};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::JobControlOutcome;
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
@@ -46,7 +46,7 @@ pub async fn desktop_operations_snapshot(
         .ok_or_else(|| BridgeError::untyped("no node selected; pass nodeDid explicitly"))?;
 
     let native_executors: Vec<NativeExecutorStatusView> =
-        gents::native_executor_status::active_native_executors()
+        gents::tools::exec::status::active_native_executors()
             .into_iter()
             .map(|ne| NativeExecutorStatusView {
                 id: ne.id as i64,
@@ -336,7 +336,7 @@ pub async fn list_backends_with_health_for_core(
             .map_err(|error| format!("invalid backend display state: {error}"))?;
         let catalog_scope = matches!(
             backend.auth,
-            gents::document_config::BackendAuth::NodeOAuth { .. }
+            gents::documents::BackendAuth::NodeOAuth { .. }
         )
         .then_some(backend.node_did.as_str());
         let models = observation

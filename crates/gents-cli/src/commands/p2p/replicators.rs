@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::agent::p2p_reconcile::templates::{
+use gents::runtime::agent::p2p_reconcile::templates::{
     combine_filters, equality_filter, to_replication_filters, PairingFilters,
 };
 use serde_json::{json, Value};

@@ -101,7 +101,7 @@ async fn stamp_terminal_message(
     message_doc_id: &str,
     lifecycle_state: RequestLifecycleState,
 ) -> Result<()> {
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
 
     let selection = serde_json::to_value(TerminalOutput::Message {
         message_doc_id: message_doc_id.to_owned(),
@@ -130,11 +130,11 @@ async fn insert_materialized_response(
     runtime: &ResponseTestRuntime,
     fixture: MaterializedResponse<'_>,
 ) -> Result<String> {
-    use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents::store::config_client::ConfigAccess;
 
     let MaterializedResponse {
         request_id,

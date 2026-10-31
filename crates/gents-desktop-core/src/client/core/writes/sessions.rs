@@ -1,16 +1,22 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 
 use super::super::bootstrap::normalize_required;
 use super::{ensure_peer_chat_ready_at, ClientCore};
 use crate::client::mutations;
 
 impl ClientCore {
-    pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
-        let result =
-            gents::mailbox::dismiss_mailbox_item(&self.node, doc_id, self.node_identity.did())
-                .await;
+    pub async fn dismiss_mailbox_item(
+        &self,
+        doc_id: &str,
+    ) -> Result<gents::session::mailbox::MailboxItem> {
+        let result = gents::session::mailbox::dismiss_mailbox_item(
+            &self.node,
+            doc_id,
+            self.node_identity.did(),
+        )
+        .await;
         match result {
             Ok(item) => {
                 self.refresh_store().await?;

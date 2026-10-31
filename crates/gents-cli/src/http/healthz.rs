@@ -185,10 +185,10 @@ mod tests {
         let (activation_runtime, activation_observation) =
             crate::http::router::empty_activation_state();
         RuntimeHttpState {
-            graphql: gents::config_client::GraphqlEndpoint::anonymous(
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),
-            p2p_graphql: gents::config_client::GraphqlEndpoint::anonymous(
+            p2p_graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),
             node_name: "test-agent".to_string(),

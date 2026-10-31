@@ -1,4 +1,4 @@
-// Adapter over the canonical interrupt owner (`gents::interrupt`), which
+// Adapter over the canonical interrupt owner (`gents::request::interrupt`), which
 // latches `interrupt_requested_at` and drains pending automated wakes in one
 // transaction for the exact physical row handed to it. This pre-check reads
 // terminality before the owner's transaction; a request that becomes terminal
@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
@@ -108,7 +108,7 @@ pub async fn interrupt_request(
             req.request_id
         ));
     }
-    gents::interrupt::interrupt_request_by_doc_id_with_access(
+    gents::request::interrupt::interrupt_request_by_doc_id_with_access(
         &ConfigAccess::local(core.node_arc()),
         &target.doc_id,
         &target.node_did,
@@ -116,11 +116,11 @@ pub async fn interrupt_request(
     )
     .await
     .map_err(|error| format!("interrupt of {} failed: {error:#}", req.request_id))?;
-    let latched =
-        gents::interrupt::fetch_interrupt_requested_at_by_doc_id(core.node(), &target.doc_id)
-            .await
-            .map_err(|error| {
-                format!("interrupt readback of {} failed: {error:#}", req.request_id)
-            })?;
+    let latched = gents::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
+        core.node(),
+        &target.doc_id,
+    )
+    .await
+    .map_err(|error| format!("interrupt readback of {} failed: {error:#}", req.request_id))?;
     Ok(result(latched, false))
 }

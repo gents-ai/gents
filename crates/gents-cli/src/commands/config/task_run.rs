@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
-use gents::graphql::escape_graphql_string;
-use gents::template::{render_template, task_node_ctx, TemplateScope};
+use gents::documents::template::{render_template, task_node_ctx, TemplateScope};
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
@@ -73,17 +73,18 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             let node_did = &node_did;
             let task_id = &task_id;
             Box::pin(async move {
-                let (task_doc_id, value) = gents::config_client::read_desired_state_record_in_txn(
-                    txn,
-                    gents::Collection::Task,
-                    node_did,
-                    task_id,
-                )
-                .await?
-                .context("task not found under the selected node")?;
-                let task: gents::document_config::Task = serde_json::from_value(value)?;
+                let (task_doc_id, value) =
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Task,
+                        node_did,
+                        task_id,
+                    )
+                    .await?
+                    .context("task not found under the selected node")?;
+                let task: gents::documents::Task = serde_json::from_value(value)?;
                 anyhow::ensure!(task.enabled, "Task {} is disabled", task.task_id);
-                let (_, value) = gents::config_client::read_desired_state_record_in_txn(
+                let (_, value) = gents::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     gents::Collection::Agent,
                     node_did,
@@ -91,7 +92,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 )
                 .await?
                 .context("task agent not found under the selected node")?;
-                let agent: gents::document_config::Agent = serde_json::from_value(value)?;
+                let agent: gents::documents::Agent = serde_json::from_value(value)?;
                 anyhow::ensure!(agent.enabled, "Agent {} is disabled", agent.agent_id);
                 Ok((task_doc_id, task))
             })
@@ -120,7 +121,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         source_collection: "Task".into(),
         source_doc_id: task_doc_id,
     };
-    let fire_key = gents::lifecycle::task_fire_key(&identity);
+    let fire_key = gents::request::lifecycle::task_fire_key(&identity);
     let request_id = format!("trigger-request:{fire_key}");
     anyhow::ensure!(goal_objective_template.is_some() || args.session_id.is_none() || args.continue_session.is_none(),
         "ordinary Tasks accept either --session-id for a session label or --continue-session for an existing session, not both");
@@ -210,7 +211,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let create = gents::build_signed_request(
         gents::RequestSpec {
             input: input.clone(),
-            trigger_lineage: gents::lifecycle::TriggerLineage {
+            trigger_lineage: gents::request::lifecycle::TriggerLineage {
                 trigger_kind: Some("manual".to_string()),
                 ..Default::default()
             },
@@ -224,7 +225,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                     agent_id: agent_id.clone(),
                     session_id: session_id.clone(),
                     content: content.clone(),
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: now.clone(),
                 },
                 admission,
@@ -251,7 +252,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         attempt: None,
         created_at: now,
     };
-    let admitted = gents::lifecycle::write_task_delivery(
+    let admitted = gents::request::lifecycle::write_task_delivery(
         &access,
         &fire,
         args.continue_session.is_some(),
@@ -451,7 +452,7 @@ mod tests {
                         agent_id: "engineer".into(),
                         session_id: "chat".into(),
                         content: "Continue the Task".into(),
-                        execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                        execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                         created_at: "2026-10-21T00:00:00Z".into(),
                     },
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(

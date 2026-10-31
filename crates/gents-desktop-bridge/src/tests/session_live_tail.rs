@@ -22,7 +22,7 @@ async fn create(
         "seed {collection}: {:?}",
         response.errors
     );
-    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+    gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
         .expect("created")
         .and_then(|document| document["_docID"].as_str())
         .expect("doc id")
@@ -77,7 +77,7 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
     folded["input"] = queue;
     folded["superseded_by_request"] = "req_head".into();
     folded["superseded_by_request_doc_id"] = head_doc.clone().into();
-    folded["failure_reason"] = gents::lifecycle::FOLDED_REASON.into();
+    folded["failure_reason"] = gents::request::lifecycle::FOLDED_REASON.into();
     create(&core, "AgentRequest", folded).await;
 
     let segment = OutputSegment {

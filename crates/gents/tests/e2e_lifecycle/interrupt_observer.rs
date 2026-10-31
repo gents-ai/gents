@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents::interrupt::{spawn_request_interrupt_observer, InterruptIntent};
+use gents::request::interrupt::{spawn_request_interrupt_observer, InterruptIntent};
 use tokio::sync::watch;
 
 use crate::support::{create_request, set_interrupt_requested_at, test_db};

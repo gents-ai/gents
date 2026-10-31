@@ -44,7 +44,7 @@ pub struct Support {
 pub fn support() -> Support {
     Support {
         contract_version: CONTRACT_VERSION,
-        workspace_sandbox: crate::toolset::workspace_write_sandbox_enforced(),
+        workspace_sandbox: crate::tools::native::workspace_write_sandbox_enforced(),
         remembered_commands: true,
     }
 }
@@ -137,7 +137,7 @@ pub(crate) enum BindingAction {
         cwd: PathBuf,
         root: PathBuf,
         writable_root: Option<PathBuf>,
-        policy: crate::toolset::CommandExecutionPolicy,
+        policy: crate::tools::native::CommandExecutionPolicy,
     },
     FileMutation {
         tool: String,
@@ -212,7 +212,7 @@ impl BindingAction {
                 ..
             } => {
                 crate::plugin::allowed::canonical_target(root, Some(true))?;
-                let context = crate::toolset::ToolContext::new(root.clone(), false)?;
+                let context = crate::tools::native::ToolContext::new(root.clone(), false)?;
                 let resolved = context.resolve_path_allow_create(
                     path.to_str()
                         .context("the file approval path is not valid UTF-8")?,
@@ -292,7 +292,7 @@ async fn authorize_binding(
     decision: BindingDecision,
     denied: &str,
 ) -> Result<Binding> {
-    let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    let session_id = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .and_then(|context| context.session_id);
     let binding = decision.binding.clone();
     let allowed = consent_binding(home, decision, super::interactive(), session_id).await?;
@@ -308,7 +308,7 @@ pub(crate) async fn consent_binding(
 ) -> Result<bool> {
     use super::{Consent, Request};
 
-    let bounds = crate::tool_call_lifecycle::runtime::tool_execution_bounds(super::WAIT);
+    let bounds = crate::tools::call::lifecycle::runtime::tool_execution_bounds(super::WAIT);
     let deadline = bounds.deadline_at.context("approval deadline is missing")?;
     let remaining = deadline
         .signed_duration_since(chrono::Utc::now())
@@ -441,8 +441,9 @@ struct Stored {
     entries: Vec<Settings>,
 }
 
-pub(in crate::plugin) const FILE: &str = crate::home::WORKSPACE_APPROVALS_FILE_NAME;
-pub(in crate::plugin) const LOCK: &str = crate::home::WORKSPACE_APPROVALS_LOCK_FILE_NAME;
+pub(in crate::plugin) const FILE: &str = crate::store::local::home::WORKSPACE_APPROVALS_FILE_NAME;
+pub(in crate::plugin) const LOCK: &str =
+    crate::store::local::home::WORKSPACE_APPROVALS_LOCK_FILE_NAME;
 
 pub fn preferences_file(home: &Path) -> PathBuf {
     home.join(FILE)
@@ -534,7 +535,7 @@ pub(crate) fn grant_at_least(
     save(home, &stored)
 }
 
-fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
+fn lock(home: &Path) -> Result<crate::store::local::file_lock::FileLock> {
     std::fs::create_dir_all(home).context("preparing workspace permissions")?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
@@ -543,7 +544,8 @@ fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
         .write(true)
         .open(home.join(LOCK))
         .context("opening the workspace permissions lock")?;
-    crate::file_lock::FileLock::exclusive(lock).context("locking workspace permissions")
+    crate::store::local::file_lock::FileLock::exclusive(lock)
+        .context("locking workspace permissions")
 }
 
 fn save(home: &Path, stored: &Stored) -> Result<()> {
@@ -647,7 +649,7 @@ mod tests {
         assert!(ask.selection.revision > full.selection.revision);
         assert!(save_mode(&home, &key, ask.selection.revision, Mode::AutoReview, None).is_err());
         assert_eq!(get(&home, &key)?.unwrap().selection.mode, Mode::Ask);
-        let selected = ReviewTaskSelection::for_task(&crate::document_config::Task {
+        let selected = ReviewTaskSelection::for_task(&crate::documents::Task {
             task_id: "review-task".into(),
             ..default_review_task("node", "agent")
         });

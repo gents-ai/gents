@@ -42,9 +42,9 @@ pub enum ApprovalSubjectView {
         cwd: std::path::PathBuf,
         root: std::path::PathBuf,
         #[serde(rename = "executionMode")]
-        execution_mode: gents::toolset::CommandExecutionMode,
+        execution_mode: gents::tools::native::CommandExecutionMode,
         #[serde(rename = "networkMode")]
-        network_mode: gents::toolset::CommandNetworkMode,
+        network_mode: gents::tools::native::CommandNetworkMode,
     },
 }
 

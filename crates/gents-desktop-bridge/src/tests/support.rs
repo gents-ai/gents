@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_protocol::job::JobProgress;
 use gents_protocol::row::AgentRequestRow;
@@ -176,12 +176,12 @@ pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::sess
 }
 
 pub struct CountingRead {
-    inner: gents::config_client::ConfigAccess,
+    inner: gents::store::config_client::ConfigAccess,
     queries: std::sync::atomic::AtomicUsize,
 }
 
 impl CountingRead {
-    pub fn new(inner: gents::config_client::ConfigAccess) -> Self {
+    pub fn new(inner: gents::store::config_client::ConfigAccess) -> Self {
         Self {
             inner,
             queries: std::sync::atomic::AtomicUsize::new(0),
@@ -194,11 +194,11 @@ impl CountingRead {
 }
 
 #[async_trait::async_trait]
-impl gents::config_client::ConfigRead for CountingRead {
+impl gents::store::config_client::ConfigRead for CountingRead {
     async fn execute_read(
         &self,
         document: &str,
-    ) -> Result<serde_json::Value, gents::config_client::ConfigClientError> {
+    ) -> Result<serde_json::Value, gents::store::config_client::ConfigClientError> {
         self.queries
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.execute_read(document).await
@@ -347,7 +347,7 @@ async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str
         "seed {collection}: {:?}",
         response.errors
     );
-    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+    gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
         .expect("created document")
         .and_then(|document| document["_docID"].as_str())
         .expect("created document id")
@@ -459,10 +459,10 @@ pub async fn seed_job_row_for_node(
     progress: &JobProgress,
     coded_output: Option<(&str, &str)>,
 ) -> String {
-    use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobCeiling, JobOrigin, JobPin};
     use gents_protocol::output::{
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,

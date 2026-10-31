@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::document_config::Agent;
-use gents::graphql::escape_graphql_string;
-use gents::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
-use gents::tool_surface::presets;
+use gents::documents::Agent;
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
+use gents::tools::surface::presets;
 use gents::{default_agent_id_for_node, Collection, NodeIdentity};
 use serde_json::{json, Value};
 
@@ -177,9 +177,7 @@ async fn load_document(
 }
 
 async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<&'static str>> {
-    use gents::document_config::{
-        merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools,
-    };
+    use gents::documents::{merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools};
     let tools: Tools = serde_json::from_value(value.clone())?;
     tools.validate()?;
     let mut surfaces = Vec::<DatastoreToolSurfaceDocument>::new();
@@ -316,7 +314,7 @@ mod tests {
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
-    use gents::document_config::Tools;
+    use gents::documents::Tools;
     use gents::{ensure_runtime_schemas, upsert_agent};
     use serde_json::Value;
 
@@ -362,14 +360,14 @@ mod tests {
                 .expect("embedded node boots"),
         );
         ensure_runtime_schemas(&node).await?;
-        let identity = gents::identity::KeyIdentity::load_or_create(
+        let identity = gents::store::identity::KeyIdentity::load_or_create(
             tempdir.path().join("identity.key"),
             None,
         )?;
         let owner = identity.did();
         let actor = identity::Did::new(owner.to_string()).expect("valid test ACP actor");
         gents::ensure_node(&node, owner).await?;
-        use gents::config_client::{
+        use gents::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let documents = [
@@ -434,7 +432,7 @@ mod tests {
                 .as_ref()
                 .and_then(|host| host.bash.as_ref())
                 .map(|bash| bash.mode),
-            Some(gents::tool_surface::BashMode::Unrestricted),
+            Some(gents::tools::surface::BashMode::Unrestricted),
         );
 
         let clone_doc = ConfigureAgentParams {

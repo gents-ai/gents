@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
-use gents::document_config::{Schedule, Task};
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::documents::{Schedule, Task};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 

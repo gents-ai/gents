@@ -79,10 +79,10 @@ pub fn test_agent(
     let mut behavior = test_agent_for_node(name, principal);
     behavior.backend_id = Some(backend_id.to_owned());
     behavior.backend_auth = match backend_api_key_env_var {
-        Some(variable) => gents::document_config::BackendAuth::Environment {
+        Some(variable) => gents::documents::BackendAuth::Environment {
             variable: variable.into(),
         },
-        None => gents::document_config::BackendAuth::Unauthenticated,
+        None => gents::documents::BackendAuth::Unauthenticated,
     };
     behavior
 }
@@ -101,29 +101,32 @@ pub fn test_agent_for_node(
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
-        backend_auth: gents::document_config::BackendAuth::Unauthenticated,
-        model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
+        backend_auth: gents::documents::BackendAuth::Unauthenticated,
+        model_name: gents::inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
-        context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: gents::config::DEFAULT_MAX_TURNS,
-        max_turns_provenance: gents::config::MaxTurnsProvenance::Default,
+        context_window: gents::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: gents::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: gents::inference::resolved::DEFAULT_MAX_TURNS,
+        max_turns_provenance: gents::inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
         tools: AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
-        stream_batch_ms: gents::config::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: gents::inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
-        deadline_duration: Duration::from_secs(gents::config::DEFAULT_DEADLINE_DURATION_SECS),
+        deadline_duration: Duration::from_secs(
+            gents::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+        ),
         provider_idle_timeout: Duration::from_secs(
-            gents::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            gents::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
-        completion_retry: gents::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: gents::config::SamplingConfig::default(),
+        completion_retry:
+            gents::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: gents::inference::resolved::SamplingConfig::default(),
     }
 }
 
@@ -135,10 +138,10 @@ pub async fn configure_child_agent(
     targets: Vec<gents::AgentTargetDocument>,
     enabled: bool,
 ) {
-    use gents::config_client::{
+    use gents::documents::{AgentContext, AgentTools, Tools};
+    use gents::store::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::document_config::{AgentContext, AgentTools, Tools};
     use gents::Collection;
 
     gents::ConfigAccess::transact_local_write(node, None, "test.configure_child_agent", |txn| {
@@ -268,7 +271,7 @@ pub async fn configure_child_agent(
                     })
                     .collect(),
             )?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
+            gents::store::config_client::apply_desired_state_plan(txn, &plan)
                 .await
                 .map(|_| ())
         })
@@ -282,13 +285,13 @@ pub async fn configure_agent_tools(
     node_did: &str,
     agent_id: &str,
     system_prompt: Option<String>,
-    tools: gents::document_config::Tools,
+    tools: gents::documents::Tools,
     referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
-    use gents::config_client::{
+    use gents::documents::AgentContext;
+    use gents::store::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::document_config::AgentContext;
     use gents::Collection;
 
     assert_eq!(tools.node_did, node_did);
@@ -342,7 +345,7 @@ pub async fn configure_agent_tools(
                     })
                     .collect(),
             )?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
+            gents::store::config_client::apply_desired_state_plan(txn, &plan)
                 .await
                 .map(|_| ())
         })
@@ -406,13 +409,13 @@ async fn bind_agent_backend_chain(
     model_name: &str,
 ) {
     ensure_node(node, node_did).await.unwrap();
-    gents::config_client::ConfigAccess::transact_local_write(
+    gents::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.bind_behavior_inference",
         |txn| {
             Box::pin(async move {
-                use gents::config_client::{
+                use gents::store::config_client::{
                     read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
@@ -489,13 +492,15 @@ async fn bind_agent_backend_chain(
                     })
                     .collect(),
                 )?;
-                gents::config_client::apply_desired_state_plan(txn, &plan).await
+                gents::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
         },
     )
     .await
     .unwrap();
-    gents::backend_registry::set_backend_probe_status(node, node_did, backend_id, "healthy")
-        .await
-        .unwrap();
+    gents::inference::backends::registry::set_backend_probe_status(
+        node, node_did, backend_id, "healthy",
+    )
+    .await
+    .unwrap();
 }

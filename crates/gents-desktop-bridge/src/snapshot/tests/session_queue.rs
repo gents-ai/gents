@@ -68,7 +68,7 @@ fn folded_into(id: &str, after: &str, head: &str, second: u32) -> AgentRequestRo
     AgentRequestRow {
         superseded_by_request: Some(head.into()),
         superseded_by_request_doc_id: Some(format!("doc-{head}")),
-        failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+        failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
         ..queued(id, after, RequestLifecycleState::Superseded, second)
     }
 }

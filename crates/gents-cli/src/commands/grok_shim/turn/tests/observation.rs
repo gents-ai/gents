@@ -129,7 +129,7 @@ where
     S: tracing::Subscriber,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
-        if event.metadata().target() != "gents::config_client::txn" {
+        if event.metadata().target() != gents::__test_internals::TXN_TRACING_TARGET {
             return;
         }
         let mut operation = ReadOperation {

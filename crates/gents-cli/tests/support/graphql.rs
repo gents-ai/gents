@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-pub use gents::graphql::escape_graphql_string;
+pub use gents::store::graphql::escape_graphql_string;
 
 fn served_principals() -> &'static Mutex<RapidHashMap<u16, String>> {
     static PRINCIPALS: OnceLock<Mutex<RapidHashMap<u16, String>>> = OnceLock::new();
@@ -13,7 +13,7 @@ fn served_principals() -> &'static Mutex<RapidHashMap<u16, String>> {
 }
 
 pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
-    let Some(config) = gents::home::read_init_config::<Value, Value>(home)? else {
+    let Some(config) = gents::store::local::home::read_init_config::<Value, Value>(home)? else {
         return Ok(());
     };
     let Some(key_path) = config.key_path.as_deref().filter(|path| !path.is_empty()) else {
@@ -28,7 +28,7 @@ pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     Ok(())
 }
 
-pub fn served_endpoint(graphql: &str) -> gents::config_client::GraphqlEndpoint {
+pub fn served_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEndpoint {
     let principal = reqwest::Url::parse(graphql)
         .ok()
         .and_then(|url| url.port())
@@ -40,13 +40,13 @@ pub fn served_endpoint(graphql: &str) -> gents::config_client::GraphqlEndpoint {
                 .cloned()
         });
     match principal {
-        Some(did) => gents::config_client::GraphqlEndpoint::as_principal(graphql, did),
-        None => gents::config_client::GraphqlEndpoint::anonymous(graphql),
+        Some(did) => gents::store::config_client::GraphqlEndpoint::as_principal(graphql, did),
+        None => gents::store::config_client::GraphqlEndpoint::anonymous(graphql),
     }
 }
 
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
-    let access = gents::config_client::ConfigAccess::Graphql(served_endpoint(graphql));
+    let access = gents::store::config_client::ConfigAccess::Graphql(served_endpoint(graphql));
     if query.trim_start().starts_with("mutation") {
         Ok(access.write("test.fixture", query).await?)
     } else {
@@ -55,7 +55,7 @@ pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
 }
 
 pub async fn graphql_mutation_with_variables(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     query: &str,
     variables: &Value,
 ) -> Result<Value> {

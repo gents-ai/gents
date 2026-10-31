@@ -5,18 +5,16 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::collection::Collection;
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_records_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
-use gents::document_config::{
-    load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin, Tools,
-};
+use gents::documents::{load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin, Tools};
 use gents::pack::home_install::recorded_provenance;
 use gents::pack::{installed_pack_documents, read_home_install, PackKind};
 use gents::plugin::authority::describe_plugin_authority;
 use gents::plugin::store::read_record;
+use gents::store::collection::Collection;
+use gents::store::config_client::{
+    apply_desired_state_plan, read_desired_state_records_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use serde_json::{json, Value};
 
 use super::split_namespace;
@@ -195,7 +193,7 @@ async fn wire_in_owned(
 /// The `job` block of the first entry for `plugin` in the pack's own Tools
 /// documents that carries one: what the pack's author reviewed.
 async fn reviewed_job(
-    txn: &gents::config_client::ConfigApplyTxn<'_>,
+    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     tools_ids: &[String],
     plugin: &str,

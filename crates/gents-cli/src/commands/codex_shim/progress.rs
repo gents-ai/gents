@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
-use gents::tool_call_lifecycle::ToolCallState;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::call::lifecycle::ToolCallState;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};
 use serde_json::{json, Value};
@@ -191,7 +191,7 @@ pub(super) async fn hydrate_gents_tool_call_progress(
         .doc_id
         .as_deref()
         .context("AgentToolCall omitted _docID")?;
-    let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
+    let presentation = gents::tools::call::lifecycle::load_tool_call_presentation(
         access,
         doc_id,
         node_did,

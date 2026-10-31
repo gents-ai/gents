@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
 use gents_protocol::client_protocol::{derive_persisted_attempt, RequestLifecycleState};
@@ -494,9 +494,9 @@ fn project_turn_group(
         request: &'a AgentRequestRow,
         requests: &[AgentRequestRow],
     ) -> Option<&'a str> {
-        gents::lifecycle::folded_into(request).filter(|head| {
+        gents::request::lifecycle::folded_into(request).filter(|head| {
             requests.iter().any(|other| {
-                other.request_id == *head && gents::lifecycle::folded_into(other).is_none()
+                other.request_id == *head && gents::request::lifecycle::folded_into(other).is_none()
             })
         })
     }
@@ -737,7 +737,7 @@ async fn decode_canonical_message_rows(
     state: &ShimState,
     response: &Value,
 ) -> Result<Vec<MessageRow>> {
-    let access = gents::config_client::ConfigAccess::local(state.node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(state.node.clone());
     let mut messages = Vec::new();
     let mut physical_ids = BTreeSet::new();
     for raw in raw_rows(response, "AgentMessage") {
@@ -776,7 +776,7 @@ async fn decode_tool_rows(
     session_id: &str,
     requester: Option<&str>,
 ) -> Result<Vec<ToolRow>> {
-    let access = gents::config_client::ConfigAccess::local(state.node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(state.node.clone());
     let mut tools = Vec::new();
     for row in raw_rows(response, "AgentToolCall") {
         if row.get("request_doc_id").is_none_or(Value::is_null) {
@@ -946,7 +946,7 @@ mod tests {
         };
         let request = request_row(json!({
             "request_id": "wake-1",
-            "content": gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            "content": gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
             "lifecycle_state": "completed",
             "input": {"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"}},
             "execution_origin": "scheduled"
@@ -1002,7 +1002,7 @@ mod tests {
             "content": "we should move faster",
             "lifecycle_state": "superseded",
             "superseded_by_request": "head",
-            "failure_reason": gents::lifecycle::FOLDED_REASON,
+            "failure_reason": gents::request::lifecycle::FOLDED_REASON,
             "input": queued,
             "execution_origin": "interactive"
         }));

@@ -48,7 +48,7 @@ pub struct InferenceBackendView {
     pub enabled: Option<bool>,
     pub tags: Vec<String>,
     pub models: Vec<String>,
-    pub advertised_models: Vec<gents::document_config::AdvertisedModel>,
+    pub advertised_models: Vec<gents::documents::AdvertisedModel>,
     pub probe_status: Option<String>,
     /// The account a subscription backend runs on; `None` is the original.
     pub account_ref: Option<String>,
@@ -61,24 +61,24 @@ pub struct InferenceSetupState {
     pub node_did: String,
     pub node: NodeView,
     pub agents: Vec<AgentView>,
-    pub agent_configs: Vec<gents::document_config::Agent>,
+    pub agent_configs: Vec<gents::documents::Agent>,
     pub inference_backends: Vec<InferenceBackendView>,
-    pub inference_profiles: Vec<gents::document_config::InferenceProfile>,
+    pub inference_profiles: Vec<gents::documents::InferenceProfile>,
     pub fast_mode_backend_ids: Vec<String>,
 }
 
 pub fn backend_config_view(
-    row: &gents::document_config::InferenceBackend,
-    observation: Option<&gents::document_config::InferenceBackendObservation>,
+    row: &gents::documents::InferenceBackend,
+    observation: Option<&gents::documents::InferenceBackendObservation>,
 ) -> InferenceBackendView {
-    use gents::document_config::BackendAuth;
+    use gents::documents::BackendAuth;
     let (auth_kind, api_key_configured, api_key_env_var) = match &row.auth {
         BackendAuth::Unauthenticated => ("unauthenticated", false, None),
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
         BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
         BackendAuth::NodeOAuth { .. } => ("node_oauth", false, None),
     };
-    let advertised_models = match gents::config::backend_catalog(row, observation) {
+    let advertised_models = match gents::inference::resolved::backend_catalog(row, observation) {
         Ok(catalog) => catalog,
         Err(error) => {
             tracing::warn!(backend_id = %row.backend_id, node_did = %row.node_did,
@@ -223,13 +223,14 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
         .filter_map(|backend| {
             let kind = gents::BackendProviderKind::parse_optional(backend.provider_kind.as_deref())
                 .ok()?;
-            gents::config::supports_service_tier(kind).then(|| backend.backend_id.clone())
+            gents::inference::resolved::supports_service_tier(kind)
+                .then(|| backend.backend_id.clone())
         })
         .collect()
 }
 
 pub async fn load_inference_setup_state(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> anyhow::Result<InferenceSetupState> {
     let store = crate::client::load_inference_configuration(access, node_did).await?;
@@ -316,7 +317,7 @@ async fn read_inference_setup_state_from(
     client_did: &str,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
-    use gents::config_client::GraphqlEndpoint;
+    use gents::store::config_client::GraphqlEndpoint;
     let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https")
@@ -437,7 +438,7 @@ mod tests {
             .unwrap();
         assert!(authorization.starts_with("Bearer "));
         assert!(
-            gents::identity::defradb_bearer_authorization(node, "localhost").is_err(),
+            gents::store::identity::defradb_bearer_authorization(node, "localhost").is_err(),
             "the runtime signer must remain unavailable"
         );
     }
@@ -570,7 +571,7 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let access = gents::config_client::ConfigAccess::graphql(format!(
+            let access = gents::store::config_client::ConfigAccess::graphql(format!(
                 "{}/api/v0/graphql",
                 server.uri()
             ));
@@ -590,7 +591,7 @@ mod tests {
 
     #[test]
     fn inference_metadata_never_exports_backend_credentials() {
-        let backend: gents::document_config::InferenceBackend = serde_json::from_value(json!({
+        let backend: gents::documents::InferenceBackend = serde_json::from_value(json!({
             "node_did": "did:runtime", "backend_id": "backend", "name": "Provider",
             "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
             "endpoint": "https://user:private-url-password@example.com/v1?key=private-query-key",

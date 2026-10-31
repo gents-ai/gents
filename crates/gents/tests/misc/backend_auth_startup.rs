@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
 
@@ -121,7 +121,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     )?;
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
-    behavior.backend_auth = gents::document_config::BackendAuth::ApiKey {
+    behavior.backend_auth = gents::documents::BackendAuth::ApiKey {
         key: "openrouter-key".to_string(),
     };
     behavior.model_name = "openai/gpt-4o-mini".to_string();

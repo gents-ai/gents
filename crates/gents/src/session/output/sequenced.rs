@@ -30,7 +30,7 @@ pub(super) fn is_current_admission_input(
         }) || header.message_key.starts_with(
             &super::super::canonical_rows::authored_message_key(
                 request_doc_id,
-                &crate::lifecycle::queue::folded_input_key(""),
+                &crate::request::lifecycle::queue::folded_input_key(""),
             ),
         ))
 }
@@ -47,7 +47,7 @@ pub(in crate::session) async fn load_sequenced_messages(
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     exclude_request_doc_id: Option<&str>,
-    replay_profile: Option<crate::provider_input::ProviderInputProfile>,
+    replay_profile: Option<crate::turn::provider_input::ProviderInputProfile>,
 ) -> Result<Vec<SequencedMessage>> {
     let session_scope = session_scope_filter(node_did, session_id, requester_did);
     let mut bounds = Vec::new();
@@ -67,7 +67,7 @@ pub(in crate::session) async fn load_sequenced_messages(
         AgentMessage(filter: {{ {session_scope}{bounds} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}
     }}"#
     );
-    let response = crate::graphql::graphql_response_with_transaction_retry(
+    let response = crate::store::graphql::graphql_response_with_transaction_retry(
         node,
         &query,
         "load_canonical_history",

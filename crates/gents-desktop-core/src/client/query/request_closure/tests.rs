@@ -1,6 +1,6 @@
 use super::super::parse_query_rows;
 use super::*;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::graphql::graphql_input_literal;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -27,7 +27,8 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     )
     .await
     .unwrap();
-    let missing_doc = gents::graphql::created_doc_id(&outside_scope, "AgentRequest").unwrap();
+    let missing_doc =
+        gents::store::graphql::created_doc_id(&outside_scope, "AgentRequest").unwrap();
     let mut seeded = Vec::new();
     for (case_index, case) in cases.enumerate() {
         let session = format!("{case_index}-{}", case["name"].as_str().unwrap());
@@ -96,7 +97,7 @@ async fn generated_request_closures_use_exact_database_dependencies() {
             .unwrap();
             docs.insert(
                 row["doc"].as_u64().unwrap(),
-                gents::graphql::created_doc_id(&result, "AgentRequest").unwrap(),
+                gents::store::graphql::created_doc_id(&result, "AgentRequest").unwrap(),
             );
         }
         for row in modeled {
@@ -113,9 +114,9 @@ async fn generated_request_closures_use_exact_database_dependencies() {
                 "superseded_by_request":format!("request-{owner_request}"),
                 "superseded_by_request_doc_id":docs.get(&owner).cloned().unwrap_or_else(|| missing_doc.clone()),
                 "failure_reason":if row["folded_into"].is_number() {
-                    gents::lifecycle::FOLDED_REASON
+                    gents::request::lifecycle::FOLDED_REASON
                 } else {
-                    gents::lifecycle::REPLACED_REASON
+                    gents::request::lifecycle::REPLACED_REASON
                 },
             }))
             .unwrap();
@@ -220,7 +221,7 @@ async fn independent_scopes_share_bounded_query_batches() {
             ),
             superseded_by_request: Some("owner".into()),
             superseded_by_request_doc_id: Some(format!("owner-{index}")),
-            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
             ..Default::default()
         })
         .collect::<Vec<_>>();
@@ -326,7 +327,7 @@ async fn malformed_dependency_row_does_not_become_missing_owner() {
         lifecycle_state: Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded),
         superseded_by_request: Some("owner".into()),
         superseded_by_request_doc_id: Some("owner-doc".into()),
-        failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+        failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
         ..Default::default()
     }];
     let error = close_request_rows_with(seeds, |_| {

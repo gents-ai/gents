@@ -8,7 +8,7 @@ pub(crate) async fn native_queue_image(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     session_id: &str,
-    selection: &[crate::lifecycle::queue::FoldedInput],
+    selection: &[crate::request::lifecycle::queue::FoldedInput],
 ) -> QueueImage {
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     #[derive(serde::Deserialize)]
@@ -16,11 +16,11 @@ pub(crate) async fn native_queue_image(
         request_id: String,
         lifecycle_state: RequestLifecycleState,
     }
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state }} }}"#,
-            crate::graphql::escape_graphql_string(session_id)
+            crate::store::graphql::escape_graphql_string(session_id)
         ))
         .await
         .unwrap();
@@ -45,14 +45,15 @@ pub(crate) async fn native_queue_image(
         .map(|folded| folded.request_id.clone())
         .filter(|id| state(id) == Some(RequestLifecycleState::Pending))
         .collect::<Vec<_>>();
-    let pending = crate::lifecycle::pending_user_queue(&access, node_did, session_id, node_did)
-        .await
-        .unwrap()
-        .entries
-        .into_iter()
-        .map(|entry| entry.request_id)
-        .filter(|id| !folding.contains(id))
-        .collect::<Vec<_>>();
+    let pending =
+        crate::request::lifecycle::pending_user_queue(&access, node_did, session_id, node_did)
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|entry| entry.request_id)
+            .filter(|id| !folding.contains(id))
+            .collect::<Vec<_>>();
     let terminal = rows
         .iter()
         .filter(|row| row.lifecycle_state.is_terminal())
@@ -75,8 +76,8 @@ pub(crate) async fn native_queue_image(
 #[cfg(test)]
 mod task_hook_vocab {
     use super::{LeanCommandResult, LeanTaskHook};
-    pub(crate) fn lean_hook_phase(name: &str) -> crate::document_config::TaskHookPhase {
-        use crate::document_config::TaskHookPhase;
+    pub(crate) fn lean_hook_phase(name: &str) -> crate::documents::TaskHookPhase {
+        use crate::documents::TaskHookPhase;
         match name {
             "before" => TaskHookPhase::Before,
             "after_success" => TaskHookPhase::AfterSuccess,
@@ -87,8 +88,8 @@ mod task_hook_vocab {
     }
 
     impl LeanTaskHook {
-        pub(crate) fn to_task_hook(&self) -> crate::document_config::TaskHook {
-            crate::document_config::TaskHook {
+        pub(crate) fn to_task_hook(&self) -> crate::documents::TaskHook {
+            crate::documents::TaskHook {
                 hook_id: self.hook_id.clone(),
                 phase: lean_hook_phase(&self.phase),
                 command: self.command.clone(),
@@ -99,8 +100,8 @@ mod task_hook_vocab {
     }
 
     impl LeanCommandResult {
-        pub(crate) fn to_native(&self) -> crate::task_hooks::HookCommandResult {
-            use crate::task_hooks::HookCommandResult;
+        pub(crate) fn to_native(&self) -> crate::request::task_hooks::HookCommandResult {
+            use crate::request::task_hooks::HookCommandResult;
             match self {
                 Self::Exited { code } => HookCommandResult::Exited { code: Some(*code) },
                 Self::LaunchFailed => HookCommandResult::LaunchFailed,

@@ -1,0 +1,113 @@
+use std::sync::Arc;
+
+use defra_node::EmbeddedNode;
+
+use crate::tools::mcp::health::ServiceHealthMap;
+use crate::tools::mcp::pool::McpPool;
+use crate::tools::native::lsp::LspPool;
+use crate::NodeIdentity;
+
+#[derive(Clone)]
+pub struct ToolRuntimeContext {
+    pub(crate) usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
+    pub(super) node: Arc<EmbeddedNode>,
+    pub(super) mcp_pool: McpPool,
+    pub(crate) lsp_pool: LspPool,
+    pub(super) health_map: ServiceHealthMap,
+    pub(super) local_hostname: String,
+    pub(super) local_subnet: Option<String>,
+    pub(super) node_did: String,
+    pub(super) identity: Option<Arc<dyn NodeIdentity>>,
+    pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
+}
+
+impl ToolRuntimeContext {
+    pub fn new(
+        node: Arc<EmbeddedNode>,
+        mcp_pool: McpPool,
+        health_map: ServiceHealthMap,
+        local_hostname: impl Into<String>,
+        local_subnet: Option<String>,
+    ) -> Self {
+        Self::new_with_node_did(
+            node,
+            mcp_pool,
+            health_map,
+            local_hostname,
+            local_subnet,
+            "",
+            None,
+        )
+    }
+
+    pub fn new_with_node_did(
+        node: Arc<EmbeddedNode>,
+        mcp_pool: McpPool,
+        health_map: ServiceHealthMap,
+        local_hostname: impl Into<String>,
+        local_subnet: Option<String>,
+        node_did: impl Into<String>,
+        identity: Option<Arc<dyn NodeIdentity>>,
+    ) -> Self {
+        Self {
+            usage_cache: Arc::default(),
+            node,
+            mcp_pool,
+            lsp_pool: LspPool::new(),
+            health_map,
+            local_hostname: local_hostname.into(),
+            local_subnet,
+            node_did: node_did.into(),
+            identity,
+            plugins: Arc::default(),
+        }
+    }
+
+    pub fn oneshot(node: Arc<EmbeddedNode>) -> Self {
+        Self::oneshot_with_node_did(node, "")
+    }
+
+    pub fn oneshot_with_node_did(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
+        Self {
+            usage_cache: Arc::default(),
+            node,
+            mcp_pool: McpPool::default(),
+            lsp_pool: LspPool::new(),
+            health_map: ServiceHealthMap::default(),
+            local_hostname: "localhost".to_string(),
+            local_subnet: None,
+            node_did: node_did.into(),
+            identity: None,
+            plugins: Arc::default(),
+        }
+    }
+
+    pub fn with_usage_cache(
+        mut self,
+        cache: Arc<crate::inference::usage_observation::UsageCache>,
+    ) -> Self {
+        self.usage_cache = cache;
+        self
+    }
+
+    pub fn with_plugins(mut self, plugins: Arc<crate::plugin::executor::PluginExecutor>) -> Self {
+        self.plugins = plugins;
+        self
+    }
+
+    pub(crate) fn plugin_home(&self) -> Option<&std::path::Path> {
+        self.plugins.home()
+    }
+
+    pub fn node(&self) -> &Arc<EmbeddedNode> {
+        &self.node
+    }
+
+    pub fn local_hostname(&self) -> &str {
+        &self.local_hostname
+    }
+
+    pub fn local_subnet(&self) -> Option<&str> {
+        self.local_subnet.as_deref()
+    }
+}

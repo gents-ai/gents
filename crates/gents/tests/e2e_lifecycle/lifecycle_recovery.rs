@@ -5,7 +5,7 @@ use gents::{
         AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     },
-    tool_call_lifecycle::ToolCallLifecycle,
+    tools::call::lifecycle::ToolCallLifecycle,
     RequestLifecycle,
 };
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -70,11 +70,11 @@ async fn boot_running_recovery_bash(
         db.node_identity.did(),
         AGENT_NAME,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{AGENT_NAME}:recovery-tools"),
             node_did: db.node_identity.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sleep".into()]),
                     ..Default::default()
@@ -140,7 +140,7 @@ async fn accepted_tool_call_doc_id(
     session_id: &str,
     provider_tool_call_id: &str,
 ) -> Option<String> {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ sequence: ASC }}) {{ _docID node_did requester_did }} }}"#
@@ -349,7 +349,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(successor.retry_root_request.as_deref(), Some("failed-wake"));
     assert_eq!(
         successor.content.as_deref(),
-        Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+        Some(gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     );
     assert_eq!(successor.retry_count, Some(2));
     assert_eq!(successor.max_retries, Some(3));
@@ -428,7 +428,7 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
         before[0].lifecycle_state,
         Some(RequestLifecycleState::Failed)
     );
-    let next_retry_at = gents::lifecycle::background_wake_next_retry_at(
+    let next_retry_at = gents::request::lifecycle::background_wake_next_retry_at(
         before[0].terminalized_at.as_deref(),
         before[0].retry_count.expect("persisted retry count"),
     )
@@ -523,11 +523,11 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         db.node_identity.did(),
         AGENT_NAME,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{AGENT_NAME}:wake-backoff-tools"),
             node_did: db.node_identity.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sh".into()]),
                     background_enabled: true,
@@ -660,7 +660,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         failed_wake.lifecycle_state,
         Some(RequestLifecycleState::Failed)
     );
-    let next_retry_at = gents::lifecycle::background_wake_next_retry_at(
+    let next_retry_at = gents::request::lifecycle::background_wake_next_retry_at(
         failed_wake.terminalized_at.as_deref(),
         failed_wake.retry_count.expect("persisted retry count"),
     )
@@ -775,7 +775,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     );
     assert!(!wake_rows.is_empty());
     let diagnostics = gents::load_background_completion_diagnostics(
-        &gents::config_client::ConfigAccess::local(db.node.clone()),
+        &gents::store::config_client::ConfigAccess::local(db.node.clone()),
         db.node_identity.did(),
     )
     .await
@@ -854,7 +854,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     )
     .await;
     let displaced = gents::load_background_completion_diagnostics(
-        &gents::config_client::ConfigAccess::local(db.node.clone()),
+        &gents::store::config_client::ConfigAccess::local(db.node.clone()),
         db.node_identity.did(),
     )
     .await
@@ -869,7 +869,7 @@ async fn background_wake_retry_rows(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
 ) -> Vec<AgentRequestRow> {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
             r#"{{
@@ -899,7 +899,7 @@ async fn recover_interrupted_request_after_crash(
     doc_id: &str,
     expected_active_child_doc_id: Option<&str>,
 ) {
-    let physical = gents::graphql::escape_graphql_string(doc_id);
+    let physical = gents::store::graphql::escape_graphql_string(doc_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }} }}, limit: 2) {{ _docID request_id node_did requester_did execution_generation }} }}"#,
@@ -916,7 +916,7 @@ async fn recover_interrupted_request_after_crash(
         .node_did
         .as_deref()
         .expect("accepted request principal identity");
-    gents::interrupt::interrupt_request_by_doc_id(
+    gents::request::interrupt::interrupt_request_by_doc_id(
         node,
         doc_id,
         node_did,
@@ -937,7 +937,7 @@ async fn recover_interrupted_request_after_crash(
     .await;
     let mut protected_child = None;
     if let Some(child_doc_id) = expected_active_child_doc_id {
-        let child_physical = gents::graphql::escape_graphql_string(child_doc_id);
+        let child_physical = gents::store::graphql::escape_graphql_string(child_doc_id);
         let child = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{child_physical}" }} }}, limit: 2) {{ _docID request_id lifecycle_state execution_generation execution_lease_expires_at caused_by_parent_request_doc_id }} }}"#,
@@ -1000,7 +1000,7 @@ async fn recover_interrupted_request_after_crash(
     if let Some((child_doc_id, child_request_id)) = protected_child {
         let child = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id lifecycle_state caused_by_parent_request_doc_id }} }}"#,
-            gents::graphql::escape_graphql_string(&child_doc_id),
+            gents::store::graphql::escape_graphql_string(&child_doc_id),
         )).await;
         let child = first_row::<AgentRequestRow>(&child, "AgentRequest");
         assert_eq!(child.doc_id.as_deref(), Some(child_doc_id.as_str()));
@@ -1046,18 +1046,18 @@ async fn seed_expired_execution_lease(
     generation: Option<&str>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
 ) {
-    let request_doc_id = gents::graphql::escape_graphql_string(request_doc_id);
+    let request_doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
     let generation_field = match generation {
         Some(value) => format!(
             r#"execution_generation: "{}","#,
-            gents::graphql::escape_graphql_string(value)
+            gents::store::graphql::escape_graphql_string(value)
         ),
         None => "execution_generation: null,".into(),
     };
     let expiry_field = match expires_at {
         Some(value) => format!(
             r#"execution_lease_expires_at: "{}","#,
-            gents::graphql::escape_graphql_string(&value.to_rfc3339())
+            gents::store::graphql::escape_graphql_string(&value.to_rfc3339())
         ),
         None => "execution_lease_expires_at: null,".into(),
     };
@@ -1105,7 +1105,7 @@ fn canonical_created_doc_id(
     response: &gents::defra_node::QueryResponse,
     collection: &str,
 ) -> String {
-    gents::graphql::single_mutation_document(response, &format!("create_{collection}"))
+    gents::store::graphql::single_mutation_document(response, &format!("create_{collection}"))
         .expect("decode canonical mutation response")
         .and_then(|row| row.get("_docID"))
         .and_then(serde_json::Value::as_str)
@@ -1334,7 +1334,7 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
         .unwrap();
     assert_eq!(report.requests_recovered, 1);
 
-    let escaped_request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_request_doc_id = gents::store::graphql::escape_graphql_string(&request_doc_id);
     let request_resp = db
         .node
         .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }}, limit: 1)
@@ -1464,7 +1464,7 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
         "a live lease must keep its exact stored generation"
     );
 
-    let escaped_request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_request_doc_id = gents::store::graphql::escape_graphql_string(&request_doc_id);
     let message = db
         .node
         .execute(&format!(
@@ -1528,9 +1528,9 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
     )
     .await;
     let interrupt_requested_at = chrono::Utc::now().to_rfc3339();
-    let escaped_request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_request_doc_id = gents::store::graphql::escape_graphql_string(&request_doc_id);
     let escaped_interrupt_requested_at =
-        gents::graphql::escape_graphql_string(&interrupt_requested_at);
+        gents::store::graphql::escape_graphql_string(&interrupt_requested_at);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -1681,7 +1681,7 @@ async fn recover_all_times_out_expired_running_tool_calls() {
         boot_running_recovery_bash(&db, "tool-timeout", "tool-timeout-call").await;
     let response = db.node.execute(&format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "2020-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
-        gents::graphql::escape_graphql_string(&tool_doc_id),
+        gents::store::graphql::escape_graphql_string(&tool_doc_id),
     )).await;
     assert!(
         !response.has_errors(),
@@ -1738,11 +1738,11 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         &node_did,
         agent_id,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{agent_id}:notification-tools"),
             node_did: node_did.clone(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["printf".into()]),
                     background_enabled: true,
@@ -1790,7 +1790,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
     runtime.shutdown().await;
     let response = db.node.execute(&format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "completionPending", completion_notification_delivered_at: null }}) {{ _docID }} }}"#,
-        gents::graphql::escape_graphql_string(&tool_doc_id),
+        gents::store::graphql::escape_graphql_string(&tool_doc_id),
     )).await;
     assert!(
         !response.has_errors(),
@@ -1828,7 +1828,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
                     limit: 1
                 ) {{ completion_notification_delivered_at }}
             }}"#,
-            gents::graphql::escape_graphql_string(&tool_doc_id),
+            gents::store::graphql::escape_graphql_string(&tool_doc_id),
         ))
         .await;
     let row = first_row::<NotificationDeliveryRow>(&response, "AgentToolCall");
@@ -1847,7 +1847,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id }} }}"#,
-            gents::graphql::escape_graphql_string(&rows[0].0),
+            gents::store::graphql::escape_graphql_string(&rows[0].0),
         ))
         .await;
     let interrupted_doc = first_row::<AgentRequestRow>(&response, "AgentRequest")

@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use gents::defra_query::{unknown_collection_message, CollectionScope};
-use gents::graphql::validate_collection_identifier;
+use gents::store::graphql::validate_collection_identifier;
+use gents::tools::builtin::defra_query::{unknown_collection_message, CollectionScope};
 use gents_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
 use serde_json::{json, Value};
 
@@ -94,8 +94,10 @@ async fn create(args: DocumentCreateArgs) -> Result<()> {
     let fields = parse_fields(&args.collection, &args.json)?;
     let mutation = create_mutation(&args.collection, &fields)?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let input_type =
-        gents::graphql::escape_graphql_string(&format!("{}MutationInputArg", args.collection));
+    let input_type = gents::store::graphql::escape_graphql_string(&format!(
+        "{}MutationInputArg",
+        args.collection
+    ));
     let query = format!(r#"{{ __type(name: "{input_type}") {{ inputFields {{ name }} }} }}"#);
     let schema = access.execute(&query).await?;
     let input_fields = schema

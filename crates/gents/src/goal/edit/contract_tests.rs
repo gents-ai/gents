@@ -113,7 +113,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         );
         if let (Some(updated), Some(expected)) = (&result, &case.expected) {
             let prompt =
-                crate::trigger_engine::goal_source::continuation_prompt(updated, None, false);
+                crate::triggers::engine::goal_source::continuation_prompt(updated, None, false);
             let objective = serde_json::to_string(&expected.objective).unwrap();
             assert!(
                 prompt.contains(&format!(

@@ -1,6 +1,6 @@
 use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::{graphql::escape_graphql_string, ConfigAccess};
+use gents::{store::graphql::escape_graphql_string, ConfigAccess};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -582,6 +582,7 @@ pub(super) async fn verify_model_receipt(
         signer_did: field(row, "outcome_signer_did")?.into(),
         signature: bs58::decode(field(row, "outcome_signature")?).into_vec()?,
     };
-    gents::tool_call_lifecycle::VerifiedFileImageReceipt::verify(receipt, demand, verifier).await?;
+    gents::tools::call::lifecycle::VerifiedFileImageReceipt::verify(receipt, demand, verifier)
+        .await?;
     Ok(())
 }

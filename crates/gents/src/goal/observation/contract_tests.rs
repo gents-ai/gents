@@ -188,7 +188,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             let changes_tx = (!closed_feed).then_some(changes_tx);
             let (ticks_tx, ticks) = futures::channel::mpsc::unbounded();
             let waiting = Arc::new(tokio::sync::Notify::new());
-            let run = crate::agent::p2p_reconcile::session_commands::run_session_command_reconciler_observing(
+            let run = crate::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler_observing(
                 f.node.clone(), identity, cancel.clone(), changes,
                 ObservedTicks { waiting: waiting.clone(), ticks },
             );
@@ -229,13 +229,14 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                         else {
                             return Ok::<_, anyhow::Error>(None);
                         };
-                        let commit = crate::graphql::newest_document_composite_commit_in_txn(
-                            txn,
-                            &goal.doc_id,
-                            "test.current_goal_revision",
-                        )
-                        .await?
-                        .unwrap();
+                        let commit =
+                            crate::store::graphql::newest_document_composite_commit_in_txn(
+                                txn,
+                                &goal.doc_id,
+                                "test.current_goal_revision",
+                            )
+                            .await?
+                            .unwrap();
                         Ok(Some(GoalRevision {
                             document: goal.doc_id,
                             composite: commit.cid,

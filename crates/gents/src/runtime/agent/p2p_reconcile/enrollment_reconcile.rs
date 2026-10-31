@@ -1,0 +1,1629 @@
+//! Single I/O owner for authenticated enrollment authority and its effects.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use chrono::{SecondsFormat, Utc};
+use defra_node::EmbeddedNode;
+use serde::Deserialize;
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
+
+use crate::store::identity::NodeIdentity;
+
+use super::enrollment_store::{EnrollmentProjection, GraphqlEnrollmentStore};
+use super::graphql_helpers::{graphql_string_list_literal, rows};
+use super::templates::{resolve_template, CLIENT_TEMPLATE};
+use super::{
+    desired_route_is_applied, observe_owned_pairing_live_matches, EmbeddedRemoteP2pAdmin,
+    GraphqlPairingStateStore, PairingStateStore,
+};
+
+const SOURCE_ENROLLMENT: &str = "enrollment";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EnrollmentAuthorityState {
+    Pending,
+    Ready(Arc<EnrollmentProjection>),
+    Failed(Arc<str>),
+}
+
+#[derive(Clone)]
+pub struct EnrollmentAuthorityHandle {
+    receiver: watch::Receiver<EnrollmentAuthorityState>,
+    commands: mpsc::Sender<EnrollmentAuthorityCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollmentAuthorizationFence {
+    pub network_id: String,
+    pub request_id: String,
+    pub admin_did: String,
+    pub member_did: String,
+    pub member_peer: String,
+    pub member_ticket: String,
+    pub owner_node: String,
+    pub profile: String,
+    pub request_digest: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+}
+
+enum EnrollmentAuthorityCommand {
+    Authorization {
+        member_did: String,
+        member_peer: String,
+        ack: oneshot::Sender<Result<Option<EnrollmentAuthorizationFence>>>,
+    },
+    MemberAdmission {
+        member_did: String,
+        ack: oneshot::Sender<Result<bool>>,
+    },
+    PeerAuthorization {
+        member_peer: String,
+        ack: oneshot::Sender<Result<Option<EnrollmentAuthorizationFence>>>,
+    },
+    MemberAuthorization {
+        member_did: String,
+        ack: oneshot::Sender<Result<Option<EnrollmentAuthorizationFence>>>,
+    },
+}
+
+#[async_trait]
+trait EnrollmentProjectionReader: Send + Sync {
+    async fn load_authority_projection(&self) -> Result<EnrollmentProjection>;
+}
+
+#[async_trait]
+impl EnrollmentProjectionReader for GraphqlEnrollmentStore {
+    async fn load_authority_projection(&self) -> Result<EnrollmentProjection> {
+        self.load_projection().await
+    }
+}
+
+#[async_trait]
+pub trait PeerAdmissionAuthority: Send + Sync {
+    async fn fresh_member_authorized(&self, member_did: &str) -> Result<bool>;
+
+    async fn fresh_member_authorized_for_agent(
+        &self,
+        member_did: &str,
+        owner_node: &str,
+    ) -> Result<bool>;
+}
+
+impl EnrollmentAuthorityHandle {
+    pub fn current(&self) -> Result<Arc<EnrollmentProjection>> {
+        match self.receiver.borrow().clone() {
+            EnrollmentAuthorityState::Ready(projection) => Ok(projection),
+            EnrollmentAuthorityState::Pending => {
+                anyhow::bail!("enrollment authority has not completed its first projection")
+            }
+            EnrollmentAuthorityState::Failed(error) => {
+                anyhow::bail!("enrollment authority projection failed: {error}")
+            }
+        }
+    }
+
+    /// Reload the document set and return the exact current authorization
+    /// generation for one member.
+    pub async fn fresh_authorization(
+        &self,
+        member_did: &str,
+        member_peer: &str,
+    ) -> Result<Option<EnrollmentAuthorizationFence>> {
+        let (ack, result) = oneshot::channel();
+        self.commands
+            .send(EnrollmentAuthorityCommand::Authorization {
+                member_did: member_did.to_string(),
+                member_peer: member_peer.to_string(),
+                ack,
+            })
+            .await
+            .context("enrollment authority owner stopped")?;
+        result
+            .await
+            .context("enrollment authority owner dropped fresh authorization response")?
+    }
+
+    /// Resolve one transport peer to its exact current generation; transport
+    /// reconciliation has the peer identity before a trusted member DID, so
+    /// the DID derives from the signed authority projection, not a desired row.
+    pub async fn fresh_peer_authorization(
+        &self,
+        member_peer: &str,
+    ) -> Result<Option<EnrollmentAuthorizationFence>> {
+        let (ack, result) = oneshot::channel();
+        self.commands
+            .send(EnrollmentAuthorityCommand::PeerAuthorization {
+                member_peer: member_peer.to_string(),
+                ack,
+            })
+            .await
+            .context("enrollment authority owner stopped")?;
+        result
+            .await
+            .context("enrollment authority owner dropped fresh peer authorization response")?
+    }
+
+    /// Resolve an exact current generation for a signed request principal;
+    /// duplicate active identities fail closed.
+    pub async fn fresh_member_authorization(
+        &self,
+        member_did: &str,
+    ) -> Result<Option<EnrollmentAuthorizationFence>> {
+        let (ack, result) = oneshot::channel();
+        self.commands
+            .send(EnrollmentAuthorityCommand::MemberAuthorization {
+                member_did: member_did.to_string(),
+                ack,
+            })
+            .await
+            .context("enrollment authority owner stopped")?;
+        result
+            .await
+            .context("enrollment authority owner dropped fresh member response")?
+    }
+
+    pub async fn client_observation_authorized(
+        &self,
+        authenticated_member: &str,
+        owner_node: &str,
+    ) -> Result<bool> {
+        let current = self
+            .fresh_member_authorization(authenticated_member)
+            .await?;
+        Ok(client_observation_admitted(
+            Some(authenticated_member),
+            owner_node,
+            current.as_ref(),
+        ))
+    }
+}
+
+/// The actor comes from DefraDB's verified request identity. The live enrollment
+/// owner supplies the unique current fence; callers must not reconstruct it from
+/// an unverified desired route or a client-provided generation.
+pub fn client_observation_admitted(
+    authenticated_member: Option<&str>,
+    owner_node: &str,
+    current: Option<&EnrollmentAuthorizationFence>,
+) -> bool {
+    match (authenticated_member, current) {
+        (Some(member), Some(authorization)) => {
+            !member.is_empty()
+                && !owner_node.is_empty()
+                && authorization.member_did == member
+                && authorization.owner_node == owner_node
+                && authorization.profile == CLIENT_TEMPLATE
+        }
+        _ => false,
+    }
+}
+
+/// The node operator uses the existing operator authority; other actors still
+/// require the current enrollment fence. This does not authorize document reads.
+pub fn runtime_observation_admitted(
+    actor: Option<&str>,
+    node: &str,
+    current: Option<&EnrollmentAuthorizationFence>,
+) -> bool {
+    (!node.is_empty()
+        && crate::tools::background::job::control::operator_control_authorized(
+            node, node, node, actor,
+        ))
+        || client_observation_admitted(actor, node, current)
+}
+
+#[async_trait]
+impl PeerAdmissionAuthority for EnrollmentAuthorityHandle {
+    async fn fresh_member_authorized(&self, member_did: &str) -> Result<bool> {
+        let (ack, result) = oneshot::channel();
+        self.commands
+            .send(EnrollmentAuthorityCommand::MemberAdmission {
+                member_did: member_did.to_string(),
+                ack,
+            })
+            .await
+            .context("enrollment authority owner stopped")?;
+        result
+            .await
+            .context("enrollment authority owner dropped peer admission response")?
+    }
+
+    async fn fresh_member_authorized_for_agent(
+        &self,
+        member_did: &str,
+        owner_node: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .fresh_member_authorization(member_did)
+            .await?
+            .is_some_and(|authorization| authorization.owner_node == owner_node))
+    }
+}
+
+pub struct EnrollmentAuthorityOwner {
+    sender: watch::Sender<EnrollmentAuthorityState>,
+    commands: mpsc::Receiver<EnrollmentAuthorityCommand>,
+}
+
+pub fn enrollment_authority_channel() -> (EnrollmentAuthorityOwner, EnrollmentAuthorityHandle) {
+    let (sender, receiver) = watch::channel(EnrollmentAuthorityState::Pending);
+    let (commands, command_receiver) = mpsc::channel(32);
+    (
+        EnrollmentAuthorityOwner {
+            sender,
+            commands: command_receiver,
+        },
+        EnrollmentAuthorityHandle { receiver, commands },
+    )
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestEnrollmentAuthority {
+    current: Arc<tokio::sync::RwLock<Option<EnrollmentAuthorizationFence>>>,
+}
+
+#[cfg(test)]
+impl TestEnrollmentAuthority {
+    pub(crate) async fn replace(&self, value: Option<EnrollmentAuthorizationFence>) {
+        *self.current.write().await = value;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_enrollment_authority(
+    initial: Option<EnrollmentAuthorizationFence>,
+) -> (TestEnrollmentAuthority, EnrollmentAuthorityHandle) {
+    let (sender, receiver) = watch::channel(EnrollmentAuthorityState::Ready(Arc::new(
+        EnrollmentProjection::default(),
+    )));
+    let (commands, mut command_receiver) = mpsc::channel(32);
+    let current = Arc::new(tokio::sync::RwLock::new(initial));
+    let task_current = current.clone();
+    tokio::spawn(async move {
+        while let Some(command) = command_receiver.recv().await {
+            let current = task_current.read().await.clone();
+            match command {
+                EnrollmentAuthorityCommand::MemberAuthorization { member_did, ack } => {
+                    let _ = ack.send(Ok(current.filter(|value| value.member_did == member_did)));
+                }
+                EnrollmentAuthorityCommand::Authorization {
+                    member_did,
+                    member_peer,
+                    ack,
+                } => {
+                    let _ = ack.send(Ok(current.filter(|value| {
+                        value.member_did == member_did && value.member_peer == member_peer
+                    })));
+                }
+                EnrollmentAuthorityCommand::PeerAuthorization { member_peer, ack } => {
+                    let _ = ack.send(Ok(current.filter(|value| value.member_peer == member_peer)));
+                }
+                EnrollmentAuthorityCommand::MemberAdmission { member_did, ack } => {
+                    let _ = ack.send(Ok(
+                        current.is_some_and(|value| value.member_did == member_did)
+                    ));
+                }
+            }
+        }
+        drop(sender);
+    });
+    (
+        TestEnrollmentAuthority { current },
+        EnrollmentAuthorityHandle { receiver, commands },
+    )
+}
+
+fn publish_ready(
+    sender: &watch::Sender<EnrollmentAuthorityState>,
+    projection: EnrollmentProjection,
+) {
+    let next = EnrollmentAuthorityState::Ready(Arc::new(projection));
+    sender.send_if_modified(|current| {
+        if *current == next {
+            return false;
+        }
+        *current = next;
+        true
+    });
+}
+
+fn publish_failed(sender: &watch::Sender<EnrollmentAuthorityState>, error: &anyhow::Error) {
+    let next = EnrollmentAuthorityState::Failed(Arc::from(format!("{error:#}")));
+    sender.send_if_modified(|current| {
+        if *current == next {
+            return false;
+        }
+        *current = next;
+        true
+    });
+}
+
+/// Authority rows plus the applied pairing witness that a route receipt
+/// records.
+const ENROLLMENT_SWEEP_COLLECTIONS: [&str; 6] = [
+    "Network",
+    "NetworkEnrollmentRequest",
+    "NetworkEnrollmentDecision",
+    "NetworkAuthorizationRevision",
+    "NetworkEnrollmentRouteReceipt",
+    "PeerPairingApplied",
+];
+
+/// Run the sole durable enrollment projection/effect loop. This loop publishes
+/// its immutable projection and owns `source="enrollment"` data-plane rows.
+pub async fn run_enrollment_reconciler(
+    node: Arc<EmbeddedNode>,
+    identity: Arc<dyn NodeIdentity>,
+    mut owner: EnrollmentAuthorityOwner,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
+    let pairing_admin = EmbeddedRemoteP2pAdmin::new(node.clone());
+    let mut delivered = BTreeSet::new();
+    let mut subscription = crate::subscribe_collections(&node, ENROLLMENT_SWEEP_COLLECTIONS)?;
+    let mut subscription_open = true;
+    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        let sweep = sweep_enrollment(
+            &node,
+            &identity,
+            &store,
+            &pairing_admin,
+            &owner.sender,
+            &mut delivered,
+        );
+        if !serve_authority_during_sweep(sweep, &store, &owner.sender, &mut owner.commands, &cancel)
+            .await
+        {
+            return Ok(());
+        }
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Ok(()),
+                _ = interval.tick() => break,
+                command = owner.commands.recv() => {
+                    let Some(command) = command else { return Ok(()); };
+                    handle_authority_command(&store, &owner.sender, command).await;
+                }
+                batch = subscription.recv(), if subscription_open => {
+                    if batch.is_none() {
+                        tracing::warn!("enrollment change subscription closed; continuing periodic sweeps");
+                        subscription_open = false;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Network effects can require transport admission through this same authority.
+/// Keep fresh database-backed checks responsive while the sweep awaits those effects.
+async fn serve_authority_during_sweep(
+    sweep: impl std::future::Future<Output = ()>,
+    store: &impl EnrollmentProjectionReader,
+    sender: &watch::Sender<EnrollmentAuthorityState>,
+    commands: &mut mpsc::Receiver<EnrollmentAuthorityCommand>,
+    cancel: &CancellationToken,
+) -> bool {
+    tokio::pin!(sweep);
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return false,
+            _ = &mut sweep => return true,
+            command = commands.recv() => {
+                let Some(command) = command else { return false; };
+                handle_authority_command(store, sender, command).await;
+            }
+        }
+    }
+}
+
+async fn handle_authority_command(
+    store: &impl EnrollmentProjectionReader,
+    sender: &watch::Sender<EnrollmentAuthorityState>,
+    command: EnrollmentAuthorityCommand,
+) {
+    match command {
+        EnrollmentAuthorityCommand::Authorization {
+            member_did,
+            member_peer,
+            ack,
+        } => {
+            let result = match store.load_authority_projection().await {
+                Ok(projection) => {
+                    publish_ready(sender, projection.clone());
+                    exact_authorization_fence(&projection, &member_did, &member_peer)
+                }
+                Err(error) => {
+                    publish_failed(sender, &error);
+                    Err(error.context("reload enrollment authority for authorization fence"))
+                }
+            };
+            let _ = ack.send(result);
+        }
+        EnrollmentAuthorityCommand::MemberAdmission { member_did, ack } => {
+            let result = match store.load_authority_projection().await {
+                Ok(projection) => {
+                    publish_ready(sender, projection.clone());
+                    if projection.conflict.is_some() {
+                        Err(anyhow::anyhow!("enrollment root authority is conflicted"))
+                    } else {
+                        Ok(projection
+                            .active
+                            .iter()
+                            .any(|active| active.request.candidate_did == member_did))
+                    }
+                }
+                Err(error) => {
+                    publish_failed(sender, &error);
+                    Err(error.context("reload enrollment authority for peer admission"))
+                }
+            };
+            let _ = ack.send(result);
+        }
+        EnrollmentAuthorityCommand::PeerAuthorization { member_peer, ack } => {
+            let result = match store.load_authority_projection().await {
+                Ok(projection) => {
+                    publish_ready(sender, projection.clone());
+                    exact_peer_authorization_fence(&projection, &member_peer)
+                }
+                Err(error) => {
+                    publish_failed(sender, &error);
+                    Err(error.context("reload enrollment authority for transport fence"))
+                }
+            };
+            let _ = ack.send(result);
+        }
+        EnrollmentAuthorityCommand::MemberAuthorization { member_did, ack } => {
+            let result = match store.load_authority_projection().await {
+                Ok(projection) => {
+                    publish_ready(sender, projection.clone());
+                    exact_member_authorization_fence(&projection, &member_did)
+                }
+                Err(error) => {
+                    publish_failed(sender, &error);
+                    Err(error.context("reload enrollment authority for request admission"))
+                }
+            };
+            let _ = ack.send(result);
+        }
+    }
+}
+
+pub(crate) fn exact_authorization_fence(
+    projection: &EnrollmentProjection,
+    member_did: &str,
+    member_peer: &str,
+) -> Result<Option<EnrollmentAuthorizationFence>> {
+    anyhow::ensure!(
+        projection.conflict.is_none(),
+        "enrollment root authority is conflicted"
+    );
+    let matches = projection
+        .active
+        .iter()
+        .filter(|active| {
+            active.request.candidate_did == member_did
+                && active.request.candidate_peer == member_peer
+        })
+        .collect::<Vec<_>>();
+    let [active] = matches.as_slice() else {
+        anyhow::ensure!(
+            matches.is_empty(),
+            "enrollment authority has multiple active generations for member"
+        );
+        return Ok(None);
+    };
+    Ok(Some(EnrollmentAuthorizationFence {
+        network_id: active.request.network_id.clone(),
+        request_id: active.request.request_id.clone(),
+        admin_did: active.request.admin_did.clone(),
+        member_did: active.request.candidate_did.clone(),
+        member_peer: active.request.candidate_peer.clone(),
+        member_ticket: active.request.candidate_ticket.clone(),
+        owner_node: active.request.owner_agent.clone(),
+        profile: active.request.profile.clone(),
+        request_digest: active.request.request_digest.clone(),
+        authorization_sequence: active.revision.sequence,
+        authorization_expires_at: active.revision.authorization_expires_at.clone(),
+    }))
+}
+
+fn exact_member_authorization_fence(
+    projection: &EnrollmentProjection,
+    member_did: &str,
+) -> Result<Option<EnrollmentAuthorizationFence>> {
+    anyhow::ensure!(
+        projection.conflict.is_none(),
+        "enrollment root authority is conflicted"
+    );
+    let matches = projection
+        .active
+        .iter()
+        .filter(|active| active.request.candidate_did == member_did)
+        .collect::<Vec<_>>();
+    let [active] = matches.as_slice() else {
+        anyhow::ensure!(
+            matches.is_empty(),
+            "enrollment authority has multiple active generations for member DID"
+        );
+        return Ok(None);
+    };
+    exact_authorization_fence(
+        projection,
+        &active.request.candidate_did,
+        &active.request.candidate_peer,
+    )
+}
+
+fn exact_peer_authorization_fence(
+    projection: &EnrollmentProjection,
+    member_peer: &str,
+) -> Result<Option<EnrollmentAuthorizationFence>> {
+    anyhow::ensure!(
+        projection.conflict.is_none(),
+        "enrollment root authority is conflicted"
+    );
+    let matches = projection
+        .active
+        .iter()
+        .filter(|active| active.request.candidate_peer == member_peer)
+        .collect::<Vec<_>>();
+    let [active] = matches.as_slice() else {
+        anyhow::ensure!(
+            matches.is_empty(),
+            "enrollment authority has multiple active generations for transport peer"
+        );
+        return Ok(None);
+    };
+    exact_authorization_fence(
+        projection,
+        &active.request.candidate_did,
+        &active.request.candidate_peer,
+    )
+}
+
+async fn sweep_enrollment(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn NodeIdentity>,
+    store: &GraphqlEnrollmentStore,
+    pairing_admin: &EmbeddedRemoteP2pAdmin,
+    sender: &watch::Sender<EnrollmentAuthorityState>,
+    delivered: &mut BTreeSet<String>,
+) {
+    let projection = match store.load_projection().await {
+        Ok(projection) => projection,
+        Err(error) => {
+            publish_failed(sender, &error);
+            tracing::warn!(error = %error, "enrollment projection read failed; authority remains fail closed");
+            return;
+        }
+    };
+    publish_ready(sender, projection.clone());
+
+    if let Err(error) = reconcile_data_plane(node, identity.did(), store, &projection).await {
+        publish_failed(sender, &error);
+        tracing::warn!(error = %error, "enrollment data-plane reconciliation failed; will retry");
+    }
+    if let Err(error) =
+        record_applied_route_receipts(node, identity, store, pairing_admin, &projection).await
+    {
+        tracing::warn!(error = %error, "enrollment route receipt publication failed; will retry");
+    }
+    retry_terminal_delivery(store, &projection, delivered).await;
+}
+
+async fn record_applied_route_receipts(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn NodeIdentity>,
+    store: &GraphqlEnrollmentStore,
+    pairing_admin: &EmbeddedRemoteP2pAdmin,
+    projection: &EnrollmentProjection,
+) -> Result<()> {
+    for active in &projection.active {
+        if active.route_receipt_doc_id.is_some() {
+            continue;
+        }
+        let peer_id = &active.request.candidate_peer;
+        let pairing_store = GraphqlPairingStateStore::for_enrollment_materialization(
+            node.clone(),
+            identity.clone(),
+            super::EnrollmentEndpointEntry {
+                desired_id: active.request.candidate_peer.clone(),
+                peer_id: active.request.candidate_peer.clone(),
+                node_did: active.request.candidate_did.clone(),
+                address: active.request.candidate_ticket.clone(),
+                request_digest: active.request.request_digest.clone(),
+                authorization_sequence: active.revision.sequence,
+                authorization_expires_at: active.revision.authorization_expires_at.clone(),
+            },
+        );
+        let Some(desired) = pairing_store.load_desired(peer_id).await? else {
+            continue;
+        };
+        let applied = pairing_store.load_applied(peer_id).await?;
+        if !applied.enrollment.binds(
+            &active.request.request_digest,
+            active.revision.sequence,
+            &active.revision.authorization_expires_at,
+        ) || !applied.duplicate_doc_ids.is_empty()
+            || !desired_route_is_applied(&desired, &applied.state)
+            || !observe_owned_pairing_live_matches(pairing_admin, &desired, &applied.state).await?
+        {
+            continue;
+        }
+        store.record_applied_route(active, Utc::now()).await?;
+    }
+    Ok(())
+}
+
+async fn retry_terminal_delivery(
+    store: &GraphqlEnrollmentStore,
+    projection: &EnrollmentProjection,
+    delivered: &mut BTreeSet<String>,
+) {
+    let retained = projection
+        .active
+        .iter()
+        .filter_map(active_delivery_id)
+        .chain(
+            projection
+                .denied
+                .iter()
+                .map(|denied| denied.decision_doc_id.clone()),
+        )
+        .chain(
+            projection
+                .revoked
+                .iter()
+                .map(|revoked| format!("{}:{}", revoked.decision_doc_id, revoked.revision_doc_id)),
+        )
+        .collect::<BTreeSet<_>>();
+    delivered.retain(|delivery_id| retained.contains(delivery_id));
+    for active in &projection.active {
+        let Some(receipt_doc_id) = active.route_receipt_doc_id.as_deref() else {
+            continue;
+        };
+        let delivery_id = active_delivery_id(active).expect("receipt was checked above");
+        if delivered.contains(&delivery_id) {
+            continue;
+        }
+        if !store
+            .deliver_terminal(
+                &active.request,
+                &active.decision_doc_id,
+                Some(&active.revision_doc_id),
+                Some(receipt_doc_id),
+            )
+            .await
+        {
+            delivered.insert(delivery_id);
+        }
+    }
+    for denied in &projection.denied {
+        if delivered.contains(&denied.decision_doc_id) {
+            continue;
+        }
+        if !store
+            .deliver_terminal(&denied.request, &denied.decision_doc_id, None, None)
+            .await
+        {
+            delivered.insert(denied.decision_doc_id.clone());
+        }
+    }
+    for revoked in &projection.revoked {
+        let delivery_id = format!("{}:{}", revoked.decision_doc_id, revoked.revision_doc_id);
+        if delivered.contains(&delivery_id) {
+            continue;
+        }
+        if !store
+            .deliver_terminal(
+                &revoked.request,
+                &revoked.decision_doc_id,
+                Some(&revoked.revision_doc_id),
+                None,
+            )
+            .await
+        {
+            delivered.insert(delivery_id);
+        }
+    }
+}
+
+fn active_delivery_id(active: &super::enrollment_store::ActiveEnrollment) -> Option<String> {
+    active.route_receipt_doc_id.as_ref().map(|receipt_doc_id| {
+        format!(
+            "{}:{}:{}",
+            active.decision_doc_id, active.revision_doc_id, receipt_doc_id
+        )
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnrollmentRoute {
+    peer_id: String,
+    member_did: String,
+    address: String,
+    request_digest: String,
+    authorization_sequence: u64,
+    authorization_expires_at: String,
+}
+
+fn desired_routes(projection: &EnrollmentProjection) -> BTreeMap<String, EnrollmentRoute> {
+    desired_routes_at(projection, Utc::now())
+}
+
+fn desired_routes_at(
+    projection: &EnrollmentProjection,
+    now: chrono::DateTime<Utc>,
+) -> BTreeMap<String, EnrollmentRoute> {
+    projection
+        .active
+        .iter()
+        .filter(|active| {
+            gents_protocol::enrollment::authorization_lease_is_fresh_at(
+                &active.revision.authorization_expires_at,
+                now,
+            )
+        })
+        .map(|active| {
+            let route = EnrollmentRoute {
+                peer_id: active.request.candidate_peer.clone(),
+                member_did: active.request.candidate_did.clone(),
+                address: active.request.candidate_ticket.clone(),
+                request_digest: active.request.request_digest.clone(),
+                authorization_sequence: active.revision.sequence,
+                authorization_expires_at: active.revision.authorization_expires_at.clone(),
+            };
+            (route.peer_id.clone(), route)
+        })
+        .collect()
+}
+
+async fn reconcile_data_plane(
+    node: &std::sync::Arc<EmbeddedNode>,
+    local_did: &str,
+    store: &GraphqlEnrollmentStore,
+    projection: &EnrollmentProjection,
+) -> Result<()> {
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        r#"{
+                PeerPairingDesired {
+                    peer_id node_did template source collections replicator_addresses
+                    enrollment_request_digest enrollment_authorization_sequence
+                    enrollment_authorization_expires_at
+                }
+            }"#,
+        "query enrollment base-route ownership",
+    )
+    .await?;
+    let existing = rows::<EnrollmentRouteRow>(&response, "PeerPairingDesired")?;
+    let desired = desired_routes(projection);
+    let client = resolve_template(CLIENT_TEMPLATE).context("client template is missing")?;
+    let client_collections = client
+        .collections
+        .iter()
+        .map(|collection| collection.to_string())
+        .collect::<BTreeSet<_>>();
+
+    let foreign_peers = existing
+        .iter()
+        .filter(|row| row.source.as_deref() != Some(SOURCE_ENROLLMENT))
+        .map(|row| row.peer_id.clone())
+        .collect::<BTreeSet<_>>();
+    let enrollment_rows = existing
+        .into_iter()
+        .filter(|row| row.source.as_deref() == Some(SOURCE_ENROLLMENT))
+        .map(|row| (row.peer_id.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+
+    for (peer_id, route) in &desired {
+        if foreign_peers.contains(peer_id) {
+            tracing::warn!(
+                peer_id,
+                "enrollment route is blocked by another base-route owner"
+            );
+            continue;
+        }
+        // A durable revoke or superseding generation can commit after the sweep
+        // projection was loaded; reload through the authority store at the
+        // write boundary and compare the complete signed generation.
+        let fresh_projection = match store.load_projection().await {
+            Ok(projection) => projection,
+            Err(error) => {
+                // Fail closed: remove every row this owner can identify so a
+                // stale materialization cannot keep granting route admission.
+                for stale_peer_id in enrollment_rows.keys() {
+                    delete_enrollment_route(node, stale_peer_id).await?;
+                }
+                return Err(error.context("reload enrollment authority before route publication"));
+            }
+        };
+        let fresh =
+            exact_authorization_fence(&fresh_projection, &route.member_did, &route.peer_id)?;
+        if !fresh
+            .as_ref()
+            .is_some_and(|fence| enrollment_route_matches_fence(route, fence))
+        {
+            if enrollment_rows.contains_key(peer_id) {
+                delete_enrollment_route(node, peer_id).await?;
+            }
+            continue;
+        }
+        let current = enrollment_rows.get(peer_id);
+        if current
+            .is_some_and(|row| row.matches(local_did, route, CLIENT_TEMPLATE, &client_collections))
+        {
+            continue;
+        }
+        let mutation = upsert_enrollment_route_mutation(
+            route,
+            local_did,
+            &client_collections,
+            &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        );
+        crate::store::config_client::ConfigAccess::write_local_response(
+            node,
+            "p2p.upsert_enrollment_route",
+            &mutation,
+        )
+        .await?;
+    }
+    for peer_id in enrollment_rows.keys() {
+        if desired.contains_key(peer_id) {
+            continue;
+        }
+        let mutation = delete_enrollment_route_mutation(peer_id);
+        crate::store::config_client::ConfigAccess::write_local_response(
+            node,
+            "p2p.retract_enrollment_route",
+            &mutation,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn enrollment_route_matches_fence(
+    route: &EnrollmentRoute,
+    fence: &EnrollmentAuthorizationFence,
+) -> bool {
+    route.peer_id == fence.member_peer
+        && route.member_did == fence.member_did
+        && route.address == fence.member_ticket
+        && route.request_digest == fence.request_digest
+        && route.authorization_sequence == fence.authorization_sequence
+        && route.authorization_expires_at == fence.authorization_expires_at
+}
+
+async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &str) -> Result<()> {
+    let mutation = delete_enrollment_route_mutation(peer_id);
+    Ok(
+        crate::store::config_client::ConfigAccess::write_local_response(
+            node,
+            "p2p.retract_enrollment_route_fenced",
+            &mutation,
+        )
+        .await
+        .map(|_| ())?,
+    )
+}
+
+fn upsert_enrollment_route_mutation(
+    route: &EnrollmentRoute,
+    local_did: &str,
+    collections: &BTreeSet<String>,
+    now: &str,
+) -> String {
+    let escape = crate::store::graphql::escape_graphql_string;
+    let peer_id = escape(&route.peer_id);
+    let local_did = escape(local_did);
+    let address = graphql_string_list_literal([route.address.as_str()]);
+    let collections = graphql_string_list_literal(collections.iter().map(String::as_str));
+    let now = escape(now);
+    let request_digest = escape(&route.request_digest);
+    let authorization_expires_at = escape(&route.authorization_expires_at);
+    format!(
+        r#"mutation {{
+            upsert_PeerPairingDesired(
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }},
+                add: {{
+                    peer_id: "{peer_id}", node_did: "{local_did}", template: "client",
+                    source: "enrollment", collections: {collections},
+                    enrollment_request_digest: "{request_digest}",
+                    enrollment_authorization_sequence: {},
+                    enrollment_authorization_expires_at: "{authorization_expires_at}",
+                    replicator_addresses: {address}, created_at: "{now}", updated_at: "{now}"
+                }},
+                update: {{
+                    node_did: "{local_did}", template: "client", source: "enrollment",
+                    enrollment_request_digest: "{request_digest}",
+                    enrollment_authorization_sequence: {},
+                    enrollment_authorization_expires_at: "{authorization_expires_at}",
+                    collections: {collections}, replicator_addresses: {address}, updated_at: "{now}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        route.authorization_sequence, route.authorization_sequence,
+    )
+}
+
+fn delete_enrollment_route_mutation(peer_id: &str) -> String {
+    let peer_id = crate::store::graphql::escape_graphql_string(peer_id);
+    format!(
+        r#"mutation {{
+            delete_PeerPairingDesired(
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct EnrollmentRouteRow {
+    peer_id: String,
+    node_did: Option<String>,
+    template: Option<String>,
+    source: Option<String>,
+    collections: Option<Vec<String>>,
+    replicator_addresses: Option<Vec<String>>,
+    enrollment_request_digest: Option<String>,
+    enrollment_authorization_sequence: Option<i64>,
+    enrollment_authorization_expires_at: Option<String>,
+}
+
+impl EnrollmentRouteRow {
+    fn matches(
+        &self,
+        local_did: &str,
+        route: &EnrollmentRoute,
+        template: &str,
+        collections: &BTreeSet<String>,
+    ) -> bool {
+        self.node_did.as_deref() == Some(local_did)
+            && self.template.as_deref() == Some(template)
+            && self.source.as_deref() == Some(SOURCE_ENROLLMENT)
+            && self.enrollment_request_digest.as_deref() == Some(&route.request_digest)
+            && self.enrollment_authorization_sequence == Some(route.authorization_sequence as i64)
+            && self.enrollment_authorization_expires_at.as_deref()
+                == Some(&route.authorization_expires_at)
+            && self
+                .collections
+                .as_ref()
+                .map(|values| values.iter().cloned().collect::<BTreeSet<_>>())
+                .as_ref()
+                == Some(collections)
+            && self.replicator_addresses.as_deref() == Some(std::slice::from_ref(&route.address))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use gents_protocol::enrollment::{
+        AuthorizationRevisionKind, AuthorizationRevisionRecord, EnrollmentDecisionKind,
+        EnrollmentDecisionRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+    use super::*;
+    use crate::request::admission::AgentRequestAdmissionVerifier;
+    use crate::runtime::agent::p2p_reconcile::enrollment_store::{
+        ActiveEnrollment, RevokedEnrollment,
+    };
+    use crate::store::identity::KeyIdentity;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ClientObservationCase {
+        name: String,
+        actor: Option<String>,
+        node: String,
+        current: Option<super::super::enrollment::EnrollmentRequestAuthority>,
+        expected_admitted: bool,
+        expected_runtime_admitted: bool,
+    }
+
+    #[test]
+    fn generated_client_observation_admission_matches_lean() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot()
+            .expect("Lean client observation admission cases");
+        let cases: Vec<ClientObservationCase> =
+            serde_json::from_value(snapshot["client_observation_admission_cases"].clone())
+                .expect("decode client observation admission cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let current = case.current.map(|authority| EnrollmentAuthorizationFence {
+                network_id: authority.network_id,
+                request_id: "request".into(),
+                admin_did: authority.admin_did,
+                member_did: authority.candidate_did,
+                member_peer: authority.candidate_peer,
+                member_ticket: "ticket".into(),
+                owner_node: authority.owner_node,
+                profile: authority.profile,
+                request_digest: "digest".into(),
+                authorization_sequence: 1,
+                authorization_expires_at: "2099-01-01T00:00:00Z".into(),
+            });
+            assert_eq!(
+                runtime_observation_admitted(case.actor.as_deref(), &case.node, current.as_ref()),
+                case.expected_runtime_admitted,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                client_observation_admitted(case.actor.as_deref(), &case.node, current.as_ref()),
+                case.expected_admitted,
+                "{}",
+                case.name,
+            );
+        }
+    }
+
+    enum ScriptedProjection {
+        Projection(Box<EnrollmentProjection>),
+        Error(&'static str),
+    }
+
+    struct ScriptedProjectionReader {
+        steps: Mutex<VecDeque<ScriptedProjection>>,
+    }
+
+    #[async_trait]
+    impl EnrollmentProjectionReader for ScriptedProjectionReader {
+        async fn load_authority_projection(&self) -> Result<EnrollmentProjection> {
+            match self
+                .steps
+                .lock()
+                .expect("scripted projection lock")
+                .pop_front()
+                .expect("scripted projection step")
+            {
+                ScriptedProjection::Projection(projection) => Ok(*projection),
+                ScriptedProjection::Error(message) => anyhow::bail!(message),
+            }
+        }
+    }
+
+    fn active_enrollment(sequence: u64, expires_at: &str) -> ActiveEnrollment {
+        let request_id = format!("enrollment-request-{sequence}");
+        let request_digest = format!("enrollment-digest-{sequence}");
+        let request = EnrollmentRequestRecord {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            request_id: request_id.clone(),
+            request_digest: request_digest.clone(),
+            offer_id: format!("offer-{sequence}"),
+            offer_token: format!("token-{sequence}"),
+            challenge: format!("challenge-{sequence}"),
+            network_id: "network-1".into(),
+            admin_did: "did:key:admin".into(),
+            server_peer: "server-peer".into(),
+            candidate_did: "did:key:member-placeholder".into(),
+            candidate_peer: "member-peer".into(),
+            candidate_ticket: "member-ticket".into(),
+            owner_agent: "did:key:owner-placeholder".into(),
+            profile: "client".into(),
+            client_nonce: format!("nonce-{sequence}"),
+            issued_at: "2030-01-01T00:00:00Z".into(),
+            expires_at: "2031-01-01T00:00:00Z".into(),
+            candidate_sig: vec![1; 64],
+        };
+        let decision = EnrollmentDecisionRecord {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            decision_id: format!("decision-{sequence}"),
+            request_id: request_id.clone(),
+            request_digest: request_digest.clone(),
+            network_id: request.network_id.clone(),
+            admin_did: request.admin_did.clone(),
+            candidate_did: request.candidate_did.clone(),
+            candidate_peer: request.candidate_peer.clone(),
+            owner_agent: request.owner_agent.clone(),
+            decision: EnrollmentDecisionKind::Approved,
+            authorization_sequence: sequence,
+            authorization_expires_at: expires_at.into(),
+            decided_at: "2030-01-01T00:00:01Z".into(),
+            signer_did: request.admin_did.clone(),
+            admin_sig: vec![2; 64],
+        };
+        let revision = AuthorizationRevisionRecord {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            revision_id: format!("revision-{sequence}"),
+            request_id,
+            request_digest,
+            network_id: request.network_id.clone(),
+            admin_did: request.admin_did.clone(),
+            member_did: request.candidate_did.clone(),
+            member_peer: request.candidate_peer.clone(),
+            owner_agent: request.owner_agent.clone(),
+            sequence,
+            authorization_expires_at: expires_at.into(),
+            kind: AuthorizationRevisionKind::Active,
+            issued_at: "2030-01-01T00:00:01Z".into(),
+            signer_did: request.admin_did.clone(),
+            admin_sig: vec![3; 64],
+        };
+        ActiveEnrollment {
+            request_doc_id: format!("request-doc-{sequence}"),
+            decision_doc_id: format!("decision-doc-{sequence}"),
+            revision_doc_id: format!("revision-doc-{sequence}"),
+            route_receipt_doc_id: None,
+            request,
+            decision,
+            revision,
+            route_receipt: None,
+        }
+    }
+
+    fn projection_with_active(active: ActiveEnrollment) -> EnrollmentProjection {
+        EnrollmentProjection {
+            network_id: Some(active.request.network_id.clone()),
+            active: vec![active],
+            ..EnrollmentProjection::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_network_sweep_serves_fresh_authority_and_revocation() {
+        let active = active_enrollment(1, "2099-01-01T00:00:00Z");
+        let member = active.request.candidate_did.clone();
+        let script = ScriptedProjectionReader {
+            steps: Mutex::new(VecDeque::from([
+                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_revoked(&active))),
+                ScriptedProjection::Error("authority unavailable during network replay"),
+            ])),
+        };
+        let (mut owner, handle) = enrollment_authority_channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            serve_authority_during_sweep(
+                async {
+                    held.await.unwrap();
+                },
+                &script,
+                &owner.sender,
+                &mut owner.commands,
+                &CancellationToken::new(),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            assert!(handle
+                .fresh_member_authorization(&member)
+                .await
+                .unwrap()
+                .is_some());
+            assert!(handle
+                .fresh_member_authorization(&member)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(handle.fresh_member_authorization(&member).await.is_err());
+        })
+        .await
+        .expect("fresh authority must not wait for network replay");
+        assert!(!task.is_finished(), "the network effect is still held");
+        release.send(()).unwrap();
+        assert!(task.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn client_observation_reloads_current_scoped_authority() {
+        let active = active_enrollment(1, "2099-01-01T00:00:00Z");
+        let member = active.request.candidate_did.clone();
+        let node = active.request.owner_agent.clone();
+        let mut peer = active.clone();
+        peer.request.profile = "peer".into();
+        let mut ambiguous = projection_with_active(active.clone());
+        ambiguous
+            .active
+            .push(active_enrollment(2, "2099-01-01T00:00:00Z"));
+        let script = ScriptedProjectionReader {
+            steps: Mutex::new(VecDeque::from([
+                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(peer))),
+                ScriptedProjection::Projection(Box::new(projection_with_revoked(&active))),
+                ScriptedProjection::Projection(Box::default()),
+                ScriptedProjection::Projection(Box::new(ambiguous)),
+                ScriptedProjection::Error("unavailable enrollment projection"),
+            ])),
+        };
+        let (mut owner, handle) = enrollment_authority_channel();
+        let task = tokio::spawn(async move {
+            for _ in 0..7 {
+                let command = owner
+                    .commands
+                    .recv()
+                    .await
+                    .expect("observation authorization");
+                handle_authority_command(&script, &owner.sender, command).await;
+            }
+        });
+        assert!(handle
+            .client_observation_authorized(&member, &node)
+            .await
+            .unwrap());
+        assert!(!handle
+            .client_observation_authorized(&member, "another-node")
+            .await
+            .unwrap());
+        for _ in 0..3 {
+            assert!(!handle
+                .client_observation_authorized(&member, &node)
+                .await
+                .unwrap());
+        }
+        assert!(handle
+            .client_observation_authorized(&member, &node)
+            .await
+            .is_err());
+        assert!(handle
+            .client_observation_authorized(&member, &node)
+            .await
+            .is_err());
+        task.await.unwrap();
+    }
+
+    fn projection_with_revoked(active: &ActiveEnrollment) -> EnrollmentProjection {
+        let mut revision = active.revision.clone();
+        revision.kind = AuthorizationRevisionKind::Revoked;
+        EnrollmentProjection {
+            network_id: Some(active.request.network_id.clone()),
+            revoked: vec![RevokedEnrollment {
+                request_doc_id: active.request_doc_id.clone(),
+                decision_doc_id: active.decision_doc_id.clone(),
+                revision_doc_id: format!("revoked-{}", active.revision.sequence + 1),
+                request: active.request.clone(),
+                decision: active.decision.clone(),
+                revision,
+            }],
+            ..EnrollmentProjection::default()
+        }
+    }
+
+    async fn create_enrollment_request(
+        node: Arc<EmbeddedNode>,
+        target: &dyn NodeIdentity,
+        member: &dyn NodeIdentity,
+        active: &ActiveEnrollment,
+        label: &str,
+    ) -> crate::request::watcher::AgentRequest {
+        let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            format!("agent-request-{label}"),
+            target.did(),
+            member.did(),
+            "behavior-1",
+            format!("session-{label}"),
+            format!("content-{label}"),
+            "interactive",
+            "2030-01-01T00:00:02Z",
+            AgentRequestAdmissionRecord::enrollment(
+                member.did(),
+                &active.request.request_id,
+                &active.request.request_digest,
+                &active.request.admin_did,
+                active.revision.sequence,
+                &active.revision.authorization_expires_at,
+            ),
+        );
+        crate::sign_agent_request_create(member, &mut create)
+            .await
+            .expect("sign enrollment AgentRequest");
+        let response = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(
+            !response.has_errors(),
+            "create enrollment AgentRequest: {:?}",
+            response.errors
+        );
+        let doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| {
+                data.get("create_AgentRequest")
+                    .or_else(|| data.get("add_AgentRequest"))
+            })
+            .and_then(|value| {
+                value.get("_docID").or_else(|| {
+                    value
+                        .as_array()
+                        .and_then(|rows| rows.first())
+                        .and_then(|row| row.get("_docID"))
+                })
+            })
+            .and_then(serde_json::Value::as_str)
+            .expect("created AgentRequest doc id");
+        crate::request::admission::load_request_for_admission_test(node.as_ref(), doc_id)
+            .await
+            .expect("load queued AgentRequest")
+    }
+
+    #[test]
+    fn enrollment_route_mutations_are_owned_bounded_and_nonempty() {
+        let route = EnrollmentRoute {
+            peer_id: "peer-\"\\".to_string(),
+            member_did: "did:key:member".to_string(),
+            address: "ticket-1".to_string(),
+            request_digest: "digest-1".to_string(),
+            authorization_sequence: 1,
+            authorization_expires_at: "2026-09-29T12:00:00Z".to_string(),
+        };
+        let collections = BTreeSet::from(["AgentRequest".to_string()]);
+        let upsert = upsert_enrollment_route_mutation(
+            &route,
+            "did:key:server",
+            &collections,
+            "2026-08-29T12:00:00Z",
+        );
+        assert!(upsert.contains("source: \"enrollment\""));
+        assert!(upsert.contains("template: \"client\""));
+        assert!(upsert.contains("enrollment_request_digest: \"digest-1\""));
+        assert!(upsert.contains("enrollment_authorization_sequence: 1"));
+        assert!(upsert.contains("enrollment_authorization_expires_at: \"2026-09-29T12:00:00Z\""));
+        assert!(upsert.contains("peer-\\\"\\\\"));
+        assert!(!upsert.contains("[]"));
+
+        let delete = delete_enrollment_route_mutation(&route.peer_id);
+        assert!(delete.contains("source: { _eq: \"enrollment\" }"));
+        assert!(delete.contains("peer-\\\"\\\\"));
+    }
+
+    #[test]
+    fn authority_handle_is_fail_closed_until_owner_publishes() {
+        let (owner, handle) = enrollment_authority_channel();
+        assert!(handle.current().is_err());
+        publish_ready(&owner.sender, EnrollmentProjection::default());
+        assert_eq!(*handle.current().unwrap(), EnrollmentProjection::default());
+    }
+
+    #[tokio::test]
+    async fn final_claim_fence_reloads_revocation_expiry_supersession_and_read_failure() {
+        let target_dir = tempfile::tempdir().unwrap();
+        let member_dir = tempfile::tempdir().unwrap();
+        let target: Arc<dyn NodeIdentity> = Arc::new(
+            KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap(),
+        );
+        let member: Arc<dyn NodeIdentity> = Arc::new(
+            KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
+        );
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::store::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .unwrap();
+        crate::test_support::install_test_agent(&node, target.did(), "behavior-1").await;
+
+        let mut generation_one = active_enrollment(1, "2030-01-01T00:10:00Z");
+        generation_one.request.candidate_did = member.did().to_string();
+        generation_one.request.owner_agent = target.did().to_string();
+        generation_one.decision.candidate_did = member.did().to_string();
+        generation_one.decision.owner_agent = target.did().to_string();
+        generation_one.revision.member_did = member.did().to_string();
+        generation_one.revision.owner_agent = target.did().to_string();
+        let mut expired = generation_one.clone();
+        expired.request.request_id = "enrollment-request-expired".into();
+        expired.request.request_digest = "enrollment-digest-expired".into();
+        expired.decision.request_id = expired.request.request_id.clone();
+        expired.decision.request_digest = expired.request.request_digest.clone();
+        expired.decision.authorization_expires_at = "2030-01-01T00:05:00Z".into();
+        expired.revision.request_id = expired.request.request_id.clone();
+        expired.revision.request_digest = expired.request.request_digest.clone();
+        expired.revision.authorization_expires_at = "2030-01-01T00:05:00Z".into();
+        let mut generation_two = active_enrollment(2, "2030-01-01T00:20:00Z");
+        generation_two.request.candidate_did = member.did().to_string();
+        generation_two.request.owner_agent = target.did().to_string();
+        generation_two.decision.candidate_did = member.did().to_string();
+        generation_two.decision.owner_agent = target.did().to_string();
+        generation_two.revision.member_did = member.did().to_string();
+        generation_two.revision.owner_agent = target.did().to_string();
+
+        let revoked_request = create_enrollment_request(
+            node.clone(),
+            target.as_ref(),
+            member.as_ref(),
+            &generation_one,
+            "revoked",
+        )
+        .await;
+        let expired_request = create_enrollment_request(
+            node.clone(),
+            target.as_ref(),
+            member.as_ref(),
+            &expired,
+            "expired",
+        )
+        .await;
+        let superseded_request = create_enrollment_request(
+            node.clone(),
+            target.as_ref(),
+            member.as_ref(),
+            &generation_one,
+            "superseded",
+        )
+        .await;
+        let replacement_request = create_enrollment_request(
+            node.clone(),
+            target.as_ref(),
+            member.as_ref(),
+            &generation_two,
+            "replacement",
+        )
+        .await;
+
+        let script = ScriptedProjectionReader {
+            steps: Mutex::new(VecDeque::from([
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_one.clone(),
+                ))),
+                ScriptedProjection::Projection(Box::new(projection_with_revoked(&generation_one))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(expired.clone()))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(expired))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_one.clone(),
+                ))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_two.clone(),
+                ))),
+                ScriptedProjection::Projection(Box::new(projection_with_active(
+                    generation_two.clone(),
+                ))),
+                ScriptedProjection::Error("injected enrollment projection read failure"),
+            ])),
+        };
+        let (mut owner, handle) = enrollment_authority_channel();
+        let command_task = tokio::spawn(async move {
+            for _ in 0..8 {
+                let command = owner.commands.recv().await.expect("authority command");
+                handle_authority_command(&script, &owner.sender, command).await;
+            }
+        });
+        let verifier =
+            AgentRequestAdmissionVerifier::new(node.clone(), target.clone(), handle.clone());
+
+        assert!(handle
+            .fresh_member_authorization(member.did())
+            .await
+            .unwrap()
+            .is_some());
+        let revoked_request_id = revoked_request.request_id.clone();
+        let rejected = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
+            &verifier,
+            node.clone(),
+            "behavior-1",
+            revoked_request,
+        )
+        .await;
+        assert!(rejected.is_none());
+        #[derive(Deserialize)]
+        struct RejectedRow {
+            lifecycle_state: RequestLifecycleState,
+            claimed_at: Option<String>,
+            failure_reason: Option<String>,
+        }
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    lifecycle_state claimed_at failure_reason
+                }} }}"#,
+                crate::store::graphql::escape_graphql_string(&revoked_request_id),
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query rejected request: {:?}",
+            response.errors
+        );
+        let rejected_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
+            .unwrap()
+            .expect("rejected request row");
+        assert_eq!(rejected_row.lifecycle_state, RequestLifecycleState::Failed);
+        assert!(rejected_row.claimed_at.is_none());
+        assert!(rejected_row
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("request admission denied")));
+
+        assert!(handle
+            .fresh_member_authorization(member.did())
+            .await
+            .unwrap()
+            .is_some());
+        let expiry_error = verifier
+            .verify_fresh_at(
+                &expired_request,
+                "behavior-1",
+                "2030-01-01T00:05:00Z".parse().unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(expiry_error.is_denied());
+        assert!(expiry_error.to_string().contains("lease expired"));
+
+        let first_fence = handle
+            .fresh_member_authorization(member.did())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_fence.authorization_sequence, 1);
+        let superseded_error = verifier
+            .verify_fresh_at(
+                &superseded_request,
+                "behavior-1",
+                "2030-01-01T00:06:00Z".parse().unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(superseded_error.is_denied());
+        assert!(superseded_error
+            .to_string()
+            .contains("stale or mixed enrollment generation"));
+
+        let verified = verifier
+            .verify_fresh_at(
+                &replacement_request,
+                "behavior-1",
+                "2030-01-01T00:06:00Z".parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(verified.request_id, replacement_request.request_id);
+
+        let read_error = verifier
+            .verify_fresh_at(
+                &replacement_request,
+                "behavior-1",
+                "2030-01-01T00:06:00Z".parse().unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(!read_error.is_denied());
+        assert!(format!("{read_error:#}").contains("injected enrollment projection read failure"));
+        command_task.await.unwrap();
+
+        let replacement_request_id = replacement_request.request_id.clone();
+        assert!(
+            crate::runtime::agent::daemon::verify_request_at_claim_boundary(
+                &verifier,
+                node.clone(),
+                "behavior-1",
+                replacement_request,
+            )
+            .await
+            .is_none()
+        );
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    lifecycle_state claimed_at failure_reason
+                }} }}"#,
+                crate::store::graphql::escape_graphql_string(&replacement_request_id),
+            ))
+            .await;
+        let pending_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
+            .unwrap()
+            .expect("temporarily unavailable request row");
+        assert_eq!(pending_row.lifecycle_state, RequestLifecycleState::Pending);
+        assert!(pending_row.claimed_at.is_none());
+        assert!(pending_row
+            .failure_reason
+            .as_deref()
+            .is_none_or(str::is_empty));
+    }
+}

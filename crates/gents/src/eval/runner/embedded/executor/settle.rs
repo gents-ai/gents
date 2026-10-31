@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::evidence::session_requests;
 use crate::defra_node::EmbeddedNode;
 use crate::eval::runner::embedded::observe::{collect_request_evidence, RequestEvidence};
-use crate::graphql::graphql_with_transaction_retry;
+use crate::store::graphql::graphql_with_transaction_retry;
 
 /// How long every request must stay terminal before the home counts as quiet:
 /// a trigger fire, a queued delivery or a goal continuation writes its request

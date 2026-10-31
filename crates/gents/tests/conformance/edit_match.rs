@@ -1,4 +1,4 @@
-use gents::toolset::edit_match::{
+use gents::tools::native::edit_match::{
     decide, EditOutcome, EditRequest, MatchMode, Operation, Strategy,
 };
 

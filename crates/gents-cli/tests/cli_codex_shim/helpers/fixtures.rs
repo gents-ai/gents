@@ -109,11 +109,11 @@ async fn seed_canonical_tool_transcript(
     result: Option<&str>,
     created_at: &str,
 ) -> Result<()> {
-    use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
@@ -290,7 +290,7 @@ async fn seed_canonical_tool_transcript(
         )
         .await?;
     }
-    let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
+    let presentation = gents::tools::call::lifecycle::load_tool_call_presentation(
         &access,
         tool_call_doc_id,
         node_did,
@@ -390,11 +390,11 @@ pub(super) async fn seed_blank_materialized_completion(
     node_did: &str,
     session_id: &str,
 ) -> Result<()> {
-    use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
@@ -628,7 +628,7 @@ pub(super) async fn seed_background_completion_wake(
         node_did,
         agent_id,
         session_id,
-        gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+        gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         "scheduled",
         &wake_created_at,
         admission,

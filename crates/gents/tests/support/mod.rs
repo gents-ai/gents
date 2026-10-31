@@ -5,8 +5,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
-use gents::graphql::escape_graphql_string;
-use gents::{watcher::AgentRequest, NodeIdentity};
+use gents::store::graphql::escape_graphql_string;
+use gents::{request::watcher::AgentRequest, NodeIdentity};
 use serde::Deserialize;
 
 pub mod accepted_turn;
@@ -285,7 +285,7 @@ pub async fn create_request_for_agent_with_signed_fields(
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -389,7 +389,7 @@ pub async fn create_retry_request(node: &EmbeddedNode, spec: &RetryRequestSpec<'
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -734,13 +734,15 @@ pub async fn create_agent_message_in_scope(
         "create_AgentOutputSegment failed: {:?}",
         segment_response.errors
     );
-    let close_doc_id =
-        gents::graphql::single_mutation_document(&segment_response, "create_AgentOutputSegment")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+    let close_doc_id = gents::store::graphql::single_mutation_document(
+        &segment_response,
+        "create_AgentOutputSegment",
+    )
+    .unwrap()
+    .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let message = TranscriptMessage {
         message_key: gents::session::sequence_message_key(
@@ -824,7 +826,7 @@ pub async fn create_agent_tool_call(
         "create_AgentToolCall failed: {:?}",
         resp.errors
     );
-    gents::graphql::single_mutation_document(&resp, "create_AgentToolCall")
+    gents::store::graphql::single_mutation_document(&resp, "create_AgentToolCall")
         .expect("mutation envelope")
         .expect("created call")["_docID"]
         .as_str()
@@ -876,12 +878,12 @@ pub async fn create_compaction_entry(
 
 pub async fn create_agent(node: &EmbeddedNode, agent_id: &str, node_did: &str) {
     let profile_id = format!("{agent_id}-inference");
-    let profile: gents::document_config::InferenceProfile = serde_json::from_value(
+    let profile: gents::documents::InferenceProfile = serde_json::from_value(
         serde_json::json!({"node_did": node_did, "profile_id": profile_id,
             "backend_id": BACKEND_ID, "model_name": "test-model"}),
     )
     .expect("canonical inference fixture");
-    let agent: gents::document_config::Agent = serde_json::from_value(
+    let agent: gents::documents::Agent = serde_json::from_value(
         serde_json::json!({"node_did": node_did, "agent_id": agent_id,
             "display_name": "test behavior", "inference_profile_id": profile_id,
             "created_at": "2026-04-21T00:00:00Z"}),

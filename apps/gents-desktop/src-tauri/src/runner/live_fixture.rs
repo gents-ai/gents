@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
 use gents_desktop_core::local_runtime::DesktopInitSummary;
 use tokio::sync::Mutex;
@@ -429,7 +429,7 @@ impl LiveBridgeFixture {
                 .display()
                 .to_string(),
             node_data_dir: self.desktop_paths.node_data_dir().display().to_string(),
-            diagnostics_hint: gents::native_logging::diagnostics_hint().to_string(),
+            diagnostics_hint: gents::runtime::native_logging::diagnostics_hint().to_string(),
             node_home_exists: self.node_home.exists(),
             desktop_home_exists: self.desktop_paths.root().exists(),
             peer_directory_exists: self.desktop_paths.peer_directory_path().exists(),
@@ -733,7 +733,7 @@ mod tests {
         .await?;
         let session = build_session_snapshot_for_node_with_transcript(
             fixture.desktop_core().as_ref(),
-            &gents::config_client::ConfigAccess::local(fixture.desktop_core().node_arc()),
+            &gents::store::config_client::ConfigAccess::local(fixture.desktop_core().node_arc()),
             Some(&node_did),
             &submitted.session_id,
             Some(&submitted.request_id),
@@ -842,8 +842,8 @@ mod tests {
         agent_id: &str,
         skill_id: &str,
     ) -> Result<()> {
-        use gents::collection::Collection;
-        use gents::config_client::{
+        use gents::store::collection::Collection;
+        use gents::store::config_client::{
             apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
@@ -870,7 +870,7 @@ mod tests {
                     )
                     .await?
                     .context("fixture context is missing")?;
-                    let mut context: gents::document_config::AgentContext =
+                    let mut context: gents::documents::AgentContext =
                         serde_json::from_value(context)?;
                     context.skill_ids = vec![skill_id.to_owned()];
                     let value = serde_json::to_value(context)?;

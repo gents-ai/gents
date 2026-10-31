@@ -132,7 +132,7 @@ async fn wait_for_live_node_readiness(
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let last_observation = match crate::commands::status::load_live_node_readiness(
-            &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
+            &gents::store::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
             node_did,
         )
         .await
@@ -471,7 +471,7 @@ async fn serve_with_startup(
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
-    gents::runtime_service::executable_build_id().await?;
+    gents::runtime::service::executable_build_id().await?;
     let mut store_lifetime = None;
     let outcome = serve_foreground(args, runtime, startup, &mut store_lifetime).await;
     drop(store_lifetime);
@@ -582,7 +582,7 @@ async fn serve_foreground(
     mut args: ServeArgs,
     executor: tokio::runtime::Handle,
     mut startup: Option<super::prepare_runtime::PreparedStartup>,
-    store_lifetime: &mut Option<gents::config_client::ConfigAccess>,
+    store_lifetime: &mut Option<gents::store::config_client::ConfigAccess>,
 ) -> Result<()> {
     #[cfg(not(unix))]
     anyhow::ensure!(
@@ -609,7 +609,7 @@ async fn serve_foreground(
         .unwrap_or_else(|| default_data_dir(&home_dir));
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    let store_lock = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
     let http_ip = args
         .http_addr
@@ -654,7 +654,7 @@ async fn serve_foreground(
         .clone()
         .or_else(|| init_config.as_ref().map(|config| config.node_name.clone()))
         .unwrap_or_else(|| DEFAULT_NODE_NAME.to_string());
-    gents::home::ensure_home_identity_can_serve(&home_dir)?;
+    gents::store::local::home::ensure_home_identity_can_serve(&home_dir)?;
     let server_identity =
         resolve_server_identity(&args, init_config.as_ref(), &home_dir, &node_name)?;
     let identity = server_identity.identity;
@@ -724,9 +724,11 @@ async fn serve_foreground(
         .enable_mcp
         .then(|| crate::http::mcp_server::McpServiceOptions {
             scope: if args.mcp_query_collections.is_empty() {
-                gents::defra_query::CollectionScope::all()
+                gents::tools::builtin::defra_query::CollectionScope::all()
             } else {
-                gents::defra_query::CollectionScope::restricted(args.mcp_query_collections.clone())
+                gents::tools::builtin::defra_query::CollectionScope::restricted(
+                    args.mcp_query_collections.clone(),
+                )
             },
             write_collections: args.mcp_write_collections.iter().cloned().collect(),
         });
@@ -741,7 +743,7 @@ async fn serve_foreground(
         effective_tool_root
             .as_deref()
             .map(|root| {
-                gents::tool_surface::resolve_configured_tool_root(root)
+                gents::tools::surface::resolve_configured_tool_root(root)
                     .map(|resolved| resolved.to_string_lossy().into_owned())
                     .map_err(|error| {
                         format!("tool root {} does not resolve: {error:#}", root.display())
@@ -767,7 +769,7 @@ async fn serve_foreground(
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
         anyhow::ensure!(
-            gents::identity::can_mint_defradb_bearer(node_identity_did),
+            gents::store::identity::can_mint_defradb_bearer(node_identity_did),
             "identity {node_identity_did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it"
         );
     }
@@ -796,7 +798,7 @@ async fn serve_foreground(
             .context("building embedded DefraDB node")?,
     );
     let store_access =
-        match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
+        match gents::store::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
             Ok(access) => access,
             Err(error) => {
                 node.shutdown().await;
@@ -810,11 +812,11 @@ async fn serve_foreground(
     let mut grok_shim_handle = None;
     let serve_result: Result<()> = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
-        if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
-            return Err(gents::storage_backend::classify_store_error(error, &data_dir).into());
+        if let Err(error) = gents::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await {
+            return Err(gents::store::local::storage_backend::classify_store_error(error, &data_dir).into());
         }
-        gents::store_key::upgrade::finish(&data_dir)?;
-        let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+        gents::store::local::store_key::upgrade::finish(&data_dir)?;
+        let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await
             .context("reading client route collection versions after migrations")?;
         replicated_schema.set(schema).ok();
@@ -896,7 +898,7 @@ async fn serve_foreground(
             let p2p_status =
                 load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
                     .await?;
-            if let Some(p2p) = gents::identity::node_p2p(&node) {
+            if let Some(p2p) = gents::store::identity::node_p2p(&node) {
                 *enrollment_offer_issuer.write().await =
                     Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
                         identity.clone(),
@@ -1238,7 +1240,7 @@ async fn serve_foreground(
                     home: home_dir.to_string_lossy().into_owned(),
                     node_did: identity.did().to_owned(),
                     graphql: graphql_url.clone(),
-                    build: gents::runtime_service::executable_build_id().await?,
+                    build: gents::runtime::service::executable_build_id().await?,
                 };
                 if let Err(error) = super::prepare_runtime::emit(report).await {
                     tracing::warn!(%error, "runtime preparation channel closed after readiness; native work remains owned");
@@ -1333,7 +1335,7 @@ struct ServeRuntime {
     handle: Option<tokio::task::JoinHandle<Result<()>>>,
     shutdown_owner: Option<(
         Arc<gents::defra_node::EmbeddedNode>,
-        gents::config_client::ConfigAccess,
+        gents::store::config_client::ConfigAccess,
     )>,
 }
 
@@ -1364,7 +1366,7 @@ impl ServeRuntime {
     fn retain_shutdown_owner(
         mut self,
         node: Arc<gents::defra_node::EmbeddedNode>,
-        access: gents::config_client::ConfigAccess,
+        access: gents::store::config_client::ConfigAccess,
     ) -> Self {
         self.shutdown_owner = Some((node, access));
         self
@@ -1420,7 +1422,7 @@ impl Drop for ServeRuntime {
 
 async fn shutdown_claimed_node(
     node: Arc<gents::defra_node::EmbeddedNode>,
-    access: gents::config_client::ConfigAccess,
+    access: gents::store::config_client::ConfigAccess,
 ) {
     let shutdown = tokio::spawn(async move {
         node.shutdown().await;
@@ -1555,7 +1557,7 @@ fn has_node_did(did: &str) -> bool {
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
-    home_dir.join(gents::home::P2P_SECRET_KEY_FILE_NAME)
+    home_dir.join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME)
 }
 
 fn resolve_server_p2p_config(
@@ -1716,7 +1718,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = gents::identity::node_p2p(node).ok_or_else(|| {
+            let p2p = gents::store::identity::node_p2p(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )
@@ -1816,7 +1818,7 @@ mod grok_shim_tests {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let key = temp.path().join("keys").join("local.key");
-        gents::identity::load_or_create_file_identity(&key).unwrap();
+        gents::store::identity::load_or_create_file_identity(&key).unwrap();
         fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
         let args = parse_server(&["--key-path", key.to_str().unwrap()]);
 
@@ -1824,11 +1826,12 @@ mod grok_shim_tests {
             Ok(_) => panic!("an insecure key must not load"),
             Err(error) => error,
         };
-        let store = gents::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
-            .expect("typed refusal");
+        let store =
+            gents::store::local::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
+                .expect("typed refusal");
         assert_eq!(
             store.kind,
-            gents::storage_backend::IncompatibleStoreKind::InsecureKey
+            gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey
         );
         assert_eq!(
             crate::native_service::incompatible_store_exit_code(store.kind),

@@ -10,9 +10,11 @@ use super::data::DataCaller;
 use super::executor::PluginExecutor;
 use super::store::InstalledPlugin;
 use super::PluginVerdict;
-use crate::document_config::{PluginToolRef, WriteToolField};
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError};
-use crate::tool_call_lifecycle::delivery::PluginToolWrites;
+use crate::documents::{PluginToolRef, WriteToolField};
+use crate::inference::llm::tool::{
+    BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError,
+};
+use crate::tools::call::lifecycle::delivery::PluginToolWrites;
 use gents_loop::live_output::DeferredToolWrites;
 use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 
@@ -133,16 +135,17 @@ impl ToolDyn for PluginTool {
 
     fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
-            let mut input: serde_json::Value = match crate::llm::tool::parse_tool_args(&args) {
-                Ok(input) => input,
-                Err(error) => {
-                    return ToolDispatchResult {
-                        result: Err(error),
-                        plugin_receipt: None,
-                        deferred_writes: None,
-                    };
-                }
-            };
+            let mut input: serde_json::Value =
+                match crate::inference::llm::tool::parse_tool_args(&args) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        return ToolDispatchResult {
+                            result: Err(error),
+                            plugin_receipt: None,
+                            deferred_writes: None,
+                        };
+                    }
+                };
             if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
                 return ToolDispatchResult {
                     result: Err(tool_error(format!("{error:#}"))),
@@ -196,7 +199,7 @@ fn bound_schema(
     let mut seen = std::collections::BTreeSet::new();
     for field in fields {
         anyhow::ensure!(
-            crate::graphql::validate_graphql_name(&field.name).is_ok()
+            crate::store::graphql::validate_graphql_name(&field.name).is_ok()
                 && field.fill.is_some()
                 && !field.required
                 && seen.insert(&field.name),
@@ -230,8 +233,13 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
         .ok_or_else(|| anyhow::anyhow!("plugin input must be an object"))?;
     let mut resolved = Vec::new();
     for field in fields {
-        crate::defra_write::validate_field_input("String", false, true, object.get(&field.name))
-            .map_err(|error| anyhow::anyhow!("plugin input {:?}: {error}", field.name))?;
+        crate::tools::builtin::defra_write::validate_field_input(
+            "String",
+            false,
+            true,
+            object.get(&field.name),
+        )
+        .map_err(|error| anyhow::anyhow!("plugin input {:?}: {error}", field.name))?;
         let fill = field
             .fill
             .as_ref()
@@ -248,7 +256,7 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::WriteToolFieldFill;
+    use crate::documents::WriteToolFieldFill;
     use serde_json::json;
 
     fn fields() -> Vec<WriteToolField> {

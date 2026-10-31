@@ -1,12 +1,15 @@
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 mod archive;
 pub mod canonical_rows;
+pub mod mailbox;
+pub mod message;
+pub mod origin;
 pub use archive::{set_session_archived, set_session_archived_on};
 mod compaction_entries;
 mod control;
@@ -31,7 +34,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::import_history_observation;
 
-pub use crate::tool_call_lifecycle::query::{
+pub use crate::tools::call::lifecycle::query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     CanonicalToolCallPresentation,
 };

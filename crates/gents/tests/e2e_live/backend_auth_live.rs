@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::BackendAuth;
+use gents::documents::BackendAuth;
 use gents::{ensure_runtime_schemas, BackendProviderKind};
 
 use crate::support::fixtures::{bind_agent_backend, test_agent};

@@ -589,7 +589,7 @@ async fn interactive_input_drains_while_provider_is_held(
             assert_eq!(matching[0]["superseded_by_request_doc_id"], parent,
                 "{text} must be consumed by the original physical request; seeded={}; final={}",
                 serde_json::to_string(&seeded)?, serde_json::to_string(rows)?);
-            assert_eq!(matching[0]["failure_reason"], gents::lifecycle::FOLDED_REASON);
+            assert_eq!(matching[0]["failure_reason"], gents::request::lifecycle::FOLDED_REASON);
         }
         let captured = endpoint.captured_chat_requests();
         let continuation = captured.iter().find(|request| request["messages"].as_array().is_some_and(|messages|

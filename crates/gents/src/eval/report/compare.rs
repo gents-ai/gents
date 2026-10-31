@@ -3,6 +3,11 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::eval::optimization::evidence::{decision_seed, totals};
+use crate::eval::optimization::policy::{
+    cost_ok, decide, evidence_from_pairs, no_case_regression, sufficient, CaseEvidence,
+    DecisionReport, Evidence, Mode, PolicyV2,
+};
 use crate::eval::report::build::{
     CellReport, EvalReport, SlotClass, SlotReport, SlotScore, SlotVerdict,
 };
@@ -10,11 +15,6 @@ use crate::eval::report::evidence::CellUsage;
 use crate::eval::report::refused;
 use crate::eval::scoring::PILOT_PURPOSE;
 use crate::eval::{pair_trials, CaseTrialScore, DefinitionRef, Pair, PairedEvidence, TrialScore};
-use crate::optimization::evidence::{decision_seed, totals};
-use crate::optimization::policy::{
-    cost_ok, decide, evidence_from_pairs, no_case_regression, sufficient, CaseEvidence,
-    DecisionReport, Evidence, Mode, PolicyV2,
-};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CaseComparison {
@@ -334,13 +334,13 @@ fn case_comparison(case: &CaseEvidence) -> CaseComparison {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::EvalDefinition;
+    use crate::documents::EvalDefinition;
+    use crate::eval::optimization::policy::permutation_p_ppm;
     use crate::eval::report::build::build;
     use crate::eval::report::evidence::{cell_trial_scores, RunRows};
     use crate::eval::report::fixtures::{at, definition, fail, pass, record, Outcome, Rows, RUN};
     use crate::eval::report::report_refused;
     use crate::eval::OutcomeKind;
-    use crate::optimization::policy::permutation_p_ppm;
 
     fn report(definition: &EvalDefinition, rows: &Rows, cells: &[&str], trials: u32) -> EvalReport {
         let run = record(RUN, definition, cells, trials);
@@ -623,8 +623,8 @@ mod tests {
         );
     }
 
-    use crate::optimization::evidence::{decision_evidence, BASELINE_CELL, CANDIDATE_CELL};
-    use crate::optimization::policy::{Decision, RejectReason};
+    use crate::eval::optimization::evidence::{decision_evidence, BASELINE_CELL, CANDIDATE_CELL};
+    use crate::eval::optimization::policy::{Decision, RejectReason};
 
     const SIX: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
 

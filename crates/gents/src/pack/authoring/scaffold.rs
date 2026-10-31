@@ -52,7 +52,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
     // Resolve generated paths through the rooted owner before writing, refusing nested symlink escapes.
-    let context = crate::toolset::ToolContext::new(dir.to_path_buf(), false)?;
+    let context = crate::tools::native::ToolContext::new(dir.to_path_buf(), false)?;
     let mut output_paths = vec!["README.md".to_owned(), "manifest.json".to_owned()];
     if input.ux {
         output_paths.push(format!("ux/{}/plugin.js", names.name));

@@ -8,10 +8,10 @@ use gents_protocol::transcript::present_message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
-use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
-use crate::run_timeline::{RunTimelineRows, TimelineToolCallRow};
+use crate::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
 
 #[async_trait::async_trait]
 pub trait ObservationHook: Send + Sync {
@@ -135,7 +135,7 @@ pub async fn await_terminal_with(
         hook.on_tick(elapsed).await;
         if !interrupted_on_deadline && deadline.is_some_and(|deadline| elapsed >= deadline) {
             hook.on_interrupt_requested().await;
-            crate::interrupt::interrupt_request(node, request_id)
+            crate::request::interrupt::interrupt_request(node, request_id)
                 .await
                 .context("interrupt request after evaluation deadline")?;
             interrupted_on_deadline = true;
@@ -184,7 +184,7 @@ pub async fn collect_request_evidence(
     let data = response
         .data
         .context("collect request evidence returned no data")?;
-    let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
         &ConfigAccess::local(node.clone()),
         request_id,
     )
@@ -297,7 +297,7 @@ pub fn classify_request_outcome(
     }
     let budget_exhausted = evidence.failure_reason.as_deref().is_some_and(|reason| {
         reason.contains("invalid_tool_call_budget_exhausted")
-            || reason.contains(crate::agent::loop_stream::REPEATED_TOOL_FAILURE_PREFIX)
+            || reason.contains(crate::runtime::agent::loop_stream::REPEATED_TOOL_FAILURE_PREFIX)
     });
     if budget_exhausted {
         return Some("tool");
@@ -456,7 +456,7 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(cases.len(), 656);
-        let native_ownership_loss = crate::lifecycle::ExecutionOwnershipLost.to_string();
+        let native_ownership_loss = crate::request::lifecycle::ExecutionOwnershipLost.to_string();
         assert!(cases.iter().any(|case| {
             case.request_reason.as_deref() == Some(native_ownership_loss.as_str())
                 && case.outcome.as_deref() == Some("infrastructure")
@@ -545,9 +545,9 @@ mod tests {
     }
 
     async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
-        let request_id = crate::graphql::escape_graphql_string(request_id);
-        let node_did = crate::graphql::escape_graphql_string(home.did());
-        let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
+        let request_id = crate::store::graphql::escape_graphql_string(request_id);
+        let node_did = crate::store::graphql::escape_graphql_string(home.did());
+        let lifecycle_state = crate::store::graphql::escape_graphql_string(lifecycle_state);
         let mutation = format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
@@ -557,12 +557,12 @@ mod tests {
 
     #[tokio::test]
     async fn request_evidence_maps_every_source_it_reads() {
-        use crate::lifecycle::RequestTerminalOutcome;
-        use crate::streaming::DefraStreamWriter;
-        use crate::tool_call_lifecycle::admission_fixture::{
+        use crate::request::lifecycle::RequestTerminalOutcome;
+        use crate::request::streaming::DefraStreamWriter;
+        use crate::tools::call::lifecycle::admission_fixture::{
             claimed_signed_request, publish_accepted_on_claimed_request,
         };
-        use crate::tool_call_lifecycle::{AwaitMode, FailureClass};
+        use crate::tools::call::lifecycle::{AwaitMode, FailureClass};
         use gents_protocol::message::{AssistantContent, Message, Text};
         use gents_protocol::output::TerminalOutput;
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
@@ -857,7 +857,7 @@ mod tests {
         .unwrap();
         assert!(observed.interrupted_on_deadline);
         assert_eq!(observed.terminal_state, None);
-        let request_id = crate::graphql::escape_graphql_string("req-stuck");
+        let request_id = crate::store::graphql::escape_graphql_string("req-stuck");
         let query = format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#
         );

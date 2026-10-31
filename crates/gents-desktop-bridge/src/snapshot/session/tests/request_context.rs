@@ -89,7 +89,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         response.errors
     );
     let doc_id = |field: &str| {
-        gents::graphql::single_mutation_document(&response, field)
+        gents::store::graphql::single_mutation_document(&response, field)
             .expect("decode create response")
             .and_then(|row| row.get("_docID"))
             .and_then(serde_json::Value::as_str)
@@ -172,9 +172,9 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         );
     }
 
-    let accounted_json = gents::graphql::escape_graphql_string(&accounting_json(2_500));
-    let twin_json = gents::graphql::escape_graphql_string(&accounting_json(3_000));
-    let foreign_json = gents::graphql::escape_graphql_string(&accounting_json(9_999));
+    let accounted_json = gents::store::graphql::escape_graphql_string(&accounting_json(2_500));
+    let twin_json = gents::store::graphql::escape_graphql_string(&accounting_json(3_000));
+    let foreign_json = gents::store::graphql::escape_graphql_string(&accounting_json(9_999));
     let inference_calls = format!(
         r#"mutation {{
             accounted: create_InferenceCall(input: {{

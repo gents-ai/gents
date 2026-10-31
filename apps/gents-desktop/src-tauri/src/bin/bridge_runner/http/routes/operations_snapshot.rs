@@ -15,7 +15,7 @@ pub(super) async fn operations_snapshot_response(
     core: Arc<ClientCore>,
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot> {
-    let native_executors = gents::native_executor_status::active_native_executors()
+    let native_executors = gents::tools::exec::status::active_native_executors()
         .into_iter()
         .map(|executor| NativeExecutorStatusView {
             id: executor.id as i64,
@@ -71,10 +71,13 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
         }
     "#;
 
-    let response =
-        gents::graphql::graphql_with_transaction_retry(core.node(), query, "AgentToolCall query")
-            .await
-            .map_err(|error| format!("{error:#}"))?;
+    let response = gents::store::graphql::graphql_with_transaction_retry(
+        core.node(),
+        query,
+        "AgentToolCall query",
+    )
+    .await
+    .map_err(|error| format!("{error:#}"))?;
 
     let data = response
         .data

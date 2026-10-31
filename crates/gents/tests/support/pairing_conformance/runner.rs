@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Result};
-use gents::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
+use gents::runtime::agent::p2p_reconcile::{
     compute_owned_pairing_diff, to_replication_filters, update_applied_after_success, DiffOp,
     PairingActual as RuntimePairingActual,
 };
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 use crate::support::{first_optional_row, test_db, TestDb};
@@ -501,7 +501,7 @@ async fn read_peer_pairing_applied_row(
         bail!("read PeerPairingApplied failed: {:?}", resp.errors);
     }
     Ok(
-        gents::graphql::rows::<AppliedRow>(&resp, "PeerPairingApplied")?
+        gents::store::graphql::rows::<AppliedRow>(&resp, "PeerPairingApplied")?
             .into_iter()
             .min_by(|left, right| left.doc_id.cmp(&right.doc_id)),
     )

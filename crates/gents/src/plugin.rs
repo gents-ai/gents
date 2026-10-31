@@ -631,6 +631,7 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
 }
 
 pub mod allowed;
+pub mod application_write;
 pub mod approval;
 pub mod authority;
 mod bound;
@@ -657,6 +658,7 @@ mod service;
 pub mod store;
 pub mod tool;
 pub mod tool_calls;
+pub mod ux;
 
 pub use afterburner_core::manifold::Manifold;
 

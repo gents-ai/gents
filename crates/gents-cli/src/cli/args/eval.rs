@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
-use gents::optimization::target::JobTarget;
+use gents::eval::optimization::target::JobTarget;
 
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct EvalScopeArgs {
@@ -339,7 +339,7 @@ pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
     Ok(raw.to_owned())
 }
 
-pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit, String> {
+pub(crate) fn parse_split(raw: &str) -> Result<gents::documents::EvalSplit, String> {
     serde_json::from_value(serde_json::Value::String(raw.trim().to_owned()))
         .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
 }
@@ -375,7 +375,7 @@ pub(crate) struct EvalRunArgs {
     #[arg(long = "profile", value_parser = parse_assignment)]
     pub(crate) profiles: Vec<(String, String)>,
     #[arg(long, value_parser = parse_split, default_value = "validation")]
-    pub(crate) split: gents::document_config::EvalSplit,
+    pub(crate) split: gents::documents::EvalSplit,
     #[arg(long, default_value_t = 2)]
     pub(crate) trials: u32,
     #[arg(long, default_value_t = 1000)]

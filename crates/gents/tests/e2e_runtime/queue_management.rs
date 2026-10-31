@@ -1,10 +1,10 @@
-use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
-use gents::lifecycle::{
+use gents::request::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
+use gents::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -34,7 +34,7 @@ pub(super) async fn enqueue(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(did),
     );
-    request.input = gents::lifecycle::prepare_user_message_input(
+    request.input = gents::request::lifecycle::prepare_user_message_input(
         &ConfigAccess::local(db.node.clone()),
         did,
         session,
@@ -57,7 +57,7 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
         )
         .await
         .unwrap();
-    gents::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+    gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
 async fn submit_edit(

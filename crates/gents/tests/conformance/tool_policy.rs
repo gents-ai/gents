@@ -4,7 +4,7 @@ use crate::lean_vocab_test::{
     LeanPluginDataInsertOutcome, LeanPluginDataInvocation, LeanPluginDataOnConflict,
     LeanPluginDataOperation, LeanPluginDataRefusal, LeanPluginDataStamp, LeanPluginDataWriteFacts,
 };
-use gents::application_write::Observation as WriteFacts;
+use gents::plugin::application_write::Observation as WriteFacts;
 use gents::plugin::data::{
     self as plugin_data, InsertOutcome, Invocation, OnConflict, Stamp, WriteRefusal,
 };
@@ -34,7 +34,7 @@ pub(super) fn generated_goal_capability_resolution_matches_rust_decoder() {
     let cases = lean_goal_capability_resolution_cases();
     assert_eq!(cases.len(), 4, "goal capability resolution matrix drifted");
     for case in cases {
-        let (goal_tools, goal_creation) = gents::tool_surface::resolve_goal_capabilities(
+        let (goal_tools, goal_creation) = gents::tools::surface::resolve_goal_capabilities(
             case.explicit_goal_tools,
             case.explicit_goal_create,
         );
@@ -112,7 +112,7 @@ fn write_facts(op: LeanPluginDataOperation, w: LeanPluginDataWriteFacts) -> Writ
 /// `substituteCallerNodeDid` and `insertNote` through the pure core
 /// `plugin::data::admit_write_observation` beside the frozen owner
 /// `plugin::data::admit_write`, and its siblings, which
-/// `application_write::apply_plugin_writes_in_txn` calls inside the output's
+/// `plugin::application_write::apply_plugin_writes_in_txn` calls inside the output's
 /// transaction. Notes are checked here as the read-then-insert decision the
 /// transaction applies to the row it read.
 #[test]
@@ -207,7 +207,7 @@ fn generated_plugin_job_resource_cases_drive_scratch() {
     for (index, row) in scratch.iter().enumerate() {
         let allowed = row.cwd_allowed;
         assert_eq!(
-            gents::plugin_job::effects::admit_scratch(
+            gents::tools::background::job::effects::admit_scratch(
                 &row.cwd,
                 &|_path: &str| allowed,
                 &row.tool_call_id,

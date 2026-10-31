@@ -295,7 +295,7 @@ fn generated_scoped_replacement_case_matches_client_store_ownership() {
                     }))
                     .expect("modeled trigger observation")
                 })
-                .collect::<Vec<gents::document_config::TriggerObservation>>()
+                .collect::<Vec<gents::documents::TriggerObservation>>()
         };
         let observation_sources = |rows: &[serde_json::Value]| {
             rows.iter()

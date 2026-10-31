@@ -109,7 +109,9 @@ async fn client_binding(state: &DesktopAppState) -> ClientBinding {
     let configured = read_home_identity(node_home).await;
     let reviewed_path = Path::new(&reviewed.node_home);
     let reviewed_home = read_home_identity(reviewed_path).await;
-    let Ok(reviewed_init_present) = present(&gents::home::init_config_path(reviewed_path)) else {
+    let Ok(reviewed_init_present) =
+        present(&gents::store::local::home::init_config_path(reviewed_path))
+    else {
         return ClientBinding::Unbound;
     };
     classify_binding(

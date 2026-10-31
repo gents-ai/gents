@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::defra_node::EmbeddedNode;
 use crate::eval::runner::executor::{Capture, CaptureResult, FileRef};
-use crate::graphql::{
+use crate::store::graphql::{
     escape_graphql_string, graphql_with_transaction_retry, validate_collection_identifier,
     validate_graphql_name,
 };
@@ -24,7 +24,7 @@ pub(super) async fn run_captures(
     for capture in captures {
         match capture {
             Capture::Schema { name, collections } => {
-                let access = crate::config_client::ConfigAccess::local(node.clone());
+                let access = crate::store::config_client::ConfigAccess::local(node.clone());
                 let mut versions = Vec::new();
                 let mut failed = false;
                 for collection in collections {
@@ -133,15 +133,18 @@ pub(in crate::eval::runner::embedded) fn documents_capture_query(
     validate_filter_names(filter)?;
     for field in fields {
         anyhow::ensure!(
-            !crate::defra_query::is_restricted_field(collection, field),
+            !crate::tools::builtin::defra_query::is_restricted_field(collection, field),
             "field {field:?} on {collection:?} is restricted and cannot be captured"
         );
     }
     let mut filter_fields = Vec::new();
-    crate::defra_query::query::collect_filter_field_keys(filter, &mut filter_fields);
+    crate::tools::builtin::defra_query::query::collect_filter_field_keys(
+        filter,
+        &mut filter_fields,
+    );
     for field in &filter_fields {
         anyhow::ensure!(
-            !crate::defra_query::is_restricted_field(collection, field),
+            !crate::tools::builtin::defra_query::is_restricted_field(collection, field),
             "field {field:?} on {collection:?} is restricted and cannot be used in a capture filter"
         );
     }

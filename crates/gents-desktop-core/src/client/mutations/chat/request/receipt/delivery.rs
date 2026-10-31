@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use std::sync::Arc;
 
 use super::correlated::{Decision, Outcome, Record};

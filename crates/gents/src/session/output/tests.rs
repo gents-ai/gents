@@ -65,7 +65,9 @@ fn current_input_selection_matches_lean_owner() {
                     publication,
                 );
                 let key = match input.kind.as_str() {
-                    "folded" => crate::lifecycle::queue::folded_input_key("folded-request"),
+                    "folded" => {
+                        crate::request::lifecycle::queue::folded_input_key("folded-request")
+                    }
                     kind => kind.to_owned(),
                 };
                 row.message.message_key =
@@ -112,7 +114,7 @@ async fn create_doc(
         .execute_request(defra_node::QueryRequest::new(mutation).with_variables(variables))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    crate::graphql::single_mutation_document(&response, field)
+    crate::store::graphql::single_mutation_document(&response, field)
         .unwrap()
         .unwrap()["_docID"]
         .as_str()

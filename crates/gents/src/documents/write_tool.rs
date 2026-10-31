@@ -1,0 +1,581 @@
+use crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME;
+use crate::tools::mcp::meta::META_TOOL_NAMES;
+use crate::tools::native::{
+    AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
+    CANCEL_PROCESS_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SESSION_HISTORY_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
+    WAIT_PROCESS_TOOL_NAME,
+};
+use anyhow::Result;
+
+/// `name` is trimmed at deserialization; the field name is interpolated verbatim
+/// as a GraphQL input key, so stray whitespace would otherwise corrupt the
+/// mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(rename_all = "snake_case"))]
+pub enum WriteToolFieldFill {
+    Correlation,
+    SourceField(String),
+}
+
+impl serde::Serialize for WriteToolFieldFill {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Correlation => serializer.serialize_str("correlation"),
+            Self::SourceField(field) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("source_field", field)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolFieldFill {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(value) if value == "correlation" => Ok(Self::Correlation),
+            serde_json::Value::Object(map) if map.len() == 1 => {
+                let field = map
+                    .get("source_field")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        serde::de::Error::custom(
+                            "fill object must contain exactly one string source_field",
+                        )
+                    })?;
+                crate::store::graphql::validate_graphql_name(field)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(Self::SourceField(field.to_string()))
+            }
+            _ => Err(serde::de::Error::custom(
+                "fill must be \"correlation\" or {\"source_field\":\"field\"}",
+            )),
+        }
+    }
+}
+
+impl WriteToolFieldFill {
+    /// Resolve this fill from the current tool-call runtime context. Shared by
+    /// the bounded write and query tools so the correlation / source-field
+    /// vocabulary cannot drift.
+    pub fn resolve(&self, field_name: &str) -> Result<String> {
+        self.resolve_optional(field_name)?.ok_or_else(|| {
+            let source = match self {
+                Self::Correlation => "correlation",
+                Self::SourceField(source_field) => source_field,
+            };
+            anyhow::anyhow!(
+                "runtime-filled field `{field_name}` requires source field `{source}` in trigger context"
+            )
+        })
+    }
+
+    /// Like [`Self::resolve`], but a source field the trigger did not capture
+    /// (absent or null on the source document) resolves to `None`. Bounded
+    /// writes use this to omit an unset optional fill; query filters and
+    /// plugin inputs keep [`Self::resolve`] so a missing scope fails closed.
+    pub fn resolve_optional(&self, field_name: &str) -> Result<Option<String>> {
+        let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "runtime-filled field `{field_name}` requires an active AgentRequest context"
+                )
+            })?;
+        match self {
+            Self::Correlation => runtime
+                .correlation
+                .filter(|value| !value.trim().is_empty())
+                .map(Some)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "runtime-filled field `{field_name}` requires a non-empty correlation"
+                    )
+                }),
+            Self::SourceField(source_field) => Ok(runtime.source_fields.get(source_field).cloned()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct WriteToolField {
+    pub name: String,
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional))]
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub fill: Option<WriteToolFieldFill>,
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolField {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            name: String,
+            #[serde(default)]
+            required: bool,
+            #[serde(default)]
+            fill: Option<WriteToolFieldFill>,
+        }
+        let raw = Raw::deserialize(deserializer).map_err(|error| {
+            serde::de::Error::custom(format!(
+                "{error}; create fields and query filter_fields use objects: {{\"name\":\"correlation\"}}. Query fields use strings: \"correlation\""
+            ))
+        })?;
+        Ok(WriteToolField {
+            name: raw.name.trim().to_string(),
+            required: raw.required,
+            fill: raw.fill,
+        })
+    }
+}
+
+/// A declarative, schema-bounded document-write tool. Each declaration becomes
+/// one runtime `BoundedWriteTool` that writes exactly one validated document to
+/// one collection. DatastoreToolSurface.entries owns these canonical declarations;
+/// Tools.datastore selects the surfaces by their owner-scoped document IDs.
+/// `tool_name` and `collection` are trimmed at deserialization; `description`
+/// is preserved verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct WriteToolDecl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
+    pub tool_name: String,
+    pub collection: String,
+    #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
+    pub description: String,
+    #[cfg_attr(
+        feature = "typescript",
+        ts(as = "Option<Vec<WriteToolField>>", optional)
+    )]
+    pub fields: Vec<WriteToolField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub output_obligation: Option<WriteToolOutputObligation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum WriteToolOutputObligationScope {
+    Request,
+    Trigger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct WriteToolOutputObligation {
+    pub scope: WriteToolOutputObligationScope,
+    #[serde(default = "default_minimum_writes")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<usize>", optional))]
+    pub minimum_writes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub expected_count_field: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputObligationDecision {
+    Continue,
+    Complete,
+    Reject,
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolOutputObligation {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            scope: WriteToolOutputObligationScope,
+            #[serde(default = "default_minimum_writes")]
+            minimum_writes: usize,
+            #[serde(default)]
+            expected_count_field: Option<String>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Self {
+            scope: raw.scope,
+            minimum_writes: raw.minimum_writes,
+            expected_count_field: raw
+                .expected_count_field
+                .map(|field| field.trim().to_string())
+                .filter(|field| !field.is_empty()),
+        })
+    }
+}
+
+impl WriteToolOutputObligation {
+    pub fn applies_to(&self, has_automated_trigger_lineage: bool) -> bool {
+        match self.scope {
+            WriteToolOutputObligationScope::Request => true,
+            WriteToolOutputObligationScope::Trigger => has_automated_trigger_lineage,
+        }
+    }
+
+    pub fn decision(
+        &self,
+        completed_writes: usize,
+        expected_writes: Option<usize>,
+        count_valid: bool,
+    ) -> OutputObligationDecision {
+        if !count_valid {
+            return OutputObligationDecision::Reject;
+        }
+        if let Some(expected_writes) = expected_writes {
+            if expected_writes < self.minimum_writes || completed_writes > expected_writes {
+                return OutputObligationDecision::Reject;
+            }
+            if completed_writes == expected_writes {
+                return OutputObligationDecision::Complete;
+            }
+            return OutputObligationDecision::Continue;
+        }
+        if completed_writes >= self.minimum_writes {
+            OutputObligationDecision::Complete
+        } else {
+            OutputObligationDecision::Continue
+        }
+    }
+}
+
+const fn default_minimum_writes() -> usize {
+    1
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolDecl {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            tool_name: String,
+            #[serde(default)]
+            notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
+            collection: String,
+            #[serde(default)]
+            description: String,
+            #[serde(default)]
+            fields: Vec<WriteToolField>,
+            #[serde(default)]
+            output_obligation: Option<WriteToolOutputObligation>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(WriteToolDecl {
+            notification: raw.notification,
+            tool_name: raw.tool_name.trim().to_string(),
+            collection: raw.collection.trim().to_string(),
+            description: raw.description,
+            fields: raw.fields,
+            output_obligation: raw.output_obligation,
+        })
+    }
+}
+
+impl WriteToolDecl {
+    /// Validate the declaration once for every registration and execution path.
+    pub fn validate(&self) -> Result<()> {
+        if self.tool_name.trim().is_empty() {
+            anyhow::bail!("tool_name must be non-empty");
+        }
+        crate::store::graphql::validate_collection_identifier(&self.collection).map_err(
+            |error| anyhow::anyhow!("invalid collection {:?}: {error}", self.collection),
+        )?;
+        reject_protected_collection_name(&self.collection)?;
+        for (index, field) in self.fields.iter().enumerate() {
+            if field.name.trim().is_empty() {
+                anyhow::bail!("invalid field[{index}] name: empty name");
+            }
+            crate::store::graphql::validate_graphql_name(&field.name).map_err(|error| {
+                anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
+            })?;
+            if field.name == "requester_did" && field.fill.is_none() {
+                anyhow::bail!(
+                    "field[{index}] requester_did is node identity and must be runtime-filled"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Boolean form used by tool advertisement and registration filters.
+    pub fn is_well_formed(&self) -> bool {
+        self.validate().is_ok()
+    }
+
+    pub fn output_obligation_is_well_formed(&self) -> bool {
+        self.output_obligation.as_ref().is_none_or(|obligation| {
+            obligation.minimum_writes > 0
+                && obligation.expected_count_field.as_ref().is_none_or(|name| {
+                    self.fields
+                        .iter()
+                        .any(|field| field.name == *name && field.required && field.fill.is_none())
+                })
+        })
+    }
+}
+
+pub(crate) fn validate_write_tool_declarations(
+    decls: &[WriteToolDecl],
+    cli_tool_names: &[String],
+    additional_tool_names: &[String],
+) -> Result<()> {
+    let cli_tool_names = cli_tool_names
+        .iter()
+        .map(|name| name.trim())
+        .collect::<rapidhash::RapidHashSet<_>>();
+    let additional_tool_names = additional_tool_names
+        .iter()
+        .map(|name| name.trim())
+        .collect::<rapidhash::RapidHashSet<_>>();
+    let mut seen_tool_names = rapidhash::RapidHashSet::default();
+    for (i, decl) in decls.iter().enumerate() {
+        decl.validate().map_err(|error| {
+            anyhow::anyhow!(
+                "write_tools[{i}] (tool {:?}) is malformed: {error}",
+                decl.tool_name
+            )
+        })?;
+        crate::session::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
+            anyhow::anyhow!(
+                "write_tools[{i}] (tool {:?}) violates mailbox registration policy: {error}",
+                decl.tool_name
+            )
+        })?;
+        if !decl.output_obligation_is_well_formed() {
+            return Err(anyhow::anyhow!(
+                "write_tools[{i}] (tool {:?}) output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                decl.tool_name
+            ));
+        }
+        reject_tool_name_surface_collisions(
+            "write_tools",
+            i,
+            &decl.tool_name,
+            "write tools",
+            &cli_tool_names,
+            &additional_tool_names,
+        )?;
+        let mut seen_field_names = rapidhash::RapidHashSet::default();
+        for (j, field) in decl.fields.iter().enumerate() {
+            if !seen_field_names.insert(field.name.trim()) {
+                return Err(anyhow::anyhow!(
+                    "write_tools[{i}] (tool {:?}) has a duplicate field name {:?}; each WriteToolField in a declaration must have a unique name",
+                    decl.tool_name,
+                    field.name.trim()
+                ));
+            }
+            if field.fill.is_some() && field.required {
+                return Err(anyhow::anyhow!(
+                    "write_tools[{i}] (tool {:?}) field[{j}] {:?} is runtime-filled and cannot be required",
+                    decl.tool_name,
+                    field.name,
+                ));
+            }
+            if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
+                crate::store::graphql::validate_graphql_name(source_field).map_err(|error| {
+                    anyhow::anyhow!(
+                        "write_tools[{i}] (tool {:?}) field[{j}] has invalid source_field {:?}: {error}",
+                        decl.tool_name,
+                        source_field,
+                    )
+                })?;
+            }
+        }
+        if !seen_tool_names.insert(decl.tool_name.trim()) {
+            return Err(anyhow::anyhow!(
+                "write_tools has a duplicate tool_name {:?}; each declared write tool must have a unique tool_name",
+                decl.tool_name.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// True when `name` is already claimed by the built-in tool surface: the native
+/// file/shell tools, the meta tools, the agent/process control tools, or the
+/// built-in singletons (including the durable goal tools).
+///
+/// A colliding `write_tools` declaration would register two tools under one
+/// advertised name with last-write-wins — silently shadowing the built-in — so
+/// the apply/ingest validators reject the collision instead.
+pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
+    let name = name.trim();
+
+    const AGENT_TOOL_NAMES: &[&str] = &[
+        AGENT_NEW_TOOL_NAME,
+        AGENT_MESSAGE_TOOL_NAME,
+        AGENT_INTERRUPT_TOOL_NAME,
+        AGENT_LIST_TOOL_NAME,
+        SPAWN_PROCESS_TOOL_NAME,
+        WAIT_PROCESS_TOOL_NAME,
+        LIST_PROCESSES_TOOL_NAME,
+        READ_PROCESS_TOOL_NAME,
+        CANCEL_PROCESS_TOOL_NAME,
+    ];
+    const SINGLETON_TOOL_NAMES: &[&str] = &[
+        DEFRA_QUERY_TOOL_NAME,
+        crate::plugin::application_write::WRITE_TOOL_NAME,
+        CONTEXT_BUDGET_TOOL_NAME,
+        SESSION_HISTORY_TOOL_NAME,
+        crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME,
+        crate::goal::CREATE_GOAL_TOOL_NAME,
+        crate::goal::GET_GOAL_TOOL_NAME,
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        "memory",
+    ];
+
+    crate::tools::native::NativeTool::ALL_NAMES.contains(&name)
+        || name == crate::tools::native::lsp::LSP_TOOL_NAME
+        || META_TOOL_NAMES.contains(&name)
+        || AGENT_TOOL_NAMES.contains(&name)
+        || SINGLETON_TOOL_NAMES.contains(&name)
+        || crate::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
+}
+
+/// Collections no datastore tool may read or write: protected eval material
+/// and promotion evidence.
+pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
+    gents_protocol::schemas::EVAL_DEFINITION_NAME,
+    gents_protocol::schemas::EVAL_RUN_NAME,
+    gents_protocol::schemas::EVAL_TRIAL_NAME,
+    gents_protocol::schemas::EVAL_VERDICT_NAME,
+    gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
+];
+
+/// Reject a collection a datastore create/query tool may never name. Sits
+/// beside `validate_collection_identifier` rather than inside it: that check
+/// lives in `gents-protocol` and is shared far beyond datastore surfaces.
+pub(crate) fn reject_protected_collection_name(collection: &str) -> Result<()> {
+    if PROTECTED_DATASTORE_COLLECTIONS.contains(&collection) {
+        anyhow::bail!(
+            "collection {collection:?} is protected and cannot be exposed through a datastore tool"
+        );
+    }
+    Ok(())
+}
+
+/// Reject a declared write/query tool name that collides with a built-in,
+/// a `cli_tool_names` entry, or another runtime-provided tool.
+pub(crate) fn reject_tool_name_surface_collisions(
+    field: &str,
+    index: usize,
+    tool_name: &str,
+    role: &str,
+    cli_tool_names: &rapidhash::RapidHashSet<&str>,
+    additional_tool_names: &rapidhash::RapidHashSet<&str>,
+) -> Result<()> {
+    let name = tool_name.trim();
+    if is_reserved_builtin_tool_name(tool_name) {
+        return Err(anyhow::anyhow!(
+            "{field}[{index}] tool_name {name:?} collides with a built-in tool; declared {role} must use a unique name"
+        ));
+    }
+    if cli_tool_names.contains(name) {
+        return Err(anyhow::anyhow!(
+            "{field}[{index}] tool_name {name:?} collides with a CLI entry in the same Tools document; each tool must have a unique name"
+        ));
+    }
+    if additional_tool_names.contains(name) {
+        return Err(anyhow::anyhow!(
+            "{field}[{index}] tool_name {name:?} collides with another runtime-provided tool; each tool must have a unique name"
+        ));
+    }
+    Ok(())
+}
+
+/// Refusal for a model-supplied value on a runtime-filled field. It names the
+/// declaring surface entry because the fix belongs to whoever configured it,
+/// not to the calling model.
+pub fn runtime_filled_refusal(
+    kind: &str,
+    field: &str,
+    tool_name: &str,
+    surface_id: Option<&str>,
+    fill: &WriteToolFieldFill,
+) -> String {
+    let source = match fill {
+        WriteToolFieldFill::Correlation => "the request/trigger correlation ID".to_owned(),
+        WriteToolFieldFill::SourceField(name) => format!("trigger document field {name:?}"),
+    };
+    format!(
+        "{kind} `{field}` is runtime-filled and must not be supplied to tool `{tool_name}`. The runtime uses {source}. For a caller-supplied value, remove fill from this field. {}",
+        surface_recovery(tool_name, surface_id)
+    )
+}
+
+pub(crate) fn undeclared_field_refusal(
+    kind: &str,
+    field: &str,
+    tool_name: &str,
+    surface_id: Option<&str>,
+    allowed: &[&str],
+) -> String {
+    let contract = if kind == "filter" {
+        "Query fields selects returned columns; filter_fields declares filter arguments."
+    } else {
+        "Create fields declares writable arguments; omitted or empty fields permits none. Schema fields are not inherited."
+    };
+    format!(
+        "{kind} `{field}` is not permitted by tool `{tool_name}`. Allowed {kind} arguments: {allowed:?}. {contract} To expose this argument, add {{\"name\":{field:?}}} to the declaration. {}",
+        surface_recovery(tool_name, surface_id)
+    )
+}
+
+fn surface_recovery(tool_name: &str, surface_id: Option<&str>) -> String {
+    let read = match surface_id {
+        Some(surface) => format!("Edit surface {surface:?}, entry {tool_name:?}."),
+        None => format!("Inspect the configuration declaring tool {tool_name:?}."),
+    };
+    format!(
+        "{read} Changes take effect next request; retrying in this request uses the old definition."
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn eval_and_optimization_collections_are_never_exposed() {
+        for name in super::PROTECTED_DATASTORE_COLLECTIONS {
+            let error = super::reject_protected_collection_name(name).unwrap_err();
+            assert!(format!("{error:#}").contains("protected"), "{error:#}");
+        }
+        for name in [
+            gents_protocol::schemas::EVAL_DEFINITION_NAME,
+            gents_protocol::schemas::EVAL_RUN_NAME,
+            gents_protocol::schemas::EVAL_TRIAL_NAME,
+            gents_protocol::schemas::EVAL_VERDICT_NAME,
+            gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
+        ] {
+            assert!(
+                super::PROTECTED_DATASTORE_COLLECTIONS.contains(&name),
+                "{name}"
+            );
+        }
+        assert!(super::reject_protected_collection_name("Notes").is_ok());
+        assert!(
+            super::PROTECTED_DATASTORE_COLLECTIONS
+                .iter()
+                .all(|name| gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(name)),
+            "every protected name must be a registered collection"
+        );
+    }
+}

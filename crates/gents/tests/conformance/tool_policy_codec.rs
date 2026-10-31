@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use gents::tool_surface::ToolPolicySurface;
-use gents::tool_surface::{BashMode, EndpointScope, FileToolMode, ToolPolicyBash};
-use gents::toolset::{CommandExecutionMode, CommandNetworkMode};
+use gents::tools::native::{CommandExecutionMode, CommandNetworkMode};
+use gents::tools::surface::ToolPolicySurface;
+use gents::tools::surface::{BashMode, EndpointScope, FileToolMode, ToolPolicyBash};
 
 use crate::lean_vocab_test::{
     LeanToolPolicySurfaceView as View, LeanToolPolicyWriteGrant as WriteGrant,

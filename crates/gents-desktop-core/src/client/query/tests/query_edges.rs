@@ -16,7 +16,7 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
     assert!(query.contains("_eq: \"did:alpha\""));
     assert_eq!(
         TRIGGER_FIELDS,
-        gents::config_client::config_projection(gents::Collection::Trigger, None)
+        gents::store::config_client::config_projection(gents::Collection::Trigger, None)
             .unwrap()
             .0
             .join(" ")
@@ -30,11 +30,13 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
             fields
         },
         {
-            let mut fields =
-                gents::config_client::config_projection(gents::Collection::InferenceBackend, None)
-                    .unwrap()
-                    .0
-                    .to_vec();
+            let mut fields = gents::store::config_client::config_projection(
+                gents::Collection::InferenceBackend,
+                None,
+            )
+            .unwrap()
+            .0
+            .to_vec();
             fields.sort_unstable();
             fields
         }
@@ -141,14 +143,14 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
             "purpose":"normal", "content":format!("physical twin {index}")
         }))
         .unwrap();
-        let result = gents::config_client::ConfigAccess::write_local(
+        let result = gents::store::config_client::ConfigAccess::write_local(
             &node,
             "test.task_history_twins",
             &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
         )
         .await
         .unwrap();
-        docs.push(gents::graphql::created_doc_id(&result, "AgentRequest").unwrap());
+        docs.push(gents::store::graphql::created_doc_id(&result, "AgentRequest").unwrap());
     }
     for index in 0..9 {
         let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
@@ -158,7 +160,7 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
             "purpose":null
         }))
         .unwrap();
-        gents::config_client::ConfigAccess::write_local(
+        gents::store::config_client::ConfigAccess::write_local(
             &node,
             "test.task_history_nonpublic",
             &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
@@ -648,7 +650,7 @@ async fn trigger_patch_counts_physical_documents_for_mixed_present_and_missing_i
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    gents::config_client::ConfigAccess::write_local(
+    gents::store::config_client::ConfigAccess::write_local(
         &node,
         "test.trigger_patch",
         r#"mutation {
@@ -817,7 +819,7 @@ async fn load_agent_tool_calls_hydrates_background_projection_fields() {
 
 #[tokio::test]
 async fn load_agent_tool_calls_hydrates_job_pin_and_progress() {
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
 
     let node = Arc::new(

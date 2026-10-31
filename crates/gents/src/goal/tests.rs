@@ -3,7 +3,9 @@ use super::*;
 #[tokio::test]
 async fn session_token_usage_breakdown_sums_to_the_total() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let owner = "did:key:z6MkTestOwner";
     let request = format!(
         r#"mutation {{ create_AgentRequest(input: {{
@@ -15,12 +17,13 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     );
     let response = node.execute(&request).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let request_doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
-        .unwrap()
-        .and_then(|document| document.get("_docID"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap()
-        .to_owned();
+    let request_doc_id =
+        crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
+            .unwrap()
+            .and_then(|document| document.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_owned();
     for (seq, prompt, completion) in [(1, 1000, 50), (2, 200, 7)] {
         let call = format!(
             r#"mutation {{ add_InferenceCall(input: {{
@@ -37,7 +40,7 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
         let response = node.execute(&call).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
-    let usage = crate::config_client::ConfigAccess::transact_local_readonly(
+    let usage = crate::store::config_client::ConfigAccess::transact_local_readonly(
         &node,
         None,
         "goal.session_usage_breakdown_test",
@@ -69,7 +72,9 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
 #[tokio::test]
 async fn auto_resume_field_round_trips_through_the_live_schema() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let owner = "did:key:z6MkTestOwner";
     let goal = set_goal(&node, owner, "session", Some("ship"), None, None)
         .await
@@ -92,7 +97,9 @@ async fn auto_resume_field_round_trips_through_the_live_schema() {
 
 async fn auto_resume_access() -> crate::ConfigAccess {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     crate::ConfigAccess::local(node)
 }
 

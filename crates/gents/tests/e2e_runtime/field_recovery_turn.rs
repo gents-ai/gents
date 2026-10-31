@@ -5,7 +5,7 @@ use crate::support::{
     streaming_backend::StreamChunk,
     test_db,
 };
-use gents::document_config::{DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools};
+use gents::documents::{DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools};
 use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -15,14 +15,14 @@ use std::{sync::Arc, time::Duration};
 async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     let db = test_db("field-recovery-writer").await;
     let did = db.node_identity.did().to_owned();
-    let access = gents::config_client::ConfigAccess::local(db.node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(db.node.clone());
     access
         .add_collection("type ReaderWork { instructions: String owned_files: String }")
         .await
         .unwrap();
     let instructions = "é".repeat(2436);
     let owned_files = format!("[\"{}\"]", "x".repeat(2920));
-    let mutation=format!("mutation {{add_ReaderWork(input: {{instructions: \"{}\", owned_files: \"{}\"}}) {{_docID}}}}", gents::graphql::escape_graphql_string(&instructions),gents::graphql::escape_graphql_string(&owned_files));
+    let mutation=format!("mutation {{add_ReaderWork(input: {{instructions: \"{}\", owned_files: \"{}\"}}) {{_docID}}}}", gents::store::graphql::escape_graphql_string(&instructions),gents::store::graphql::escape_graphql_string(&owned_files));
     let response = access
         .write("test.field_recovery.work", &mutation)
         .await

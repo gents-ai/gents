@@ -255,11 +255,11 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         bytes,
     )
     .unwrap();
-    let (packed, _) = crate::pack_archive::pack_dir(&next_dir.path().join("source")).unwrap();
-    let next = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let (packed, _) = crate::pack::archive::pack_dir(&next_dir.path().join("source")).unwrap();
+    let next = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     access.write("test.dangling_agent", r#"mutation { create_Agent(input: {agent_id: "broken", node_did: "did:test:owner", context_id: "missing", inference_profile_id: "profile"}) { _docID } }"#).await.unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();

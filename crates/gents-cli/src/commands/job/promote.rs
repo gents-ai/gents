@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::document_config::Tools;
+use gents::documents::Tools;
 use gents::pack::authoring::check_dir;
 use gents::pack::authoring::test::run_plugin_cases;
-use gents::plugin_job::promote::{
+use gents::store::config_client::ConfigAccess;
+use gents::tools::background::job::promote::{
     generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
     PromotionRecord,
 };
-use gents::plugin_job::view::JobKey;
+use gents::tools::background::job::view::JobKey;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -188,7 +188,7 @@ pub async fn promote(
             .transact_readonly("job.promote.agent_tools", move |txn| {
                 let (owner, agent_id) = (owner.clone(), agent_id.clone());
                 Box::pin(async move {
-                    gents::document_config::load_agent_tools_in_txn(txn, &owner, &agent_id).await
+                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_id).await
                 })
             })
             .await
@@ -312,8 +312,8 @@ pub async fn promote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::GraphqlEndpoint;
-    use gents::plugin_job::promote::gate;
+    use gents::store::config_client::GraphqlEndpoint;
+    use gents::tools::background::job::promote::gate;
     use gents_protocol::job::{JobOrigin, JobPinSummary, JobScope, JobState, JobView};
 
     fn view(state: JobState, origin: JobOrigin) -> JobView {

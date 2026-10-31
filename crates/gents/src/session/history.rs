@@ -47,10 +47,10 @@ pub(crate) async fn load_history_through_sequence(
 
 pub(crate) async fn load_sequenced_history_for_request(
     node: &EmbeddedNode,
-    request: &crate::watcher::AgentRequest,
+    request: &crate::request::watcher::AgentRequest,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
-    provider_profile: crate::provider_input::ProviderInputProfile,
+    provider_profile: crate::turn::provider_input::ProviderInputProfile,
 ) -> Result<Vec<SequencedMessage>> {
     super::output::sequenced::load_sequenced_messages(
         node,
@@ -67,7 +67,7 @@ pub(crate) async fn load_sequenced_history_for_request(
 
 pub(crate) async fn retry_has_published_input(
     node: &EmbeddedNode,
-    request: &crate::watcher::AgentRequest,
+    request: &crate::request::watcher::AgentRequest,
 ) -> Result<bool> {
     let Some(mut parent_id) = request.retry_parent_request_doc_id.clone() else {
         return Ok(false);
@@ -78,13 +78,13 @@ pub(crate) async fn retry_has_published_input(
             visited.insert(parent_id.clone()),
             "retry parent chain contains a cycle"
         );
-        let parent = crate::graphql::escape_graphql_string(&parent_id);
+        let parent = crate::store::graphql::escape_graphql_string(&parent_id);
         let scope = super::query::session_scope_filter(
             &request.node_did,
             &request.session_id,
             request.requester_did.as_deref(),
         );
-        let key = crate::graphql::escape_graphql_string(
+        let key = crate::store::graphql::escape_graphql_string(
             &super::canonical_rows::authored_message_key(&parent_id, "prompt"),
         );
         let query = format!(
@@ -98,9 +98,12 @@ pub(crate) async fn retry_has_published_input(
                 _or: [{{ await_mode: {{ _eq: "foreground" }} }}, {{ await_mode: {{ _eq: null }} }}] }}, limit: 1) {{ _docID }}
         }}"#
         );
-        let response =
-            crate::graphql::graphql_with_transaction_retry(node, &query, "resolve retry frontier")
-                .await?;
+        let response = crate::store::graphql::graphql_with_transaction_retry(
+            node,
+            &query,
+            "resolve retry frontier",
+        )
+        .await?;
         let rows = response
             .data
             .as_ref()

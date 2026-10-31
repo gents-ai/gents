@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -9,7 +9,7 @@ use super::super::cli_process::{path_arg, run_cli_json};
 use super::manifest::ResultDocumentExpectation;
 use super::stages::StageResult;
 use crate::graphql_access::post_graphql;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 
 pub(super) async fn graphql_rows(
     graphql: &GraphqlEndpoint,

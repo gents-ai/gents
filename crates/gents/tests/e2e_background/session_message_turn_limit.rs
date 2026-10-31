@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::config::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde::Deserialize;
 use serde_json::json;
@@ -67,12 +67,12 @@ async fn bind_child_execution_max_turns(
     node_did: &str,
     max_turns: i64,
 ) {
-    use gents::config_client::{
+    use gents::store::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;
 
-    gents::config_client::ConfigAccess::transact_local_write(
+    gents::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.bind_child_execution_max_turns",
@@ -102,7 +102,7 @@ async fn bind_child_execution_max_turns(
                         update: profile,
                     },
                 ])?;
-                gents::config_client::apply_desired_state_plan(txn, &plan).await
+                gents::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
         },
     )
@@ -193,7 +193,7 @@ async fn start_child_session(
             prompt: PARENT_PROMPT,
             accepted_chunks: vec![StreamChunk::tool_call(
                 PARENT_TOOL_CALL_ID,
-                gents::toolset::AGENT_NEW_TOOL_NAME,
+                gents::tools::native::AGENT_NEW_TOOL_NAME,
                 json!({
                     "agent": CHILD_AGENT_ID,
                     "prompt": CHILD_PROMPT,

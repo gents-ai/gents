@@ -10,12 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::plugin_job::keys::{job_session_id, job_spawn_key};
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use gents::store::config_client::ConfigAccess;
+use gents::tools::background::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{
     JobBudget, JobCeiling, JobEffects, JobGuestPin, JobOrigin, JobPauseReason, JobPin, JobProgress,
     JobSpawn, JobState, JobStepOutput,
@@ -599,7 +599,7 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
                     agent_id: "general".into(),
                     session_id: "job-s1".into(),
                     content: "run".into(),
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: "2026-06-01T10:00:00Z".into(),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),

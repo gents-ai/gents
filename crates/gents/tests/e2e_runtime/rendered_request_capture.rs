@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
-use gents::llm::message::Message;
-use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::rendered_request::RenderedCompletionRequest;
+use gents::inference::llm::message::Message;
+use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use gents::inference::rendered_request::RenderedCompletionRequest;
+use gents::store::graphql::escape_graphql_string;
 use gents::{AgentBuilder, CompactionStrategy, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
@@ -285,7 +285,7 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
 #[tokio::test]
 async fn capture_is_idempotent_and_never_rebinds_a_key() {
     let db = test_db("rendered-request-capture-idempotency").await;
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
 
     let first = rendered_fixture(serde_json::json!({"model": "m", "messages": [{"role": "user"}]}));
     sink.capture(first.clone()).await.expect("first capture");
@@ -397,7 +397,7 @@ fn message_text(seed: u64, len: usize) -> String {
 #[tokio::test]
 async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let db = test_db("rendered-request-manifest-linear").await;
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
     let turns = 12usize;
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
@@ -417,25 +417,27 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         });
         let mut rendered = rendered_fixture(body.clone());
         rendered.request_id = format!("req-manifest-{turn}");
-        rendered.assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-            gents::rendered_request::AssemblyBuildPath::Budgeted,
-            vec![Message::user(format!(
-                "λ {} {}",
-                turn,
-                message_text(1000 + u64::try_from(turn).unwrap(), 3 * 1024)
-            ))],
-        );
+        rendered.assembly_trace =
+            gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+                gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
+                vec![Message::user(format!(
+                    "λ {} {}",
+                    turn,
+                    message_text(1000 + u64::try_from(turn).unwrap(), 3 * 1024)
+                ))],
+            );
         rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
-        rendered.provenance_json =
-            serde_json::to_value(gents::rendered_request::ProvenanceManifest::captured_only(
+        rendered.provenance_json = serde_json::to_value(
+            gents::inference::rendered_request::ProvenanceManifest::captured_only(
                 rendered.capture_scope.clone(),
                 None,
                 None,
                 rendered.assembly_trace.clone(),
-            ))
-            .unwrap();
+            ),
+        )
+        .unwrap();
         rendered.turn_index = turn;
-        rendered.capture_key = gents::rendered_request::capture_key(
+        rendered.capture_key = gents::inference::rendered_request::capture_key(
             &rendered.node_did,
             &rendered.session_id,
             &rendered.request_doc_id,
@@ -457,7 +459,9 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let row = response.data.unwrap()["RenderedRequest"][0].clone();
         assert_eq!(
             row["capture_version"].as_u64(),
-            Some(u64::from(gents::rendered_request::CAPTURE_VERSION))
+            Some(u64::from(
+                gents::inference::rendered_request::CAPTURE_VERSION
+            ))
         );
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
@@ -471,20 +475,20 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             referenced_blocks += keys.len();
             leaf_keys.extend(keys);
         }
-        let decoded = gents::rendered_request::decode_capture_json_embedded(
+        let decoded = gents::inference::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
-            gents::rendered_request::CAPTURE_VERSION,
+            gents::inference::rendered_request::CAPTURE_VERSION,
             stored,
-            gents::rendered_request::CapturePayloadKind::RequestBody,
+            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await
         .unwrap();
         assert_eq!(decoded, canonical(&body));
-        let decoded_payload = gents::rendered_request::decode_capture_json_embedded(
+        let decoded_payload = gents::inference::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
-            gents::rendered_request::CAPTURE_VERSION,
+            gents::inference::rendered_request::CAPTURE_VERSION,
             stored,
-            gents::rendered_request::CapturePayloadKind::ProvenancePayload,
+            gents::inference::rendered_request::CapturePayloadKind::ProvenancePayload,
         )
         .await
         .unwrap();
@@ -495,12 +499,13 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let mut legacy_manifest = rendered.provenance_json.clone();
         legacy_manifest["manifest_version"] = serde_json::json!(3);
         legacy_manifest["assembly_trace"] = rendered.provenance_payload_json.clone();
-        let turn_body_bytes = gents::rendered_request::canonical_json_string(&body)
+        let turn_body_bytes = gents::inference::rendered_request::canonical_json_string(&body)
             .unwrap()
             .len();
-        let turn_trace_bytes = gents::rendered_request::canonical_json_string(&legacy_manifest)
-            .unwrap()
-            .len();
+        let turn_trace_bytes =
+            gents::inference::rendered_request::canonical_json_string(&legacy_manifest)
+                .unwrap()
+                .len();
         let turn_row_bytes = stored.len() + row["provenance_json"].as_str().unwrap().len();
         if turn + 1 == turns {
             last_turn_new_content_bytes =
@@ -673,23 +678,25 @@ fn manifest_turn_fixture(body: Value, turn: usize) -> RenderedCompletionRequest 
     let mut rendered = rendered_fixture(body);
     rendered.request_id = format!("req-manifest-resync-{turn}");
     rendered.turn_index = turn;
-    rendered.assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-        gents::rendered_request::AssemblyBuildPath::Budgeted,
-        vec![Message::user(format!(
-            "λ {turn} {}",
-            message_text(2000 + u64::try_from(turn).unwrap(), 4 * 1024)
-        ))],
-    );
+    rendered.assembly_trace =
+        gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+            gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
+            vec![Message::user(format!(
+                "λ {turn} {}",
+                message_text(2000 + u64::try_from(turn).unwrap(), 4 * 1024)
+            ))],
+        );
     rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
-    rendered.provenance_json =
-        serde_json::to_value(gents::rendered_request::ProvenanceManifest::captured_only(
+    rendered.provenance_json = serde_json::to_value(
+        gents::inference::rendered_request::ProvenanceManifest::captured_only(
             rendered.capture_scope.clone(),
             None,
             None,
             rendered.assembly_trace.clone(),
-        ))
-        .unwrap();
-    rendered.capture_key = gents::rendered_request::capture_key(
+        ),
+    )
+    .unwrap();
+    rendered.capture_key = gents::inference::rendered_request::capture_key(
         &rendered.node_did,
         &rendered.session_id,
         &rendered.request_doc_id,
@@ -706,7 +713,7 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     const TURNS: usize = 20;
     const KEPT_FROM: usize = 12;
     let db = test_db("rendered-request-manifest-resync").await;
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
     let history: Vec<Value> = (0..TURNS)
         .map(|index| {
             serde_json::json!({
@@ -784,22 +791,22 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     );
 
     assert_eq!(
-        gents::rendered_request::decode_capture_json_embedded(
+        gents::inference::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
-            gents::rendered_request::CAPTURE_VERSION,
+            gents::inference::rendered_request::CAPTURE_VERSION,
             &edited_stored,
-            gents::rendered_request::CapturePayloadKind::RequestBody,
+            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await
         .unwrap(),
         canonical(&edited_body)
     );
     assert_eq!(
-        gents::rendered_request::decode_capture_json_embedded(
+        gents::inference::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
-            gents::rendered_request::CAPTURE_VERSION,
+            gents::inference::rendered_request::CAPTURE_VERSION,
             &edited_stored,
-            gents::rendered_request::CapturePayloadKind::ProvenancePayload,
+            gents::inference::rendered_request::CapturePayloadKind::ProvenancePayload,
         )
         .await
         .unwrap(),
@@ -855,7 +862,7 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
     let mut delta = rendered_fixture(next_body.clone());
     delta.turn_index = 1;
     delta.request_id = "req-stored-v2-delta".to_string();
-    delta.capture_key = gents::rendered_request::capture_key(
+    delta.capture_key = gents::inference::rendered_request::capture_key(
         &delta.node_did,
         &delta.session_id,
         &delta.request_doc_id,
@@ -868,24 +875,26 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
 
     let stored = stored_request_json(db.node.as_ref(), &delta.capture_key).await;
     assert_eq!(
-        gents::rendered_request::decode_capture_json_embedded(
+        gents::inference::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
             2,
             &stored,
-            gents::rendered_request::CapturePayloadKind::RequestBody,
+            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await
         .unwrap(),
         canonical(&next_body)
     );
-    assert!(gents::rendered_request::decode_capture_json_embedded(
-        db.node.as_ref(),
-        3,
-        &stored,
-        gents::rendered_request::CapturePayloadKind::RequestBody,
-    )
-    .await
-    .is_err());
+    assert!(
+        gents::inference::rendered_request::decode_capture_json_embedded(
+            db.node.as_ref(),
+            3,
+            &stored,
+            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
+        )
+        .await
+        .is_err()
+    );
 }
 
 async fn insert_stored_capture(
@@ -895,7 +904,8 @@ async fn insert_stored_capture(
     request_json: &str,
 ) {
     let provenance =
-        gents::rendered_request::canonical_json_string(&rendered.provenance_json).unwrap();
+        gents::inference::rendered_request::canonical_json_string(&rendered.provenance_json)
+            .unwrap();
     let source = serde_json::to_value(rendered.source).unwrap();
     let mutation = format!(
         r#"mutation {{ create_RenderedRequest(input: {{
@@ -972,15 +982,17 @@ async fn request_json_commit_cid(node: &EmbeddedNode, doc_id: &str) -> String {
 #[tokio::test]
 async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
     let db = test_db("rendered-request-legacy-format").await;
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
     let rendered = rendered_fixture(serde_json::json!({
         "model": "m", "messages": [{"role": "user", "content": "legacy λ"}]
     }));
     let mut legacy_manifest = rendered.provenance_json.clone();
     legacy_manifest["manifest_version"] = serde_json::json!(3);
     legacy_manifest["assembly_trace"] = rendered.provenance_payload_json.clone();
-    let body = gents::rendered_request::canonical_json_string(&rendered.request_json).unwrap();
-    let provenance = gents::rendered_request::canonical_json_string(&legacy_manifest).unwrap();
+    let body =
+        gents::inference::rendered_request::canonical_json_string(&rendered.request_json).unwrap();
+    let provenance =
+        gents::inference::rendered_request::canonical_json_string(&legacy_manifest).unwrap();
     let source = serde_json::to_value(rendered.source).unwrap();
     let fields = [
         ("capture_key", rendered.capture_key.as_str()),
@@ -1241,12 +1253,12 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     gents::sign_agent_request_create_as_registered_target(&mut create)
         .await
         .unwrap();
-    let response = gents::config_client::ConfigAccess::local(db.node.clone())
+    let response = gents::store::config_client::ConfigAccess::local(db.node.clone())
         .write("test.retry_successor", &create.graphql_mutation().unwrap())
         .await
         .unwrap();
     let response: gents::defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-    let doc_id = gents::graphql::single_mutation_document(&response, "create_AgentRequest")
+    let doc_id = gents::store::graphql::single_mutation_document(&response, "create_AgentRequest")
         .unwrap()
         .unwrap()["_docID"]
         .as_str()
@@ -1293,7 +1305,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         "{messages:?}"
     );
     let retry_doc = escape_graphql_string(&doc_id);
-    let rows = gents::graphql::graphql_with_transaction_retry(db.node.as_ref(), &format!(
+    let rows = gents::store::graphql::graphql_with_transaction_retry(db.node.as_ref(), &format!(
         r#"{{ AgentMessage(filter: {{request_doc_id: {{_eq:"{retry_doc}"}}, message_key: {{_eq:"authored:{retry_doc}:prompt"}}}}) {{_docID}} }}"#
     ), "test.retry_authored_input").await.unwrap();
     assert_eq!(
@@ -1374,7 +1386,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
             "turn {index} must carry the body the provider was posted"
         );
     }
-    let request_commits = gents::graphql::composite_commits(
+    let request_commits = gents::store::graphql::composite_commits(
         db.node.as_ref(),
         &doc_id,
         "load captured AgentRequest versions",
@@ -1429,7 +1441,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         let manifest = parse_json(&row["provenance_json"]);
         assert_eq!(
             manifest["manifest_version"],
-            gents::rendered_request::PROVENANCE_MANIFEST_VERSION,
+            gents::inference::rendered_request::PROVENANCE_MANIFEST_VERSION,
             "manifest version"
         );
         let admission = manifest
@@ -1826,7 +1838,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         "the seeding request must be a single uncompacted completion"
     );
 
-    let seed_commit = gents::graphql::newest_document_composite_commit(
+    let seed_commit = gents::store::graphql::newest_document_composite_commit(
         db.node.as_ref(),
         &seed_doc,
         "seed request reduction boundary",
@@ -1834,7 +1846,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .await
     .unwrap()
     .expect("seed request commit");
-    let boundary = gents::provider_context_reduction::capture_source_boundary(
+    let boundary = gents::turn::provider_context_reduction::capture_source_boundary(
         db.node.as_ref(),
         session_id,
         &agent.node_did,
@@ -1845,7 +1857,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .await
     .unwrap();
     let request_local_checkpoint = vec![Message::user("REQUEST_LOCAL_ONLY_SENTINEL")];
-    let reduction_key = gents::provider_context_reduction::reduction_key(
+    let reduction_key = gents::turn::provider_context_reduction::reduction_key(
         &agent.node_did,
         session_id,
         &seed_doc,
@@ -1888,15 +1900,16 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
             compacted_tokens: 10
             created_at: "2026-09-02T00:00:00Z"
         }}) {{ _docID }} }}"#,
-        reduction_key = gents::graphql::escape_graphql_string(&reduction_key),
-        node_did = gents::graphql::escape_graphql_string(&agent.node_did),
-        session_id = gents::graphql::escape_graphql_string(session_id),
-        request_doc_id = gents::graphql::escape_graphql_string(&seed_doc),
-        request_commit_cid = gents::graphql::escape_graphql_string(&seed_commit.cid),
-        boundary_json = gents::graphql::escape_graphql_string(&boundary_json),
-        empty_prefix_json = gents::graphql::escape_graphql_string(&empty_prefix_json),
-        checkpoint_json = gents::graphql::escape_graphql_string(&checkpoint_json),
-        replay_associations_json = gents::graphql::escape_graphql_string(&replay_associations_json),
+        reduction_key = gents::store::graphql::escape_graphql_string(&reduction_key),
+        node_did = gents::store::graphql::escape_graphql_string(&agent.node_did),
+        session_id = gents::store::graphql::escape_graphql_string(session_id),
+        request_doc_id = gents::store::graphql::escape_graphql_string(&seed_doc),
+        request_commit_cid = gents::store::graphql::escape_graphql_string(&seed_commit.cid),
+        boundary_json = gents::store::graphql::escape_graphql_string(&boundary_json),
+        empty_prefix_json = gents::store::graphql::escape_graphql_string(&empty_prefix_json),
+        checkpoint_json = gents::store::graphql::escape_graphql_string(&checkpoint_json),
+        replay_associations_json =
+            gents::store::graphql::escape_graphql_string(&replay_associations_json),
     );
     let response = db.node.execute(&fixture).await;
     assert!(
@@ -2555,12 +2568,12 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     let request_doc_id = String::new();
     let request_id = "req-idem".to_string();
     let capture_scope = "inference.1".to_string();
-    let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-        gents::rendered_request::AssemblyBuildPath::Budgeted,
+    let assembly_trace = gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+        gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
         Vec::new(),
     );
     RenderedCompletionRequest {
-        capture_key: gents::rendered_request::capture_key(
+        capture_key: gents::inference::rendered_request::capture_key(
             &node_did,
             &session_id,
             &request_doc_id,
@@ -2569,7 +2582,7 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
             0,
         )
         .expect("capture key"),
-        capture_version: gents::rendered_request::CAPTURE_VERSION,
+        capture_version: gents::inference::rendered_request::CAPTURE_VERSION,
         request_doc_id,
         request_commit_cid: String::new(),
         request_id,
@@ -2581,14 +2594,14 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         agent_id: "behavior".to_string(),
         session_id,
         model_name: "m".to_string(),
-        source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+        source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
         request_json,
         messages_json: serde_json::json!([]),
         tools_json: serde_json::json!([]),
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
         provenance_json: serde_json::to_value(
-            gents::rendered_request::ProvenanceManifest::captured_only(
+            gents::inference::rendered_request::ProvenanceManifest::captured_only(
                 capture_scope,
                 None,
                 None,
@@ -2676,24 +2689,26 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
         for (field, kind) in [
             (
                 "request_json",
-                gents::rendered_request::CapturePayloadKind::RequestBody,
+                gents::inference::rendered_request::CapturePayloadKind::RequestBody,
             ),
             (
                 "provenance_payload_json",
-                gents::rendered_request::CapturePayloadKind::ProvenancePayload,
+                gents::inference::rendered_request::CapturePayloadKind::ProvenancePayload,
             ),
         ] {
             let decoded = if version == 1
-                && kind == gents::rendered_request::CapturePayloadKind::ProvenancePayload
+                && kind == gents::inference::rendered_request::CapturePayloadKind::ProvenancePayload
             {
                 parse_json(&row["provenance_json"])["assembly_trace"].clone()
             } else {
-                gents::rendered_request::decode_capture_json_embedded(node, version, &stored, kind)
-                    .await
-                    .unwrap_or_else(|error| panic!("decode {field}: {error:#}"))
+                gents::inference::rendered_request::decode_capture_json_embedded(
+                    node, version, &stored, kind,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("decode {field}: {error:#}"))
             };
             row[field] = Value::String(
-                gents::rendered_request::canonical_json_string(&decoded)
+                gents::inference::rendered_request::canonical_json_string(&decoded)
                     .expect("canonical decoded capture JSON"),
             );
         }
@@ -2866,7 +2881,9 @@ async fn boot_capture_agent_with(
 }
 
 async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) {
-    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     gents::ensure_node(node, owner).await.unwrap();
     let value = serde_json::json!({"node_did":owner,"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100});
     let profile_id = format!("{CAPTURE_AGENT_ID}:inference");
@@ -2889,11 +2906,18 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.install_provider_backend", |txn| {
         let plan = &plan;
-        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();
-    gents::backend_registry::set_backend_probe_status(node, owner, CAPTURE_BACKEND_ID, "healthy")
-        .await
-        .unwrap();
+    gents::inference::backends::registry::set_backend_probe_status(
+        node,
+        owner,
+        CAPTURE_BACKEND_ID,
+        "healthy",
+    )
+    .await
+    .unwrap();
 }

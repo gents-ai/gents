@@ -1,5 +1,7 @@
 use anyhow::Result;
-use gents::agent::p2p_reconcile::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
+use gents::runtime::agent::p2p_reconcile::{
+    expand_p2p_collection_profile_ids, P2pCollectionProfile,
+};
 use serde_json::{json, Value};
 
 use crate::cli::args::{

@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use gents::backend_registry::{
+use gents::documents::{BackendAuth, BackendModelCatalog};
+use gents::inference::backends::registry::{
     list_enabled_backends_for_agent, lookup_backend_observation, lookup_backend_observation_in_txn,
 };
-use gents::config_client::{
+use gents::store::config_client::{
     apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::{BackendAuth, BackendModelCatalog};
 use gents::{
     list_agents, list_inference_profile_records, load_inference_profile, Collection,
     InferenceBackend, InferenceProfile, ReasoningEffort,
@@ -421,7 +421,9 @@ async fn apply_model_selection(
                     (profile.reasoning_effort, model.reasoning_efforts.as_ref())
                 {
                     anyhow::ensure!(
-                        gents::config::admits_reasoning_effort(&backend, effort, supported),
+                        gents::inference::resolved::admits_reasoning_effort(
+                            &backend, effort, supported
+                        ),
                         "selected model does not advertise configured reasoning effort {effort:?}"
                     );
                 }

@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
+use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_message;
@@ -1019,12 +1019,12 @@ async fn seed_preexisting_hydration_history(
     );
 
     use gents::defra_node::QueryRequest;
-    use gents::graphql::single_mutation_document;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     use gents::session::sequence_message_key;
+    use gents::store::graphql::single_mutation_document;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
@@ -1055,7 +1055,7 @@ async fn seed_preexisting_hydration_history(
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let request_response = node.execute(&request_mutation).await;
     assert!(
@@ -1328,7 +1328,7 @@ async fn wait_for_enrollment_desired(
     let deadline = Instant::now() + timeout;
     let peer_id = escape_graphql_string(peer_id);
     loop {
-        let response = gents::graphql::graphql_with_transaction_retry(
+        let response = gents::store::graphql::graphql_with_transaction_retry(
             node,
             &format!(
                 r#"{{ PeerPairingDesired(filter: {{
@@ -1380,7 +1380,7 @@ async fn install_control_only_authenticated_hydration_route(
     node_did: &str,
     generation: &HydrationRouteGeneration,
 ) {
-    use gents::agent::p2p_reconcile::{
+    use gents::runtime::agent::p2p_reconcile::{
         resolve_template, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
         CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
     };
@@ -1505,14 +1505,17 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
     )
     .await;
 
-    let (authority_owner, authority) = gents::agent::p2p_reconcile::enrollment_authority_channel();
+    let (authority_owner, authority) =
+        gents::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let enrollment_cancel = tokio_util::sync::CancellationToken::new();
-    let enrollment_handle = tokio::spawn(gents::agent::p2p_reconcile::run_enrollment_reconciler(
-        server.node.clone(),
-        server_identity.clone(),
-        authority_owner,
-        enrollment_cancel.clone(),
-    ));
+    let enrollment_handle = tokio::spawn(
+        gents::runtime::agent::p2p_reconcile::run_enrollment_reconciler(
+            server.node.clone(),
+            server_identity.clone(),
+            authority_owner,
+            enrollment_cancel.clone(),
+        ),
+    );
     let generation =
         wait_for_enrollment_desired(server.node.as_ref(), &client_peer, Duration::from_secs(30))
             .await;
@@ -1546,7 +1549,7 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
 
     let hydration_cancel = tokio_util::sync::CancellationToken::new();
     let hydration_handle = tokio::spawn(
-        gents::agent::p2p_reconcile::run_session_hydration_reconciler(
+        gents::runtime::agent::p2p_reconcile::run_session_hydration_reconciler(
             server.node.clone(),
             authority,
             server_identity,

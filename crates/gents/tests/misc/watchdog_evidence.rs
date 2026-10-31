@@ -1,7 +1,7 @@
 //! Failed background wake redrive scheduling invariants.
 //!
 //! Regression coverage for the production owners in
-//! `crates/gents/src/lifecycle/background_wake_recovery.rs`:
+//! `crates/gents/src/request/lifecycle/background_wake_recovery.rs`:
 //!
 //! - `background_wake_retry_delay` must stay bounded: exponential growth caps
 //!   at `BACKGROUND_WAKE_RETRY_MAX_SECONDS` (60s) and a negative persisted
@@ -15,7 +15,7 @@
 //! logic). They pin scheduling invariants only; they make no claim about
 //! detecting wedged or unhealthy busy sessions.
 
-use gents::lifecycle::{background_wake_next_retry_at, background_wake_retry_delay};
+use gents::request::lifecycle::{background_wake_next_retry_at, background_wake_retry_delay};
 
 #[test]
 fn background_wake_backoff_uses_exponential_delay_up_to_the_cap() {

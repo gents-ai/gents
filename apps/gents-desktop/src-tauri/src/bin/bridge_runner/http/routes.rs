@@ -152,9 +152,10 @@ pub(super) async fn handle_request(
                 "client".to_string(),
             );
             let enrollment = issuer.mint().await?;
-            let schema =
-                gents::agent::p2p_reconcile::read_client_replicated_schema(server.node_arc())
-                    .await?;
+            let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(
+                server.node_arc(),
+            )
+            .await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({
                     "enrollment": enrollment,
@@ -182,7 +183,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("GET", "/desktop/inference/setup/catalog") => Ok(HttpResponse::json_ok(
-            serde_json::to_string(&gents::inference_setup::inference_setup_catalog())?,
+            serde_json::to_string(&gents::inference::backends::setup::inference_setup_catalog())?,
         )),
         ("POST", "/desktop/inference/models/discover") => {
             let request = decode::<InferenceDiscoveryRequest>(
