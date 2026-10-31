@@ -199,23 +199,26 @@ export type ListRow = {
   metaLeadToggles?: boolean;
 };
 
-/* which packs' groups a list has folded, per section, kept on this device */
-const foldsKey = (section: string) => `gents.config.packFolds.${section}`;
-function loadFolds(section: string): Set<string> {
+/* which packs' groups the person opened (true) or folded (false) in a list,
+   per section, kept on this device; a pack they never touched follows the
+   list's default */
+const groupsKey = (section: string) => `gents.config.packGroups.${section}`;
+function loadGroupChoices(section: string): Record<string, boolean> {
   try {
-    const saved: unknown = JSON.parse(localStorage.getItem(foldsKey(section)) ?? "[]");
-    return new Set(
-      Array.isArray(saved)
-        ? saved.filter((v): v is string => typeof v === "string")
-        : [],
+    const saved: unknown = JSON.parse(localStorage.getItem(groupsKey(section)) ?? "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+    return Object.fromEntries(
+      Object.entries(saved).filter(
+        (entry): entry is [string, boolean] => typeof entry[1] === "boolean",
+      ),
     );
   } catch {
-    return new Set();
+    return {};
   }
 }
-function saveFolds(section: string, folds: Set<string>) {
+function saveGroupChoices(section: string, choices: Record<string, boolean>) {
   try {
-    localStorage.setItem(foldsKey(section), JSON.stringify([...folds]));
+    localStorage.setItem(groupsKey(section), JSON.stringify(choices));
   } catch {}
 }
 
@@ -260,15 +263,10 @@ export function ListDetail({
   const [originFilter, setOriginFilter] = useState("all");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [allNested, setAllNested] = useState<Set<string>>(() => new Set());
-  const [folds, setFolds] = useState<Set<string>>(() => loadFolds(base.section));
-  const toggleFold = (pack: string) =>
-    setFolds((prev) => {
-      const next = new Set(prev);
-      if (next.has(pack)) next.delete(pack);
-      else next.add(pack);
-      saveFolds(base.section, next);
-      return next;
-    });
+  const [groupChoices, setGroupChoices] = useState<Record<string, boolean>>(() =>
+    loadGroupChoices(base.section),
+  );
+
   const origins = useMemo(
     () =>
       Array.from(
@@ -330,6 +328,17 @@ export function ListDetail({
       [r.title, r.titleNote, r.meta, r.badge].some((t) => t?.toLowerCase().includes(q));
     return matchesOrigin && matchesQuery;
   });
+  /* a pack's entries start folded under the person's own, so packs don't
+     flood the list; with none of their own showing, the groups are the
+     list, or the filter picked a pack, so they start open */
+  const groupsOpenByDefault = !shown.some((r) => packOrigin(r.tags) === null);
+  const groupOpen = (pack: string) => groupChoices[pack] ?? groupsOpenByDefault;
+  const toggleGroup = (pack: string) =>
+    setGroupChoices((prev) => {
+      const next = { ...prev, [pack]: !(prev[pack] ?? groupsOpenByDefault) };
+      saveGroupChoices(base.section, next);
+      return next;
+    });
   const renderRow = (r: ListRow, inPackGroup: boolean) => (
     <Fragment key={r.id}>
       <ListItem
@@ -431,14 +440,14 @@ export function ListDetail({
         {origins.map((pack) => {
           const entries = shown.filter((r) => packOrigin(r.tags) === pack);
           if (entries.length === 0) return null;
-          const open = Boolean(q) || !folds.has(pack);
+          const open = Boolean(q) || groupOpen(pack);
           return (
             <Fragment key={`pack:${pack}`}>
               <li className="flex items-center gap-2 bg-background/40 pr-4">
                 <button
                   type="button"
                   aria-expanded={open}
-                  onClick={() => toggleFold(pack)}
+                  onClick={() => toggleGroup(pack)}
                   className="flex min-w-0 flex-1 items-center gap-2 py-2.5 pl-4 text-left text-xs text-muted-foreground hover:text-foreground"
                 >
                   <ChevronDown
