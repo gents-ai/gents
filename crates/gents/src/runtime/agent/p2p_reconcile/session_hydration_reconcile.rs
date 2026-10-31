@@ -40,6 +40,7 @@ mod inventory_requests;
 pub(crate) use inventory::refusal_reason as file_inventory_refusal_reason;
 pub use inventory::{FileInventoryPageError, FileInventorySnapshot};
 mod selection;
+mod work;
 use selection::load_hydration_selection;
 
 #[derive(Clone, Copy)]
@@ -125,6 +126,7 @@ struct HydrationRequestRow {
     pub session_id: String,
 }
 
+#[cfg(test)]
 async fn reconcile_hydration_tick(
     store: &dyn HydrationRequestStore,
     delivery: &dyn HydrationDelivery,
@@ -349,11 +351,11 @@ pub async fn run_session_hydration_reconciler(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let store = GraphqlHydrationStore {
+    let store = Arc::new(GraphqlHydrationStore {
         node: node.clone(),
         enrollment,
         identity,
-    };
+    });
     let delivery: Arc<dyn HydrationDelivery> = Arc::new(EmbeddedHydrationDelivery {
         node: node.clone(),
         enrollment: store.enrollment.clone(),
@@ -373,42 +375,34 @@ pub async fn run_session_hydration_reconciler(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut subscription_open = true;
 
-    if !sweep_hydration_requests_until_cancelled(
-        &cancel,
-        sweep_hydration_requests(&store, delivery.as_ref()),
-    )
-    .await
-    {
-        return Ok(());
-    }
+    let mut work = work::PeerWork::default();
+    work::discover(&store, &delivery, &mut work, &cancel).await;
     loop {
         tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {
-                if !sweep_hydration_requests_until_cancelled(&cancel, sweep_hydration_requests(&store, delivery.as_ref())).await {
-                    return Ok(());
-                }
-            },
+            _ = work.next(), if !work.is_empty() => {},
+            _ = interval.tick() => work::discover(&store, &delivery, &mut work, &cancel).await,
             batch = subscription.recv(), if subscription_open => {
-                let Some(batch) = batch else {
-                    tracing::warn!("session-hydration reconciler update subscription closed; continuing with periodic sweeps");
-                    subscription_open = false;
-                    continue;
-                };
-                if batch.resync_required {
-                    tracing::warn!(
-                        updates = batch.updates,
-                        "session-hydration document-change capacity exceeded; performing authoritative sweep"
-                    );
-                }
-                if !sweep_hydration_requests_until_cancelled(&cancel, sweep_hydration_requests(&store, delivery.as_ref())).await {
-                    return Ok(());
+                match batch {
+                    Some(batch) => {
+                        if batch.resync_required {
+                            tracing::warn!(updates = batch.updates,
+                                "session-hydration capacity exceeded; performing authoritative sweep");
+                        }
+                        work::discover(&store, &delivery, &mut work, &cancel).await;
+                    }
+                    None => {
+                        subscription_open = false;
+                        tracing::warn!("session-hydration subscription closed; continuing periodic sweeps");
+                    }
                 }
             }
         }
     }
 }
 
+#[cfg(test)]
 async fn sweep_hydration_requests_until_cancelled(
     cancel: &CancellationToken,
     sweep: impl std::future::Future<Output = ()>,
@@ -420,16 +414,7 @@ async fn sweep_hydration_requests_until_cancelled(
     }
 }
 
-async fn sweep_hydration_requests(store: &GraphqlHydrationStore, delivery: &dyn HydrationDelivery) {
-    sweep_transcript_requests(store, delivery).await;
-    if let Err(error) = inventory_requests::reconcile_inventory_requests(store, delivery).await {
-        tracing::warn!(%error, "file inventory sweep failed");
-    }
-    if let Err(error) = file_images::reconcile_file_images(store, delivery).await {
-        tracing::warn!(%error, "file-image hydration sweep failed");
-    }
-}
-
+#[cfg(test)]
 async fn sweep_transcript_requests(
     store: &dyn HydrationRequestStore,
     delivery: &dyn HydrationDelivery,

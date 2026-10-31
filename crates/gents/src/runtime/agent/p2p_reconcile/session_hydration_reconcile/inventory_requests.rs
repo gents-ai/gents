@@ -12,10 +12,9 @@ use gents_protocol::file_inventory::{
 };
 use gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME;
 
-pub(super) async fn reconcile_inventory_requests(
+pub(super) async fn pending_requests(
     store: &GraphqlHydrationStore,
-    delivery: &dyn HydrationDelivery,
-) -> Result<()> {
+) -> Result<Vec<InventoryRequestRow>> {
     let filter = format!(
         r#"status: {{ _eq: "pending" }}, node_did: {{ _eq: "{}" }}"#,
         escape_graphql_string(store.identity.did())
@@ -29,14 +28,28 @@ pub(super) async fn reconcile_inventory_requests(
             })
         })
         .await?;
+    let mut requests = Vec::new();
+    for value in pending {
+        match serde_json::from_value::<InventoryRequestRow>(value).and_then(|row| {
+            row.validate().map_err(serde::de::Error::custom)?;
+            Ok(row)
+        }) {
+            Ok(row) => requests.push(row),
+            Err(error) => tracing::warn!(%error, "invalid file inventory request"),
+        }
+    }
+    Ok(requests)
+}
+
+#[cfg(test)]
+pub(super) async fn reconcile_inventory_requests(
+    store: &GraphqlHydrationStore,
+    delivery: &dyn HydrationDelivery,
+) -> Result<()> {
+    let pending = pending_requests(store).await?;
     let mut first_error = None;
     for value in pending {
-        let result = async {
-            let row: InventoryRequestRow = serde_json::from_value(value)?;
-            row.validate()?;
-            serve_inventory(store, delivery, &row).await
-        }
-        .await;
+        let result = serve_inventory(store, delivery, &value).await;
         if let Err(error) = result {
             tracing::warn!(%error, "file inventory request failed; continuing sweep");
             if first_error.is_none() {
@@ -57,7 +70,7 @@ async fn refuse(
     ))
 }
 
-async fn serve_inventory(
+pub(super) async fn serve_inventory(
     store: &GraphqlHydrationStore,
     delivery: &dyn HydrationDelivery,
     row: &InventoryRequestRow,
