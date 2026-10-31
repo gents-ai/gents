@@ -648,6 +648,94 @@ describe("SessionScreen automated inputs", () => {
     );
     expect(screen.queryByText("Model input")).toBeNull();
   });
+
+  it("says why a person's message is unavailable instead of drawing it empty", () => {
+    const unavailable = (state: "loading" | "denied" | "invalid", n: number) => ({
+      kind: "userMessage",
+      itemKey: `authored:doc-${n}:prompt`,
+      requestId: `doc-${n}`,
+      ownsTurn: true,
+      sequence: n,
+      content: null,
+      timestamp: null,
+      reconstruction: { state },
+    });
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          unavailable("loading", 1),
+          unavailable("denied", 2),
+          unavailable("invalid", 3),
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    expect(
+      screen
+        .getAllByTestId("user-input-unavailable")
+        .map((reason) => reason.textContent),
+    ).toEqual([
+      "Still syncing this input.",
+      "This input is not shared with this device.",
+      "This input could not be read.",
+    ]);
+  });
+
+  it("draws a message of only captured context or only attachments without an empty bubble", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "userMessage",
+            itemKey: "authored:doc-context:prompt",
+            requestId: "doc-context",
+            ownsTurn: true,
+            sequence: 1,
+            content: null,
+            timestamp: null,
+            capturedContext: [
+              {
+                kind: "selection",
+                source: "editor",
+                capturedAt: "2026-10-30T00:00:00Z",
+                uri: "file:///work/src/main.rs",
+                terminalName: null,
+                workspaceUri: null,
+                version: null,
+                unsaved: false,
+                range: {
+                  start: { line: 11, character: 0 },
+                  end: { line: 19, character: 4 },
+                },
+                content: "fn main() {}",
+              },
+            ],
+            reconstruction: { state: "ready" },
+          },
+          {
+            kind: "userMessage",
+            itemKey: "authored:doc-file:prompt",
+            requestId: "doc-file",
+            ownsTurn: true,
+            sequence: 2,
+            content: null,
+            timestamp: null,
+            attachments: [
+              { name: "notes.txt", mediaType: "text/plain", digest: "hash", size: 2 },
+            ],
+            reconstruction: { state: "ready" },
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const bubbles = document.querySelectorAll('[data-slot="user-message"]');
+    expect(bubbles).toHaveLength(1);
+    expect(
+      within(bubbles[0] as HTMLElement).getByTestId("sent-context"),
+    ).toHaveTextContent("main.rs:12–20");
+    expect(screen.getByText("notes.txt")).toBeVisible();
+  });
 });
 
 describe("SessionScreen goal label", () => {
