@@ -1,7 +1,9 @@
 use rapidhash::RapidHashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+use anyhow::Result;
 
 use super::super::context::ToolError;
 #[cfg(target_os = "macos")]
