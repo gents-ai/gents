@@ -4411,17 +4411,22 @@ async fn compaction_profile_pick_cannot_switch_account() {
 async fn compaction_reference_pick_cannot_switch_account() {
     let (_, _, core) = account_choice_core("compaction-ref-pick").await;
     let context = |compaction: &str| {
-        protect_working_agent(anchored_request(
-            SelfConfigTarget::AgentContext,
-            "context_id",
-            vec![("compaction_id".into(), Some(json!(compaction)))],
-        ))
+        protect_working_agent(
+            anchored_request(
+                SelfConfigTarget::AgentContext,
+                "context_id",
+                vec![("compaction_id".into(), Some(json!(compaction)))],
+            ),
+            false,
+            true,
+        )
     };
     let agent = |context: &str| {
-        protect_working_agent(agent_request(
-            &core,
-            vec![("context_id".into(), Some(json!(context)))],
-        ))
+        protect_working_agent(
+            agent_request(&core, vec![("context_id".into(), Some(json!(context)))]),
+            false,
+            true,
+        )
     };
     assert_account_choice_refused(&core, || context("c-chat-b")).await;
     assert_account_choice_refused(&core, || agent("ctx-chat-b")).await;
@@ -6521,10 +6526,14 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         .unwrap()
         .with_lockout_agent_id("worker".into());
     for preview in [true, false] {
-        let request = protect_working_agent(agent_request(
-            &core,
-            vec![("context_id".into(), Some(json!("granted:context")))],
-        ));
+        let request = protect_working_agent(
+            agent_request(
+                &core,
+                vec![("context_id".into(), Some(json!("granted:context")))],
+            ),
+            false,
+            true,
+        );
         let result = if preview {
             core.preview(request).await
         } else {
@@ -6537,10 +6546,14 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         ..Default::default()
     });
     holder
-        .apply(protect_working_agent(agent_request(
-            &holder,
-            vec![("context_id".into(), Some(json!("granted:context")))],
-        )))
+        .apply(protect_working_agent(
+            agent_request(
+                &holder,
+                vec![("context_id".into(), Some(json!("granted:context")))],
+            ),
+            false,
+            true,
+        ))
         .await
         .unwrap();
     let no_grant = SelfConfigCore::new(node.clone(), owner, "sibling".into()).unwrap();

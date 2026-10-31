@@ -206,69 +206,7 @@ impl SelfConfigCore {
     }
 
     pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
-        let Some((_doc_id, doc)) =
-            read_owned_doc(txn, SelfConfigTarget::Agent, &self.node_did, &self.agent_id).await?
-        else {
-            return Err(MissingAgent {
-                agent_id: self.agent_id.clone(),
-                suggestions: Vec::new(),
-            }
-            .into());
-        };
-        let owner = doc.get("node_did").and_then(Value::as_str).unwrap_or("");
-        if owner != self.node_did {
-            bail!(
-                "agent {} is owned by {owner:?}, not this node — self-config is self only",
-                self.agent_id
-            );
-        }
-        let context = match doc.get("context_id").and_then(Value::as_str) {
-            Some(context_id) => {
-                read_owned_doc(
-                    txn,
-                    SelfConfigTarget::AgentContext,
-                    &self.node_did,
-                    context_id,
-                )
-                .await?
-                .context("context not found")?
-                .1
-            }
-            None => Map::new(),
-        };
-        let profile_id = doc
-            .get("inference_profile_id")
-            .and_then(Value::as_str)
-            .context("agent inference profile is missing")?;
-        let profile = read_owned_doc(
-            txn,
-            SelfConfigTarget::InferenceProfile,
-            &self.node_did,
-            profile_id,
-        )
-        .await?
-        .context("profile not found")?
-        .1;
-        let execution = match profile.get("execution_id").and_then(Value::as_str) {
-            Some(id) => {
-                read_owned_doc(
-                    txn,
-                    SelfConfigTarget::InferenceExecution,
-                    &self.node_did,
-                    id,
-                )
-                .await?
-                .context("execution not found")?
-                .1
-            }
-            None => Map::new(),
-        };
-        Ok(AgentAnchor {
-            doc,
-            context,
-            profile,
-            execution,
-        })
+        load_agent_anchor_for(txn, &self.node_did, &self.agent_id).await
     }
 
     pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
@@ -1233,6 +1171,65 @@ pub(crate) async fn shared_referrers(
     }
 }
 
+/// Load one agent's anchor by exact `agent_id`, for the invoking agent or for
+/// a sibling the write reaches. Fails closed when the row is owned elsewhere.
+pub(crate) async fn load_agent_anchor_for(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_id: &str,
+) -> Result<AgentAnchor> {
+    let Some((_doc_id, doc)) =
+        read_owned_doc(txn, SelfConfigTarget::Agent, node_did, agent_id).await?
+    else {
+        return Err(MissingAgent {
+            agent_id: agent_id.to_owned(),
+            suggestions: Vec::new(),
+        }
+        .into());
+    };
+    let owner = doc.get("node_did").and_then(Value::as_str).unwrap_or("");
+    if owner != node_did {
+        bail!("agent {agent_id} is owned by {owner:?}, not this node — self-config is self only");
+    }
+    let context = match doc.get("context_id").and_then(Value::as_str) {
+        Some(context_id) => {
+            read_owned_doc(txn, SelfConfigTarget::AgentContext, node_did, context_id)
+                .await?
+                .context("context not found")?
+                .1
+        }
+        None => Map::new(),
+    };
+    let profile_id = doc
+        .get("inference_profile_id")
+        .and_then(Value::as_str)
+        .context("agent inference profile is missing")?;
+    let profile = read_owned_doc(
+        txn,
+        SelfConfigTarget::InferenceProfile,
+        node_did,
+        profile_id,
+    )
+    .await?
+    .context("profile not found")?
+    .1;
+    let execution = match profile.get("execution_id").and_then(Value::as_str) {
+        Some(id) => {
+            read_owned_doc(txn, SelfConfigTarget::InferenceExecution, node_did, id)
+                .await?
+                .context("execution not found")?
+                .1
+        }
+        None => Map::new(),
+    };
+    Ok(AgentAnchor {
+        doc,
+        context,
+        profile,
+        execution,
+    })
+}
+
 /// The refusal for a shared Context or Tools, naming the option that accepts it.
 pub(crate) fn shared_refusal(agents: &[String]) -> anyhow::Error {
     anyhow!(
@@ -1241,9 +1238,55 @@ pub(crate) fn shared_refusal(agents: &[String]) -> anyhow::Error {
     )
 }
 
+/// The refusal when the caller acknowledges a shared edit but holds no
+/// authority over every agent the write reaches.
+///
+/// `options.shared = "acknowledge"` waives only the sharing refusal. It never
+/// widens who may write: a caller that may edit its own Context or Tools still
+/// needs the agent catalog grant (category `node`) to change one that other
+/// agents select, because the write lands on their configuration too.
+pub(crate) fn shared_authority_refusal(agents: &[String]) -> anyhow::Error {
+    anyhow!(
+        "options.shared = \"acknowledge\" waives only the sharing refusal; editing a Context or Tools that other agents select requires the agent catalog grant (category node), because the write changes their configuration too (agents: {}). Clone the working agent to customize it independently, or ask the operator for the node grant",
+        agents.join(", ")
+    )
+}
+
+/// Enforce the caller's authority over every agent a shared write reaches.
+///
+/// Runs inside the same transaction as validation and publication, so the
+/// referrer list cannot go stale between the check and the write. The
+/// acknowledgement is a waiver of the sharing refusal only: with more than one
+/// referrer it requires the agent catalog grant, and it never borrows a
+/// sibling's authority — the anchor is the invoking agent, not whichever
+/// referrer sorts first.
+pub(crate) async fn guard_shared_authority_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    target: SelfConfigTarget,
+    owner: &str,
+    id: &str,
+    acknowledged: bool,
+    holds_catalog_grant: bool,
+) -> Result<Vec<String>> {
+    let agents = shared_referrers(txn, target, owner, id).await?;
+    if agents.len() <= 1 {
+        return Ok(agents);
+    }
+    if !acknowledged {
+        return Err(shared_refusal(&agents));
+    }
+    anyhow::ensure!(holds_catalog_grant, "{}", shared_authority_refusal(&agents));
+    Ok(agents)
+}
+
 /// The receipt for a shared edit: every agent the write reaches and the
 /// sha256 of the document that was published. Absent when the document is not
 /// shared, so an ordinary edit's receipt is unchanged.
+///
+/// `agents` is exactly the set the write modifies: the agents that select this
+/// Context, or that reach this Tools directly or through a Context. It is not
+/// widened to agents that merely use Tools this document newly selects — those
+/// agents' own rows are untouched.
 async fn shared_receipt(
     txn: &ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
@@ -1256,11 +1299,33 @@ async fn shared_receipt(
         return Ok(None);
     }
     use sha2::{Digest, Sha256};
-    let bytes = serde_json::to_vec(&Value::Object(merged.clone()))?;
+    let bytes = canonical_json_bytes(&Value::Object(merged.clone()))?;
     Ok(Some(json!({
         "agents": agents,
         "sha256": format!("{:x}", Sha256::digest(&bytes)),
     })))
+}
+
+/// Serialize a JSON value with object keys sorted at every depth, so the
+/// receipt's sha256 identifies the published document's content and not the
+/// order a map happened to iterate in.
+fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>> {
+    fn canonical(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut sorted = Map::new();
+                let mut keys = map.keys().collect::<Vec<_>>();
+                keys.sort();
+                for key in keys {
+                    sorted.insert(key.clone(), canonical(&map[key]));
+                }
+                Value::Object(sorted)
+            }
+            Value::Array(items) => Value::Array(items.iter().map(canonical).collect()),
+            other => other.clone(),
+        }
+    }
+    Ok(serde_json::to_vec(&canonical(value))?)
 }
 
 fn replacement_plan(

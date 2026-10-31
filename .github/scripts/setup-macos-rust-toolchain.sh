@@ -19,8 +19,9 @@ set -euo pipefail
 # so cc-rs crates and the C fixtures the tests spawn with /usr/bin/cc all
 # resolve the same readable SDK.
 #
-# A job that needs a different toolchain (xcodebuild, or the Xcode-only iOS
-# SDK) must `unset DEVELOPER_DIR SDKROOT` in that step.
+# A job that needs a different toolchain (xcodebuild) must select it in that
+# step. The iOS simulator check keeps this selection: the developer directory
+# chosen here is the Xcode one, and that Xcode ships the iOS SDKs.
 
 developer_dir="${GENTS_DEVELOPER_DIR:-}"
 if [[ -z "${developer_dir}" ]]; then
@@ -59,6 +60,31 @@ if ! probe_output="$("${probe_cc}" "${probe_dir}/probe.c" -o "${probe_dir}/probe
   echo "::error::${probe_cc} cannot link with DEVELOPER_DIR=${developer_dir} SDKROOT=${sdk_path}:"
   printf '%s\n' "${probe_output}"
   exit 1
+fi
+
+# The C probe above only proves /usr/bin/cc links. Rust does not link through
+# /usr/bin/cc: .cargo/config.toml routes every macOS Rust link through
+# scripts/macos-clang-lld.sh, which prefers ld64.lld. A rust-lld/SDK mismatch
+# therefore passes the C probe and only surfaces ~15 minutes into a suite, so
+# link a real Rust binary through the same Cargo configuration CI uses.
+if [[ "${GENTS_SKIP_CARGO_PROBE:-}" != "1" ]]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "::error::cargo is missing; cannot probe the Rust link path."
+    exit 1
+  fi
+  probe_crate="${probe_dir}/cargo-probe"
+  mkdir -p "${probe_crate}/src"
+  printf '[package]\nname = "cargo-probe"\nversion = "0.0.0"\nedition = "2021"\n\n[[bin]]\nname = "cargo-probe"\npath = "src/main.rs"\n' \
+    > "${probe_crate}/Cargo.toml"
+  printf 'fn main() { println!("probe"); }\n' > "${probe_crate}/src/main.rs"
+  # Run from the repository root so .cargo/config.toml (the linker wrapper and
+  # its rustflags) applies exactly as it does to the real build.
+  if ! probe_output="$(cd "${GITHUB_WORKSPACE:-.}" && cargo run --quiet \
+      --manifest-path "${probe_crate}/Cargo.toml" --target-dir "${probe_dir}/target" 2>&1)"; then
+    echo "::error::cargo cannot link a Rust binary with DEVELOPER_DIR=${developer_dir} SDKROOT=${sdk_path}:"
+    printf '%s\n' "${probe_output}"
+    exit 1
+  fi
 fi
 
 echo "Selected toolchain: DEVELOPER_DIR=${developer_dir} SDKROOT=${sdk_path}"

@@ -230,13 +230,15 @@ impl ConfigCommandTool {
         if contextual {
             request.shared_ack = shared_ack;
             if bound {
-                request = protect_working_agent(request);
+                request = protect_working_agent(request, shared_ack, self.holds_catalog_grant());
             }
             let validate = request.validate;
             let expected_id = id.clone();
+            let invoking_agent = self.core.agent_id().to_owned();
             request.validate = Box::new(move |txn, anchor, stored, merged| {
                 let validation = validate(txn, anchor, stored, merged);
                 let id = expected_id.clone();
+                let invoking_agent = invoking_agent.clone();
                 Box::pin(async move {
                     if !create {
                         if bound {
@@ -247,7 +249,12 @@ impl ConfigCommandTool {
                                 .get("node_did")
                                 .and_then(Value::as_str)
                                 .context("missing owner")?;
-                            anyhow::ensure!(document_agent_in_txn(txn, target, owner, &id, true).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current agent");
+                            anyhow::ensure!(
+                                document_agent_in_txn(txn, target, owner, &id, true, &invoking_agent)
+                                    .await?
+                                    .is_none(),
+                                "document {id:?} was selected during this call; retry the update against its current agent"
+                            );
                         }
                     }
                     validation.await
@@ -376,8 +383,10 @@ impl ConfigCommandTool {
             Some(self.core.identity()?),
             "self_config.document_agent",
             |txn| {
+                let invoking_agent = self.core.agent_id().to_owned();
                 Box::pin(async move {
-                    document_agent_in_txn(txn, target, owner, id, acknowledged).await
+                    document_agent_in_txn(txn, target, owner, id, acknowledged, &invoking_agent)
+                        .await
                 })
             },
         )
@@ -455,19 +464,29 @@ pub(super) struct BatchFailure {
     pub unattempted: usize,
 }
 
-/// The single agent that selects this Context or Tools, or `None` when
-/// nothing does. A shared document is refused unless `acknowledged`, and the
-/// refusal names every agent it would reach.
+/// The agent whose anchor this exact-ID write is validated against, or `None`
+/// when nothing selects the document.
+///
+/// A shared document is refused unless `acknowledged`, and the refusal names
+/// every agent it would reach. When the caller is one of the referrers it is
+/// the anchor, so the write is validated against the caller's own row rather
+/// than whichever sibling happens to sort first; the authority check for the
+/// other referrers is `ops::guard_shared_authority_in_txn`, inside the write
+/// transaction.
 async fn document_agent_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
     owner: &str,
     id: &str,
     acknowledged: bool,
+    invoking_agent: &str,
 ) -> Result<Option<String>> {
     let agents = ops::shared_referrers(txn, target, owner, id).await?;
     if agents.len() > 1 && !acknowledged {
         return Err(ops::shared_refusal(&agents));
+    }
+    if agents.iter().any(|agent| agent == invoking_agent) {
+        return Ok(Some(invoking_agent.to_owned()));
     }
     Ok(agents.into_iter().next())
 }

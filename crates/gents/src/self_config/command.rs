@@ -499,6 +499,15 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
 }
 
 impl ConfigCommandTool {
+    /// Whether the caller holds the agent catalog grant (category `node`).
+    ///
+    /// A shared Context or Tools edit lands on every agent that selects it, so
+    /// it needs authority over the whole catalog, not just the caller's own
+    /// row. `options.shared = "acknowledge"` waives the sharing refusal only.
+    fn holds_catalog_grant(&self) -> bool {
+        self.categories.contains("node")
+    }
+
     fn failure_guidance(
         &self,
         error: &anyhow::Error,
@@ -765,7 +774,11 @@ impl ConfigCommandTool {
                         .patch(
                             &core,
                             "preview",
-                            protect_working_agent(agent_request(&core, patch)),
+                            protect_working_agent(
+                                agent_request(&core, patch),
+                                false,
+                                self.holds_catalog_grant(),
+                            ),
                         )
                         .await;
                 }
@@ -790,7 +803,11 @@ impl ConfigCommandTool {
                 self.patch(
                     &core,
                     "edit",
-                    protect_working_agent(agent_request(&core, patch)),
+                    protect_working_agent(
+                        agent_request(&core, patch),
+                        false,
+                        self.holds_catalog_grant(),
+                    ),
                 )
                 .await
             }
@@ -862,11 +879,11 @@ impl ConfigCommandTool {
                 let (shared_ack, rest) = extract_shared(&rest)?;
                 let patch =
                     parse_patch_args(ParsedArgs::parse(&rest)?, SelfConfigTarget::AgentContext)?;
-                let mut request = protect_working_agent(anchored_request(
-                    SelfConfigTarget::AgentContext,
-                    "context_id",
-                    patch,
-                ));
+                let mut request = protect_working_agent(
+                    anchored_request(SelfConfigTarget::AgentContext, "context_id", patch),
+                    shared_ack,
+                    self.holds_catalog_grant(),
+                );
                 request.shared_ack = shared_ack;
                 self.patch(&core, verb, request).await
             }
@@ -939,8 +956,12 @@ impl ConfigCommandTool {
                     _ => unreachable!("bound resource"),
                 };
                 request.shared_ack = shared_ack;
-                self.patch(&core, verb, protect_working_agent(request))
-                    .await
+                self.patch(
+                    &core,
+                    verb,
+                    protect_working_agent(request, shared_ack, self.holds_catalog_grant()),
+                )
+                .await
             }
             other => bail!(
                 "unknown {resource} command {other:?}; accepted: get, preview, edit; see [\"help\",\"{resource}\"]"
@@ -1153,7 +1174,11 @@ impl ConfigCommandTool {
                 self.patch(
                     &core,
                     verb,
-                    protect_working_agent(profile_target_request(Some(request_name), patch)?),
+                    protect_working_agent(
+                        profile_target_request(Some(request_name), patch)?,
+                        false,
+                        self.holds_catalog_grant(),
+                    ),
                 )
                 .await
             }
@@ -1289,7 +1314,11 @@ impl ConfigCommandTool {
                 self.patch(
                     &core,
                     verb,
-                    protect_working_agent(automation_request(&core, target, id.clone(), patch)),
+                    protect_working_agent(
+                        automation_request(&core, target, id.clone(), patch),
+                        false,
+                        self.holds_catalog_grant(),
+                    ),
                 )
                 .await
             }

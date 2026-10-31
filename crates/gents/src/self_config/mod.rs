@@ -148,9 +148,17 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
 /// configurator itself. Keep the shared-reference check inside the same
 /// transaction as validation/publication so a stale preflight cannot
 /// authorize a write.
-fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
+///
+/// `acknowledged` is passed in rather than read from `request.shared_ack`:
+/// reading the field at call time made the answer depend on whether the caller
+/// had already assigned it, which is how the bound `context update` path
+/// silently ignored `options.shared = "acknowledge"`.
+fn protect_working_agent(
+    mut request: ApplyRequest<'static>,
+    acknowledged: bool,
+    holds_catalog_grant: bool,
+) -> ApplyRequest<'static> {
     let target = request.target;
-    let acknowledged = request.shared_ack;
     let validate = request.validate;
     request.validate = Box::new(move |txn, anchor, stored, merged| {
         let validation = validate(txn, anchor, stored, merged);
@@ -162,29 +170,35 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
                 .context("selected agent is missing node_did")?;
             // A Context or Tools that more than one agent selects is refused
             // unless the caller acknowledged it; the refusal names every agent
-            // the write would reach.
-            let require_only_referrer = |agents: Vec<String>| -> Result<()> {
-                if acknowledged || agents.len() <= 1 {
-                    return Ok(());
-                }
-                Err(ops::shared_refusal(&agents))
-            };
+            // the write would reach. The acknowledgement waives only that
+            // refusal: it never widens who may write, so a shared edit still
+            // needs the agent catalog grant.
             if target == SelfConfigTarget::AgentContext || target == SelfConfigTarget::Tools {
                 let context_id = anchor.context.get("context_id").and_then(Value::as_str)
                     .context("selected agent has no context; create and select a Context before editing it or its Tools")?;
-                require_only_referrer(
-                    ops::shared_referrers(txn, SelfConfigTarget::AgentContext, owner, context_id)
-                        .await?,
-                )?;
+                ops::guard_shared_authority_in_txn(
+                    txn,
+                    SelfConfigTarget::AgentContext,
+                    owner,
+                    context_id,
+                    acknowledged,
+                    holds_catalog_grant,
+                )
+                .await?;
                 if target == SelfConfigTarget::Tools {
                     let tools_id = stored
                         .get("tools_id")
                         .and_then(Value::as_str)
                         .context("selected Tools is missing tools_id")?;
-                    require_only_referrer(
-                        ops::shared_referrers(txn, SelfConfigTarget::Tools, owner, tools_id)
-                            .await?,
-                    )?;
+                    ops::guard_shared_authority_in_txn(
+                        txn,
+                        SelfConfigTarget::Tools,
+                        owner,
+                        tools_id,
+                        acknowledged,
+                        holds_catalog_grant,
+                    )
+                    .await?;
                 }
             }
             ops::guard_compaction_choice_in_txn(txn, target, anchor, stored, merged).await?;
