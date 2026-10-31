@@ -564,8 +564,8 @@ describe("configuration panels", () => {
         claudeAccount("cred-2", "acct-2", "second-identity"),
       ]);
       renderIn(app, <InferencePanel deployment={claudeDeployment} />);
-      expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
-      expect(screen.getAllByText(/· disabled$/)).toHaveLength(1);
+      expect(await screen.findAllByText(/· login disabled$/)).toHaveLength(1);
+      expect(screen.getByText(/· label-cred-2$/)).toBeVisible();
       expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
     });
 
@@ -759,20 +759,17 @@ describe("configuration panels", () => {
         const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
         renderIn(app, <InferencePanel deployment={rowsDeployment} />);
-        const claude = "Anthropic / Claude (subscription)";
-        const grok = "Grok (subscription)";
-        const chatgpt = "ChatGPT / Codex (subscription)";
         for (const meta of [
-          `· ${claude} · Personal · signed in`,
-          `· ${claude} · signed in`,
-          `· ${grok} · signed in`,
-          `· ${grok} · disabled`,
-          `· ${chatgpt} · Main · signed in`,
-          `· ${chatgpt} · signed in`,
-          "· OpenRouter · key stored",
+          "· Subscription · Personal",
+          "· Subscription · login disabled",
+          "· Subscription · Main",
+          "· OpenRouter",
           "· OpenRouter · key from OPENROUTER_API_KEY",
         ])
           expect(await screen.findByText(meta)).toBeVisible();
+        /* a usable login says nothing more */
+        expect(screen.getAllByText("· Subscription")).toHaveLength(3);
+        expect(screen.queryByText(/signed in|key stored/)).not.toBeInTheDocument();
         expect(screen.getAllByText("· OpenAI compatible · no key")).toHaveLength(2);
         expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
       });
@@ -1376,7 +1373,7 @@ describe("configuration panels", () => {
     expect(await screen.findByText(/disabled/)).toBeVisible();
   });
 
-  it("says off for a switched-off backend whose account is signed in", async () => {
+  it("says nothing of the login for a switched-off backend, its switch says it", async () => {
     const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       { provider: "xai-oauth", enabled: true, credentialId: "signed-in-credential" },
@@ -1396,8 +1393,8 @@ describe("configuration panels", () => {
         }}
       />,
     );
-    expect(await screen.findByText(/· off$/)).toBeVisible();
-    expect(screen.queryByText(/signed in/)).not.toBeInTheDocument();
+    expect(await screen.findByText("· Subscription")).toBeVisible();
+    expect(screen.queryByText(/signed in|· off/)).not.toBeInTheDocument();
   });
 
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {

@@ -113,28 +113,43 @@ export function InferencePanel({
     .map((b) => ({ b, provider: providerOf(b), stored: backendAccount(accounts, b) }))
     .sort((x, y) => order(x.provider) - order(y.provider));
   const missing = providers.filter((p) => !configured.some((c) => c.provider === p.id));
+  /* a row says what kind of backend it is and, only when something keeps it
+     from working, what: a usable login or key needs no word, and the switch
+     already says when it is off */
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
     const stored = backendAccount(accounts, b);
-    const label =
-      stored?.label && stored.label !== (b.name ?? b.backendId)
-        ? `${stored.label} · `
-        : "";
-    const cred = sub
+    const kind = KINDS.find((k) => k.value === b.providerKind)?.label ?? b.providerKind;
+    const account =
+      stored?.label &&
+      stored.label !== (b.name ?? b.backendId) &&
+      !(sub?.title ?? kind ?? "").toLowerCase().includes(stored.label.toLowerCase())
+        ? stored.label
+        : null;
+    const problem = sub
       ? stored
-        ? `${label}${b.enabled === false ? "off" : stored.enabled ? "signed in" : "disabled"}`
+        ? b.enabled === false || stored.enabled
+          ? null
+          : "login disabled"
         : b.accountRef
           ? "account not on this node"
           : "not signed in"
       : b.apiKeyConfigured
-        ? "key stored"
+        ? null
         : b.apiKeyEnvVar
           ? `key from ${b.apiKeyEnvVar}`
           : "no key";
     const profiles = deployment.inferenceProfiles.filter(
       (profile) => profile.backend_id === b.backendId,
     );
-    return `${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"} · ${KINDS.find((k) => k.value === b.providerKind)?.label ?? b.providerKind} · ${cred}`;
+    return [
+      `${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"}`,
+      sub ? "Subscription" : kind,
+      account,
+      problem,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   };
   return (
     <>
