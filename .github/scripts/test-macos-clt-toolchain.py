@@ -10,25 +10,29 @@ SCRIPTS = Path(__file__).resolve().parent
 SCRIPT = SCRIPTS / "setup-macos-clt-toolchain.sh"
 
 
-class CltToolchainSetupTests(unittest.TestCase):
+class ToolchainSetupTests(unittest.TestCase):
     """Fences the CI toolchain selection that fixes the `ld: tapi` link failure.
 
-    The script must select the Command Line Tools developer dir, resolve the
-    macOS SDK through it, prove the C compiler the tests spawn can link, and
-    export both variables to later steps. Each test drives a fake toolchain so
-    the assertions hold on any host.
+    The script must resolve the developer directory the linker comes from,
+    pin SDKROOT to that directory's macOS SDK, prove the C compiler the tests
+    spawn can link, and export both variables to later steps. Each test drives
+    a fake toolchain so the assertions hold on any host.
     """
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.clt = self.root / "CommandLineTools"
-        (self.clt / "usr" / "bin").mkdir(parents=True)
-        clang = self.clt / "usr" / "bin" / "clang"
-        clang.write_text("#!/bin/sh\n")
-        clang.chmod(0o755)
-        self.sdk = self.clt / "SDKs" / "MacOSX27.2.sdk"
+        self.developer = self.root / "Xcode-beta.app" / "Contents" / "Developer"
+        self.developer.mkdir(parents=True)
+        self.sdk = (
+            self.developer
+            / "Platforms"
+            / "MacOSX.platform"
+            / "Developer"
+            / "SDKs"
+            / "MacOSX26.4.sdk"
+        )
         self.sdk.mkdir(parents=True)
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -42,11 +46,16 @@ class CltToolchainSetupTests(unittest.TestCase):
         path.chmod(0o755)
         return path
 
+    def fake_xcode_select(self, developer_dir):
+        return self.write_tool(
+            "xcode-select",
+            "#!/bin/sh\n" f'printf "%s\\n" "{developer_dir}"\n',
+        )
+
     def fake_xcrun(self, sdk_path):
         return self.write_tool(
             "xcrun",
-            "#!/bin/sh\n"
-            f'printf "%s\\n" "{sdk_path}"\n',
+            "#!/bin/sh\n" f'printf "%s\\n" "{sdk_path}"\n',
         )
 
     def fake_cc(self, exit_code=0, stderr=""):
@@ -62,8 +71,8 @@ class CltToolchainSetupTests(unittest.TestCase):
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}{os.pathsep}{env['PATH']}"
         env["GITHUB_ENV"] = str(self.github_env)
-        env["GENTS_CLT_DEVELOPER_DIR"] = str(self.clt)
-        env["GENTS_CLT_PROBE_CC"] = str(self.bin / "cc")
+        env["GENTS_PROBE_CC"] = str(self.bin / "cc")
+        env.pop("GENTS_DEVELOPER_DIR", None)
         env.update(env_overrides)
         return subprocess.run(
             ["bash", str(SCRIPT)],
@@ -80,21 +89,48 @@ class CltToolchainSetupTests(unittest.TestCase):
                 values[key] = value
         return values
 
-    def test_selects_clt_toolchain_and_exports_it(self):
+    def test_pins_sdkroot_to_the_selected_developer_directory(self):
+        self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
         result = self.run_script()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         exported = self.exported()
-        self.assertEqual(exported["DEVELOPER_DIR"], str(self.clt))
+        self.assertEqual(exported["DEVELOPER_DIR"], str(self.developer))
         self.assertEqual(exported["SDKROOT"], str(self.sdk))
-        self.assertIn("Selected CLT toolchain", result.stdout)
+        self.assertIn("Selected toolchain", result.stdout)
+
+    def test_uses_the_developer_directory_the_linker_comes_from(self):
+        # The regression this fences: pinning the CLT developer dir made
+        # rust-lld fail on the CLT 27.2 SDK. The SDK must come from the
+        # directory xcode-select reports, not from the newest SDK on disk.
+        self.fake_xcode_select(self.developer)
+        self.fake_xcrun(self.sdk)
+        self.fake_cc()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.exported()["SDKROOT"], str(self.sdk))
+        self.assertNotIn("CommandLineTools", self.exported()["SDKROOT"])
+
+    def test_honours_an_explicit_developer_directory(self):
+        other = self.root / "CommandLineTools"
+        other.mkdir()
+        other_sdk = other / "SDKs" / "MacOSX27.2.sdk"
+        other_sdk.mkdir(parents=True)
+        self.fake_xcode_select(self.developer)
+        self.fake_xcrun(other_sdk)
+        self.fake_cc()
+        result = self.run_script(GENTS_DEVELOPER_DIR=str(other))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.exported()["DEVELOPER_DIR"], str(other))
+        self.assertEqual(self.exported()["SDKROOT"], str(other_sdk))
 
     def test_probes_the_compiler_the_tests_spawn(self):
+        self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
         result = self.run_script()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # The probe must be a real link of a C source, not a version check:
         # the failing tests build a fixture with /usr/bin/cc.
         self.assertTrue(self.cc_log.exists(), "the C compiler was never invoked")
@@ -103,6 +139,7 @@ class CltToolchainSetupTests(unittest.TestCase):
         self.assertIn("-o", invocation)
 
     def test_fails_fast_when_the_compiler_cannot_link(self):
+        self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc(
             exit_code=1,
@@ -117,6 +154,7 @@ class CltToolchainSetupTests(unittest.TestCase):
         self.assertEqual(self.exported(), {})
 
     def test_fails_when_xcrun_reports_no_sdk(self):
+        self.fake_xcode_select(self.developer)
         self.fake_xcrun("")
         self.fake_cc()
         result = self.run_script()
@@ -124,35 +162,34 @@ class CltToolchainSetupTests(unittest.TestCase):
         self.assertIn("no macOS SDK", result.stdout + result.stderr)
         self.assertEqual(self.exported(), {})
 
-    def test_fails_when_clt_is_absent(self):
-        self.fake_xcrun(self.sdk)
-        self.fake_cc()
-        result = self.run_script(
-            GENTS_CLT_DEVELOPER_DIR=str(self.root / "missing-CommandLineTools")
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Command Line Tools not found", result.stdout + result.stderr)
-
-    def test_fails_when_clt_clang_is_absent(self):
-        (self.clt / "usr" / "bin" / "clang").unlink()
+    def test_fails_when_the_developer_directory_is_absent(self):
+        self.fake_xcode_select(self.root / "missing-Developer")
         self.fake_xcrun(self.sdk)
         self.fake_cc()
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("clang is missing", result.stdout + result.stderr)
+        self.assertIn("Developer directory not found", result.stdout + result.stderr)
+
+    def test_fails_when_xcode_select_is_absent(self):
+        self.fake_xcrun(self.sdk)
+        self.fake_cc()
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("xcode-select is missing", result.stdout + result.stderr)
 
     def test_succeeds_without_github_env(self):
+        self.fake_xcode_select(self.developer)
         self.fake_xcrun(self.sdk)
         self.fake_cc()
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}{os.pathsep}{env['PATH']}"
         env.pop("GITHUB_ENV", None)
-        env["GENTS_CLT_DEVELOPER_DIR"] = str(self.clt)
-        env["GENTS_CLT_PROBE_CC"] = str(self.bin / "cc")
+        env.pop("GENTS_DEVELOPER_DIR", None)
+        env["GENTS_PROBE_CC"] = str(self.bin / "cc")
         result = subprocess.run(
             ["bash", str(SCRIPT)], env=env, capture_output=True, text=True
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

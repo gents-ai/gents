@@ -166,11 +166,14 @@ jobs:
           persist-credentials: false
 
       # A Command Line Tools update repointed the default SDK to MacOSX27.2.sdk,
-      # which the Xcode-beta linker selected by `xcode-select` cannot read
-      # (`ld: tapi error: malformed file`). Rust and test jobs need no Xcode, so
-      # select the CLT toolchain explicitly. This also covers the C fixtures the
-      # tests spawn with /usr/bin/cc, which inherit this environment.
-      - name: Select the Command Line Tools toolchain
+      # whose libSystem.B.tbd declares arm64e.x1-macos targets that neither
+      # linker on this runner understands: Xcode-beta's ld-1266.5 fails with
+      # `ld: tapi error: malformed file`, and rust-lld (forced by
+      # .cargo/config.toml) with `could not load TAPI file ... unknown target`.
+      # Pin SDKROOT to the SDK of the developer directory the linker comes
+      # from, so cc-rs crates and the C fixtures the tests spawn with
+      # /usr/bin/cc all resolve one readable SDK.
+      - name: Select a matching macOS SDK for the linker
         run: .github/scripts/setup-macos-clt-toolchain.sh
 
       # gents-migration's build script compiles the fixture lens for WASM and
