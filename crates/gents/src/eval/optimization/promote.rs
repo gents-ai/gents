@@ -924,9 +924,9 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         for surface in [
-            "self_config",
+            "tools/builtin/self_config",
             "tools/native",
-            "meta_tools",
+            "tools/mcp/meta",
             "tools/background/status",
             "tools/surface",
         ] {
@@ -934,7 +934,7 @@ mod tests {
         }
         for module in [
             "tools/native.rs",
-            "meta_tools.rs",
+            "tools/mcp/meta.rs",
             "tools/background/status.rs",
             "tools/call/control.rs",
         ] {
