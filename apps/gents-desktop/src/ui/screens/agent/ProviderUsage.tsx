@@ -113,34 +113,58 @@ function windowDetail(w: UsageWindowView, now: number) {
   return parts.join(" · ");
 }
 
-/* one window: its name, how full it is and when it empties */
+function Meter({ w, pct }: { w: UsageWindowView; pct: number }) {
+  return (
+    <span
+      role="meter"
+      aria-label={`${w.label} used`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={pct}
+      className="block h-1.5 overflow-hidden rounded-full bg-muted"
+    >
+      <span
+        className={cn("block h-full rounded-full", FILL[usageLevel(pct)])}
+        style={{ width: `${Math.min(pct, 100)}%` }}
+      />
+    </span>
+  );
+}
+
+/* one window as a row: its name, how full it is and when it empties, in
+   columns the account's other rows share, so their bars end together */
 function WindowRow({ w, now }: { w: UsageWindowView; now: number }) {
   const pct = Math.round(w.usedPct);
   return (
     <li
       title={windowDetail(w, now)}
-      className="grid grid-cols-[minmax(2.5rem,auto)_minmax(3rem,1fr)_3ch_minmax(0,auto)] items-center gap-3 text-sm"
+      className="col-span-4 grid grid-cols-subgrid items-center text-sm"
     >
       <span className="truncate text-foreground">{w.label}</span>
-      <span
-        role="meter"
-        aria-label={`${w.label} used`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct}
-        className="h-1.5 overflow-hidden rounded-full bg-muted"
-      >
-        <span
-          className={cn("block h-full rounded-full", FILL[usageLevel(pct)])}
-          style={{ width: `${Math.min(pct, 100)}%` }}
-        />
-      </span>
+      <Meter w={w} pct={pct} />
       <span className={cn("text-right tabular-nums", INK[usageLevel(pct)])}>
         {pct}%
       </span>
       <span className="truncate text-xs text-muted-foreground tabular-nums">
         {resetsIn(w, now) ?? (w.lastKnown ? "last known" : "")}
       </span>
+    </li>
+  );
+}
+
+/* one window as a bar beside the account's others, its name, percent and
+   reset under it */
+function WindowBar({ w, now }: { w: UsageWindowView; now: number }) {
+  const pct = Math.round(w.usedPct);
+  const when = resetsIn(w, now) ?? (w.lastKnown ? "last known" : null);
+  return (
+    <li title={windowDetail(w, now)} className="grid min-w-0 gap-1.5">
+      <Meter w={w} pct={pct} />
+      <p className="flex min-w-0 items-baseline gap-1.5 text-xs tabular-nums">
+        <span className="text-foreground">{w.label}</span>
+        <span className={INK[usageLevel(pct)]}>{pct}%</span>
+        {when && <span className="truncate text-muted-foreground">· {when}</span>}
+      </p>
     </li>
   );
 }
@@ -186,11 +210,21 @@ export function UsageRows({ view }: { view?: AccountUsageView }) {
             {groups.size > 1 && (
               <p className="text-xs text-muted-foreground">{label}</p>
             )}
-            <ul className="grid gap-1.5">
-              {windows.map((w) => (
-                <WindowRow key={w.label} w={w} now={now} />
-              ))}
-            </ul>
+            {/* a few windows of one kind read as one meter, side by side;
+                more, or several kinds, as rows */}
+            {groups.size === 1 && windows.length <= 3 ? (
+              <ul className="grid [grid-template-columns:repeat(auto-fit,minmax(9rem,1fr))] gap-x-2 gap-y-3">
+                {windows.map((w) => (
+                  <WindowBar key={w.label} w={w} now={now} />
+                ))}
+              </ul>
+            ) : (
+              <ul className="grid grid-cols-[minmax(2.5rem,auto)_minmax(3rem,1fr)_3ch_minmax(0,auto)] gap-x-3 gap-y-1.5">
+                {windows.map((w) => (
+                  <WindowRow key={w.label} w={w} now={now} />
+                ))}
+              </ul>
+            )}
           </section>
         ))
       ) : (
