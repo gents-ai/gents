@@ -128,6 +128,35 @@ impl EnrollmentAuthorityHandle {
             .context("enrollment authority owner dropped fresh authorization response")?
     }
 
+    /// A long-running effect remains bound to its exact signed authorization.
+    /// Watch observations also carry data-plane failures and can lag a fresh
+    /// command, so a change wakes a signed-authority reload rather than revoking
+    /// by itself. Expiry bounds even a reload whose owner stops responding.
+    pub async fn authorization_lost(&self, expected: &EnrollmentAuthorizationFence) -> Result<()> {
+        let mut changes = self.receiver.clone();
+        let expires = chrono::DateTime::parse_from_rfc3339(&expected.authorization_expires_at)
+            .context("enrollment authorization has an invalid expiry")?;
+        let remaining = expires
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .unwrap_or_default();
+        let expiry = tokio::time::sleep(remaining);
+        tokio::pin!(expiry);
+        loop {
+            let current = tokio::select! {
+                current = self.fresh_authorization(&expected.member_did, &expected.member_peer) => current?,
+                _ = &mut expiry => return Ok(()),
+            };
+            if current.as_ref() != Some(expected) {
+                return Ok(());
+            }
+            tokio::select! {
+                result = changes.changed() => result.context("enrollment authority owner stopped")?,
+                _ = &mut expiry => return Ok(()),
+            }
+        }
+    }
+
     /// Resolve one transport peer to its exact current generation; transport
     /// reconciliation has the peer identity before a trusted member DID, so
     /// the DID derives from the signed authority projection, not a desired row.
@@ -1171,6 +1200,119 @@ mod tests {
             active: vec![active],
             ..EnrollmentProjection::default()
         }
+    }
+
+    struct CurrentProjectionReader(Arc<Mutex<EnrollmentProjection>>);
+
+    #[async_trait]
+    impl EnrollmentProjectionReader for CurrentProjectionReader {
+        async fn load_authority_projection(&self) -> Result<EnrollmentProjection> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_authorization_survives_transport_failure_and_stale_observations() {
+        let active = active_enrollment(1, "2099-01-01T00:00:00Z");
+        let projection = projection_with_active(active.clone());
+        let expected = exact_authorization_fence(
+            &projection,
+            &active.request.candidate_did,
+            &active.request.candidate_peer,
+        )
+        .unwrap()
+        .unwrap();
+        let loaded = Arc::new(Mutex::new(projection.clone()));
+        let reader = CurrentProjectionReader(loaded.clone());
+        let (mut owner, handle) = enrollment_authority_channel();
+        let sender = owner.sender.clone();
+        publish_ready(&sender, projection.clone());
+        let task = tokio::spawn(async move {
+            while let Some(command) = owner.commands.recv().await {
+                handle_authority_command(&reader, &owner.sender, command).await;
+            }
+        });
+        let watch = handle.authorization_lost(&expected);
+        tokio::pin!(watch);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut watch)
+                .await
+                .is_err()
+        );
+        publish_failed(&sender, &anyhow::anyhow!("unrelated route write failed"));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut watch)
+                .await
+                .is_err(),
+            "a data-plane failure does not revoke successfully loaded authority"
+        );
+        let mut unrelated = projection;
+        let mut other = active_enrollment(9, "2099-01-01T00:00:00Z");
+        other.request.candidate_did = "did:key:another-member".into();
+        other.request.candidate_peer = "another-peer".into();
+        unrelated.active.push(other);
+        *loaded.lock().unwrap() = unrelated.clone();
+        publish_ready(&sender, unrelated);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut watch)
+                .await
+                .is_err()
+        );
+        // A sweep can publish an old snapshot after a fresh command has reloaded.
+        publish_ready(&sender, EnrollmentProjection::default());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut watch)
+                .await
+                .is_err(),
+            "a stale observation must be reloaded before cancelling"
+        );
+        *loaded.lock().unwrap() =
+            projection_with_active(active_enrollment(2, "2099-01-01T00:00:00Z"));
+        publish_ready(&sender, loaded.lock().unwrap().clone());
+        tokio::time::timeout(std::time::Duration::from_secs(1), watch)
+            .await
+            .unwrap()
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delivery_authorization_expires_even_when_reload_is_stalled() {
+        let active = active_enrollment(
+            1,
+            &(Utc::now() + chrono::Duration::seconds(60)).to_rfc3339(),
+        );
+        let expected = exact_authorization_fence(
+            &projection_with_active(active.clone()),
+            &active.request.candidate_did,
+            &active.request.candidate_peer,
+        )
+        .unwrap()
+        .unwrap();
+        let (_owner, handle) = enrollment_authority_channel();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(61),
+            handle.authorization_lost(&expected),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delivery_authorization_fails_when_owner_stops() {
+        let active = active_enrollment(1, "2099-01-01T00:00:00Z");
+        let expected = exact_authorization_fence(
+            &projection_with_active(active.clone()),
+            &active.request.candidate_did,
+            &active.request.candidate_peer,
+        )
+        .unwrap()
+        .unwrap();
+        let (owner, handle) = enrollment_authority_channel();
+        drop(owner);
+        assert!(handle.authorization_lost(&expected).await.is_err());
     }
 
     #[tokio::test]

@@ -521,6 +521,7 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
     let lost = LostAcknowledgment {
         inner: EmbeddedHydrationDelivery {
             node: source_node.clone(),
+            enrollment: store.enrollment.clone(),
         },
         documents: std::sync::Mutex::new(Vec::new()),
     };
@@ -542,7 +543,7 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
         .context("prepared retry page")?;
     let calls = lost.documents.lock().unwrap().clone();
     anyhow::ensure!(
-        calls.len() == HYDRATION_DELIVERY_MAX_ATTEMPTS
+        calls.len() == 1
             && calls
                 .iter()
                 .all(|document| document == &prepared.document_id),
@@ -579,6 +580,7 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
     );
     let delivered = EmbeddedHydrationDelivery {
         node: source_node.clone(),
+        enrollment: store.enrollment.clone(),
     };
     serve_inventory(store, &delivered, &waiting).await?;
     let response = wait_request(source_node, &retry)
@@ -655,6 +657,7 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
     let revocation = RevokeAfterAcknowledgment {
         inner: EmbeddedHydrationDelivery {
             node: source_node.clone(),
+            enrollment: store.enrollment.clone(),
         },
         enrollment: GraphqlEnrollmentStore::new(source_node.clone(), source.clone()),
         request: enrollment.into(),
@@ -826,12 +829,19 @@ struct LostAcknowledgment {
 
 #[async_trait]
 impl HydrationDelivery for LostAcknowledgment {
-    async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
+    async fn push_documents_to_peer(
+        &self,
+        peer: &str,
+        target: DeliveryTarget<'_>,
+        fence: &EnrollmentAuthorizationFence,
+    ) -> Result<()> {
         let DeliveryTarget::FileInventory(document) = target else {
             anyhow::bail!("unexpected delivery target");
         };
         self.documents.lock().unwrap().push(document.to_owned());
-        self.inner.push_documents_to_peer(peer, target).await?;
+        self.inner
+            .push_documents_to_peer(peer, target, fence)
+            .await?;
         anyhow::bail!("injected lost acknowledgment after actual metadata delivery")
     }
 }
@@ -840,7 +850,12 @@ struct NoDelivery(std::sync::atomic::AtomicUsize);
 
 #[async_trait]
 impl HydrationDelivery for NoDelivery {
-    async fn push_documents_to_peer(&self, _: &str, _: DeliveryTarget<'_>) -> Result<()> {
+    async fn push_documents_to_peer(
+        &self,
+        _: &str,
+        _: DeliveryTarget<'_>,
+        _fence: &EnrollmentAuthorizationFence,
+    ) -> Result<()> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         anyhow::bail!("settled attempts must not perform another transfer")
     }
@@ -855,9 +870,16 @@ struct RevokeAfterAcknowledgment {
 
 #[async_trait]
 impl HydrationDelivery for RevokeAfterAcknowledgment {
-    async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
+    async fn push_documents_to_peer(
+        &self,
+        peer: &str,
+        target: DeliveryTarget<'_>,
+        fence: &EnrollmentAuthorizationFence,
+    ) -> Result<()> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.inner.push_documents_to_peer(peer, target).await?;
+        self.inner
+            .push_documents_to_peer(peer, target, fence)
+            .await?;
         self.enrollment.revoke_request(&self.request).await?;
         Ok(())
     }

@@ -107,9 +107,16 @@ struct ObservedDelivery {
 
 #[async_trait]
 impl HydrationDelivery for ObservedDelivery {
-    async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
+    async fn push_documents_to_peer(
+        &self,
+        peer: &str,
+        target: DeliveryTarget<'_>,
+        fence: &EnrollmentAuthorizationFence,
+    ) -> Result<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.inner.push_documents_to_peer(peer, target).await?;
+        self.inner
+            .push_documents_to_peer(peer, target, fence)
+            .await?;
         self.gate.pause(PauseAt::Acknowledged).await;
         if self.gate.at == PauseAt::Delivered {
             let DeliveryTarget::FileImage(image, _) = target else {
@@ -657,10 +664,12 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
         .await?;
         EmbeddedHydrationDelivery {
             node: source_node.clone(),
+            enrollment: source_store.enrollment.clone(),
         }
         .push_documents_to_peer(
             &client_peer,
             DeliveryTarget::FileInventory(&prepared.document_id),
+            &metadata_fence,
         )
         .await?;
         let received = tokio::time::timeout(Duration::from_secs(20), async {
@@ -787,6 +796,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     let delivery = ObservedDelivery {
         inner: EmbeddedHydrationDelivery {
             node: source_node.clone(),
+            enrollment: store.inner.enrollment.clone(),
         },
         gate: gate.clone(),
         calls: AtomicUsize::new(0),
