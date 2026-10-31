@@ -113,7 +113,7 @@ pub struct LoadedPairingDesired {
 pub struct PairingTickOutcome {
     pub peer_id: String,
     pub ops_applied: Vec<DiffOp>,
-    pub replayed_replicators: Vec<String>,
+    pub ensured_replicators: Vec<String>,
     pub desired_read_failed: bool,
     pub peer_active: bool,
     pub live_route_matches: bool,

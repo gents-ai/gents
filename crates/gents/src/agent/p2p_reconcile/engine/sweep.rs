@@ -257,10 +257,10 @@ pub(super) async fn sweep_pairings_after_drops(
                         "pairing reconcile applied operations"
                     );
                 }
-                if !outcome.replayed_replicators.is_empty() {
+                if !outcome.ensured_replicators.is_empty() {
                     tracing::info!(target: "gents::agent::p2p_reconcile::engine",
                         peer_id = %outcome.peer_id,
-                        replicators = ?outcome.replayed_replicators,
+                        replicators = ?outcome.ensured_replicators,
                         "replayed agent-target replicators after peer reconnect"
                     );
                 }

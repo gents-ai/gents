@@ -9,10 +9,7 @@ use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
-use super::templates::{
-    filter_conditions, live_filter_string_eq, to_replication_filters, FilterPredicate,
-    PairingFilters,
-};
+use super::templates::{live_filter_string_eq, to_replication_filters, PairingFilters};
 use super::{
     resolve_embedded_collection_id, resolve_embedded_collection_name, RemoteP2pAdmin,
     RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
@@ -164,52 +161,6 @@ impl EmbeddedRemoteP2pAdmin {
             }
         }
         Ok(routed)
-    }
-
-    async fn selected_document_ids(
-        &self,
-        collection: &str,
-        filter: Option<&FilterPredicate>,
-    ) -> RemoteP2pAdminResult<Vec<String>> {
-        crate::graphql::validate_collection_identifier(collection)
-            .map_err(|error| RemoteP2pAdminError::LocalError(error.to_string()))?;
-        let filter = match filter {
-            None => serde_json::Value::Null,
-            Some(filter) => {
-                serde_json::Value::Object(filter_conditions(filter).ok_or_else(|| {
-                    RemoteP2pAdminError::LocalError(format!(
-                        "{collection} replicator filter has no document predicate"
-                    ))
-                })?)
-            }
-        };
-        let query = format!(
-            "query($filter: {collection}FilterArg) {{ {collection}(filter: $filter) {{ _docID }} }}"
-        );
-        let variables = serde_json::json!({ "filter": filter });
-        let response = crate::config_client::ConfigAccess::transact_local_readonly(
-            &self.node,
-            None,
-            "p2p_reconcile.replicated_document_ids",
-            move |txn| {
-                let query = query.clone();
-                let variables = variables.clone();
-                Box::pin(async move { txn.execute_with_variables(&query, &variables).await })
-            },
-        )
-        .await
-        .map_err(|error| {
-            RemoteP2pAdminError::LocalError(
-                gents_protocol::error_chain::ErrorChain(&error).to_string(),
-            )
-        })?;
-        Ok(response
-            .pointer(&format!("/data/{collection}"))
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|row| row.get("_docID")?.as_str().map(str::to_string))
-            .collect())
     }
 }
 
@@ -378,24 +329,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
             p2p.sync_branchable_collection(collection_id),
         )
         .await
-    }
-
-    async fn replication_acknowledged(
-        &self,
-        peer_id: &str,
-        collection: &str,
-        filter: Option<&FilterPredicate>,
-    ) -> RemoteP2pAdminResult<Option<bool>> {
-        let doc_ids = self.selected_document_ids(collection, filter).await?;
-        if doc_ids.is_empty() {
-            return Ok(Some(true));
-        }
-        let acknowledged = self
-            .documents_acknowledged(peer_id, collection, &doc_ids)
-            .await?;
-        Ok(Some(
-            acknowledged.into_iter().all(|acknowledged| acknowledged),
-        ))
     }
 }
 

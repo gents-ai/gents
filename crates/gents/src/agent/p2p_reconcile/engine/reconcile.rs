@@ -6,9 +6,7 @@ use super::super::{
     compute_owned_pairing_diff, owned_pairing_live_matches, DiffOp, PairingApplied, PairingDesired,
     RemoteP2pAdmin,
 };
-use super::remote_topology::{
-    apply_op, read_actual, replay_replicator_after_reconnect, replicator_acknowledged,
-};
+use super::remote_topology::{apply_op, ensure_replicator_after_reconnect, read_actual};
 use super::{
     EnrollmentRouteGeneration, LoadedPairingApplied, PairingStateStore, PairingTickOutcome,
 };
@@ -192,7 +190,7 @@ pub(super) async fn reconcile_prepared_peer(
         return Ok(PairingTickOutcome {
             peer_id,
             ops_applied: Vec::new(),
-            replayed_replicators: Vec::new(),
+            ensured_replicators: Vec::new(),
             desired_read_failed: true,
             peer_active: false,
             live_route_matches: false,
@@ -224,7 +222,7 @@ pub(super) async fn reconcile_prepared_peer(
         &applied_record.state,
     ));
     let mut ops_applied = Vec::new();
-    let mut replayed_replicators = Vec::new();
+    let mut ensured_replicators = Vec::new();
 
     if (!ops.is_empty() || reconnected || force_replay)
         && applied_record.enrollment != Default::default()
@@ -233,12 +231,6 @@ pub(super) async fn reconcile_prepared_peer(
         persist_applied_record(store, &peer_id, &mut applied_record).await?;
     }
 
-    // DefraDB's idempotent add_replicator skips initial replay for an existing
-    // identity (#664), so after a reconnect force-reinstall every otherwise-
-    // converged agent-target replicator whose peer has not acknowledged every
-    // routed document, replaying owner-authored DAG heads. If the desired
-    // identity changed, the diff already contains the teardown+install replay;
-    // avoid doing it twice.
     if (reconnected || force_replay)
         && desired_state.uses_agent_target_template()
         && fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
@@ -255,13 +247,11 @@ pub(super) async fn reconcile_prepared_peer(
                         if candidate == address
                 )
             });
-            if diff_reinstalls_address
-                || replicator_acknowledged(admin, address, &desired_state, &actual).await
-            {
+            if diff_reinstalls_address {
                 continue;
             }
-            replay_replicator_after_reconnect(admin, address, &desired_state, &actual).await?;
-            replayed_replicators.push(address.clone());
+            ensure_replicator_after_reconnect(admin, address, &desired_state).await?;
+            ensured_replicators.push(address.clone());
         }
     }
 
@@ -287,7 +277,7 @@ pub(super) async fn reconcile_prepared_peer(
         ops_applied.push(op);
     }
 
-    let verified_actual = if ops_applied.is_empty() && replayed_replicators.is_empty() {
+    let verified_actual = if ops_applied.is_empty() && ensured_replicators.is_empty() {
         actual
     } else {
         read_actual(admin, &applied_record.state.replicator_addresses)
@@ -323,7 +313,7 @@ pub(super) async fn reconcile_prepared_peer(
     Ok(PairingTickOutcome {
         peer_id,
         ops_applied,
-        replayed_replicators,
+        ensured_replicators,
         desired_read_failed: false,
         peer_active: active_before || reconnected,
         live_route_matches,

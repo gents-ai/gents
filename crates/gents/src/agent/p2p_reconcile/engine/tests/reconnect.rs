@@ -12,7 +12,7 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
         desired: Mutex::new(Err("transient desired read".into())),
         applied: Mutex::new(PairingApplied {
             replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
-            replicator_filter: filter,
+            replicator_filter: filter.clone(),
             ..Default::default()
         }),
         ..Default::default()
@@ -27,7 +27,7 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
             id: Some("id-current-endpoint".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
-            filters: Some(Default::default()),
+            filters: Some(mock_live_filters(&filter)),
         },
     );
     let mut replay_connections = BTreeMap::new();
@@ -54,10 +54,7 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
 
     assert_eq!(
         *admin.emitted.lock().unwrap(),
-        vec![
-            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
-            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
-        ],
+        vec![DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into())],
         "the deferred startup replay must fire on the first healthy sweep"
     );
     assert_eq!(replay_connections.get("peer-a"), Some(&true));
@@ -72,7 +69,7 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     .expect("steady-state sweep");
     assert_eq!(
         admin.emitted.lock().unwrap().len(),
-        2,
+        1,
         "a steady-state sweep without a connection edge must not replay again"
     );
 }
@@ -91,7 +88,7 @@ async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
         desired: Mutex::new(Err("transient desired read".into())),
         applied: Mutex::new(PairingApplied {
             replicator_addresses: set(&["addr1"]),
-            replicator_filter: filter,
+            replicator_filter: filter.clone(),
             ..Default::default()
         }),
         ..Default::default()
@@ -106,7 +103,7 @@ async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("addr1".into()),
-            filters: Some(Default::default()),
+            filters: Some(mock_live_filters(&filter)),
         },
     );
     let mut replay_connections = BTreeMap::from([("peer-a".to_string(), false)]);
@@ -134,15 +131,12 @@ async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
     assert_eq!(replay_connections.get("peer-a"), Some(&true));
     assert_eq!(
         *admin.emitted.lock().unwrap(),
-        vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
-        ]
+        vec![DiffOp::InstallReplicator("addr1".into())]
     );
 }
 
 #[tokio::test]
-async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
+async fn failed_reconnect_ensure_preserves_route_and_retries_next_tick() {
     let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
@@ -153,7 +147,7 @@ async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
-        replicator_filter: filter,
+        replicator_filter: filter.clone(),
         ..Default::default()
     };
     let admin = MockAdmin {
@@ -167,7 +161,7 @@ async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("addr1".into()),
-            filters: Some(Default::default()),
+            filters: Some(mock_live_filters(&filter)),
         },
     );
     let mut replay_connections = BTreeMap::new();
@@ -181,11 +175,9 @@ async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
     .await
     .expect("sweep contains per-peer replay failure");
     assert_eq!(replay_connections.get("peer-a"), Some(&false));
-    assert!(admin.replicators.lock().unwrap().is_empty());
-    assert_eq!(
-        *admin.emitted.lock().unwrap(),
-        vec![DiffOp::TeardownReplicator("addr1".into())]
-    );
+    assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
+    assert!(admin.emitted.lock().unwrap().is_empty());
+    assert!(admin.deleted_replicator_collections.lock().unwrap().is_empty());
 
     sweep_pairings(
         &admin,
@@ -194,20 +186,17 @@ async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
         &mut BTreeSet::<String>::new(),
     )
     .await
-    .expect("next sweep heals torn replay");
+    .expect("next sweep retries the preserved route");
     assert_eq!(replay_connections.get("peer-a"), Some(&true));
     assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
     assert_eq!(
         *admin.emitted.lock().unwrap(),
-        vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
-        ]
+        vec![DiffOp::InstallReplicator("addr1".into())]
     );
 }
 
 #[tokio::test]
-async fn reconnect_force_replays_converged_agent_target_replicator() {
+async fn reconnect_ensures_converged_agent_target_replicator_without_teardown() {
     let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
@@ -240,19 +229,16 @@ async fn reconnect_force_replays_converged_agent_target_replicator() {
         outcome.ops_applied.is_empty(),
         "topology was already converged"
     );
-    assert_eq!(outcome.replayed_replicators, vec!["addr1"]);
+    assert_eq!(outcome.ensured_replicators, vec!["addr1"]);
     assert_eq!(
         *admin.emitted.lock().unwrap(),
-        vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
-        ],
-        "reconnect must force one bounded full replay"
+        vec![DiffOp::InstallReplicator("addr1".into())],
+        "reconnect must preserve native acknowledgement and retry state"
     );
 }
 
 #[tokio::test]
-async fn inbound_reconnect_force_replays_without_owner_redial() {
+async fn inbound_reconnect_ensures_without_owner_redial() {
     let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
@@ -287,18 +273,15 @@ async fn inbound_reconnect_force_replays_without_owner_redial() {
         .expect("inbound reconnect replay tick");
 
     assert!(admin.connects.lock().unwrap().is_empty());
-    assert_eq!(outcome.replayed_replicators, vec![TEST_TRANSPORT_ADDRESS_A]);
+    assert_eq!(outcome.ensured_replicators, vec![TEST_TRANSPORT_ADDRESS_A]);
     assert_eq!(
         *admin.emitted.lock().unwrap(),
-        vec![
-            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
-            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
-        ]
+        vec![DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into())]
     );
 }
 
 #[tokio::test]
-async fn reconnect_replay_reinstalls_when_delete_reports_remote_not_found() {
+async fn reconnect_ensure_never_deletes_native_replicator() {
     let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
@@ -326,19 +309,21 @@ async fn reconnect_replay_reinstalls_when_delete_reports_remote_not_found() {
 
     let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
         .await
-        .expect("missing old replicator must not prevent reconnect replay");
+        .expect("reconnect ensure succeeds without deleting the native replicator");
 
-    assert_eq!(outcome.replayed_replicators, vec!["addr1"]);
+    assert_eq!(outcome.ensured_replicators, vec!["addr1"]);
     assert_eq!(
         *admin.emitted.lock().unwrap(),
         vec![DiffOp::InstallReplicator("addr1".into())],
-        "replay must reinstall after the concurrent removal"
+        "native ensure preserves the installed route"
     );
     assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
+    assert!(*admin.delete_replicator_not_found.lock().unwrap());
+    assert!(admin.deleted_replicator_collections.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn reconnect_skips_replay_when_peer_acknowledged_every_document() {
+async fn reconnect_delegates_native_replay_decision_without_document_scan() {
     let filter = one_filter("AgentRequest", "requester_did", "did:key:peer");
     let desired = PairingDesired {
         replicator_addresses: set(&["addr1"]),
@@ -353,10 +338,7 @@ async fn reconnect_skips_replay_when_peer_acknowledged_every_document() {
         replicator_filter: filter.clone(),
         ..Default::default()
     };
-    let admin = MockAdmin {
-        acknowledged_peers: set(&["id-addr1"]),
-        ..Default::default()
-    };
+    let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(
         "addr1".into(),
         RemoteReplicator {
@@ -374,16 +356,10 @@ async fn reconnect_skips_replay_when_peer_acknowledged_every_document() {
         .await
         .expect("acknowledged reconnect tick");
 
-    assert!(outcome.replayed_replicators.is_empty());
-    assert!(
-        admin.emitted.lock().unwrap().is_empty(),
-        "an acknowledged replicator keeps its retry markers and acknowledgement records"
-    );
+    assert_eq!(outcome.ensured_replicators, vec!["addr1"]);
     assert_eq!(
-        *admin.acknowledgement_queries.lock().unwrap(),
-        vec![
-            ("id-addr1".to_string(), "AgentRequest".to_string()),
-            ("id-addr1".to_string(), "AgentSession".to_string()),
-        ]
+        *admin.emitted.lock().unwrap(),
+        vec![DiffOp::InstallReplicator("addr1".into())],
     );
+    assert!(admin.deleted_replicator_collections.lock().unwrap().is_empty());
 }
