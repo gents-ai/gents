@@ -269,49 +269,58 @@ export function ItemDialog({
       {item && (
         <DialogContent
           showCloseButton={false}
-          className="gap-2 overflow-visible bg-transparent p-0 shadow-none ring-0 sm:max-w-xl dark:ring-0"
+          className="grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-visible bg-transparent p-0 shadow-none ring-0 sm:max-w-xl dark:ring-0"
           /* the list stays readable behind, with the open row marked */
           overlayProps={{
             className: "bg-black/25 supports-backdrop-filter:backdrop-blur-[1px]",
           }}
           data-testid="mailbox-dialog"
           onKeyDown={(e) => {
-            if (typing(e.target)) return;
+            if (e.defaultPrevented || typing(e.target) || ownsArrows(e.target)) return;
             if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
               e.preventDefault();
               go(at + (e.key === "ArrowRight" ? 1 : -1));
             }
           }}
         >
-          {items.length > 1 && (
-            <div className="flex items-center justify-end gap-0.5 text-xs text-muted-foreground tabular-nums">
-              <Button
-                variant="quiet"
-                size="icon-xs"
-                aria-label="Previous item"
-                disabled={at === 0}
-                onClick={() => go(at - 1)}
-              >
-                <ChevronLeft />
-              </Button>
-              {at + 1} of {items.length}
-              <Button
-                variant="quiet"
-                size="icon-xs"
-                aria-label="Next item"
-                disabled={at === items.length - 1}
-                onClick={() => go(at + 1)}
-              >
-                <ChevronRight />
-              </Button>
-            </div>
-          )}
+          <div className="flex items-center justify-end gap-0.5 text-xs text-muted-foreground tabular-nums">
+            {items.length > 1 && (
+              <>
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Previous item"
+                  disabled={at === 0}
+                  onClick={() => go(at - 1)}
+                >
+                  <ChevronLeft />
+                </Button>
+                {at + 1} of {items.length}
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Next item"
+                  disabled={at === items.length - 1}
+                  onClick={() => go(at + 1)}
+                >
+                  <ChevronRight />
+                </Button>
+              </>
+            )}
+            <Button
+              variant="quiet"
+              size="icon-sm"
+              aria-label="Close mailbox"
+              onClick={onClose}
+            >
+              <X />
+            </Button>
+          </div>
           <Opened
             key={item.itemId}
             item={item}
             now={now}
             behind={Math.min(2, items.length - at - 1)}
-            onClose={onClose}
             onDone={done}
           />
         </DialogContent>
@@ -319,6 +328,14 @@ export function ItemDialog({
     </Dialog>
   );
 }
+
+const ownsArrows = (target: EventTarget) =>
+  target instanceof Element &&
+  Boolean(
+    target.closest(
+      '[role="menu"], [role="listbox"], [role="slider"], [role="tablist"]',
+    ),
+  );
 
 const typing = (target: EventTarget) =>
   target instanceof HTMLElement &&
@@ -348,13 +365,11 @@ function Opened({
   item: m,
   now,
   behind,
-  onClose,
   onDone,
 }: {
   item: MailboxItemView;
   now: number;
   behind: number;
-  onClose: () => void;
   onDone: () => void;
 }) {
   const question = parseQuestion(m);
@@ -379,13 +394,13 @@ function Opened({
     <>
       {/* a question's prompt is its heading; the dialog is named by the item */}
       {asking && <DialogTitle className="sr-only">{m.title}</DialogTitle>}
-      <div className="relative">
+      <div className="relative min-h-0 min-w-0">
         <Stack behind={behind} />
-        <div className="[view-transition-name:mailbox-card] [view-transition-class:morph-card]">
+        <div className="h-full min-h-0 [view-transition-name:mailbox-card] [view-transition-class:morph-card]">
           {asking ? (
             <QuestionPanel
               items={[m]}
-              onTypeInstead={onClose}
+              className="h-full max-h-full"
               where={<AskedWhere item={m} />}
               aside={
                 <span className="shrink-0 whitespace-nowrap">
@@ -443,7 +458,7 @@ function Details({ item: m, now }: { item: MailboxItemView; now: number }) {
     .join("\n\n");
   return (
     <section
-      className="grid gap-2 rounded-2xl bg-popover px-4 pt-3 pb-4 text-sm text-popover-foreground shadow-xl ring-1 ring-foreground/5 dark:ring-foreground/10 [&>*]:min-w-0"
+      className="flex h-full min-h-0 flex-col gap-2 rounded-2xl bg-popover px-4 pt-3 pb-4 text-sm text-popover-foreground shadow-xl ring-1 ring-foreground/5 dark:ring-foreground/10 [&>*]:min-w-0"
       onKeyDown={(e) => {
         if (e.key !== "Enter" || !openable(m)) return;
         if ((e.target as Element).closest(CONTROLS)) return;
@@ -491,7 +506,7 @@ function Details({ item: m, now }: { item: MailboxItemView; now: number }) {
       {body && (
         <div
           data-testid="mailbox-item-body"
-          className="prose-app max-h-[50vh] min-w-0 overflow-y-auto"
+          className="prose-app min-h-0 min-w-0 overflow-y-auto"
         >
           <Markdown breaks>{body}</Markdown>
         </div>

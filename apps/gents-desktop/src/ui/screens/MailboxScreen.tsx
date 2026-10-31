@@ -38,22 +38,31 @@ export function MailboxScreen() {
         {items.length > 0 && (
           <>
             <div className="flex items-center gap-2">
-              <Tabs
-                value={tab}
-                onValueChange={(value) => listViews.setMailboxTab(value as Tab)}
-                className="min-w-0"
+              <div
+                className="min-w-0 flex-1 overflow-x-auto py-1"
+                data-testid="mailbox-tabs-scroll"
               >
-                <TabsList variant="line" aria-label="Mailbox groups">
-                  <TabsTrigger value="all" className={TAB}>
-                    All <Count n={searched.length} />
-                  </TabsTrigger>
-                  {tabs.map((t) => (
-                    <TabsTrigger key={t.key} value={t.key} className={TAB}>
-                      {t.label} <Count n={t.count} />
+                <Tabs
+                  value={tab}
+                  onValueChange={(value) => listViews.setMailboxTab(value as Tab)}
+                  className="w-max"
+                >
+                  <TabsList
+                    variant="line"
+                    aria-label="Mailbox groups"
+                    className="min-h-11"
+                  >
+                    <TabsTrigger value="all" className={TAB}>
+                      All <Count n={searched.length} />
                     </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
+                    {tabs.map((t) => (
+                      <TabsTrigger key={t.key} value={t.key} className={TAB}>
+                        {t.label} <Count n={t.count} />
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              </div>
               <Button
                 variant="ghost"
                 size="icon-sm"
