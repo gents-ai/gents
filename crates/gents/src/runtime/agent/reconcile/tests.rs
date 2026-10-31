@@ -395,7 +395,7 @@ async fn slot_panic_restarts_agent() {
     let slot = spawn_slot(
         agent_config,
         tool_surface,
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 1,
@@ -461,7 +461,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let slot = spawn_slot(
         agent_config,
         tool_surface,
-        crate::retry::RetryPolicy::default(),
+        crate::runtime::agent::retry::RetryPolicy::default(),
         runner,
         shutdown_rx,
     );
@@ -552,7 +552,7 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
     let slots = spawn_slots(
         &snapshot,
         1,
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 1,
@@ -673,7 +673,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -809,7 +809,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         registry.clone(),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -954,7 +954,7 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -1142,7 +1142,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -1299,7 +1299,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -1500,7 +1500,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 2,
@@ -1588,7 +1588,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 2,
@@ -1708,7 +1708,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 2,
@@ -1863,7 +1863,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 2,
@@ -2032,7 +2032,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
             max_delay_ms: 25,
@@ -2143,7 +2143,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::inference::admission::AdmissionRegistry::new(node.clone()),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 2,
@@ -2303,7 +2303,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     let slot = spawn_slot(
         Arc::clone(&agent_config),
         Arc::clone(&absent_surface),
-        crate::retry::RetryPolicy {
+        crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
             max_delay_ms: 1,

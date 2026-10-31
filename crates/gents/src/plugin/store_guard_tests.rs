@@ -12,7 +12,7 @@ fn open_lock_file(home: &Path) -> std::fs::File {
 }
 
 fn lock_is_free(home: &Path) -> bool {
-    match crate::file_lock::FileLock::try_exclusive(open_lock_file(home)) {
+    match crate::store::local::file_lock::FileLock::try_exclusive(open_lock_file(home)) {
         Ok(probe) => {
             drop(probe);
             true

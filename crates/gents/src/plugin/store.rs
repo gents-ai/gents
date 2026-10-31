@@ -234,7 +234,7 @@ pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
 
 pub struct StoreGuard {
     home: PathBuf,
-    _lock: crate::file_lock::FileLock,
+    _lock: crate::store::local::file_lock::FileLock,
 }
 
 impl StoreGuard {
@@ -266,9 +266,9 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
     let lock = if exclusive {
-        crate::file_lock::FileLock::exclusive(file)
+        crate::store::local::file_lock::FileLock::exclusive(file)
     } else {
-        crate::file_lock::FileLock::shared(file)
+        crate::store::local::file_lock::FileLock::shared(file)
     }
     .with_context(|| format!("locking {}", path.display()))?;
     Ok(StoreGuard {
@@ -291,7 +291,7 @@ pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let lock = match crate::file_lock::FileLock::try_exclusive(file) {
+    let lock = match crate::store::local::file_lock::FileLock::try_exclusive(file) {
         Ok(lock) => lock,
         Err(std::fs::TryLockError::WouldBlock) => {
             anyhow::bail!("plugin store is busy; retry this pack operation")

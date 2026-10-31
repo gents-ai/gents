@@ -735,7 +735,7 @@ fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
 }
 
 fn structured_error(error: serde_json::Value) -> ToolError {
-    let message = crate::tool_output::render(
+    let message = crate::tools::output::render(
         &error,
         &[
             "message",

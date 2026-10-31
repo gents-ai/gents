@@ -9,9 +9,7 @@ pub mod codex_shim_binding;
 pub mod documents;
 pub mod error;
 pub mod eval;
-pub mod failure_text;
 pub mod file_inventory;
-pub mod file_lock;
 pub mod goal;
 pub mod inference;
 #[cfg(test)]
@@ -271,7 +269,6 @@ pub use request::admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
     verify_request_receipt_signature, SIGNED_REQUEST_FIELDS,
 };
-pub mod retry;
 pub mod session;
 pub mod tools;
 pub mod triggers;
@@ -443,5 +440,3 @@ pub mod __test_internals {
     pub use crate::runtime::agent::principal_assembly::AgentBuildError;
     pub use crate::store::config_client::TXN_TRACING_TARGET;
 }
-
-pub(crate) mod tool_output;

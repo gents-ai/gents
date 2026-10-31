@@ -126,14 +126,14 @@ pub(crate) async fn resolve_pack_source(
 pub(super) fn materialize_cached_pack(
     home: &std::path::Path,
     pack: &PackSource,
-) -> Result<(std::path::PathBuf, gents::file_lock::FileLock)> {
+) -> Result<(std::path::PathBuf, gents::store::local::file_lock::FileLock)> {
     gents::pack::materialize::cached(home, &pack.archive)
 }
 
 pub(crate) struct SubjectPack {
     pub(crate) source: gents::eval::runner::CellSource,
     pub(crate) manifest: PackManifest,
-    _lease: Option<gents::file_lock::FileLock>,
+    _lease: Option<gents::store::local::file_lock::FileLock>,
 }
 
 impl SubjectPack {

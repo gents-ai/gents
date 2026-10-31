@@ -97,7 +97,7 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to seal workspace after writer success"
                     );
                     return OwnedWorkOutcome::observed(
@@ -120,7 +120,7 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to integrate workspace after integrator success"
                     );
                     // Keep the Active Integrate binding so a retry can observe
@@ -147,7 +147,7 @@ where
                 tracing::error!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "request failed after response started"
                 );
                 OwnedWorkOutcome::observed(
@@ -162,7 +162,7 @@ where
                 tracing::error!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "graceful shutdown could not confirm provider output retention; leaving durable execution for recovery"
                 );
                 OwnedWorkOutcome::DrainFailed(error)
@@ -177,7 +177,7 @@ where
                 tracing::error!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "request handling failed"
                 );
                 OwnedWorkOutcome::observed(

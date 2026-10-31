@@ -101,7 +101,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
             record_current_request_outcome("admission_retry");
             tracing::warn!(
                 request_id = %request.request_id,
-                error = %crate::failure_text::BoundedErrorChain(&error),
+                error = %crate::request::failure_text::BoundedErrorChain(&error),
                 "request admission authority is temporarily unavailable; leaving request pending"
             );
             None
@@ -174,7 +174,7 @@ fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) if ShutdownDrainFailure::occurs_in(&error) => Err(error),
         Ok(Err(error)) => {
-            tracing::warn!(error = %crate::failure_text::BoundedErrorChain(error.as_ref()), "failed to resume owned auxiliary request");
+            tracing::warn!(error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()), "failed to resume owned auxiliary request");
             Ok(())
         }
         Err(error) => Err(anyhow::anyhow!("owned auxiliary task join failed: {error}")),

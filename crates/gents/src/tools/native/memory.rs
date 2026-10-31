@@ -143,7 +143,7 @@ impl Tool for MemoryTool {
             }
         };
 
-        crate::tool_output::render(&output, &["value", "found", "key", "action"])
+        crate::tools::output::render(&output, &["value", "found", "key", "action"])
             .map_err(|error| MemoryToolError(anyhow!("failed to serialize memory output: {error}")))
     }
 }

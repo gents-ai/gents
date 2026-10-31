@@ -273,7 +273,7 @@ fn permission_locks_remain_in_place_when_owned_state_is_retired() {
     };
     let _held: Vec<_> = RUNTIME_HOME_LOCK_FILES
         .iter()
-        .map(|name| crate::file_lock::FileLock::exclusive(open(name)).unwrap())
+        .map(|name| crate::store::local::file_lock::FileLock::exclusive(open(name)).unwrap())
         .collect();
     fs::write(home.path().join(ALLOWED_DIRS_FILE_NAME), b"{}").unwrap();
     fs::write(home.path().join(WORKSPACE_APPROVALS_FILE_NAME), b"{}").unwrap();
@@ -295,7 +295,7 @@ fn permission_locks_remain_in_place_when_owned_state_is_retired() {
     for name in RUNTIME_HOME_LOCK_FILES {
         assert!(
             matches!(
-                crate::file_lock::FileLock::try_exclusive(open(name)),
+                crate::store::local::file_lock::FileLock::try_exclusive(open(name)),
                 Err(fs::TryLockError::WouldBlock)
             ),
             "{name}"

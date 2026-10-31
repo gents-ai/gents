@@ -89,7 +89,7 @@ impl Ordered {
 
 macro_rules! ordered {
     ($($key:literal : $value:expr),* $(,)?) => {
-        $crate::tool_output::Ordered::new(vec![$($crate::tool_output::Ordered::entry($key, &$value)),*])
+        $crate::tools::output::Ordered::new(vec![$($crate::tools::output::Ordered::entry($key, &$value)),*])
     };
 }
 pub(crate) use ordered;

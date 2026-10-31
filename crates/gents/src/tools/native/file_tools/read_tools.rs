@@ -142,7 +142,7 @@ impl Tool for ListFilesTool {
             )
             .await?;
         if args.raw_json {
-            crate::tool_output::render_json_text(output, &["entries", "matches"])
+            crate::tools::output::render_json_text(output, &["entries", "matches"])
                 .map_err(Into::into)
         } else {
             Ok(output)
@@ -327,7 +327,7 @@ impl Tool for GlobTool {
             )
             .await?;
         if args.raw_json {
-            crate::tool_output::render_json_text(output, &["entries", "matches"])
+            crate::tools::output::render_json_text(output, &["entries", "matches"])
                 .map_err(Into::into)
         } else {
             Ok(output)
@@ -417,7 +417,7 @@ impl Tool for GrepTool {
             )
             .await?;
         if args.raw_json {
-            crate::tool_output::render_json_text(output, &["entries", "matches"])
+            crate::tools::output::render_json_text(output, &["entries", "matches"])
                 .map_err(Into::into)
         } else {
             Ok(output)

@@ -1,5 +1,6 @@
 pub(crate) mod admission;
 pub(crate) mod binding;
+pub mod failure_text;
 pub mod interrupt;
 pub mod lifecycle;
 pub mod streaming;

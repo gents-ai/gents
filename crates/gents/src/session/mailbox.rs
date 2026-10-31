@@ -730,7 +730,7 @@ impl crate::inference::llm::tool::Tool for MailboxCreateTool {
             MAILBOX_CLOSE_COLLECTIONS,
         )
         .await?;
-        Ok(crate::tool_output::render(&receipt, &["item", "outcome"])
+        Ok(crate::tools::output::render(&receipt, &["item", "outcome"])
             .context("serialize notification receipt")?)
     }
 }

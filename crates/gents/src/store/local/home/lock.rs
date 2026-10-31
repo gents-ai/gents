@@ -5,7 +5,7 @@ use super::{default_data_dir, HomeError, Result, RUNTIME_STARTUP_LOCK_FILE_NAME}
 
 #[derive(Debug)]
 pub struct StoreLock {
-    _lock: crate::file_lock::FileLock,
+    _lock: crate::store::local::file_lock::FileLock,
     path: PathBuf,
 }
 
@@ -151,7 +151,7 @@ fn lock_path_with_wait(home_dir: &Path, path: PathBuf, wait: bool) -> Result<Sto
     file.rewind()?;
     writeln!(file, "{}", std::process::id())?;
     Ok(StoreLock {
-        _lock: crate::file_lock::FileLock::adopt(file),
+        _lock: crate::store::local::file_lock::FileLock::adopt(file),
         path,
     })
 }
@@ -188,7 +188,7 @@ pub(super) fn open_runtime_lock(path: &Path) -> Result<fs::File> {
 /// reservation conveys no runtime identity or operator authority.
 #[derive(Debug)]
 pub struct RuntimeStartupReservation {
-    _lock: crate::file_lock::FileLock,
+    _lock: crate::store::local::file_lock::FileLock,
 }
 
 /// A dedicated OS thread keeps an abandoned OS lock wait out of Tokio's
@@ -220,7 +220,7 @@ pub(super) fn start_runtime_startup_waiter(
                     }
                 })?;
                 let file = open_runtime_lock(&home.join(RUNTIME_STARTUP_LOCK_FILE_NAME))?;
-                crate::file_lock::FileLock::exclusive(file)
+                crate::store::local::file_lock::FileLock::exclusive(file)
                     .map(|lock| RuntimeStartupReservation { _lock: lock })
                     .map_err(HomeError::ReserveStartup)
             })();

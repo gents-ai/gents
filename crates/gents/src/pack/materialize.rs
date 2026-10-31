@@ -181,7 +181,7 @@ pub fn cache_root(
 pub fn cached(
     home: &std::path::Path,
     pack: &crate::pack::archive::PackArchive,
-) -> Result<(std::path::PathBuf, crate::file_lock::FileLock)> {
+) -> Result<(std::path::PathBuf, crate::store::local::file_lock::FileLock)> {
     let root = cache_root(
         home,
         &pack.manifest().metadata.namespace,
@@ -190,7 +190,7 @@ pub fn cached(
     )?;
     let parent = root.parent().context("pack cache parent")?;
     std::fs::create_dir_all(parent)?;
-    let lock = crate::file_lock::FileLock::shared(
+    let lock = crate::store::local::file_lock::FileLock::shared(
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -265,8 +265,10 @@ pub fn prune_stale_asset_cache(
     Ok(removed)
 }
 
-pub fn lock_exclusive(parent: &std::path::Path) -> Result<crate::file_lock::FileLock> {
-    match crate::file_lock::FileLock::try_exclusive(cache_lock(parent)?) {
+pub fn lock_exclusive(
+    parent: &std::path::Path,
+) -> Result<crate::store::local::file_lock::FileLock> {
+    match crate::store::local::file_lock::FileLock::try_exclusive(cache_lock(parent)?) {
         Ok(lock) => Ok(lock),
         Err(std::fs::TryLockError::WouldBlock) => {
             anyhow::bail!("pack cache is in use; stop active pack operations and retry")

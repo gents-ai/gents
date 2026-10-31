@@ -21,10 +21,10 @@
     "generated_groups": ["completion_retry_cases"],
     "fixture_status": "summary_only",
     "native_owner_paths": [
-      "crates/gents/src/retry.rs",
+      "crates/gents/src/runtime/agent/retry.rs",
       "crates/gents/src/runtime/agent/completion_retry.rs"
     ],
-    "consumer_paths": ["crates/gents/src/retry/tests.rs"],
+    "consumer_paths": ["crates/gents/src/runtime/agent/retry/tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "enforce transport and resample retry budgets monotonically without exceeding configured caps",
@@ -57,7 +57,7 @@
       "crates/gents/src/runtime/agent/completion_retry.rs",
       "crates/gents/src/request/streaming.rs"
     ],
-    "consumer_paths": ["crates/gents/src/retry/tests.rs"],
+    "consumer_paths": ["crates/gents/src/runtime/agent/retry/tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "reject accept and confirmRetraction at the policy-only subtype boundary",
@@ -89,7 +89,7 @@
       "crates/gents/src/runtime/agent/completion_retry.rs",
       "crates/gents/src/request/streaming.rs"
     ],
-    "consumer_paths": ["crates/gents/src/retry/tests.rs"],
+    "consumer_paths": ["crates/gents/src/runtime/agent/retry/tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "reject incoherent request identity, backward time, wrong source and policy-invalid phases before mutation",

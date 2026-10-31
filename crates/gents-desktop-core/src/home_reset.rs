@@ -1248,20 +1248,20 @@ pub fn lock_desktop_process(
 /// so each lock a desktop holds has its own type.
 #[derive(Debug)]
 pub struct DesktopProcessLock {
-    _lock: gents::file_lock::FileLock,
+    _lock: gents::store::local::file_lock::FileLock,
 }
 
 /// [`lock_browser_store`]'s lock; see [`DesktopProcessLock`].
 #[derive(Debug)]
 pub struct BrowserStoreLock {
-    _lock: gents::file_lock::FileLock,
+    _lock: gents::store::local::file_lock::FileLock,
 }
 
 /// A reset reserves the next process-lock acquisition before asking the app to
 /// exit. Startup takes this lock first, so it cannot overtake the waiting reset.
 pub fn lock_reset(
     paths: &crate::client::DesktopPaths,
-) -> anyhow::Result<gents::file_lock::FileLock> {
+) -> anyhow::Result<gents::store::local::file_lock::FileLock> {
     lock_file(paths, ".reset.lock", false)
 }
 
@@ -1272,7 +1272,7 @@ pub fn lock_client_state(
     paths: &crate::client::DesktopPaths,
 ) -> anyhow::Result<(
     gents::store::local::home::StoreLock,
-    gents::file_lock::FileLock,
+    gents::store::local::file_lock::FileLock,
 )> {
     use anyhow::Context;
     let store = gents::store::local::home::lock_store_at(paths.root(), paths.node_data_dir())
@@ -1286,7 +1286,7 @@ pub fn lock_client_state(
         .truncate(false)
         .open(&peers)
         .with_context(|| format!("opening {}", peers.display()))?;
-    let peers = gents::file_lock::FileLock::try_exclusive(file)
+    let peers = gents::store::local::file_lock::FileLock::try_exclusive(file)
         .context("Quit Gents before resetting its desktop state")?;
     Ok((store, peers))
 }
@@ -1322,11 +1322,15 @@ fn lock_file(
     paths: &crate::client::DesktopPaths,
     name: &str,
     wait: bool,
-) -> anyhow::Result<gents::file_lock::FileLock> {
+) -> anyhow::Result<gents::store::local::file_lock::FileLock> {
     lock_in(paths.root(), name, wait)
 }
 
-fn lock_in(directory: &Path, name: &str, wait: bool) -> anyhow::Result<gents::file_lock::FileLock> {
+fn lock_in(
+    directory: &Path,
+    name: &str,
+    wait: bool,
+) -> anyhow::Result<gents::store::local::file_lock::FileLock> {
     use anyhow::Context;
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -1347,9 +1351,9 @@ fn lock_in(directory: &Path, name: &str, wait: bool) -> anyhow::Result<gents::fi
     }
     let file = options.open(path)?;
     if wait {
-        Ok(gents::file_lock::FileLock::exclusive(file)?)
+        Ok(gents::store::local::file_lock::FileLock::exclusive(file)?)
     } else {
-        gents::file_lock::FileLock::try_exclusive(file).context("Gents is running or a reset is in progress; quit Gents or wait for the reset to finish")
+        gents::store::local::file_lock::FileLock::try_exclusive(file).context("Gents is running or a reset is in progress; quit Gents or wait for the reset to finish")
     }
 }
 

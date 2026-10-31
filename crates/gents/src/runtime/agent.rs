@@ -12,7 +12,7 @@ use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::retry::RetryPolicy;
+use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::store::schema::migration;
@@ -34,6 +34,7 @@ pub(crate) mod output_obligation;
 pub mod p2p_reconcile;
 pub(crate) mod principal_assembly;
 mod reconcile;
+pub mod retry;
 mod runtime;
 pub(crate) mod stream_processor;
 #[cfg(test)]
