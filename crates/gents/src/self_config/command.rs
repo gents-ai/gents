@@ -781,7 +781,12 @@ impl ConfigCommandTool {
                     .get(1)
                     .context("agent update requires target_id and fields in set or clear")?;
                 let core = self.target_core(Some(agent_id), "edit").await?;
-                let patch = parse_patch(&argv[2..], SelfConfigTarget::Agent)?;
+                let (shared_ack, rest) = extract_shared(&argv[2..])?;
+                anyhow::ensure!(
+                    !shared_ack,
+                    "shared applies only to a Context or Tools; an Agent document is not shared by reference"
+                );
+                let patch = parse_patch(&rest, SelfConfigTarget::Agent)?;
                 self.patch(
                     &core,
                     "edit",
@@ -854,17 +859,16 @@ impl ConfigCommandTool {
                         "agent context {verb} takes no positional argument {word:?}; name the agent in options.agent and the fields in set: {{\"argv\":[\"agent\",\"context\",\"{verb}\"],\"options\":{{\"agent\":\"AGENT_ID\"}},\"set\":{{\"FIELD\":VALUE}}}}"
                     );
                 }
-                let patch = parse_patch_args(parsed, SelfConfigTarget::AgentContext)?;
-                self.patch(
-                    &core,
-                    verb,
-                    protect_working_agent(anchored_request(
-                        SelfConfigTarget::AgentContext,
-                        "context_id",
-                        patch,
-                    )),
-                )
-                .await
+                let (shared_ack, rest) = extract_shared(&rest)?;
+                let patch =
+                    parse_patch_args(ParsedArgs::parse(&rest)?, SelfConfigTarget::AgentContext)?;
+                let mut request = protect_working_agent(anchored_request(
+                    SelfConfigTarget::AgentContext,
+                    "context_id",
+                    patch,
+                ));
+                request.shared_ack = shared_ack;
+                self.patch(&core, verb, request).await
             }
             other => {
                 bail!("unknown agent context command {other:?}; accepted: get, preview, edit")
@@ -920,8 +924,13 @@ impl ConfigCommandTool {
                     allow_drop.is_empty() || target == SelfConfigTarget::Tools,
                     "allow-drop applies only to tools; see [\"help\",\"tools\"]"
                 );
+                let (shared_ack, rest) = extract_shared(&rest)?;
+                anyhow::ensure!(
+                    !shared_ack || target == SelfConfigTarget::Tools,
+                    "shared applies only to a Context or Tools; see [\"help\",\"tools\"]"
+                );
                 let patch = parse_patch(&rest, target)?;
-                let request = match target {
+                let mut request = match target {
                     SelfConfigTarget::Tools => refuse_silent_tools_drops(
                         tools_request(&core, patch),
                         allow_drop,
@@ -929,6 +938,7 @@ impl ConfigCommandTool {
                     SelfConfigTarget::InferenceBackend => backend_request(patch),
                     _ => unreachable!("bound resource"),
                 };
+                request.shared_ack = shared_ack;
                 self.patch(&core, verb, protect_working_agent(request))
                     .await
             }
@@ -2413,6 +2423,33 @@ fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>)
         index += 1;
     }
     Ok((agent_id, rest))
+}
+
+/// `--shared acknowledge` (or `options.shared = "acknowledge"`): accept an
+/// edit to a Context or Tools that more than one agent selects. Anything else
+/// is refused here rather than silently treated as an acknowledgement.
+fn extract_shared(argv: &[String]) -> Result<(bool, Vec<String>)> {
+    let mut acknowledged = false;
+    let mut rest = Vec::with_capacity(argv.len());
+    let mut index = 0;
+    while index < argv.len() {
+        if argv[index] == "--shared" {
+            index += 1;
+            let value = argv
+                .get(index)
+                .filter(|value| !value.starts_with("--"))
+                .context("--shared requires the value \"acknowledge\"")?;
+            anyhow::ensure!(
+                value == "acknowledge",
+                "--shared accepts only \"acknowledge\"; it is the acknowledgement that a shared Context or Tools is edited for every agent that selects it"
+            );
+            acknowledged = true;
+        } else {
+            rest.push(argv[index].clone());
+        }
+        index += 1;
+    }
+    Ok((acknowledged, rest))
 }
 
 fn extract_allow_drop(argv: &[String]) -> Result<(BTreeSet<String>, Vec<String>)> {
