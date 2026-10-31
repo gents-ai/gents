@@ -8,6 +8,7 @@ import type {
   AccountUsageView,
   UsageWindowView,
 } from "@source-inc/gents-desktop-client";
+import { ProviderLogo } from "../ProviderLogo";
 import { FactRow, LongFactRow } from "./editors";
 import { KINDS, SUBSCRIPTION } from "./inferenceKinds";
 
@@ -201,8 +202,16 @@ export function AllProviderLimits({
             key={`${view.provider}:${view.label}:${index}`}
             className="grid gap-2 py-3 first:pt-0 last:pb-0"
           >
-            <h3 className="text-xs font-medium text-muted-foreground">
-              <span className="text-foreground">{view.label}</span>{" "}
+            <h3 className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <ProviderLogo
+                kind={
+                  Object.entries(SUBSCRIPTION).find(
+                    ([, entry]) => entry.provider === view.provider,
+                  )?.[0] ?? view.provider
+                }
+                className="size-3.5"
+              />
+              <span className="text-foreground">{view.label}</span>
               <span className="font-normal">
                 {Object.values(SUBSCRIPTION).find(
                   (entry) => entry.provider === view.provider,
