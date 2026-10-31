@@ -162,8 +162,6 @@ pub struct ResolvedToolSelection {
     pub enable_pack_install: bool,
     pub enable_lsp: bool,
     pub lsp_config: Option<String>,
-    pub eth_queries: Vec<crate::eth::ResolvedEthQuery>,
-    pub eth_calls: Vec<crate::eth::ResolvedEthCall>,
     pub plugin_tools: Vec<crate::document_config::PluginToolRef>,
 }
 
@@ -205,8 +203,6 @@ impl Default for ResolvedToolSelection {
             enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
         }
     }
@@ -375,8 +371,6 @@ impl ResolvedToolSelection {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: integrations
                 .and_then(|group| group.plugins.clone())
                 .unwrap_or_default(),

@@ -400,7 +400,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
         "inference_sampling":[], "inference_execution":[], "tasks":[],
         "schedules":[], "triggers":[], "skills":[], "compactions":[],
         "tool_service_registries":[], "event_sources":[], "agent_targets":[],
-        "datastore_tool_surfaces":[], "chain_key_bindings":[], "sessions":[], "requests":[]
+        "datastore_tool_surfaces":[], "sessions":[], "requests":[]
     }});
     let store = core.store().clone();
     wiremock::Mock::given(wiremock::matchers::method("POST"))

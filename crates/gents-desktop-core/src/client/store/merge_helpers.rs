@@ -333,10 +333,3 @@ pub(super) fn datastore_tool_surface_merge_key(
 ) -> String {
     format!("{}\0{}", row.node_did, row.surface_id)
 }
-
-pub(super) fn chain_key_binding_merge_key(
-    row: &ChainKeyBindingDocument,
-    _source_node_did: Option<&str>,
-) -> String {
-    format!("{}\0{}", row.node_did, row.binding_id)
-}

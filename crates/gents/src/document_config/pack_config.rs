@@ -64,20 +64,6 @@ pub struct PackConfig {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<ChainKeyBindingDocument>>", optional = nullable))]
-    pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<EthToolDocument>>", optional = nullable))]
-    pub eth_tools: Vec<EthToolDocument>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
-        skip_serializing_if = "Vec::is_empty"
-    )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<InferenceBackend>>", optional = nullable))]
     pub inference_backends: Vec<InferenceBackend>,
     #[serde(

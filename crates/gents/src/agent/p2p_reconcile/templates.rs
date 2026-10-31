@@ -215,8 +215,6 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
-    "ChainKeyBinding",
-    "EthTool",
 ];
 
 const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
@@ -256,8 +254,6 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
-    "ChainKeyBinding",
-    "EthTool",
     "Task",
     "Schedule",
     "Trigger",
@@ -352,8 +348,6 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
-    "ChainKeyBinding",
-    "EthTool",
     "MailboxItem",
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
@@ -432,8 +426,6 @@ const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
-    "ChainKeyBinding",
-    "EthTool",
     "InferenceBackend",
 ];
 

@@ -187,7 +187,6 @@ fn ensure_tool_less(
         agent_id,
         tools,
         &config.datastore_tool_surfaces,
-        &config.eth_tools,
         &config.agent_targets,
         &gents::ToolCeiling::readonly(),
         Vec::new(),

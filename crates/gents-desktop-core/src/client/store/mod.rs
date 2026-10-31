@@ -17,10 +17,10 @@ use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use gents::document_config::{
-    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
-    DatastoreToolSurfaceDocument, EventSource, InferenceBackend, InferenceBackendObservation,
-    InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
-    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
+    Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
+    EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
+    InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
+    ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::client_protocol::ClientTurnState;
@@ -104,9 +104,6 @@ pub struct ClientStoreRows {
     pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
     #[serde(skip)]
     pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
-    pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
-    #[serde(skip)]
-    pub chain_key_binding_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
     pub operator_config_authoritative_node_dids: RapidHashSet<String>,
     #[serde(skip)]
@@ -168,8 +165,6 @@ pub struct ClientStore {
     pub agent_target_source_node_dids: Vec<Option<String>>,
     pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
     pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
-    pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
-    pub chain_key_binding_source_node_dids: Vec<Option<String>>,
     pub operator_config_authoritative_node_dids: RapidHashSet<String>,
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     pub backend_observation_source_node_dids: Vec<Option<String>>,

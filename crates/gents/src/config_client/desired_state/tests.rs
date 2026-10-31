@@ -1042,63 +1042,6 @@ fn rule_documents(
 }
 
 #[tokio::test]
-async fn canonical_replacement_preserves_revocation_and_attested_creation() {
-    use crate::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
-    use std::sync::Arc;
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
-    let original: crate::document_config::PackConfig = serde_json::from_value(serde_json::json!({
-        "node":{"node_did":"binding-owner"},
-        "chain_key_bindings":[{"node_did":"binding-owner","binding_id":"signing","address":"0x1111111111111111111111111111111111111111","key_backend":"keyring","attestation":"signed-owner-binding","created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z"}]
-    })).unwrap();
-    let plan = DesiredStateApplyPlan::from_pack_config(&original).unwrap();
-    access
-        .transact_write("seed_revoked_binding", |txn| {
-            let plan = plan.clone();
-            Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
-        })
-        .await
-        .unwrap();
-    for proposed in [
-        None,
-        Some(serde_json::Value::Null),
-        Some(serde_json::json!("")),
-        Some(serde_json::json!(" \t ")),
-    ] {
-        let mut raw = serde_json::to_value(&original).unwrap();
-        let binding = raw["chain_key_bindings"][0].as_object_mut().unwrap();
-        binding.insert(
-            "created_at".into(),
-            serde_json::json!("2026-09-01T00:00:00Z"),
-        );
-        binding.insert("tags".into(), serde_json::json!(["updated"]));
-        if let Some(proposed) = proposed {
-            binding.insert("revoked_at".into(), proposed);
-        } else {
-            binding.remove("revoked_at");
-        }
-        let config = serde_json::from_value(raw).unwrap();
-        let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-        access
-            .transact_write("stale_binding_update", |txn| {
-                let plan = plan.clone();
-                Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
-            })
-            .await
-            .unwrap();
-        let read=node.execute(r#"{ChainKeyBinding(filter:{node_did:{_eq:"binding-owner"},binding_id:{_eq:"signing"}}){created_at revoked_at tags}}"#).await;
-        assert!(!read.has_errors(), "{:?}", read.errors);
-        let rows = read.data.unwrap()["ChainKeyBinding"].clone();
-        assert_eq!(
-            rows,
-            serde_json::json!([{"created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z","tags":["updated"]}])
-        );
-    }
-    node.shutdown().await;
-}
-
-#[tokio::test]
 async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
