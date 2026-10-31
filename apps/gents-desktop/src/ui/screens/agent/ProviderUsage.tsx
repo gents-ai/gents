@@ -1,5 +1,8 @@
 import { useRef, useState } from "react";
+import { RotateCw } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
+import { Hint } from "@/screens/Hint";
 import { setupErrorMessage } from "../../../lib/setupErrors";
 import type {
   AccountUsageView,
@@ -26,18 +29,60 @@ const USAGE_SOURCE: Record<string, string> = {
   error: "from a rejected request",
 };
 
-function windowText(w: UsageWindowView, now: number) {
-  const parts = [`${Math.round(w.usedPct)}% used`];
-  if (w.resetsAt) {
-    const at = new Date(w.resetsAt);
-    const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    parts.push(`resets in ${shortDuration(at.getTime() - now)} (${time})`);
-  }
+/* what the row leaves out, for its tooltip: when it resets and where the
+   figure came from */
+function windowDetail(w: UsageWindowView, now: number) {
+  const parts: string[] = [];
+  if (w.resetsAt)
+    parts.push(
+      `Resets ${new Date(w.resetsAt).toLocaleString([], {
+        weekday: "short",
+        hour: "numeric",
+        minute: "2-digit",
+      })}`,
+    );
   parts.push(
     `${USAGE_SOURCE[w.source] ?? w.source}, ${shortDuration(now - Date.parse(w.observedAt))} ago`,
   );
   if (w.lastKnown) parts.push("last known");
   return parts.join(" · ");
+}
+
+/* one window: its name, how full it is and when it empties */
+function WindowRow({ w, now }: { w: UsageWindowView; now: number }) {
+  const pct = Math.round(w.usedPct);
+  return (
+    <li
+      title={windowDetail(w, now)}
+      className="grid grid-cols-[minmax(2.5rem,auto)_minmax(3rem,1fr)_3ch_minmax(0,auto)] items-center gap-3 text-sm"
+    >
+      <span className="truncate text-foreground">{w.label}</span>
+      <span
+        role="meter"
+        aria-label={`${w.label} used`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+        className="h-1.5 overflow-hidden rounded-full bg-muted"
+      >
+        <span
+          className={cn(
+            "block h-full rounded-full",
+            pct >= 90 ? "bg-destructive" : "bg-foreground/60",
+          )}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </span>
+      <span className="text-right text-foreground tabular-nums">{pct}%</span>
+      <span className="truncate text-xs text-muted-foreground tabular-nums">
+        {w.resetsAt
+          ? `resets in ${shortDuration(Date.parse(w.resetsAt) - now)}`
+          : w.lastKnown
+            ? "last known"
+            : ""}
+      </span>
+    </li>
+  );
 }
 
 export function UsageBar({ view }: { view?: AccountUsageView }) {
@@ -83,13 +128,15 @@ export function UsageRows({ view }: { view?: AccountUsageView }) {
     <>
       {view?.windows.length ? (
         Array.from(groups, ([label, windows]) => (
-          <section key={label} aria-label={label}>
-            <p className="text-xs font-medium text-muted-foreground">{label}</p>
-            {windows.map((w) => (
-              <FactRow key={w.label} label={w.label}>
-                {windowText(w, now)}
-              </FactRow>
-            ))}
+          <section key={label} aria-label={label} className="grid gap-1.5">
+            {groups.size > 1 && (
+              <p className="text-xs text-muted-foreground">{label}</p>
+            )}
+            <ul className="grid gap-1.5">
+              {windows.map((w) => (
+                <WindowRow key={w.label} w={w} now={now} />
+              ))}
+            </ul>
           </section>
         ))
       ) : (
@@ -127,44 +174,51 @@ export function AllProviderLimits({
   return (
     <section
       aria-label="Your limits"
-      className="mb-6 space-y-4 rounded-lg border border-border p-4"
+      className="mb-6 grid gap-3 rounded-xl border border-border px-4 pt-2.5 pb-3.5"
     >
       <div className="flex items-center justify-between gap-3">
-        <h2 className="font-medium">Your limits</h2>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          onClick={() => void refresh()}
-        >
-          {busy ? "Refreshing…" : "Refresh all limits"}
-        </Button>
+        <h2 className="text-sm font-medium">Your limits</h2>
+        <Hint label={busy ? "Refreshing…" : "Refresh all limits"}>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Refresh all limits"
+            disabled={busy}
+            onClick={() => void refresh()}
+          >
+            <RotateCw className={cn(busy && "animate-spin")} />
+          </Button>
+        </Hint>
       </div>
       {!views.length && (
         <p className="text-sm text-muted-foreground">
           No account limits have been reported.
         </p>
       )}
-      {views.map((view, index) => (
-        <div key={`${view.provider}:${view.label}:${index}`} className="space-y-2">
-          <h3 className="text-sm font-medium">
-            {view.label}{" "}
-            <span className="font-normal text-muted-foreground">
-              ·{" "}
-              {Object.values(SUBSCRIPTION).find(
-                (entry) => entry.provider === view.provider,
-              )?.title ??
-                KINDS.find((entry) => entry.value === view.provider)?.label ??
-                view.provider}
-            </span>
-          </h3>
-          {view.read === "disabled" ? (
-            <p className="text-sm text-muted-foreground">Disabled</p>
-          ) : (
-            <UsageRows view={view} />
-          )}
-        </div>
-      ))}
+      <div className="grid divide-y divide-border/60">
+        {views.map((view, index) => (
+          <div
+            key={`${view.provider}:${view.label}:${index}`}
+            className="grid gap-2 py-3 first:pt-0 last:pb-0"
+          >
+            <h3 className="text-xs font-medium text-muted-foreground">
+              <span className="text-foreground">{view.label}</span>{" "}
+              <span className="font-normal">
+                {Object.values(SUBSCRIPTION).find(
+                  (entry) => entry.provider === view.provider,
+                )?.title ??
+                  KINDS.find((entry) => entry.value === view.provider)?.label ??
+                  view.provider}
+              </span>
+            </h3>
+            {view.read === "disabled" ? (
+              <p className="text-sm text-muted-foreground">Disabled</p>
+            ) : (
+              <UsageRows view={view} />
+            )}
+          </div>
+        ))}
+      </div>
       {error && (
         <p role="alert" className="text-sm">
           {error}

@@ -43,9 +43,56 @@ it("shows every account together, including an account with no configured backen
   expect(screen.getByRole("region", { name: "Your limits" })).toBeInTheDocument();
   expect(screen.getByText("Work")).toBeInTheDocument();
   expect(screen.getByText("Unbound personal")).toBeInTheDocument();
-  expect(screen.getByText("Quota windows")).toBeInTheDocument();
-  expect(screen.getByText("Request limits")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Quota windows" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Request limits" })).toBeInTheDocument();
+  expect(screen.queryByText("Quota windows")).toBeNull();
   expect(refresh).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "Refresh all limits" }));
   expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+it("draws each window as a meter, with its reset and source in a tooltip", () => {
+  const now = Date.now();
+  const views = [
+    {
+      label: "Claude",
+      provider: "Claude",
+      backendIds: ["claude"],
+      windows: [
+        {
+          label: "5h",
+          windowMinutes: 300,
+          usedPct: 64.4,
+          resetsAt: new Date(now + 24 * 60_000 + 30_000).toISOString(),
+          source: "endpoint",
+          observedAt: new Date(now - 2 * 60_000).toISOString(),
+          lastKnown: false,
+        },
+        {
+          label: "7d",
+          windowMinutes: 10_080,
+          usedPct: 93,
+          resetsAt: null,
+          source: "header",
+          observedAt: new Date(now).toISOString(),
+          lastKnown: true,
+        },
+      ],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+    },
+  ];
+  render(<AllProviderLimits views={views} onRefresh={vi.fn()} />);
+  const hours = screen.getByRole("meter", { name: "5h used" });
+  expect(hours).toHaveAttribute("aria-valuenow", "64");
+  const row = hours.closest("li")!;
+  expect(row).toHaveTextContent("64%");
+  expect(row).toHaveTextContent("resets in 24m");
+  expect(row.title).toMatch(/^Resets .+ · from the usage endpoint, 2m ago$/);
+  const week = screen.getByRole("meter", { name: "7d used" });
+  expect(week.firstElementChild).toHaveClass("bg-destructive");
+  expect(week.closest("li")).toHaveTextContent("last known");
 });
