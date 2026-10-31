@@ -174,7 +174,7 @@ export function AllProviderLimits({
   return (
     <section
       aria-label="Your limits"
-      className="mb-6 grid gap-3 rounded-xl border border-border px-4 pt-2.5 pb-3.5"
+      className="mb-6 grid gap-3 rounded-2xl border border-border/60 bg-raised px-4 pt-2.5 pb-3.5"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-sm font-medium">Your limits</h2>
