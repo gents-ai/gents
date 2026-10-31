@@ -714,8 +714,8 @@ impl Serialize for SystemBlock {
 /// A tool definition.
 ///
 /// Claude Code's `Q0` builds `{name, description, input_schema, strict?,
-/// eager_input_streaming?, defer_loading?, cache_control?, citations?}`; the
-/// optional keys are off by default on first party and are not modeled. Names
+/// eager_input_streaming?, defer_loading?, cache_control?, citations?}`; only
+/// `eager_input_streaming` (Vertex and Bedrock) is modeled. Names
 /// are sent verbatim (Claude Code 2.1.311 does not prefix them).
 #[derive(Debug, Clone, Serialize)]
 pub struct Tool {
@@ -725,12 +725,16 @@ pub struct Tool {
     pub description: String,
     /// The JSON schema, kept as the caller's bytes.
     pub input_schema: Box<RawValue>,
+    /// `eager_input_streaming: true`, sent only when set.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub eager_input_streaming: bool,
 }
 
 impl PartialEq for Tool {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.description == other.description
+            && self.eager_input_streaming == other.eager_input_streaming
             && raw_eq(&self.input_schema, &other.input_schema)
     }
 }

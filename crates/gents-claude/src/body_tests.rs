@@ -384,3 +384,74 @@ fn an_unlisted_model_takes_the_fallback_limits_and_id_based_facts() {
         assert!(!facts.thinking_supported && !facts.effort_capable, "{id}");
     }
 }
+
+#[test]
+fn the_body_follows_the_beta_decisions_on_every_provider() {
+    use crate::betas::{self, ModelTraits, Provider};
+    let providers = [
+        Provider::FirstParty,
+        Provider::AnthropicAws,
+        Provider::Mantle,
+        Provider::Foundry,
+        Provider::Vertex,
+        Provider::Bedrock,
+        Provider::AnthropicGoogleCloud,
+        Provider::Gateway,
+    ];
+    // (model, display on a provider outside upe)
+    for (id, outside_upe) in [("claude-opus-4-6", false), ("claude-opus-4-8", true)] {
+        let model = catalog::find(id).unwrap();
+        let facts = ModelFacts::of(model);
+        let traits = ModelTraits {
+            canonical: model.id,
+            capabilities: model.capabilities,
+            native_1m: false,
+            thinking_supported: facts.thinking_supported,
+        };
+        for provider in providers {
+            let beta_request = betas::Request {
+                provider,
+                first_party_base_url: true,
+                subscriber: false,
+                agentic: true,
+                interactive: true,
+                show_thinking_summaries: false,
+                thinking: true,
+                long_context_suffix: false,
+                cache_one_hour: false,
+                output_format: false,
+                experimental_betas_disabled: false,
+            };
+            let selected = betas::select(&traits, &beta_request);
+            let request = Request {
+                display_updates: betas::display_updates(&traits, &beta_request),
+                context_management_beta: selected.contains(&betas::CONTEXT_MANAGEMENT),
+                ..Request::default()
+            };
+            let upe = matches!(
+                provider,
+                Provider::FirstParty
+                    | Provider::AnthropicAws
+                    | Provider::AnthropicGoogleCloud
+                    | Provider::Foundry
+            );
+            let decision = evaluate(&facts, &request);
+            let display = match decision.thinking {
+                Some(Thinking::Adaptive { display }) => display,
+                other => panic!("{id} {provider:?}: {other:?}"),
+            };
+            assert_eq!(
+                display.is_some(),
+                upe || outside_upe,
+                "{id} {provider:?} display"
+            );
+            assert_eq!(
+                decision.context_management.is_some(),
+                provider != Provider::Vertex
+                    && provider != Provider::Bedrock
+                    && provider != Provider::Gateway,
+                "{id} {provider:?} context management"
+            );
+        }
+    }
+}

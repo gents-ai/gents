@@ -295,6 +295,7 @@ pub fn plan_with_ids(
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: to_raw_value(&tool.parameters)?,
+                eager_input_streaming: false,
             })
         })
         .collect::<Result<Vec<_>, serde_json::Error>>()?;

@@ -229,6 +229,7 @@ fn passthrough_json_keeps_key_order() {
         name: "n".to_owned(),
         description: "d".to_owned(),
         input_schema: input,
+        eager_input_streaming: false,
     };
     assert_eq!(
         serde_json::to_string(&tool).unwrap(),
@@ -292,6 +293,7 @@ fn tool_schema_keeps_insertion_order() {
         name: "Read".to_owned(),
         description: "d".to_owned(),
         input_schema: schema,
+        eager_input_streaming: false,
     };
     assert_eq!(
         serde_json::to_string(&tool).unwrap(),
@@ -387,4 +389,23 @@ fn per_turn_effort_row_bytes() {
         serde_json::to_string(&row).unwrap(),
         r#"{"role":"system","content":[],"output_config":{"effort":"medium"}}"#
     );
+}
+
+#[test]
+fn eager_input_streaming_follows_the_description_and_precedes_nothing_else() {
+    let tool = |eager| Tool {
+        name: "n".to_owned(),
+        description: "d".to_owned(),
+        input_schema: raw(r#"{"a":1}"#),
+        eager_input_streaming: eager,
+    };
+    assert_eq!(
+        serde_json::to_string(&tool(true)).unwrap(),
+        r#"{"name":"n","description":"d","input_schema":{"a":1},"eager_input_streaming":true}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&tool(false)).unwrap(),
+        r#"{"name":"n","description":"d","input_schema":{"a":1}}"#
+    );
+    assert_ne!(tool(true), tool(false));
 }

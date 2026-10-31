@@ -182,7 +182,14 @@ fn vertex_receives_the_third_party_subset() {
     };
     assert_eq!(
         select(&OPUS_5_5, &request),
-        [CLAUDE_CODE, INTERLEAVED_THINKING, WEB_SEARCH, EFFORT]
+        [
+            CLAUDE_CODE,
+            INTERLEAVED_THINKING,
+            WEB_SEARCH,
+            THINKING_TOKEN_COUNT,
+            EFFORT,
+            THINKING_DISPLAY_UPDATES
+        ]
     );
 }
 
@@ -196,7 +203,15 @@ fn bedrock_moves_interleaved_thinking_to_the_body() {
     };
     let betas = select(&OPUS_5_5, &request);
     assert!(!betas.contains(&INTERLEAVED_THINKING));
-    assert_eq!(betas, [CLAUDE_CODE, EFFORT]);
+    assert_eq!(
+        betas,
+        [
+            CLAUDE_CODE,
+            THINKING_TOKEN_COUNT,
+            EFFORT,
+            THINKING_DISPLAY_UPDATES
+        ]
+    );
 }
 
 #[test]
@@ -252,4 +267,202 @@ fn the_effort_beta_follows_the_effort_gate() {
     };
     assert!(!select(&opus_4_5, &vertex).contains(&EFFORT));
     assert!(select(&OPUS_5_5, &vertex).contains(&EFFORT));
+}
+
+const PROVIDERS: [Provider; 8] = [
+    Provider::FirstParty,
+    Provider::AnthropicAws,
+    Provider::Mantle,
+    Provider::Foundry,
+    Provider::Vertex,
+    Provider::Bedrock,
+    Provider::AnthropicGoogleCloud,
+    Provider::Gateway,
+];
+
+fn traits(canonical: &'static str, capabilities: &'static [&'static str]) -> ModelTraits<'static> {
+    ModelTraits {
+        canonical,
+        capabilities,
+        native_1m: false,
+        thinking_supported: !canonical.contains("claude-3-"),
+    }
+}
+
+fn on(provider: Provider) -> Request {
+    Request {
+        provider,
+        subscriber: false,
+        ..MAIN_THREAD
+    }
+}
+
+#[test]
+fn provider_predicates_match_claude_code() {
+    // (provider, upe, Gq)
+    let expected = [
+        (Provider::FirstParty, true, true),
+        (Provider::AnthropicAws, true, true),
+        (Provider::Mantle, false, true),
+        (Provider::Foundry, true, true),
+        (Provider::Vertex, false, false),
+        (Provider::Bedrock, false, false),
+        (Provider::AnthropicGoogleCloud, true, true),
+        (Provider::Gateway, false, false),
+    ];
+    for (provider, upe, gq) in expected {
+        assert_eq!(provider.first_party_like(), upe, "{provider:?} upe");
+        assert_eq!(provider.capability_betas(), gq, "{provider:?} Gq");
+    }
+}
+
+#[test]
+fn thinking_betas_follow_upe_or_a_model_not_older_than_opus_4_7() {
+    // (model, taken on a provider outside upe)
+    let models = [
+        ("claude-opus-4-0", false),
+        ("claude-sonnet-4-5", false),
+        ("claude-opus-4-6", false),
+        ("claude-sonnet-4-6", false),
+        ("claude-opus-4-7", true),
+        ("claude-opus-4-8", true),
+        ("claude-opus-5-5", true),
+        ("claude-mythos-5", true),
+        ("claude-3-5-haiku", false),
+    ];
+    for provider in PROVIDERS {
+        for (canonical, outside_upe) in models {
+            let model = traits(canonical, &[]);
+            let request = on(provider);
+            let interleaved = model.interleaved_thinking(provider);
+            let expected = interleaved && (provider.first_party_like() || outside_upe);
+            let betas = select(&model, &request);
+            let kept = |beta| betas.contains(&beta);
+            // Bedrock keeps the third-party subset, which holds both betas.
+            assert_eq!(
+                kept(THINKING_TOKEN_COUNT),
+                expected && model.thinking_supported,
+                "{provider:?} {canonical} token count"
+            );
+            assert_eq!(
+                kept(THINKING_DISPLAY_UPDATES),
+                expected,
+                "{provider:?} {canonical} display"
+            );
+            assert_eq!(display_updates(&model, &request), expected);
+        }
+    }
+}
+
+#[test]
+fn first_party_thinking_betas_are_unchanged() {
+    for canonical in ["claude-opus-4-0", "claude-opus-4-6", "claude-opus-5-5"] {
+        let model = traits(canonical, &[]);
+        let betas = select(&model, &on(Provider::FirstParty));
+        assert!(betas.contains(&THINKING_TOKEN_COUNT));
+        assert!(betas.contains(&THINKING_DISPLAY_UPDATES));
+    }
+    let haiku = select(&traits("claude-haiku-4-5", &[]), &on(Provider::FirstParty));
+    assert!(haiku.contains(&THINKING_TOKEN_COUNT));
+}
+
+#[test]
+fn experimental_betas_off_drops_the_thinking_betas_everywhere() {
+    for provider in PROVIDERS {
+        let request = Request {
+            experimental_betas_disabled: true,
+            ..on(provider)
+        };
+        let betas = select(&OPUS_5_5, &request);
+        assert!(!betas.contains(&THINKING_TOKEN_COUNT), "{provider:?}");
+        assert!(!display_updates(&OPUS_5_5, &request), "{provider:?}");
+    }
+}
+
+#[test]
+fn web_search_goes_to_foundry_and_to_vertex_models_outside_claude_3() {
+    for provider in PROVIDERS {
+        for (canonical, vertex_takes) in [
+            ("claude-opus-4-0", true),
+            ("claude-opus-5-5", true),
+            ("claude-3-5-haiku", false),
+            ("claude-3-7-sonnet", false),
+        ] {
+            let betas = select(&traits(canonical, &[]), &on(provider));
+            let expected = match provider {
+                Provider::Foundry => true,
+                Provider::Vertex => vertex_takes,
+                _ => false,
+            };
+            assert_eq!(
+                betas.contains(&WEB_SEARCH),
+                expected,
+                "{provider:?} {canonical}"
+            );
+        }
+    }
+}
+
+#[test]
+fn context_management_follows_the_per_provider_gate() {
+    let catalog_named: &[&str] = &["context_management"];
+    // (provider, catalog-named model, unnamed model, catalog-named claude-3 model, mythos-5)
+    let expected = [
+        (Provider::FirstParty, true, true, false, true),
+        (Provider::AnthropicAws, true, true, false, true),
+        (Provider::Mantle, true, true, false, true),
+        (Provider::Foundry, true, true, true, true),
+        (Provider::Vertex, true, false, true, true),
+        (Provider::Bedrock, true, false, true, true),
+        (Provider::AnthropicGoogleCloud, true, true, false, true),
+        (Provider::Gateway, true, false, true, true),
+    ];
+    for (provider, named, unnamed, claude3, mythos) in expected {
+        let gate = |canonical, caps| traits(canonical, caps).context_management(provider);
+        assert_eq!(
+            gate("claude-opus-4-6", catalog_named),
+            named,
+            "{provider:?}"
+        );
+        assert_eq!(gate("claude-opus-4-6", &[]), unnamed, "{provider:?}");
+        assert_eq!(
+            gate("claude-3-5-haiku", catalog_named),
+            claude3,
+            "{provider:?}"
+        );
+        assert_eq!(gate("claude-mythos-5", &[]), mythos, "{provider:?}");
+    }
+}
+
+#[test]
+fn the_context_management_beta_needs_a_capability_beta_provider_and_the_gate() {
+    let unnamed = traits("claude-opus-4-6", &[]);
+    for provider in PROVIDERS {
+        let betas = select(&unnamed, &on(provider));
+        let expected = provider.capability_betas();
+        assert_eq!(
+            betas.contains(&CONTEXT_MANAGEMENT),
+            expected,
+            "{provider:?}"
+        );
+    }
+    // First party stays catalog-independent for non-Claude-3 models.
+    let claude3 = traits("claude-3-5-haiku", &["context_management"]);
+    assert!(!select(&claude3, &on(Provider::FirstParty)).contains(&CONTEXT_MANAGEMENT));
+    assert!(select(&claude3, &on(Provider::Foundry)).contains(&CONTEXT_MANAGEMENT));
+    let mythos = traits("claude-mythos-5", &[]);
+    assert!(select(&mythos, &on(Provider::FirstParty)).contains(&CONTEXT_MANAGEMENT));
+}
+
+#[test]
+fn the_effort_gate_agrees_with_the_body_for_every_provider() {
+    let opus_4_6 = traits("claude-opus-4-6", &[]);
+    for provider in PROVIDERS {
+        let betas = select(&opus_4_6, &on(provider));
+        assert_eq!(
+            betas.contains(&EFFORT),
+            crate::body::effort_capable("claude-opus-4-6", false, provider.capability_betas()),
+            "{provider:?}"
+        );
+    }
 }

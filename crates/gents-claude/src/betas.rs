@@ -46,16 +46,13 @@ impl Provider {
     fn first_party_like(self) -> bool {
         matches!(
             self,
-            Self::FirstParty | Self::AnthropicAws | Self::Mantle | Self::Foundry
+            Self::FirstParty | Self::AnthropicAws | Self::AnthropicGoogleCloud | Self::Foundry
         )
     }
 
     /// `Gq()`: providers that accept capability betas.
     fn capability_betas(self) -> bool {
-        matches!(
-            self,
-            Self::FirstParty | Self::AnthropicAws | Self::Mantle | Self::Foundry
-        )
+        self.first_party_like() || self == Self::Mantle
     }
 }
 
@@ -77,7 +74,7 @@ impl ModelTraits<'_> {
         self.capabilities.contains(&capability)
     }
 
-    /// `Svn`: interleaved thinking; first-party-like providers allow it for
+    /// `Svn`: interleaved thinking; capability-beta providers allow it for
     /// every model except the Claude 3 generation.
     fn interleaved_thinking(&self, provider: Provider) -> bool {
         if provider == Provider::Foundry {
@@ -88,6 +85,55 @@ impl ModelTraits<'_> {
         }
         !(self.canonical == "claude-haiku-4-5" || self.canonical.contains("claude-3-"))
     }
+
+    /// `OK`: the model takes the context-management beta. Foundry takes every
+    /// model, a capability-beta provider every non-Claude-3 model, any other
+    /// provider the catalog capability or mythos-5. The beta and the body's
+    /// `context_management` field both follow this one decision.
+    pub fn context_management(&self, provider: Provider) -> bool {
+        if provider == Provider::Foundry {
+            return true;
+        }
+        if provider.capability_betas() {
+            return !self.canonical.contains("claude-3-");
+        }
+        self.has("context_management") || self.canonical == "claude-mythos-5"
+    }
+
+    /// `yYn`: the thinking-token-count and thinking-display betas apply to
+    /// the model on the provider.
+    fn thinking_betas(&self, request: &Request) -> bool {
+        !request.experimental_betas_disabled
+            && self.interleaved_thinking(request.provider)
+            && (request.provider.first_party_like() || !older_than_opus_4_7(self.canonical))
+    }
+}
+
+/// Claude Code's model order (`ow`), oldest first.
+const MODEL_ORDER: [&str; 10] = [
+    "claude-opus-4-0",
+    "claude-sonnet-4-0",
+    "claude-opus-4-1",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+];
+
+/// Index of `claude-opus-4-7` in [`MODEL_ORDER`].
+const OPUS_4_7: usize = 8;
+
+/// `Or(id, "claude-opus-4-7")`: a Claude 3 model, or one listed before
+/// opus-4-7; a model off the list is never older.
+fn older_than_opus_4_7(id: &str) -> bool {
+    id.contains("claude-3-")
+        || MODEL_ORDER
+            .iter()
+            .position(|listed| *listed == id)
+            .is_some_and(|at| at < OPUS_4_7)
 }
 
 /// The request facts the selection reads.
@@ -144,11 +190,11 @@ pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
     if first_party_only && interleaved && request.interactive && !request.show_thinking_summaries {
         betas.push(REDACT_THINKING);
     }
-    if capability_betas && model.has("context_management") {
+    if capability_betas && model.context_management(request.provider) {
         betas.push(CONTEXT_MANAGEMENT);
     }
     if request.provider == Provider::Foundry
-        || (request.provider == Provider::Vertex && model.canonical != "claude-opus-4-0")
+        || (request.provider == Provider::Vertex && !model.canonical.contains("claude-3-"))
     {
         betas.push(WEB_SEARCH);
     }
@@ -180,10 +226,7 @@ pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
     push_once(
         &mut betas,
         THINKING_TOKEN_COUNT,
-        !request.experimental_betas_disabled
-            && interleaved
-            && request.provider.first_party_like()
-            && model.thinking_supported,
+        model.thinking_supported && model.thinking_betas(request),
     );
 
     // Per-attempt additions (`zN`).
@@ -236,15 +279,11 @@ pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
 
 /// Whether the request takes `thinking-display-updates` and sends
 /// `thinking.display = "updates"` (`Xon` defaults to `connector_text`, `yYn`
-/// gates the beta): a thinking request on a first-party-like provider that
-/// allows interleaved thinking and experimental betas, without summaries.
-/// `select` and the body's thinking decision share this one predicate.
+/// gates the beta): a thinking request without summaries on a model that takes
+/// the thinking betas (`upe() || aXo(model)`). `select` and the body's
+/// thinking decision share this one predicate.
 pub fn display_updates(model: &ModelTraits<'_>, request: &Request) -> bool {
-    request.thinking
-        && !request.show_thinking_summaries
-        && !request.experimental_betas_disabled
-        && model.interleaved_thinking(request.provider)
-        && request.provider.first_party_like()
+    request.thinking && !request.show_thinking_summaries && model.thinking_betas(request)
 }
 
 /// Betas Bedrock takes in the request body rather than the header (`FEn`).

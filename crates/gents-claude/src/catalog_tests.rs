@@ -273,3 +273,58 @@ fn latest_per_family_and_best() {
         assert_eq!(find(id).map(|m| m.family), Some(*family));
     }
 }
+
+#[test]
+fn gateway_falls_back_to_the_first_party_id() {
+    let named = find("claude-haiku-4-5").unwrap();
+    assert_eq!(
+        named.id_for(CatalogProvider::Gateway),
+        Some("claude-haiku-4-5-20251001")
+    );
+    let unnamed = find("claude-haiku-5-5").unwrap();
+    assert_eq!(unnamed.provider_ids.gateway, None);
+    assert_eq!(
+        unnamed.id_for(CatalogProvider::Gateway),
+        Some(unnamed.provider_ids.first_party)
+    );
+    // Other providers keep their absent ids.
+    let mythos = find("claude-mythos-5").unwrap();
+    assert_eq!(mythos.id_for(CatalogProvider::Vertex), None);
+    assert_eq!(
+        mythos.id_for(CatalogProvider::Gateway),
+        Some("claude-mythos-5")
+    );
+}
+
+#[test]
+fn eager_input_streaming_is_read_on_vertex_and_bedrock_default_endpoints() {
+    let providers = [
+        CatalogProvider::FirstParty,
+        CatalogProvider::Bedrock,
+        CatalogProvider::Vertex,
+        CatalogProvider::Foundry,
+        CatalogProvider::AnthropicAws,
+        CatalogProvider::AnthropicGoogleCloud,
+        CatalogProvider::Mantle,
+        CatalogProvider::Gateway,
+    ];
+    for (id, bedrock, vertex) in [
+        ("claude-opus-5-5", true, true),
+        ("claude-3-5-haiku", false, true),
+        ("claude-mythos-5", false, false),
+    ] {
+        let flag = find(id).unwrap().eager_input_streaming;
+        for provider in providers {
+            let expected = match provider {
+                CatalogProvider::Bedrock => bedrock,
+                CatalogProvider::Vertex => vertex,
+                _ => false,
+            };
+            assert_eq!(flag.enabled(provider, true), expected, "{id} {provider:?}");
+            assert!(
+                !flag.enabled(provider, false),
+                "{id} {provider:?} custom url"
+            );
+        }
+    }
+}

@@ -114,6 +114,20 @@ pub struct EagerStreaming {
     pub vertex: bool,
 }
 
+impl EagerStreaming {
+    /// Whether tool definitions carry `eager_input_streaming` on `provider`
+    /// (`k5t`). Only Vertex and Bedrock read the catalog flag, and only on
+    /// their default endpoint (no custom base URL).
+    pub fn enabled(&self, provider: CatalogProvider, default_endpoint: bool) -> bool {
+        default_endpoint
+            && match provider {
+                CatalogProvider::Vertex => self.vertex,
+                CatalogProvider::Bedrock => self.bedrock,
+                _ => false,
+            }
+    }
+}
+
 /// Image size limits of a model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageLimits {
@@ -258,7 +272,7 @@ impl Model {
         self.capabilities.contains(&capability)
     }
 
-    /// The model's id on `provider`.
+    /// The model's id on `provider`; the gateway falls back to the first-party id.
     pub fn id_for(&self, provider: CatalogProvider) -> Option<&'static str> {
         let ids = &self.provider_ids;
         match provider {
@@ -269,7 +283,7 @@ impl Model {
             CatalogProvider::AnthropicAws => ids.anthropic_aws,
             CatalogProvider::AnthropicGoogleCloud => ids.anthropic_google_cloud,
             CatalogProvider::Mantle => ids.mantle,
-            CatalogProvider::Gateway => ids.gateway,
+            CatalogProvider::Gateway => ids.gateway.or(Some(ids.first_party)),
         }
     }
 
