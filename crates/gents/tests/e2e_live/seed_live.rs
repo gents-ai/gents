@@ -150,6 +150,15 @@ async fn configure_seed_and_compaction(
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default inference profile is missing"))?;
             let mut profile: gents::InferenceProfile = serde_json::from_value(profile)?;
+            let mut sampling = match profile.sampling_id.as_deref() {
+                Some(id) => {
+                    let (_, value) = read(txn, Collection::InferenceSampling, node_did, id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("selected inference sampling is missing"))?;
+                    serde_json::from_value::<InferenceSampling>(value)?
+                }
+                None => InferenceSampling::default(),
+            };
             let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
@@ -177,15 +186,13 @@ async fn configure_seed_and_compaction(
             let compaction_id = format!("{agent_id}:compaction");
             profile.sampling_id = Some(sampling_id.clone());
             profile.context_window = Some(64_000);
-            profile.max_output_tokens = Some(512);
+            profile.max_output_tokens =
+                Some(profile.max_output_tokens.map_or(512, |cap| cap.min(512)));
             behavior.context_id = Some(context_id);
             context.compaction_id = Some(compaction_id.clone());
-            let sampling = InferenceSampling {
-                node_did: node_did.to_string(),
-                sampling_id,
-                seed: Some(PROFILE_SEED),
-                ..Default::default()
-            };
+            sampling.node_did = node_did.to_string();
+            sampling.sampling_id = sampling_id;
+            sampling.seed = Some(PROFILE_SEED);
             let compaction = CompactionConfig {
                 compaction_id,
                 node_did: node_did.to_string(),

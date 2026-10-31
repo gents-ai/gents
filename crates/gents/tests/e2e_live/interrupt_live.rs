@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
-use gents::documents::{Agent, AgentContext, InferenceProfile, InferenceSampling};
+use gents::documents::{Agent, AgentContext, InferenceProfile};
 use gents::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -486,14 +486,7 @@ async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &
         .expect("ensure live interrupt fixture principal");
 
     let backend = target.backend(node_did);
-    let sampling = InferenceSampling {
-        node_did: node_did.to_string(),
-        sampling_id: LIVE_SAMPLING_ID.to_string(),
-        display_name: Some("live high-thinking interrupt sampling".to_string()),
-        temperature: Some(1.0),
-        top_p: Some(0.95),
-        ..Default::default()
-    };
+    let sampling = target.live_sampling(node_did, LIVE_SAMPLING_ID);
     let profile = InferenceProfile {
         profile_id: default_inference_profile_id_for_agent(LIVE_AGENT_ID),
         sampling_id: Some(LIVE_SAMPLING_ID.to_string()),
