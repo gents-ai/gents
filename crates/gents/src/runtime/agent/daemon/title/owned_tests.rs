@@ -307,8 +307,18 @@ async fn install_review_policy(
     selection
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledger() {
+    configured_review_task_and_callers_ledger(true).await;
+}
+
+#[tokio::test]
+async fn workspace_command_admission_uses_the_configured_review_task_and_the_callers_ledger() {
+    configured_review_task_and_callers_ledger(false).await;
+}
+
+async fn configured_review_task_and_callers_ledger(launch: bool) {
     use crate::plugin::approval::workspace;
 
     let fixture = TitleFixture::with_auxiliary(
@@ -377,30 +387,40 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
     } else {
         ("/bin/echo", vec!["fixture".into()])
     };
-    let output = workspace::scope(
-        Some(context),
-        crate::tools::native::run_command_for_test(
-            &tool_context,
-            "bash_unrestricted",
-            program,
-            &arguments,
-            key.path.to_str(),
-            Duration::from_secs(5),
-            &crate::tools::native::CommandExecutionPolicy::write_capable()
-                .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted),
-            true,
-            2048,
-        ),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&output).unwrap()["stdout"]
-            .as_str()
-            .unwrap()
-            .trim_end(),
-        "fixture"
-    );
+    let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
+        .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted);
+    let argv: Vec<String> = std::iter::once(program.to_owned())
+        .chain(arguments.iter().cloned())
+        .collect();
+    workspace::scope(Some(context), async {
+        if launch {
+            let output = crate::tools::native::run_command_for_test(
+                &tool_context,
+                "bash_unrestricted",
+                program,
+                &arguments,
+                key.path.to_str(),
+                Duration::from_secs(5),
+                &policy,
+                true,
+                2048,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&output).unwrap()["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .trim_end(),
+                "fixture"
+            );
+        } else {
+            workspace::authorize_command(&argv, &key.path, &tool_root, None, &policy)
+                .await
+                .unwrap();
+        }
+    })
+    .await;
     drain_reviews(&tasks, true).await;
     assert!(reviewer.take_failure().is_none());
     assert_eq!(budget.snapshot().unwrap().used, 8);
@@ -519,8 +539,18 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
         .is_empty());
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn configuration_edits_cannot_replace_the_selected_review_policy() {
+    selected_review_policy_survives_configuration_edits(true).await;
+}
+
+#[tokio::test]
+async fn command_admission_cannot_replace_the_selected_review_policy() {
+    selected_review_policy_survives_configuration_edits(false).await;
+}
+
+async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     use crate::plugin::approval::workspace;
 
     let fixture = TitleFixture::with_auxiliary(
@@ -611,6 +641,29 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
     ];
     let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
         .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted);
+    let argv: Vec<String> = std::iter::once(program.clone())
+        .chain(arguments.iter().cloned())
+        .collect();
+    let run = || async {
+        if launch {
+            crate::tools::native::run_command_for_test(
+                &tool_context,
+                "bash_unrestricted",
+                &program,
+                &arguments,
+                None,
+                Duration::from_secs(5),
+                &policy,
+                true,
+                2048,
+            )
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+        } else {
+            workspace::authorize_command(&argv, &key.path, &key.path, None, &policy).await
+        }
+    };
     workspace::scope(Some(context), async {
         let changed = config
             .call(
@@ -626,19 +679,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
             serde_json::from_str::<serde_json::Value>(&changed).unwrap()["committed"],
             true
         );
-        let error = crate::tools::native::run_command_for_test(
-            &tool_context,
-            "bash_unrestricted",
-            &program,
-            &arguments,
-            None,
-            Duration::from_secs(5),
-            &policy,
-            true,
-            2048,
-        )
-        .await
-        .unwrap_err();
+        let error = run().await.unwrap_err();
         assert!(error.to_string().contains("not approved"), "{error:#}");
         assert!(calls.lock().unwrap().is_empty());
         assert!(!marker.exists());
@@ -663,24 +704,12 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
             Some(&updated),
         )
         .unwrap();
-        crate::tools::native::run_command_for_test(
-            &tool_context,
-            "bash_unrestricted",
-            &program,
-            &arguments,
-            None,
-            Duration::from_secs(5),
-            &policy,
-            true,
-            2048,
-        )
-        .await
-        .unwrap();
+        run().await.unwrap();
     })
     .await;
     drain_reviews(&tasks, true).await;
     assert!(reviewer.take_failure().is_none());
-    assert!(marker.exists());
+    assert_eq!(marker.exists(), launch);
     assert_eq!(calls.lock().unwrap().len(), 1);
 }
 
