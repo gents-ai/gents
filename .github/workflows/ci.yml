@@ -84,10 +84,15 @@ jobs:
           bash -n scripts/measure-gents-binary.sh
           bash -n scripts/measure-gents-build-attribution.sh
           bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
+          bash -n .github/scripts/setup-macos-clt-toolchain.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
           shellcheck scripts/measure-gents-build-attribution.sh
           shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
+          shellcheck .github/scripts/setup-macos-clt-toolchain.sh
+
+      - name: Check the macOS toolchain selection
+        run: python3 .github/scripts/test-macos-clt-toolchain.py
 
       - name: Check desktop Rust build and test graph routing
         run: python3 .github/scripts/test-desktop-rust-suite.py
@@ -164,11 +169,12 @@ jobs:
           persist-credentials: false
 
       # A Command Line Tools update repointed the default SDK to MacOSX27.2.sdk,
-      # whose libSystem.B.tbd declares arm64e.x1-macos targets that neither
-      # linker on this runner understands. Pin SDKROOT to the SDK of the
-      # developer directory the linker comes from (as release/rc1 does).
-      - name: Select a matching macOS SDK for the linker
-        run: .github/scripts/setup-macos-rust-toolchain.sh
+      # which the Xcode-beta linker selected by `xcode-select` cannot read
+      # (`ld: tapi error: malformed file`). Rust and test jobs need no Xcode, so
+      # select the CLT toolchain explicitly. This also covers the C fixtures the
+      # tests spawn with /usr/bin/cc, which inherit this environment.
+      - name: Select the Command Line Tools toolchain
+        run: .github/scripts/setup-macos-clt-toolchain.sh
 
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
@@ -424,7 +430,10 @@ jobs:
         if: matrix.suite == 'desktop' && github.event_name != 'pull_request'
         # iOS shares the desktop crates, so desktop-only Tauri APIs break it
         # silently; a compile check is the cheapest gate (#890).
+        # The iOS SDK ships only with Xcode, not with Command Line Tools, so
+        # this step must not inherit the CLT toolchain selected above.
         run: |
+          unset DEVELOPER_DIR SDKROOT
           rustup target add aarch64-apple-ios-sim
           cargo check -p gents-desktop-tauri --lib --target aarch64-apple-ios-sim
 
