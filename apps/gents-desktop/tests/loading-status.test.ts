@@ -279,6 +279,7 @@ describe("session loading projection", () => {
             state: "syncing",
             lastError: null,
             connectedPeerCount: 1,
+            activationErrorCount: 0,
             pendingDagCount: 1,
             persistedPendingDagCount: 1,
             pushRetryMarkerCount: 0,

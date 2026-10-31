@@ -6,6 +6,11 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## 1.0.0-rc1 - 2026-10-31
 
+- Recover stalled conversation and file synchronization without resetting saved
+  history, including reconnects and duplicate enrollment route records.
+- Improve mobile keyboard layout, touch targets, composer history, question
+  focus, and mailbox navigation; preserve a session's selected folder when branching.
+
 - Remove `gents chain` and the built-in Ethereum surface (`EthTool`,
   `ChainKeyBinding`, `EthSubmission`, `PackConfig.eth_tools`,
   `PackConfig.chain_key_bindings`, and `Tools.integrations.eth_tool_ids`).
