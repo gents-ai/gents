@@ -366,79 +366,70 @@ async fn assert_selected_delivery_outlives_deadline(
         started.elapsed() > former_deadline,
         "native pacing-derived workload must exercise the former deadline"
     );
-    // Native ACKs admit heads; local merge completion is a separate observation.
+    // ACKs admit heads. This healthy loopback fixture requires fresh merge progress
+    // within five seconds and exact convergence within one native recovery window.
+    let completion_deadline =
+        tokio::time::Instant::now() + Duration::from_secs(p2p::PENDING_RECOVERY_WORST_CASE_SECS);
     let access = crate::store::config_client::ConfigAccess::local(receiver.clone());
-    let mut change_batches = 0;
-    let mut last_observed_count = 0;
-    let merged = tokio::time::timeout(Duration::from_secs(5), async {
+    let query = format!(
+        "{{ PacedDeliveryProbe(limit: {}) {{ _docID }} }}",
+        document_count + 1
+    );
+    let read = || async {
+        let received = access.execute(&query).await.unwrap();
+        let observed = received["data"]["PacedDeliveryProbe"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["_docID"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            observed.is_subset(&expected),
+            "selected replay merged {} unexpected documents",
+            observed.difference(&expected).count()
+        );
+        observed
+    };
+    let merged = tokio::time::timeout_at(completion_deadline, async {
+        let mut seen = std::collections::BTreeSet::new();
         loop {
-            let received = access
-                .execute(&format!(
-                    "{{ PacedDeliveryProbe(limit: {}) {{ _docID }} }}",
-                    document_count + 1
-                ))
-                .await
-                .unwrap();
-            let observed = received["data"]["PacedDeliveryProbe"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| row["_docID"].as_str().unwrap().to_string())
-                .collect::<std::collections::BTreeSet<_>>();
-            last_observed_count = observed.len();
+            let progress = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let observed = read().await;
+                    if observed == expected || observed.difference(&seen).next().is_some() {
+                        break observed;
+                    }
+                    updates
+                        .recv()
+                        .await
+                        .expect("receiver collection subscription remains open");
+                }
+            })
+            .await;
+            let observed = match progress {
+                Ok(observed) => observed,
+                Err(_) => {
+                    let observed = read().await;
+                    if observed != expected && observed.difference(&seen).next().is_none() {
+                        let status = receiver.p2p().unwrap().sync_status().await.unwrap();
+                        panic!("receiver made no fresh merge progress for five seconds: expected={document_count} observed={} previously_seen={} status={status}", observed.len(), seen.len());
+                    }
+                    observed
+                }
+            };
             if observed == expected {
                 break;
             }
-            updates
-                .recv()
-                .await
-                .expect("receiver collection subscription remains open");
-            change_batches += 1;
+            seen.extend(observed);
         }
     })
     .await;
     if merged.is_err() {
-        let current = access
-            .execute(&format!(
-                "{{ PacedDeliveryProbe(limit: {}) {{ _docID }} }}",
-                document_count + 1
-            ))
-            .await
-            .unwrap();
-        let actual = current["data"]["PacedDeliveryProbe"]
-            .as_array()
-            .unwrap()
-            .len();
-        let status = receiver.p2p().unwrap().sync_status().await.unwrap();
-        let mut recovery = Vec::new();
-        let diagnostic_started = tokio::time::Instant::now();
-        while diagnostic_started.elapsed()
-            < Duration::from_secs(p2p::PENDING_RECOVERY_WORST_CASE_SECS)
-        {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            let data = access
-                .execute(&format!(
-                    "{{ PacedDeliveryProbe(limit: {}) {{ _docID }} }}",
-                    document_count + 1
-                ))
-                .await
-                .unwrap();
-            let count = data["data"]["PacedDeliveryProbe"].as_array().unwrap().len();
-            let checkpoint = receiver.p2p().unwrap().sync_status().await.unwrap();
-            recovery.push(serde_json::json!({
-                "elapsed_ms": diagnostic_started.elapsed().as_millis(),
-                "documents": count,
-                "pending": checkpoint["pending_dags"],
-                "dispatched": checkpoint["pending_dag_retry_dispatched"],
-                "merged": checkpoint["pending_dag_terminal_merged"],
-                "next_retry_ms": checkpoint["next_pending_retry_in_ms"],
-                "peer_fetches": checkpoint["peer_fetches"],
-            }));
-            if count == document_count {
-                break;
-            }
+        let observed = read().await;
+        if observed != expected {
+            let status = receiver.p2p().unwrap().sync_status().await.unwrap();
+            panic!("selected replay did not converge within the native recovery window: expected={document_count} observed={} status={status}", observed.len());
         }
-        panic!("five-second merge observation failed: expected={document_count} last_observed={last_observed_count} current={actual} change_batches={change_batches} status={status}; recovery_window={recovery:?}");
     }
     sender.shutdown().await;
     receiver.shutdown().await;
