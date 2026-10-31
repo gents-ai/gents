@@ -222,6 +222,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_installation_cases: Vec<serde_json::Value>,
     pub(crate) client_installation_compatibility_cases: Vec<serde_json::Value>,
     pub(crate) runtime_service_replacement_cases: Vec<serde_json::Value>,
+    pub(crate) update_handoff_cases: Vec<serde_json::Value>,
     pub(crate) client_observation_scope_cases: Vec<serde_json::Value>,
     pub(crate) inference_observation_cases: Vec<serde_json::Value>,
     pub(crate) client_telemetry_cases: Vec<serde_json::Value>,

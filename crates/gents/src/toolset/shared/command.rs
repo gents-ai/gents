@@ -37,6 +37,9 @@ const CORE_ENV_VARS: &[&str] = &[
     "TEMP",
     "TMP",
     "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
@@ -998,6 +1001,24 @@ async fn prepare_command_launch(
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<CommandLaunch, ToolError> {
     let mut environment = build_shell_env();
+    // Diagnostic provenance only, never authorization. Unrestricted commands
+    // can remove it; supported service commands use it to avoid self-stop.
+    if let Some(scope) = crate::tool_call_lifecycle::runtime::current_tool_runtime_context() {
+        for (key, value) in [
+            (
+                "GENTS_CALLER_RUNTIME_HOME",
+                scope
+                    .runtime_home
+                    .map(|path| path.to_string_lossy().into_owned()),
+            ),
+            ("GENTS_CALLER_SESSION_ID", scope.session_id),
+            ("GENTS_CALLER_REQUEST_ID", scope.request_id),
+        ] {
+            if let Some(value) = value {
+                environment.insert(key.to_owned(), value);
+            }
+        }
+    }
     let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
         let scope = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .ok_or_else(|| {

@@ -266,6 +266,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_installation_compatibility_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "serve_lifecycle::update::tests::handoff_matches_executable_lean_owner",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/serve_lifecycle/update.rs",
+            module_path: "serve_lifecycle::update::tests",
+            function: "handoff_matches_executable_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "serve_lifecycle::replacement::tests::generated_replacement_traces_match_authenticated_admission_and_release_guards",
             package: "gents-protocol",
             source_path: "crates/gents-protocol/src/serve_lifecycle/replacement.rs",

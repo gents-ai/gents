@@ -2670,7 +2670,8 @@ mod tests {
     async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
         let tempdir = tempfile::tempdir().expect("tempdir");
         // Started sessions in these fixtures carry receipts the fixture key signs.
-        let node_did = crate::caused_sessions::fixtures::FIXTURE_DID.to_owned();
+        let signer = crate::caused_sessions::fixtures::fixture_signer();
+        let node_did = gents::NodeIdentity::did(&signer).to_owned();
         let agent_id = gents::default_agent_id_for_node(&node_did);
         let node = Arc::new(
             crate::shared::test_support::node_builder()

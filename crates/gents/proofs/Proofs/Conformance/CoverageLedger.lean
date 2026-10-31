@@ -1184,6 +1184,11 @@ def caseCoverage : List CoverageEntry :=
       "serve_lifecycle::replacement::tests::generated_replacement_traces_match_authenticated_admission_and_release_guards")
       "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
   , tagged (consumerCoverage
+      "update_handoff_cases"
+      "UpdateHandoffCases"
+      "serve_lifecycle::update::tests::handoff_matches_executable_lean_owner")
+      "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_observation_scope_cases"
       "ClientObservationScopeCases"
       "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
