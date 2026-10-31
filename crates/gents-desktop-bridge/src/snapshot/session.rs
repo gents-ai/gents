@@ -503,11 +503,12 @@ pub(crate) async fn attach_context_history_rows(
             }
         };
     let starts = match &compactions {
-        Some(entries) if !entries.is_empty() => request_context::load_compaction_request_starts(
+        Some(entries) => request_context::load_compaction_request_starts(
             access,
             node_did,
             session_id,
             requester_did,
+            entries,
         )
         .await
         .unwrap_or_else(|error| {
@@ -520,7 +521,7 @@ pub(crate) async fn attach_context_history_rows(
             );
             RapidHashMap::new()
         }),
-        _ => RapidHashMap::new(),
+        None => RapidHashMap::new(),
     };
     let mut markers = compactions
         .iter()

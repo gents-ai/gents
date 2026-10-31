@@ -413,6 +413,8 @@ pub struct CompactionEntryRow {
     #[serde(default)]
     pub requester_did: Option<String>,
     #[serde(default)]
+    pub request_doc_id: Option<String>,
+    #[serde(default)]
     pub sequence: Option<i64>,
     #[serde(default)]
     pub summary: Option<String>,

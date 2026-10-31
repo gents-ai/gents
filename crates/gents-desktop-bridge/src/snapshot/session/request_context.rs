@@ -172,13 +172,13 @@ pub(super) async fn load_session_request_context_history(
 }
 
 pub(super) async fn load_session_reductions(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> anyhow::Result<Vec<LoadedReduction>> {
     let requester = requester_did
-        .map(gents::graphql::escape_graphql_string)
+        .map(gents::store::graphql::escape_graphql_string)
         .map(|did| format!("\"{did}\""))
         .unwrap_or_else(|| "null".to_string());
     let query = format!(
@@ -195,8 +195,8 @@ pub(super) async fn load_session_reductions(
                 original_tokens compacted_tokens created_at
             }}
         }}"#,
-        node_did = gents::graphql::escape_graphql_string(node_did),
-        session_id = gents::graphql::escape_graphql_string(session_id),
+        node_did = gents::store::graphql::escape_graphql_string(node_did),
+        session_id = gents::store::graphql::escape_graphql_string(session_id),
     );
     let data = access.execute(&query).await?;
     data.pointer("/data/ProviderContextReduction")
@@ -209,77 +209,93 @@ pub(super) async fn load_session_reductions(
         .collect()
 }
 
+/// Requests whose first message one placement query reads; each is a
+/// top-level selection, and DefraDB bounds a query level's width.
+const REQUEST_STARTS_PER_QUERY: usize = 32;
+
 /// Where each start-of-request compaction happened: the first message of the
 /// request it ran for, by compaction key. A compaction whose request is
 /// unknown (a fork's copy has none) or has no messages here is left out.
 pub(super) async fn load_compaction_request_starts(
-    access: &gents::config_client::ConfigAccess,
+    access: &dyn gents::store::config_client::ConfigRead,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
+    entries: &[gents_protocol::row::CompactionEntryRow],
 ) -> anyhow::Result<RapidHashMap<String, i64>> {
-    let scope = format!(
-        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
-        node = gents::graphql::escape_graphql_string(node_did),
-        session = gents::graphql::escape_graphql_string(session_id),
-        requester = requester_did
-            .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
-            .unwrap_or_else(|| "null".to_string()),
-    );
-    let data = access
-        .execute(&format!(
-            "query {{ CompactionEntry(filter: {{ {scope} }}) {{ compaction_key request_doc_id }} }}"
-        ))
-        .await?;
-    let requests = data
-        .pointer("/data/CompactionEntry")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("CompactionEntry response omitted its result array"))?
+    let requests = entries
         .iter()
-        .filter_map(|row| {
-            Some((
-                row.get("compaction_key")?.as_str()?.to_string(),
-                row.get("request_doc_id")?.as_str()?.to_string(),
-            ))
-        })
-        .collect::<Vec<_>>();
-    if requests.is_empty() {
-        return Ok(RapidHashMap::new());
-    }
-    let ids = requests
-        .iter()
-        .map(|(_, doc_id)| format!(r#""{}""#, gents::graphql::escape_graphql_string(doc_id)))
+        .filter_map(|entry| entry.request_doc_id.as_deref())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
-        .collect::<Vec<_>>()
-        .join(", ");
-    let data = access
-        .execute(&format!(
-            "query {{ AgentMessage(filter: {{ {scope}, request_doc_id: {{ _in: [{ids}] }} }}) {{ request_doc_id sequence }} }}"
-        ))
-        .await?;
-    let mut starts = RapidHashMap::<String, i64>::new();
-    for row in data
-        .pointer("/data/AgentMessage")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("AgentMessage response omitted its result array"))?
-    {
-        let (Some(doc_id), Some(sequence)) = (
-            row.get("request_doc_id")
-                .and_then(serde_json::Value::as_str),
-            row.get("sequence").and_then(serde_json::Value::as_i64),
-        ) else {
-            continue;
-        };
-        starts
-            .entry(doc_id.to_string())
-            .and_modify(|first| *first = (*first).min(sequence))
-            .or_insert(sequence);
+        .collect::<Vec<_>>();
+    let mut starts = RapidHashMap::<&str, i64>::new();
+    for chunk in requests.chunks(REQUEST_STARTS_PER_QUERY) {
+        let data = access
+            .execute_read(&request_starts_query(
+                node_did,
+                session_id,
+                requester_did,
+                chunk,
+            ))
+            .await?;
+        for (index, doc_id) in chunk.iter().enumerate() {
+            let first = data
+                .pointer(&format!("/data/r{index}"))
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| anyhow::anyhow!("AgentMessage response omitted its result array"))?
+                .first();
+            let Some(sequence) = first
+                .filter(|row| {
+                    row.get("request_doc_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(*doc_id)
+                })
+                .and_then(|row| row.get("sequence"))
+                .and_then(serde_json::Value::as_i64)
+            else {
+                continue;
+            };
+            starts.insert(*doc_id, sequence);
+        }
     }
-    Ok(requests
-        .into_iter()
-        .filter_map(|(key, doc_id)| Some((key, *starts.get(&doc_id)?)))
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            let start = *starts.get(entry.request_doc_id.as_deref()?)?;
+            Some((entry.compaction_key.clone(), start))
+        })
         .collect())
+}
+
+/// Each request's first message as its own ordered `limit: 1` selection, so
+/// the read returns one row per request rather than every message it holds.
+fn request_starts_query(
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    request_doc_ids: &[&str],
+) -> String {
+    let scope = format!(
+        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
+        node = gents::store::graphql::escape_graphql_string(node_did),
+        session = gents::store::graphql::escape_graphql_string(session_id),
+        requester = requester_did
+            .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
+            .unwrap_or_else(|| "null".to_string()),
+    );
+    let selections = request_doc_ids
+        .iter()
+        .enumerate()
+        .map(|(index, doc_id)| {
+            format!(
+                r#"r{index}: AgentMessage(filter: {{ {scope}, request_doc_id: {{ _eq: "{doc_id}" }} }}, order: {{ sequence: ASC }}, limit: 1) {{ request_doc_id sequence }}"#,
+                doc_id = gents::store::graphql::escape_graphql_string(doc_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("query DesktopCompactionRequestStarts {{ {selections} }}")
 }
 
 pub(super) struct EntrySummary {
@@ -297,7 +313,7 @@ pub(super) struct MarkerSummaries {
 }
 
 pub(super) async fn load_marker_summaries(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -310,16 +326,16 @@ pub(super) async fn load_marker_summaries(
     }
     let keys = |keys: &[String]| {
         keys.iter()
-            .map(|key| format!(r#""{}""#, gents::graphql::escape_graphql_string(key)))
+            .map(|key| format!(r#""{}""#, gents::store::graphql::escape_graphql_string(key)))
             .collect::<Vec<_>>()
             .join(", ")
     };
     let scope = format!(
         r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
-        node = gents::graphql::escape_graphql_string(node_did),
-        session = gents::graphql::escape_graphql_string(session_id),
+        node = gents::store::graphql::escape_graphql_string(node_did),
+        session = gents::store::graphql::escape_graphql_string(session_id),
         requester = requester_did
-            .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
+            .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
             .unwrap_or_else(|| "null".to_string()),
     );
     let data = access
@@ -376,7 +392,8 @@ fn decode_reduction_row(row: &serde_json::Value) -> anyhow::Result<LoadedReducti
         .ok_or_else(|| anyhow::anyhow!("ProviderContextReduction row has no reduction_key"))?;
     let anchor_sequence = string("source_boundary_json")
         .and_then(|json| {
-            serde_json::from_str::<gents::provider_context_reduction::SourceBoundary>(&json).ok()
+            serde_json::from_str::<gents::turn::provider_context_reduction::SourceBoundary>(&json)
+                .ok()
         })
         .and_then(|boundary| boundary.canonical_through)
         .map(|fact| fact.sequence);
@@ -868,3 +885,7 @@ mod tests {
         server.verify().await;
     }
 }
+
+#[cfg(test)]
+#[path = "request_context/placement_tests.rs"]
+mod placement_tests;
