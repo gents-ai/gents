@@ -285,8 +285,24 @@ async fn embedded_filtered_replicator_replays_existing_matching_documents() {
 
 #[tokio::test]
 async fn selected_delivery_outlives_the_former_bulk_deadline() {
-    let sender_test = test_node().await;
-    let receiver_test = test_node().await;
+    assert_selected_delivery_outlives_deadline(test_node().await, test_node().await, 0).await;
+}
+
+#[tokio::test]
+async fn selected_delivery_outlives_the_former_bulk_deadline_with_runtime_schemas() {
+    assert_selected_delivery_outlives_deadline(
+        runtime_test_node().await,
+        runtime_test_node().await,
+        1200,
+    )
+    .await;
+}
+
+async fn assert_selected_delivery_outlives_deadline(
+    sender_test: super::fixtures::TestNode,
+    receiver_test: super::fixtures::TestNode,
+    minimum_document_count: usize,
+) {
     let sender = &sender_test.node;
     let receiver = &receiver_test.node;
     for node in [sender, receiver] {
@@ -296,8 +312,10 @@ async fn selected_delivery_outlives_the_former_bulk_deadline() {
     }
     let pacing = db::merge::ReplayPushConfig::default();
     let former_deadline = Duration::from_secs(10);
-    let document_count = pacing.per_peer_rate_limit_burst as usize
-        + (pacing.per_peer_rate_limit_rate * (former_deadline.as_secs_f64() + 2.0)).ceil() as usize;
+    let document_count = (pacing.per_peer_rate_limit_burst as usize
+        + (pacing.per_peer_rate_limit_rate * (former_deadline.as_secs_f64() + 2.0)).ceil()
+            as usize)
+        .max(minimum_document_count);
     let inputs = (0..document_count)
         .map(|value| format!("{{value: {value}}}"))
         .collect::<Vec<_>>()
