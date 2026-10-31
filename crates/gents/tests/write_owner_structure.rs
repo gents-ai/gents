@@ -2225,9 +2225,18 @@ impl<'ast> Visit<'ast> for ErrorTextVisitor {
     fn visit_expr_binary(&mut self, binary: &'ast syn::ExprBinary) {
         // Comparing two observed values is identity, not classification; a
         // decision compares error text with a fixed wording.
+        let text_literal = |literal: &syn::ExprLit| {
+            matches!(
+                literal.lit,
+                syn::Lit::Str(_) | syn::Lit::ByteStr(_) | syn::Lit::Char(_) | syn::Lit::Byte(_)
+            )
+        };
         let wording = |expression: &Expr| match expression {
-            Expr::Lit(_) | Expr::Macro(_) => true,
-            Expr::Reference(reference) => matches!(reference.expr.as_ref(), Expr::Lit(_)),
+            Expr::Lit(literal) => text_literal(literal),
+            Expr::Macro(_) => true,
+            Expr::Reference(reference) => {
+                matches!(reference.expr.as_ref(), Expr::Lit(literal) if text_literal(literal))
+            }
             Expr::Path(path) => path.path.segments.last().is_some_and(|segment| {
                 let name = segment.ident.to_string();
                 name.chars()
@@ -2343,6 +2352,15 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
         (r#"fn f(e: &E) -> bool { e.path().to_string() == "." }"#, 0),
         (r#"fn f(e: &E) -> bool { matches!(e, E::Conflict) }"#, 0),
         (
+            r#"fn f(activation_error_count: usize) -> bool { activation_error_count == 0 }"#,
+            0,
+        ),
+        (r#"fn f(error: &str) -> bool { error == "unavailable" }"#, 1),
+        (
+            r#"fn f(error: &str) -> bool { error == &"unavailable" }"#,
+            1,
+        ),
+        (
             r#"fn f(a: &R, b: &R) -> bool { a.last_error != b.last_error }"#,
             0,
         ),
@@ -2397,7 +2415,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("goal", "tools", 3),
     ("goal", "triggers", 6),
     ("inference", "observe", 3),
-    ("inference", "request", 3),
+    ("inference", "request", 4),
     ("inference", "runtime", 3),
     ("inference", "tools", 1),
     ("inference", "turn", 1),
