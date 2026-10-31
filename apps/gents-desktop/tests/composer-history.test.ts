@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
+import { formatReference, referenceKind } from "@gents/ui/conversation";
 import { recalledParts, sentMessages } from "../src/ui/screens/session/composerHistory";
 
 const user = (
@@ -115,6 +116,25 @@ describe("a message brought back to the composer", () => {
     expect(
       recalledParts({ text: "/review then /review again", skills: ["review"] }),
     ).toEqual([chip("review"), text("then /review again")]);
+  });
+
+  it("has the chips its text holds as references, as the field reads them", () => {
+    const reference = { kind: "session", id: "s-1", label: "intro" };
+    expect(
+      recalledParts(
+        {
+          text: `see ${formatReference(reference)} and /review it`,
+          skills: ["review"],
+        },
+        { session: referenceKind("session") },
+      ),
+    ).toEqual([
+      text("see "),
+      { type: "chip", chip: { ...reference, text: formatReference(reference) } },
+      text("and "),
+      chip("review"),
+      text("it"),
+    ]);
   });
 
   it("keeps its lines", () => {

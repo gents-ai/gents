@@ -113,6 +113,12 @@ export function OpenSessionComposer({
         ? goalMode.edit(goal.objective ?? "")
         : goalMode.create(),
   );
+  const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
+  const commands = editing ? editSlash : slash;
+  const chipKinds = useMemo(
+    () => ({ ...commands.chipKinds, ...mention.chipKinds }),
+    [commands.chipKinds, mention.chipKinds],
+  );
   const history = useComposerHistory({
     field: slash.field,
     sent: () =>
@@ -122,13 +128,8 @@ export function OpenSessionComposer({
           selectedNodeDid: nodeDid,
         })?.timelineItems ?? [],
       ),
+    kinds: chipKinds,
   });
-  const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
-  const commands = editing ? editSlash : slash;
-  const chipKinds = useMemo(
-    () => ({ ...commands.chipKinds, ...mention.chipKinds }),
-    [commands.chipKinds, mention.chipKinds],
-  );
 
   /* a session that never takes this app's messages says so before anything is typed */
   const readOnly =

@@ -6,7 +6,12 @@ import {
   type RefObject,
 } from "react";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
-import type { ComposerHandle, ComposerPart } from "@gents/ui/conversation";
+import {
+  parseParts,
+  type ChipKind,
+  type ComposerHandle,
+  type ComposerPart,
+} from "@gents/ui/conversation";
 import { splitSkillLines } from "@/lib/skillLines";
 
 /** a message the person sent in this session, as the composer gets it back */
@@ -49,24 +54,32 @@ const sameList = (a: readonly string[], b: readonly string[]) =>
 
 const skillChip = (id: string) => ({ kind: "command", id, label: `/${id}` });
 
-/** The message as the field's parts: each skill a chip where the text names
+/** The message as the field's parts: the chips `kinds` read from text, as
+    the field would make them, then each skill a chip where the text names
     it as `/id`, as the slash menu left it, and before the text otherwise. A
     chip brings its own space, so the text after one drops a space. */
-export function recalledParts({ text, skills }: SentMessage): ComposerPart[] {
+export function recalledParts(
+  { text, skills }: SentMessage,
+  kinds: Record<string, ChipKind> = {},
+): ComposerPart[] {
   const named = new Set<string>();
-  const inline: ComposerPart[] = [];
   const word = /(^|\s)\/([A-Za-z0-9_.-]+)(?=\s|$)/g;
-  let at = 0;
-  for (const match of text.matchAll(word)) {
-    const id = match[2]!;
-    if (!skills.includes(id) || named.has(id)) continue;
-    named.add(id);
-    const start = match.index + match[1]!.length;
-    if (start > at) inline.push({ type: "text", text: text.slice(at, start) });
-    inline.push({ type: "chip", chip: skillChip(id) });
-    at = start + id.length + 1;
-  }
-  if (at < text.length) inline.push({ type: "text", text: text.slice(at) });
+  const inline = parseParts(text, kinds).flatMap((part): ComposerPart[] => {
+    if (part.type !== "text") return [part];
+    const split: ComposerPart[] = [];
+    let at = 0;
+    for (const match of part.text.matchAll(word)) {
+      const id = match[2]!;
+      if (!skills.includes(id) || named.has(id)) continue;
+      named.add(id);
+      const start = match.index + match[1]!.length;
+      if (start > at) split.push({ type: "text", text: part.text.slice(at, start) });
+      split.push({ type: "chip", chip: skillChip(id) });
+      at = start + id.length + 1;
+    }
+    if (at < part.text.length) split.push({ type: "text", text: part.text.slice(at) });
+    return split;
+  });
   const leading: ComposerPart[] = skills
     .filter((id) => !named.has(id))
     .map((id) => ({ type: "chip", chip: skillChip(id) }));
@@ -96,10 +109,13 @@ const signature = (parts: readonly ComposerPart[]) =>
 export function useComposerHistory({
   field,
   sent,
+  kinds,
 }: {
   field: RefObject<ComposerHandle | null>;
   /** read on ↑, so the composer does not follow the transcript as it streams */
   sent: () => SentMessage[];
+  /** the field's chip kinds, whose readers turn text it is given into chips */
+  kinds: Record<string, ChipKind>;
 }) {
   const [position, setPosition] = useState<{ index: number; total: number } | null>(
     null,
@@ -120,7 +136,7 @@ export function useComposerHistory({
   const show = (messages: SentMessage[], index: number) => {
     const handle = field.current;
     if (!handle) return;
-    const parts = recalledParts(messages[index]!);
+    const parts = recalledParts(messages[index]!, kinds);
     browsing.current = { messages, index, shown: signature(parts), settled: false };
     setPosition({ index: index + 1, total: messages.length });
     handle.clear();
