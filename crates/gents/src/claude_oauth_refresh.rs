@@ -29,9 +29,10 @@ pub(crate) async fn refresh_claude_token_at(
         client_id: None,
     })
     .map_err(|error| OAuthAuthProblem::Other(format!("Claude token refresh failed: {error}")))?;
+    // The caller's client bounds the exchange (`REFRESH_REQUEST_TIMEOUT`, Claude Code's 30 s);
+    // a per-request timeout would replace that bound.
     let response = http
         .post(endpoint)
-        .timeout(std::time::Duration::from_millis(post.timeout_ms))
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
         .body(post.body)
