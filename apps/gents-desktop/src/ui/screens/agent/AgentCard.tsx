@@ -7,7 +7,6 @@ import type {
 import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { Badge } from "@gents/ui/components/badge";
 import { Skeleton } from "@gents/ui/components/skeleton";
-import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "../AgentAvatar";
 import { isLive } from "@/lib/live";
@@ -15,10 +14,9 @@ import { useApp } from "@/app/AppContext";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
-import { InferenceLogos } from "../HoverCards";
+import { InferenceSummary, OnlineStatus, StateDot, counted } from "../NodeFacts";
 import { ProviderLogo } from "../ProviderLogo";
 import { agentOf, backendOf } from "@/lib/agents";
-import { healthy } from "./inferenceKinds";
 import { RunNodeButton } from "./LocalServer";
 import { errorText } from "../../../lib/errorText";
 import { shortPath } from "@/lib/paths";
@@ -36,7 +34,7 @@ function pulse(
   const jobs = tools.length - workers - workflows;
   const overdue = tools.filter((t) => t.deadlineExpired).length;
   const parts = [
-    live ? `${live} ${live === 1 ? "session" : "sessions"} live` : null,
+    live ? `${counted(live, "session")} live` : null,
     workers ? `${workers} ${workers === 1 ? "session call" : "session calls"}` : null,
     workflows ? `${workflows} ${workflows === 1 ? "workflow" : "workflows"}` : null,
     jobs ? `${jobs} background ${jobs === 1 ? "job" : "jobs"}` : null,
@@ -66,7 +64,7 @@ function Summary({
       className="group/summary grid min-w-0 gap-1 rounded-xl bg-raised/50 px-3 py-2.5 transition-colors hover:bg-raised focus-visible:bg-raised focus-visible:outline-none"
     >
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="flex min-w-0 items-center gap-2 truncate text-sm">
+      <span className="flex min-w-0 items-center gap-2 truncate text-sm underline-offset-2 group-hover/summary:underline group-focus-visible/summary:underline">
         {children}
       </span>
     </a>
@@ -163,7 +161,6 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   const now = pulse(sessions, ops);
   const online = deployment.dialSucceeded;
   const backends = deployment.inferenceBackends;
-  const unready = backends.filter((b) => !healthy(b.probeStatus)).length;
   const section = (section: string): Route => ({
     name: "agent",
     nodeDid: deployment.nodeDid,
@@ -183,16 +180,7 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
               {name}
             </h2>
             {node.enabled === false && <Badge variant="outline">Disabled</Badge>}
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span
-                aria-hidden
-                className={cn(
-                  "size-1.5 rounded-full",
-                  online ? "bg-brand" : "bg-destructive",
-                )}
-              />
-              {online ? "Online" : "Offline"}
-            </span>
+            <OnlineStatus online={online} />
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
             {facts.join(" · ")}
@@ -213,13 +201,7 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
         <Summary label="Activity" to={{ name: "sessions" }}>
           {opsRead ? (
             <>
-              <span
-                aria-hidden
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  now.overdue ? "bg-destructive" : now.busy ? "bg-brand" : "bg-border",
-                )}
-              />
+              <StateDot tone={now.overdue ? "bad" : now.busy ? "busy" : "idle"} />
               <span className="truncate">{now.text}</span>
             </>
           ) : (
@@ -227,14 +209,7 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
           )}
         </Summary>
         <Summary label="Inference" to={section("inference")}>
-          {backends.length > 0 && <InferenceLogos backends={backends} />}
-          <span className="truncate">
-            {backends.length === 0
-              ? "None set up"
-              : unready
-                ? `${unready} not ready`
-                : "Ready"}
-          </span>
+          <InferenceSummary backends={backends} />
         </Summary>
         <Summary label="Packs" to={section("packs")}>
           <PacksValue packs={packs} />
@@ -280,23 +255,15 @@ export function AgentSummaryCards({
           <span className="truncate">{env?.modelName ?? "No model"}</span>
         </Summary>
         <Summary label="Activity" to={{ name: "sessions" }}>
-          <span
-            aria-hidden
-            className={cn(
-              "size-1.5 shrink-0 rounded-full",
-              live ? "bg-brand" : "bg-border",
-            )}
-          />
+          <StateDot tone={live ? "busy" : "idle"} />
           <span className="truncate">
             {live
-              ? `${live} ${live === 1 ? "session" : "sessions"} live`
-              : `Idle · ${mine.length} ${mine.length === 1 ? "session" : "sessions"}`}
+              ? `${counted(live, "session")} live`
+              : `Idle · ${counted(mine.length, "session")}`}
           </span>
         </Summary>
         <Summary label="Tasks" to={section("tasks")}>
-          <span className="truncate">
-            {tasks ? `${tasks} ${tasks === 1 ? "task" : "tasks"}` : "None"}
-          </span>
+          <span className="truncate">{tasks ? counted(tasks, "task") : "None"}</span>
         </Summary>
       </div>
     </div>

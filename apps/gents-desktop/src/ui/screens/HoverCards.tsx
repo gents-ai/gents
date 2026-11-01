@@ -14,7 +14,7 @@ import { agentReadiness } from "@/lib/agent-readiness";
 import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
 import { agentOf, backendOf } from "@/lib/agents";
 import { ProviderLogo } from "./ProviderLogo";
-import { providerLogo } from "@/lib/provider";
+import { InferenceSummary, OnlineStatus } from "./NodeFacts";
 import { useNodeReach } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
@@ -196,15 +196,7 @@ export function NodeHoverCard({
       <HoverCardTrigger delay={500} render={children} />
       <HoverCardContent side={side} align="start" className="w-80">
         <CardTitle name={deployment.node.displayName ?? deployment.label} to={page}>
-          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <span
-              className={cn(
-                "size-2 rounded-full",
-                online ? "bg-brand" : "bg-destructive",
-              )}
-            />
-            {online ? "Online" : "Offline"}
-          </span>
+          <OnlineStatus online={online} />
         </CardTitle>
         <Facts>
           <NodeReach deployment={deployment} />
@@ -215,7 +207,7 @@ export function NodeHoverCard({
             {deployment.tasks.length}
           </Line>
           <Line label="Inference" to={nodeSection(deployment.nodeDid, "inference")}>
-            <InferenceLogos backends={deployment.inferenceBackends} />
+            <InferenceSummary backends={deployment.inferenceBackends} />
           </Line>
           <Line label="ID" title={deployment.nodeDid}>
             <span className="inline-flex max-w-full items-center gap-1 align-middle">
@@ -235,52 +227,6 @@ export function NodeHoverCard({
         />
       </HoverCardContent>
     </HoverCard>
-  );
-}
-
-/* one logo per provider, however many of its accounts the node has; the
-   accounts themselves are named on hover */
-export function InferenceLogos({
-  backends,
-}: {
-  backends: NodeView["inferenceBackends"];
-}) {
-  if (backends.length === 0) return <span className="text-muted-foreground">None</span>;
-  const providers = new Map<string, (typeof backends)[number]>();
-  for (const b of backends) {
-    const key = providerLogo(b.providerKind, b.endpoint) ?? "other";
-    if (!providers.has(key)) providers.set(key, b);
-  }
-  const shown = [...providers.values()];
-  const names = backends.map((b) => b.name ?? b.backendId).join(", ");
-  return (
-    <span
-      role="img"
-      aria-label={names}
-      title={names}
-      className="-my-0.5 inline-flex items-center align-middle"
-    >
-      {shown.slice(0, 3).map((b, i) => (
-        <span
-          key={b.backendId}
-          className={cn(
-            "grid size-5 place-items-center rounded-full bg-muted ring-2 ring-popover",
-            i > 0 && "-ml-1.5",
-          )}
-        >
-          <ProviderLogo
-            kind={b.providerKind}
-            endpoint={b.endpoint}
-            className="size-3"
-          />
-        </span>
-      ))}
-      {shown.length > 3 && (
-        <span className="ml-1 text-muted-foreground tabular-nums">
-          +{shown.length - 3}
-        </span>
-      )}
-    </span>
   );
 }
 
