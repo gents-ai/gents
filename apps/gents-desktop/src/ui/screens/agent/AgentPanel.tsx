@@ -8,13 +8,16 @@ import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
 import { useApp } from "@/app/AppContext";
-import { useBootstrap, useNodeReach } from "@/hooks/useClient";
+import { useBootstrap, useNodeConfigReadOnly, useNodeReach } from "@/hooks/useClient";
 
 export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const bootstrap = useBootstrap();
   const reach = useNodeReach(deployment);
   const { changeConfig } = useApp().actions;
   const agent = deployment.node;
+  /* settings the app hasn't read are unknown, not empty: no form is drawn
+     from them, so nothing reads as missing or could be saved over them */
+  const readOnly = useNodeConfigReadOnly(deployment);
   const agents = deployment.agents.map((b) => ({
     value: b.agentId,
     label: b.enabled
@@ -65,73 +68,80 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
     <div>
       <AgentCard
         deployment={deployment}
-        edit={{
-          open: naming,
-          onToggle: () => setNaming((open) => !open),
-          onTags: () => {
-            setNaming(true);
-            focusField("agent-tags");
-          },
-          controls: "node-naming",
-          enabled: d.draft.enabled,
-          onEnabled: (v) => d.set("enabled", v),
-          tags: d.draft.tags,
-        }}
+        edit={
+          readOnly
+            ? undefined
+            : {
+                open: naming,
+                onToggle: () => setNaming((open) => !open),
+                onTags: () => {
+                  setNaming(true);
+                  focusField("agent-tags");
+                },
+                controls: "node-naming",
+                enabled: d.draft.enabled,
+                onEnabled: (v) => d.set("enabled", v),
+                tags: d.draft.tags,
+              }
+        }
       />
-      <Unfold open={Boolean(naming || d.problems.displayName)} id="node-naming">
-        <Group title="Name and tags">
-          <TextRow
-            id="agent-name"
-            label="Display name"
-            description="How this node is named across the desktop."
-            value={d.draft.displayName}
-            onChange={(v) => d.set("displayName", v)}
-            error={d.problems.displayName}
+      {!readOnly && (
+        <>
+          <Unfold open={Boolean(naming || d.problems.displayName)} id="node-naming">
+            <Group title="Name and tags">
+              <TextRow
+                id="agent-name"
+                label="Display name"
+                description="How this node is named across the desktop."
+                value={d.draft.displayName}
+                onChange={(v) => d.set("displayName", v)}
+                error={d.problems.displayName}
+              />
+              <TagsRow
+                id="agent-tags"
+                label="Tags"
+                description="Optional discovery labels."
+                value={d.draft.tags}
+                onChange={(v) => d.set("tags", v)}
+              />
+            </Group>
+          </Unfold>
+          <Group title="Node details">
+            <RefRow
+              id="agent-default"
+              label="Default agent"
+              description="Used when a session does not choose one."
+              value={d.draft.defaultAgentId}
+              onChange={(v) => d.set("defaultAgentId", v)}
+              error={d.problems.defaultAgentId}
+              items={agents}
+              createLabel="New agent…"
+              openRoute={(agentId) => ({
+                name: "agent",
+                nodeDid: deployment.nodeDid,
+                section: "agents",
+                item: agentId,
+              })}
+            />
+            <NumberRow
+              id="agent-max-request-hop"
+              label="Maximum request hop"
+              description="Limits how far requests can be chained. Leave blank for no limit; 0 permits only root requests."
+              value={d.draft.maxRequestHop}
+              onChange={(v) => d.set("maxRequestHop", v)}
+              error={d.problems.maxRequestHop}
+            />
+          </Group>
+          <DraftActions
+            draft={d}
+            fields={{
+              displayName: "agent-name",
+              defaultAgentId: "agent-default",
+              maxRequestHop: "agent-max-request-hop",
+            }}
           />
-          <TagsRow
-            id="agent-tags"
-            label="Tags"
-            description="Optional discovery labels."
-            value={d.draft.tags}
-            onChange={(v) => d.set("tags", v)}
-          />
-        </Group>
-      </Unfold>
-      <Group title="Node details">
-        <RefRow
-          id="agent-default"
-          label="Default agent"
-          description="Used when a session does not choose one."
-          value={d.draft.defaultAgentId}
-          onChange={(v) => d.set("defaultAgentId", v)}
-          error={d.problems.defaultAgentId}
-          items={agents}
-          createLabel="New agent…"
-          openRoute={(agentId) => ({
-            name: "agent",
-            nodeDid: deployment.nodeDid,
-            section: "agents",
-            item: agentId,
-          })}
-        />
-        <NumberRow
-          id="agent-max-request-hop"
-          label="Maximum request hop"
-          description="Limits how far requests can be chained. Leave blank for no limit; 0 permits only root requests."
-          value={d.draft.maxRequestHop}
-          onChange={(v) => d.set("maxRequestHop", v)}
-          error={d.problems.maxRequestHop}
-        />
-      </Group>
-      <DraftActions
-        draft={d}
-        fields={{
-          displayName: "agent-name",
-          defaultAgentId: "agent-default",
-          maxRequestHop: "agent-max-request-hop",
-        }}
-      />
-
+        </>
+      )}
       <Group title="Identity">
         <Row
           label="Node DID"

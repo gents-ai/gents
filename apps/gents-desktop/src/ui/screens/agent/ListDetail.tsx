@@ -341,6 +341,7 @@ export function ListDetail({
               variant="outline"
               disabled={creating}
               onClick={create}
+              data-readonly-hide=""
             >
               <Plus /> {creating ? "Creating…" : createLabel}
             </Button>
@@ -533,7 +534,7 @@ export function DeleteButton({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <FieldSet className="mt-12 mb-8" data-testid="danger-zone">
+    <FieldSet className="mt-12 mb-8" data-testid="danger-zone" data-readonly-hide="">
       <FieldLegend variant="eyebrow">Danger zone</FieldLegend>
       <FieldRows className="ring-destructive/25 dark:ring-destructive/30">
         <Row
