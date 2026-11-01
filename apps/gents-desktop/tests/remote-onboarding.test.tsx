@@ -1,4 +1,4 @@
-import { act, screen } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -266,6 +266,26 @@ describe("remote onboarding", () => {
       screen.getByText("Approval received · finishing secure route"),
     ).toBeVisible();
   });
+  it("lists a waiting request among the remote nodes, until its node takes its place", () => {
+    const waiting = snapshot([request]);
+    waiting.client!.deployments = [deployment];
+    const app = testApp({ snapshot: waiting, supportsManagedServer: false });
+    renderIn(app, <AgentsScreen />);
+    const remote = screen
+      .getByRole("heading", { name: /Remote nodes/ })
+      .closest("section")!;
+    const row = within(remote).getByTestId("pending-node");
+    expect(row).toHaveTextContent("My computer");
+    expect(row).toHaveTextContent("Waiting for My computer to accept");
+    /* a request on its way is not "nothing paired" */
+    expect(screen.queryByText("No remote nodes paired.")).not.toBeInTheDocument();
+
+    /* once the node is listed, its own row stands in the request's place */
+    act(() => publishSnapshot(app, snapshot([{ ...request, state: "approved" }])));
+    expect(screen.queryByTestId("pending-node")).not.toBeInTheDocument();
+    expect(within(remote).getByText("My computer")).toBeVisible();
+  });
+
   it("keeps activation failures visible in the shared fleet dashboard", () => {
     const failed = {
       ...request,
