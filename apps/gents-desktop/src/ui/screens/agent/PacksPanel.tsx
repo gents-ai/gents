@@ -17,6 +17,7 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { ChoiceRow } from "./editors";
 import { Group, Row } from "./rows";
 import { WirePackDialog, type WirePackDialogProps } from "./WirePackDialog";
+import { RegistryPack } from "./RegistryPack";
 import { errorText } from "../../../lib/errorText";
 
 /** An install or update that would replace documents someone edited stops and
@@ -38,6 +39,8 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
   /* null until the first answer; a search is in flight while true */
   const [searched, setSearched] = useState<boolean | null>(null);
   const searches = useRef(0);
+  /* the registry pack whose page is open under its line */
+  const [opened, setOpened] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [slots, setSlots] = useState<PackPluginSlot[]>([]);
@@ -335,34 +338,20 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
           >
             {found.map((pack) => {
               const name = `${pack.namespace}/${pack.name}`;
-              const have = installed?.some((p) => p.pack === name) ?? false;
-              const about = pack.description ?? pack.latest ?? undefined;
               return (
-                <li key={name} className="flex h-11 items-center gap-3 px-5">
-                  <span title={about} className="min-w-0 flex-1 truncate text-sm">
-                    <span className="font-medium text-foreground">{name}</span>
-                    {about && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        {about}
-                      </span>
-                    )}
-                  </span>
-                  {have ? (
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      Installed
-                    </span>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="shrink-0"
-                      disabled={busy !== null}
-                      onClick={() => install(name)}
-                    >
-                      Install
-                    </Button>
-                  )}
-                </li>
+                <RegistryPack
+                  key={name}
+                  pack={pack}
+                  installed={installed?.some((p) => p.pack === name) ?? false}
+                  installing={busy !== null}
+                  onInstall={() => install(name)}
+                  onKeyword={(word) => {
+                    setOpened(null);
+                    setQuery(word);
+                  }}
+                  open={opened === name}
+                  onToggle={() => setOpened((was) => (was === name ? null : name))}
+                />
               );
             })}
           </ul>

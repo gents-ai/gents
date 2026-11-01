@@ -1398,6 +1398,10 @@ export function createDesktopUiHarness(
     async searchPacks() {
       return { packs: [], has_more: false };
     },
+    async packInfo(pack: string) {
+      const [namespace, name] = pack.split("/");
+      return { namespace, name, versions: [] };
+    },
     async installPack() {},
     async updatePack() {},
     async removePack() {},
