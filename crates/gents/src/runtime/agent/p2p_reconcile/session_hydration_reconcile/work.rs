@@ -172,16 +172,13 @@ impl PeerWork {
                     .boxed()
                 }
                 // `discover` binds both before anything can be queued, so this
-                // is only reachable from a test that queues a real batch without
-                // a store. It is a no-op there, and a debug-build tripwire in
-                // production.
-                _ => {
-                    debug_assert!(
-                        cfg!(test),
-                        "a deferred batch requires the reconciler's store and delivery"
-                    );
-                    async {}.boxed()
-                }
+                // arm is only reachable from a test that queues a real batch
+                // without a store. Production keeps the original invariant: a
+                // batch started without them is a bug, never a silent success.
+                #[cfg(test)]
+                _ => async {}.boxed(),
+                #[cfg(not(test))]
+                _ => unreachable!("a deferred batch requires the reconciler's store and delivery"),
             },
             #[cfg(test)]
             BatchWork::Future(work) => work,
