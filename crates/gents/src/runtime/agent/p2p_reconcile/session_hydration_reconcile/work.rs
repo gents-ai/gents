@@ -320,4 +320,488 @@ mod tests {
         drop(work);
         assert!(dropped.load(Ordering::SeqCst));
     }
+
+    // --- Real-store characterization of the active-peer deferral (T2) --------
+    //
+    // These tests characterize the CURRENT behavior of `discover` when a new
+    // request for a peer arrives while an earlier attempt for that peer is
+    // still `active` (`work.rs:173-176`). They are not a claim that the current
+    // latency is desired, and not a claim about the original 819 failure. The
+    // store is real; only delivery is faked and gated.
+
+    use crate::runtime::agent::p2p_reconcile::enrollment_reconcile::test_enrollment_authority;
+    use crate::runtime::agent::p2p_reconcile::templates::{combine_filters, equality_filter};
+    use crate::store::config_client::ConfigAccess;
+    use crate::store::identity::KeyIdentity;
+    use crate::tools::call::lifecycle::admission_fixture::ensure_fixture_session;
+    use std::time::Duration;
+
+    const FIXTURE_CREATED_AT: &str = "2026-10-28T00:00:00Z";
+
+    struct SchedulerFixture {
+        _directory: tempfile::TempDir,
+        node: Arc<EmbeddedNode>,
+        store: Arc<GraphqlHydrationStore>,
+        peer: String,
+        requester: String,
+        node_did: String,
+    }
+
+    impl SchedulerFixture {
+        fn request_key(&self, session_id: &str) -> String {
+            format!("{}:{session_id}", self.peer)
+        }
+    }
+
+    /// A gated delivery: every push records itself, signals `started`, and then
+    /// parks until the test releases it. `fail_first` makes the first push
+    /// return an error, which is the indeterminate-delivery path that writes no
+    /// terminal state (`session_hydration_reconcile.rs:285-295`).
+    struct GatedDelivery {
+        started: tokio::sync::Notify,
+        releases: std::sync::Mutex<Vec<tokio::sync::oneshot::Sender<()>>>,
+        pushes: std::sync::Mutex<Vec<(String, BTreeSet<HydrationDocument>)>>,
+        fail_first: bool,
+    }
+
+    impl GatedDelivery {
+        fn new(fail_first: bool) -> Self {
+            Self {
+                started: tokio::sync::Notify::new(),
+                releases: std::sync::Mutex::new(Vec::new()),
+                pushes: std::sync::Mutex::new(Vec::new()),
+                fail_first,
+            }
+        }
+
+        fn pushes(&self) -> Vec<(String, BTreeSet<HydrationDocument>)> {
+            self.pushes.lock().expect("pushes lock").clone()
+        }
+
+        /// The session whose selected document each push carried. Each fixture
+        /// session owns exactly one selected document, so this is the exact
+        /// request identity of the attempt. Every push must be a singleton set
+        /// for this peer, so a push can never be attributed to the wrong request.
+        fn pushed_sessions(&self, peer: &str) -> Vec<String> {
+            self.pushes()
+                .into_iter()
+                .map(|(pushed_peer, documents)| {
+                    assert_eq!(pushed_peer, peer, "every push targets the fixture peer");
+                    assert_eq!(
+                        documents.len(),
+                        1,
+                        "each fixture session selects exactly one document"
+                    );
+                    let session = documents
+                        .iter()
+                        .next()
+                        .expect("length checked")
+                        .session_id
+                        .clone();
+                    assert!(
+                        documents
+                            .iter()
+                            .all(|document| document.session_id == session),
+                        "a push carries one request's documents"
+                    );
+                    session
+                })
+                .collect()
+        }
+
+        fn release_next(&self) {
+            let release = self
+                .releases
+                .lock()
+                .expect("releases lock")
+                .pop()
+                .expect("a gated push is waiting for release");
+            release.send(()).expect("gated delivery still waiting");
+        }
+    }
+
+    #[async_trait]
+    impl HydrationDelivery for GatedDelivery {
+        async fn push_documents_to_peer(
+            &self,
+            peer_id: &str,
+            documents: DeliveryTarget<'_>,
+            _fence: &EnrollmentAuthorizationFence,
+        ) -> Result<()> {
+            let documents = documents.transcript();
+            let attempt = {
+                let mut pushes = self.pushes.lock().expect("pushes lock");
+                pushes.push((peer_id.to_string(), documents));
+                pushes.len()
+            };
+            let (release, released) = tokio::sync::oneshot::channel();
+            self.releases.lock().expect("releases lock").push(release);
+            self.started.notify_one();
+            let _ = released.await;
+            if self.fail_first && attempt == 1 {
+                anyhow::bail!("injected indeterminate delivery");
+            }
+            Ok(())
+        }
+    }
+
+    /// Every case is wrapped in this bound so a stuck scheduler fails the test
+    /// instead of hanging it. It is a termination guard, never the ordering
+    /// mechanism: ordering comes from the explicit `Notify`/oneshot barriers.
+    const CASE_TIMEOUT: Duration = Duration::from_secs(60);
+    const STEP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    async fn bounded<F: std::future::Future>(label: &str, future: F) -> F::Output {
+        tokio::time::timeout(CASE_TIMEOUT, future)
+            .await
+            .unwrap_or_else(|_| panic!("{label} exceeded {CASE_TIMEOUT:?}"))
+    }
+
+    /// Poll the scheduler until the gated delivery signals that an attempt has
+    /// actually started. `discover` only enqueues; `fill_slots` pushes the
+    /// future into `running`, and `FuturesUnordered` does not poll it until the
+    /// scheduler is polled again.
+    async fn drive_until_started(work: &mut PeerWork, delivery: &GatedDelivery) {
+        tokio::time::timeout(STEP_TIMEOUT, async {
+            tokio::select! {
+                _ = work.next() => panic!("attempt completed before signalling start"),
+                _ = delivery.started.notified() => {}
+            }
+        })
+        .await
+        .expect("the gated attempt starts within the bound");
+    }
+
+    /// One scheduler step that must complete: a completion, or an idle `next`.
+    async fn next_within(work: &mut PeerWork, label: &str) {
+        tokio::time::timeout(STEP_TIMEOUT, work.next())
+            .await
+            .unwrap_or_else(|_| panic!("{label} did not return within the bound"));
+    }
+
+    /// Drain one coalesced subscription batch, so a later "no wake" assertion
+    /// is about the write under test and not about an earlier one.
+    async fn drain_batch(changes: &mut events::DocumentChangeSubscription, label: &str) {
+        tokio::time::timeout(STEP_TIMEOUT, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{label} did not wake the subscription"))
+            .expect("subscription stays open");
+    }
+
+    /// No batch is pending: the write under test produced no wake.
+    fn assert_no_pending_wake(changes: &mut events::DocumentChangeSubscription, label: &str) {
+        assert!(
+            matches!(changes.try_recv(), Err(events::TryRecvError::Empty)),
+            "{label} must not leave a subscription wake pending"
+        );
+    }
+
+    async fn scheduler_fixture() -> SchedulerFixture {
+        let (directory, identity, requester_identity) =
+            tokio::task::spawn_blocking(|| -> Result<_> {
+                let directory = tempfile::tempdir()?;
+                let identity: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
+                    directory.path().join("node.key"),
+                    None,
+                )?);
+                let requester =
+                    KeyIdentity::load_or_create(directory.path().join("requester.key"), None)?;
+                Ok((directory, identity, requester))
+            })
+            .await
+            .expect("fixture identity task")
+            .expect("fixture identity");
+        let node_did = identity.did().to_owned();
+        let requester = requester_identity.did().to_owned();
+        let peer = "peer-1".to_owned();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(directory.path().join("store"))
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .expect("build fixture node"),
+        );
+        crate::ensure_runtime_schemas(&node)
+            .await
+            .expect("runtime schemas");
+        for session in ["session-a", "session-b"] {
+            ensure_fixture_session(
+                &node,
+                session,
+                &node_did,
+                Some(&requester),
+                FIXTURE_CREATED_AT,
+            )
+            .await;
+        }
+        let fence = EnrollmentAuthorizationFence {
+            network_id: "network-1".into(),
+            request_id: "request-1".into(),
+            admin_did: "did:key:admin-1".into(),
+            member_did: requester.clone(),
+            member_peer: peer.clone(),
+            member_ticket: "ticket-1".into(),
+            owner_node: node_did.clone(),
+            profile: crate::runtime::agent::p2p_reconcile::templates::CLIENT_TEMPLATE.into(),
+            request_digest: "digest-1".into(),
+            authorization_sequence: 1,
+            authorization_expires_at: "2099-09-29T00:00:00Z".into(),
+        };
+        let peer_literal = escape_graphql_string(&peer);
+        let node_literal = escape_graphql_string(&node_did);
+        let digest = escape_graphql_string(&fence.request_digest);
+        let expires = escape_graphql_string(&fence.authorization_expires_at);
+        let fields = format!(
+            r#"node_did: "{node_literal}", enrollment_request_digest: "{digest}", enrollment_authorization_sequence: 1, enrollment_authorization_expires_at: "{expires}""#
+        );
+        ConfigAccess::write_local(
+            &node,
+            "test.hydration.desired_generation",
+            &format!(
+                r#"mutation {{ upsert_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_literal}" }} }}, add: {{ source: "enrollment", collections: ["SessionHydrationRequest"], replicator_addresses: ["test-address"], {fields} }}, update: {{ source: "enrollment", {fields} }}) {{ _docID }} }}"#,
+            ),
+        )
+        .await
+        .expect("seed desired pairing route");
+        let filters = BTreeMap::from([(
+            "SessionHydrationRequest".to_owned(),
+            combine_filters(
+                equality_filter("requester_did", requester.clone()),
+                equality_filter("node_did", node_did.clone()),
+            ),
+        )]);
+        let filter =
+            escape_graphql_string(&serde_json::to_string(&filters).expect("pairing filter json"));
+        ConfigAccess::write_local(
+            &node,
+            "test.hydration.applied_generation",
+            &format!(
+                r#"mutation {{ create_PeerPairingApplied(input: {{ peer_id: "{peer_literal}", replicator_filter: "{filter}", enrollment_request_digest: "{digest}", enrollment_authorization_sequence: 1, enrollment_authorization_expires_at: "{expires}" }}) {{ _docID }} }}"#,
+            ),
+        )
+        .await
+        .expect("seed applied pairing route");
+        let (_authority, enrollment) = test_enrollment_authority(Some(fence));
+        let store = Arc::new(GraphqlHydrationStore {
+            node: node.clone(),
+            identity,
+            enrollment,
+        });
+        let fixture = SchedulerFixture {
+            _directory: directory,
+            node,
+            store,
+            peer,
+            requester,
+            node_did,
+        };
+        for session in ["session-a", "session-b"] {
+            seed_selected_document(&fixture, session).await;
+        }
+        fixture
+    }
+
+    /// One selected document per session, so a push identifies its request.
+    async fn seed_selected_document(fixture: &SchedulerFixture, session_id: &str) {
+        let key = escape_graphql_string(&format!("compaction-{session_id}"));
+        let session = escape_graphql_string(session_id);
+        let node_did = escape_graphql_string(&fixture.node_did);
+        let requester = escape_graphql_string(&fixture.requester);
+        ConfigAccess::write_local(
+            &fixture.node,
+            "test.hydration.seed_selected_document",
+            &format!(
+                r#"mutation {{ create_CompactionEntry(input: {{ compaction_key: "{key}", session_id: "{session}", node_did: "{node_did}", requester_did: "{requester}", sequence: 1 }}) {{ _docID }} }}"#,
+            ),
+        )
+        .await
+        .expect("seed selected document");
+    }
+
+    async fn seed_pending_request(fixture: &SchedulerFixture, session_id: &str) {
+        let request_key = escape_graphql_string(&fixture.request_key(session_id));
+        let session = escape_graphql_string(session_id);
+        let node_did = escape_graphql_string(&fixture.node_did);
+        let requester = escape_graphql_string(&fixture.requester);
+        ConfigAccess::write_local(
+            &fixture.node,
+            "test.hydration.seed_pending_request",
+            &format!(
+                r#"mutation {{ create_SessionHydrationRequest(input: {{ request_key: "{request_key}", requester_did: "{requester}", node_did: "{node_did}", session_id: "{session}", created_at: "{FIXTURE_CREATED_AT}", status: "pending" }}) {{ _docID }} }}"#,
+            ),
+        )
+        .await
+        .expect("seed pending hydration request");
+    }
+
+    async fn request_status(fixture: &SchedulerFixture, session_id: &str) -> String {
+        let request_key = escape_graphql_string(&fixture.request_key(session_id));
+        let response = ConfigAccess::local(fixture.node.clone())
+            .execute(&format!(
+                r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{ status }} }}"#,
+            ))
+            .await
+            .expect("read hydration request status");
+        let rows = response["data"]["SessionHydrationRequest"]
+            .as_array()
+            .expect("SessionHydrationRequest rows");
+        assert_eq!(rows.len(), 1, "one row per request key");
+        rows[0]["status"]
+            .as_str()
+            .expect("hydration request status")
+            .to_owned()
+    }
+
+    /// A confirmed attempt for A, then a distinct request B for the same peer
+    /// committed while A is still active. The discovery during A's attempt
+    /// defers B; completing A does not serve B; an explicit discovery does.
+    #[tokio::test]
+    async fn a_new_request_for_an_active_peer_is_deferred_until_the_next_discovery() {
+        bounded(
+            "a_new_request_for_an_active_peer_is_deferred_until_the_next_discovery",
+            async {
+                let fixture = scheduler_fixture().await;
+                let store = fixture.store.clone();
+                let delivery = Arc::new(GatedDelivery::new(false));
+                let delivery_trait: Arc<dyn HydrationDelivery> = delivery.clone();
+                let cancel = CancellationToken::new();
+                let mut work = PeerWork::default();
+
+                seed_pending_request(&fixture, "session-a").await;
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                drive_until_started(&mut work, &delivery).await;
+                assert_eq!(work.active, BTreeSet::from([fixture.peer.clone()]));
+                assert_eq!(delivery.pushes().len(), 1);
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string()]
+                );
+
+                // A distinct request for the same peer arrives while A is active.
+                seed_pending_request(&fixture, "session-b").await;
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                assert!(
+                    work.queued.is_empty(),
+                    "the new row is not enqueued while its peer is active"
+                );
+                assert_eq!(work.active, BTreeSet::from([fixture.peer.clone()]));
+                assert_eq!(
+                    delivery.pushes().len(),
+                    1,
+                    "no second attempt for the same peer"
+                );
+
+                // Complete A explicitly: the delivery confirms and the terminal write lands.
+                delivery.release_next();
+                next_within(&mut work, "A completes").await;
+                assert!(work.active.is_empty());
+                assert!(work.queued.is_empty());
+                assert_eq!(
+                    delivery.pushes().len(),
+                    1,
+                    "completion alone does not retry the peer"
+                );
+                assert_eq!(request_status(&fixture, "session-a").await, "served");
+                assert_eq!(request_status(&fixture, "session-b").await, "pending");
+
+                // `work.next()` alone neither serves B nor retries A.
+                next_within(&mut work, "idle next").await;
+                assert_eq!(delivery.pushes().len(), 1);
+                assert_eq!(request_status(&fixture, "session-b").await, "pending");
+
+                // An explicit discovery serves the deferred row.
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                drive_until_started(&mut work, &delivery).await;
+                assert_eq!(delivery.pushes().len(), 2);
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string(), "session-b".to_string()],
+                    "the second attempt serves B, not a retry of A"
+                );
+                delivery.release_next();
+                next_within(&mut work, "B completes").await;
+                assert_eq!(request_status(&fixture, "session-b").await, "served");
+                assert_eq!(delivery.pushes().len(), 2, "A was attempted exactly once");
+
+                fixture.node.shutdown().await;
+            },
+        )
+        .await;
+    }
+
+    /// The same deferral when A's attempt writes no terminal state. A real
+    /// subscription is created before the first discovery, so this case also
+    /// shows that B's own insert wake is consumed by the discovery that defers
+    /// it, and that A's completion adds no further wake. It does not claim the
+    /// subscription is lossless; only that no wake is left pending here.
+    #[tokio::test]
+    async fn a_failed_attempt_without_a_terminal_write_still_defers_the_new_request() {
+        bounded(
+            "a_failed_attempt_without_a_terminal_write_still_defers_the_new_request",
+            async {
+                let fixture = scheduler_fixture().await;
+                let store = fixture.store.clone();
+                let delivery = Arc::new(GatedDelivery::new(true));
+                let delivery_trait: Arc<dyn HydrationDelivery> = delivery.clone();
+                let cancel = CancellationToken::new();
+                let mut work = PeerWork::default();
+                let mut changes =
+                    crate::subscribe_collections(&fixture.node, ["SessionHydrationRequest"])
+                        .expect("subscribe to hydration requests");
+
+                seed_pending_request(&fixture, "session-a").await;
+                drain_batch(&mut changes, "A's insert").await;
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                drive_until_started(&mut work, &delivery).await;
+                assert_eq!(delivery.pushes().len(), 1);
+
+                seed_pending_request(&fixture, "session-b").await;
+                drain_batch(&mut changes, "B's insert").await;
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                assert!(
+                    work.queued.is_empty(),
+                    "the new row is not enqueued while its peer is active"
+                );
+                assert_eq!(delivery.pushes().len(), 1);
+
+                // A finishes with no terminal write and no new store write.
+                delivery.release_next();
+                next_within(&mut work, "A completes").await;
+                assert!(work.active.is_empty());
+                assert_eq!(delivery.pushes().len(), 1);
+                assert_eq!(
+                    request_status(&fixture, "session-a").await,
+                    "pending",
+                    "an indeterminate delivery writes no terminal state"
+                );
+                assert_eq!(request_status(&fixture, "session-b").await, "pending");
+                assert_no_pending_wake(&mut changes, "A's failed attempt");
+
+                // Idle: no completion-driven retry and no service of B.
+                next_within(&mut work, "idle next").await;
+                assert_eq!(
+                    delivery.pushes().len(),
+                    1,
+                    "B is not attempted without a discovery"
+                );
+
+                // An explicit discovery serves B. A is legitimately reattempted
+                // here, because its row is still pending; only B's service is
+                // asserted, not a lifetime attempt count for A.
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                drive_until_started(&mut work, &delivery).await;
+                delivery.release_next();
+                drive_until_started(&mut work, &delivery).await;
+                delivery.release_next();
+                next_within(&mut work, "the deferred batch completes").await;
+                assert_eq!(request_status(&fixture, "session-b").await, "served");
+                assert_eq!(request_status(&fixture, "session-a").await, "served");
+                assert_eq!(delivery.pushes().len(), 3);
+
+                fixture.node.shutdown().await;
+            },
+        )
+        .await;
+    }
 }
