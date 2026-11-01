@@ -286,8 +286,11 @@ export function DockTabs({
                   className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
                 >
                   <s.icon className="size-4 shrink-0" />
-                  <span className={cn("truncate", active && "font-medium")}>
-                    {s.title}
+                  <span
+                    title={s.tab ? s.title : undefined}
+                    className={cn("truncate", active && "font-medium")}
+                  >
+                    {s.tab ?? s.title}
                   </span>
                   <TabBadge surface={s} sessionId={sessionId} />
                 </button>
