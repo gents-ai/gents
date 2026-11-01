@@ -14,6 +14,7 @@ import {
 } from "@gents/ui/components/alert-dialog";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -62,6 +63,7 @@ import {
   type SaveIntent,
 } from "./behaviorDraft";
 import { ContextPicker } from "./ContextPicker";
+import { AgentSummaryCards } from "./AgentCard";
 import { contextOutcome, writeAgentDraft } from "./behaviorSave";
 
 export function AgentEditor({
@@ -296,7 +298,10 @@ export function AgentEditor({
     <>
       <header
         data-testid="agent-header"
-        className="mb-8 rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5"
+        className={cn(
+          draftMode ? "mb-8" : "mb-3",
+          "rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5",
+        )}
       >
         <div className="flex min-w-0 items-start gap-3 max-md:flex-col">
           <AgentInitials
@@ -335,6 +340,9 @@ export function AgentEditor({
           </div>
         </div>
       </header>
+      {!draftMode && (
+        <AgentSummaryCards deployment={deployment} agentId={agent.agentId} />
+      )}
 
       <Group title="About">
         {!draftMode && (

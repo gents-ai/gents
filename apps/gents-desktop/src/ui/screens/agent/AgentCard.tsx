@@ -15,6 +15,8 @@ import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { InferenceLogos } from "../HoverCards";
+import { ProviderLogo } from "../ProviderLogo";
+import { agentOf, backendOf } from "@/lib/agents";
 import { healthy } from "./inferenceKinds";
 import { RunNodeButton } from "./LocalServer";
 import { shortPath } from "@/lib/paths";
@@ -194,6 +196,65 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
         </Summary>
         <Summary label="Packs" to={section("packs")}>
           <span className="truncate">{packsText(packs)}</span>
+        </Summary>
+      </div>
+    </div>
+  );
+}
+
+/** The agent page's cards, as the node page's: what it runs on, what it is
+    doing, and what runs with it on its own. */
+export function AgentSummaryCards({
+  deployment,
+  agentId,
+}: {
+  deployment: NodeView;
+  agentId: string;
+}) {
+  const agent = agentOf(deployment, agentId);
+  const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
+  if (!agent) return null;
+  const env = deployment.agentEnvironments.find((e) => e.agentId === agentId);
+  const backend = backendOf(deployment, agent);
+  const mine = sessions.filter((s) => s.agentId === agentId);
+  const live = mine.filter((s) => isLive(s.turnState)).length;
+  const tasks = deployment.tasks.filter((t) => t.agentId === agentId).length;
+  const section = (section: string, item?: string): Route => ({
+    name: "agent",
+    nodeDid: deployment.nodeDid,
+    section,
+    ...(item ? { item } : {}),
+  });
+  return (
+    <div className="@container mb-8">
+      <div className="grid gap-2 @xl:grid-cols-3">
+        <Summary
+          label="Runs on"
+          to={backend ? section("inference", backend.backendId) : section("inference")}
+        >
+          {backend && (
+            <ProviderLogo kind={backend.providerKind} endpoint={backend.endpoint} />
+          )}
+          <span className="truncate">{env?.modelName ?? "No model"}</span>
+        </Summary>
+        <Summary label="Activity" to={{ name: "sessions" }}>
+          <span
+            aria-hidden
+            className={cn(
+              "size-1.5 shrink-0 rounded-full",
+              live ? "bg-brand" : "bg-border",
+            )}
+          />
+          <span className="truncate">
+            {live
+              ? `${live} ${live === 1 ? "session" : "sessions"} live`
+              : `Idle · ${mine.length} ${mine.length === 1 ? "session" : "sessions"}`}
+          </span>
+        </Summary>
+        <Summary label="Tasks" to={section("tasks")}>
+          <span className="truncate">
+            {tasks ? `${tasks} ${tasks === 1 ? "task" : "tasks"}` : "None"}
+          </span>
         </Summary>
       </div>
     </div>
