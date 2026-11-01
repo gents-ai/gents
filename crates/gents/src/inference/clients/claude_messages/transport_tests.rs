@@ -309,3 +309,108 @@ fn a_wildcard_no_proxy_bypasses_every_target_but_still_builds_the_pool() {
     assert!(!proxied, "NO_PROXY=* excludes every target");
     assert!(std::ptr::eq(client, &shared.direct));
 }
+
+fn outgoing(uri: &'static str) -> Outgoing {
+    Outgoing::new("POST", &Uri::from_static(uri), &HeaderMap::new()).unwrap()
+}
+
+/// The reviewed finding: the pool must be chosen for the target actually connected to.
+///
+/// `send_once` used to pick the pool from the URL's target and only then rewrite the target
+/// for the test route, so a loopback target that `NO_PROXY` excludes was still sent through
+/// the proxy the API host's route selected. This asserts the coupling through `select`, the
+/// one function `send_once` uses, so restoring the old ordering turns it red.
+#[test]
+fn a_rewritten_target_selects_the_pool_for_where_the_bytes_go() {
+    let shared = Shared::from_env(proxy_env(
+        Some("http://proxy.corp:3128"),
+        Some("127.0.0.1,localhost"),
+    ))
+    .unwrap();
+    let proxied = shared
+        .proxied
+        .as_ref()
+        .expect("HTTPS_PROXY builds the pool");
+
+    let outgoing = outgoing("https://api.anthropic.com/v1/messages");
+    let client = ClaudeHttpClient::new(None).with_test_route(
+        Arc::new(AtomicBool::new(false)),
+        "127.0.0.1",
+        8443,
+    );
+
+    let (selected, is_proxied, target) = client.select(&shared, &outgoing).unwrap();
+    assert_eq!(target.host, "127.0.0.1");
+    assert_eq!(target.port, 8443);
+    assert!(
+        target.tls,
+        "the rewrite changes where, not whether TLS is used"
+    );
+    assert!(!is_proxied, "the loopback target is named in NO_PROXY");
+    assert!(
+        std::ptr::eq(selected, &shared.direct),
+        "the rewritten target must use the direct pool"
+    );
+
+    // The URL's own target would have gone through the proxy: that is the mismatch.
+    let (url_client, url_proxied) = shared.client_for(&outgoing.target).unwrap();
+    assert!(url_proxied, "the API host is outside NO_PROXY");
+    assert!(std::ptr::eq(url_client, proxied));
+
+    // The `Host` header and the gzip decision still follow the URL's host.
+    assert_eq!(outgoing.host_header, "api.anthropic.com");
+    assert!(
+        request::gzip_body(
+            &outgoing.target.host,
+            request::GZIP_MIN_UTF16_UNITS,
+            is_proxied,
+            false
+        ),
+        "a bypassed first-party target still gzips, whatever the rewrite"
+    );
+}
+
+/// The reverse direction: a URL that bypasses the proxy, rewritten to a target that does not.
+#[test]
+fn a_rewritten_target_that_is_proxied_uses_the_proxied_pool() {
+    let shared =
+        Shared::from_env(proxy_env(Some("http://proxy.corp:3128"), Some("127.0.0.1"))).unwrap();
+    let proxied = shared
+        .proxied
+        .as_ref()
+        .expect("HTTPS_PROXY builds the pool");
+
+    let outgoing = outgoing("https://127.0.0.1:8443/v1/messages");
+    let client = ClaudeHttpClient::new(None).with_test_route(
+        Arc::new(AtomicBool::new(false)),
+        "gateway.internal",
+        8443,
+    );
+
+    let (selected, is_proxied, target) = client.select(&shared, &outgoing).unwrap();
+    assert_eq!(target.host, "gateway.internal");
+    assert!(is_proxied, "the gateway is outside NO_PROXY");
+    assert!(
+        std::ptr::eq(selected, proxied),
+        "the rewritten target must use the proxied pool"
+    );
+
+    let (_, url_proxied) = shared.client_for(&outgoing.target).unwrap();
+    assert!(!url_proxied, "the URL's own target is named in NO_PROXY");
+}
+
+/// With no test route the effective target is the URL's target, unchanged.
+#[test]
+fn without_a_test_route_the_effective_target_is_the_url_target() {
+    let outgoing = outgoing("https://api.anthropic.com/v1/messages");
+    let client = ClaudeHttpClient::new(None);
+    let (_, _, target) = client
+        .select(
+            &Shared::from_env(proxy_env(Some("http://proxy.corp:3128"), None)).unwrap(),
+            &outgoing,
+        )
+        .unwrap();
+    assert_eq!(target.host, outgoing.target.host);
+    assert_eq!(target.port, outgoing.target.port);
+    assert_eq!(target.tls, outgoing.target.tls);
+}

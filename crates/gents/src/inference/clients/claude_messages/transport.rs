@@ -307,7 +307,7 @@ impl ClaudeHttpClient {
         body: &Bytes,
     ) -> Result<(Response, bool), ClaudeTransportError> {
         let text = std::str::from_utf8(body).map_err(|_| ClaudeTransportError::BodyNotUtf8)?;
-        let (client, proxied) = shared.client_for(&outgoing.target)?;
+        let (client, proxied, target) = self.select(shared, outgoing)?;
         let gzipped = request::gzip_body(
             &outgoing.target.host,
             request::utf16_len(text),
@@ -339,6 +339,32 @@ impl ClaudeHttpClient {
                 .map(|(name, value, sensitive)| (name.as_str(), value.as_str(), *sensitive)),
             gzipped,
         );
+        let response = client
+            .send(&target, &head.encode(wire.len()), &wire)
+            .await?;
+        Ok((response, gzipped))
+    }
+
+    /// The pool and the target for one request, decided together.
+    ///
+    /// The target is resolved first, because the pool must describe the connection that is
+    /// made, not the URL that was asked for: choosing the pool from `outgoing.target` and only
+    /// then rewriting the target would send a rewritten loopback target through the proxy the
+    /// URL host's route selected. The `Host` header and the gzip decision keep using the URL's
+    /// host, so a rewrite changes where the bytes go and nothing else.
+    fn select<'a>(
+        &self,
+        shared: &'a Shared,
+        outgoing: &Outgoing,
+    ) -> Result<(&'a Client, bool, Target), ClaudeTransportError> {
+        let target = self.effective_target(outgoing);
+        let (client, proxied) = shared.client_for(&target)?;
+        Ok((client, proxied, target))
+    }
+
+    /// The target this request actually connects to: the URL's target, or the test route's
+    /// host and port when one is set.
+    fn effective_target(&self, outgoing: &Outgoing) -> Target {
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut target = outgoing.target.clone();
         #[cfg(test)]
@@ -346,10 +372,7 @@ impl ClaudeHttpClient {
             target.host.clone_from(host);
             target.port = *port;
         }
-        let response = client
-            .send(&target, &head.encode(wire.len()), &wire)
-            .await?;
-        Ok((response, gzipped))
+        target
     }
 
     /// Sends the request, resending it plain once when the API rejects the gzip body, and
