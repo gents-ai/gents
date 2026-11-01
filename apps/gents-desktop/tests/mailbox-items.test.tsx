@@ -15,7 +15,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
-import { MailboxStack } from "../src/ui/screens/MailboxStack";
+import { MailboxStack, openInStack } from "../src/ui/screens/MailboxStack";
 import { mailboxSeen } from "../src/ui/app/mailboxSeen";
 import { listViews } from "../src/ui/app/listViews";
 import { node, testApp, withApp } from "./app-fixture";
@@ -324,6 +324,23 @@ describe("an opened item", () => {
     open("Landed");
     expect(within(dialog()).queryByText(/of 2/)).toBeNull();
     expect(within(dialog()).queryByRole("link", { name: "Mailbox" })).toBeNull();
+    listViews.setMailboxTab("all");
+  });
+
+  it("opens an item from outside the page's list over every item, the page's tab left as it was", () => {
+    listViews.setMailboxTab("done");
+    const flagged = item({ itemId: "a", title: "Flagged", kind: "flag" });
+    renderMailbox(
+      mailboxWith([flagged, item({ itemId: "b", title: "Landed", kind: "finished" })]),
+    );
+    /* as the side nav's mailbox section and the search palette do */
+    act(() => openInStack(flagged));
+    expect(within(dialog()).getByRole("heading", { name: "Flagged" })).toBeVisible();
+    expect(within(dialog()).getByText("1 of 2")).toBeVisible();
+    /* the page behind still lists its Done tab alone */
+    const list = screen.getByTestId("mailbox-list");
+    expect(within(list).getByText("Landed")).toBeInTheDocument();
+    expect(within(list).queryByText("Flagged")).toBeNull();
     listViews.setMailboxTab("all");
   });
 
