@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
 import {
@@ -27,6 +28,8 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       ? b.displayName
       : `${b.displayName} · disabled, enabled when saved as default`,
   }));
+  /* the name and tags show in the header; their fields open under it */
+  const [naming, setNaming] = useState(false);
   const d = useDraft(
     {
       displayName: agent.displayName ?? "",
@@ -67,16 +70,37 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
 
   return (
     <div>
-      <AgentCard deployment={deployment} />
+      <AgentCard
+        deployment={deployment}
+        edit={{
+          open: naming,
+          onToggle: () => setNaming((open) => !open),
+          controls: "node-naming",
+          tags: d.draft.tags,
+        }}
+      />
+      {(naming || d.problems.displayName) && (
+        <div id="node-naming">
+          <Group title="Name and tags">
+            <TextRow
+              id="agent-name"
+              label="Display name"
+              description="How this node is named across the desktop."
+              value={d.draft.displayName}
+              onChange={(v) => d.set("displayName", v)}
+              error={d.problems.displayName}
+            />
+            <TagsRow
+              id="agent-tags"
+              label="Tags"
+              description="Optional discovery labels."
+              value={d.draft.tags}
+              onChange={(v) => d.set("tags", v)}
+            />
+          </Group>
+        </div>
+      )}
       <Group title="Node details">
-        <TextRow
-          id="agent-name"
-          label="Display name"
-          description="How this node is named across the desktop."
-          value={d.draft.displayName}
-          onChange={(v) => d.set("displayName", v)}
-          error={d.problems.displayName}
-        />
         <RefRow
           id="agent-default"
           label="Default agent"
@@ -107,13 +131,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           value={d.draft.maxRequestHop}
           onChange={(v) => d.set("maxRequestHop", v)}
           error={d.problems.maxRequestHop}
-        />
-        <TagsRow
-          id="agent-tags"
-          label="Tags"
-          description="Optional discovery labels."
-          value={d.draft.tags}
-          onChange={(v) => d.set("tags", v)}
         />
       </Group>
       <DraftActions

@@ -6,6 +6,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { Badge } from "@gents/ui/components/badge";
+import { Button } from "@gents/ui/components/button";
+import { Pencil } from "lucide-react";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "../AgentAvatar";
@@ -126,7 +128,15 @@ function PacksValue({ packs }: { packs: PacksRead }) {
   );
 }
 
-export function AgentCard({ deployment }: { deployment: NodeView }) {
+/** The node page's header: what the node is called, its state and summary;
+    with `edit`, its tags show and its name and tags can be opened to edit. */
+export function AgentCard({
+  deployment,
+  edit,
+}: {
+  deployment: NodeView;
+  edit?: { open: boolean; onToggle: () => void; controls: string; tags: string[] };
+}) {
   const {
     actions: { fetchOperationsSnapshot },
   } = useApp();
@@ -181,6 +191,23 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
             </h2>
             {node.enabled === false && <Badge variant="outline">Disabled</Badge>}
             <OnlineStatus online={online} />
+            {edit && (
+              <Button
+                size="xs"
+                variant="quiet"
+                aria-expanded={edit.open}
+                aria-controls={edit.controls}
+                onClick={edit.onToggle}
+              >
+                {edit.open ? (
+                  "Done"
+                ) : (
+                  <>
+                    <Pencil /> Edit
+                  </>
+                )}
+              </Button>
+            )}
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
             {facts.join(" · ")}
@@ -194,6 +221,18 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
               </>
             )}
           </p>
+          {edit && edit.tags.length > 0 && (
+            <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
+              {edit.tags.map((tag) => (
+                <li
+                  key={tag}
+                  className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                >
+                  {tag}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         {isLocalNode(deployment, homeDid) && <RunNodeButton />}
       </div>
