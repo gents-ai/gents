@@ -26,7 +26,7 @@ test("keeps the selected node visible and reviews a draft before changing destin
     page.getByRole("heading", { name: "Start a new chat with Amy" }),
   ).toBeVisible();
   await expect(composer(page)).toHaveText("");
-  await expect(page.getByTitle("Choose a node")).toHaveCount(0);
+  await expect(page.getByTitle("Choose a node")).toContainText("Amy");
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.getByRole("option", { name: /Remote worker/ })).toBeVisible();
   await expect(page.getByRole("option", { name: /^Default/ })).toHaveCount(0);
