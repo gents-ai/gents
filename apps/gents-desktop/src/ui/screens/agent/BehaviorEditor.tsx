@@ -21,6 +21,7 @@ import {
 } from "@gents/ui/components/alert-dialog";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,7 +51,7 @@ import { ToolsEditor } from "./ToolsPanel";
 import { ProfileEditor, modelSentence } from "./ProfileEditor";
 import { focusFirstProblem, newId, useDraft } from "./draft";
 import { ConfirmDelete, DeleteButton } from "./ListDetail";
-import { Group } from "./rows";
+import { focusField, Group, Unfold } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
 import { useApp } from "@/app/AppContext";
 import {
@@ -388,7 +389,10 @@ export function AgentEditor({
                 )}
                 <p
                   data-testid="agent-summary"
-                  className="mt-0.5 text-sm text-muted-foreground"
+                  className={cn(
+                    "text-sm text-muted-foreground",
+                    d.draft.description.trim() ? "mt-1.5" : "mt-0.5",
+                  )}
                 >
                   <AccessSentence
                     name={agent.displayName}
@@ -399,11 +403,17 @@ export function AgentEditor({
                 {d.draft.tags.length > 0 && (
                   <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
                     {d.draft.tags.map((tag) => (
-                      <li
-                        key={tag}
-                        className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-                      >
-                        {tag}
+                      <li key={tag}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingAbout(true);
+                            focusField(id("tags"));
+                          }}
+                          className="cursor-pointer rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                        >
+                          {tag}
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -426,38 +436,39 @@ export function AgentEditor({
         <AgentSummaryCards deployment={deployment} agentId={agent.agentId} />
       )}
 
-      {(draftMode || editingAbout || errors.displayName) && (
-        <div id={id("about")}>
-          <Group title="About">
-            {!draftMode && (
-              <FactRow label="Agent ID" mono>
-                {agent.agentId}
-              </FactRow>
-            )}
-            <TextRow
-              id={id("name")}
-              label="Display name"
-              value={d.draft.displayName}
-              onChange={(v) => d.set("displayName", v)}
-              error={errors.displayName}
-            />
-            <AreaRow
-              id={id("description")}
-              label="Description"
-              description="One or two sentences, shown in the agent picker."
-              value={d.draft.description}
-              onChange={(v) => d.set("description", v)}
-              rows={2}
-            />
-            <TagsRow
-              id={id("tags")}
-              label="Tags"
-              value={d.draft.tags}
-              onChange={(v) => d.set("tags", v)}
-            />
-          </Group>
-        </div>
-      )}
+      <Unfold
+        open={Boolean(draftMode || editingAbout || errors.displayName)}
+        id={id("about")}
+      >
+        <Group title="About">
+          {!draftMode && (
+            <FactRow label="Agent ID" mono>
+              {agent.agentId}
+            </FactRow>
+          )}
+          <TextRow
+            id={id("name")}
+            label="Display name"
+            value={d.draft.displayName}
+            onChange={(v) => d.set("displayName", v)}
+            error={errors.displayName}
+          />
+          <AreaRow
+            id={id("description")}
+            label="Description"
+            description="One or two sentences, shown in the agent picker."
+            value={d.draft.description}
+            onChange={(v) => d.set("description", v)}
+            rows={2}
+          />
+          <TagsRow
+            id={id("tags")}
+            label="Tags"
+            value={d.draft.tags}
+            onChange={(v) => d.set("tags", v)}
+          />
+        </Group>
+      </Unfold>
 
       <section
         data-testid="context-frame"
