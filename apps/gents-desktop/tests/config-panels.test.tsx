@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Toaster } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { selection } from "../src/hooks/selectionStore";
 import { href, type Route } from "../src/ui/lib/router";
@@ -2395,16 +2396,31 @@ describe("configuration panels", () => {
         t.taskId === "task-a" ? { ...t, promptTemplate: "Check {{host}}" } : t,
       ),
     };
-    const view = renderIn(app, <TasksPanel deployment={withArgs} item="task-a" />);
+    const view = renderIn(
+      app,
+      <>
+        <Toaster />
+        <TasksPanel deployment={withArgs} item="task-a" />
+      </>,
+    );
     await act(async () => {
       screen.getByRole("button", { name: "Run" }).click();
       await new Promise((r) => requestAnimationFrame(r));
     });
     expect(api.runTask).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Args")).toHaveFocus();
+    expect(
+      await screen.findByText("Fill in host under Args to run this task"),
+    ).toBeInTheDocument();
 
     view.unmount();
-    renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
+    renderIn(
+      app,
+      <>
+        <Toaster />
+        <TasksPanel deployment={deployment} item="task-a" />
+      </>,
+    );
     await act(async () => {
       screen.getByRole("button", { name: "Run" }).click();
       await Promise.resolve();
@@ -2415,6 +2431,8 @@ describe("configuration panels", () => {
       "href",
       expect.stringContaining("session-run"),
     );
+    expect(await screen.findByText(/ started$/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open session" })).toBeInTheDocument();
   });
 
   it("preserves interval cadence and rejects non-positive intervals", async () => {

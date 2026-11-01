@@ -32,7 +32,7 @@ import { sourceInWords, triggerReadiness } from "./automation";
 import { Switch } from "@gents/ui/components/switch";
 import { ExternalLink, Pencil, Play, Plus } from "lucide-react";
 import { Hint } from "../Hint";
-import { href } from "@/lib/router";
+import { href, navigate } from "@/lib/router";
 import { toastFailure } from "@/lib/failure";
 import { agentOf } from "@/lib/agents";
 import { Badge } from "@gents/ui/components/badge";
@@ -160,6 +160,12 @@ export function TaskEditor({
       const r = await pending;
       if (!acceptsComposeIntent(intentGeneration)) return;
       setStarted(r.sessionId);
+      toast(`${d.draft.name.trim() || task.taskId} started`, {
+        action: {
+          label: "Open session",
+          onClick: () => navigate({ name: "session", sessionId: r.sessionId }),
+        },
+      });
     } catch (error) {
       if (!acceptsComposeIntent(intentGeneration)) return;
       toastFailure("start the task", error);
@@ -168,11 +174,18 @@ export function TaskEditor({
     }
   };
   /* a template that names {{placeholders}} needs its args filled first */
-  const takesArgs = /\{\{\s*[\w.]+\s*\}\}/.test(
-    `${d.draft.promptTemplate}\n${d.draft.goalObjectiveTemplate}`,
-  );
+  const placeholders = [
+    ...new Set(
+      [
+        ...`${d.draft.promptTemplate}\n${d.draft.goalObjectiveTemplate}`.matchAll(
+          /\{\{\s*([\w.]+)\s*\}\}/g,
+        ),
+      ].map((m) => m[1]!),
+    ),
+  ];
   const startRun = () => {
-    if (takesArgs && args.replace(/\s/g, "") === "{}") {
+    if (placeholders.length && args.replace(/\s/g, "") === "{}") {
+      toast(`Fill in ${placeholders.join(", ")} under Args to run this task`);
       focusField(id("args"));
       return;
     }
