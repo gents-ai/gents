@@ -166,7 +166,7 @@ const isDismissible = (m: MailboxItemView) => {
   return !question || question.version < 2;
 };
 
-const kindOf = (m: MailboxItemView) =>
+export const kindOf = (m: MailboxItemView) =>
   KIND[m.kind] ?? { icon: CircleHelp, label: m.kind };
 
 function KindIcon({ item, className }: { item: MailboxItemView; className?: string }) {

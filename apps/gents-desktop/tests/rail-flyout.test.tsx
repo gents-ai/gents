@@ -16,10 +16,12 @@ describe("the rail flyout", () => {
         <button type="button">rail</button>
       </RailFlyout>,
     );
+    /* the nav's scroll area keeps a timer of its own while mounted */
+    const mounted = vi.getTimerCount();
     fireEvent.blur(screen.getByRole("button", { name: "rail" }), {
       relatedTarget: null,
     });
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(mounted + 1);
     unmount();
     expect(vi.getTimerCount()).toBe(0);
   });
