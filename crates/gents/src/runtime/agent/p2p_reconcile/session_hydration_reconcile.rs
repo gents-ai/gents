@@ -95,6 +95,10 @@ trait HydrationRequestStore: Send + Sync {
         documents: &BTreeSet<HydrationDocument>,
     ) -> Result<()>;
     async fn mark_rejected(&self, request: &HydrationRequestRow, detail: &str) -> Result<()>;
+    /// Whether the exact four-field identity of `row` is still `pending` at read
+    /// time. `Ok(false)` means the row is gone or terminal; a query or decode
+    /// failure is `Err`, never `Ok(false)`.
+    async fn still_pending(&self, row: &HydrationRequestRow) -> Result<bool>;
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +177,11 @@ async fn admit_or_reject(
     row: HydrationRequestRow,
     outcome: &mut HydrationTickOutcome,
 ) -> Result<Option<AdmittedHydration>> {
+    // A cached row may have been served, rejected or replaced since discovery.
+    // Revalidate its pending identity before admission, which can mutate.
+    if !store.still_pending(&row).await? {
+        return Ok(None);
+    }
     let request = match HydrationRequest::from_row(
         row.request_key.clone(),
         row.requester_did.clone(),
@@ -718,6 +727,31 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         Ok(())
     }
 
+    async fn still_pending(&self, request: &HydrationRequestRow) -> Result<bool> {
+        let request_key = escape_graphql_string(&request.request_key);
+        let requester_did = escape_graphql_string(&request.requester_did);
+        let node_did = escape_graphql_string(&request.node_did);
+        let session_id = escape_graphql_string(&request.session_id);
+        let query = format!(
+            r#"{{
+            SessionHydrationRequest(filter: {{
+                request_key: {{ _eq: "{request_key}" }},
+                requester_did: {{ _eq: "{requester_did}" }},
+                node_did: {{ _eq: "{node_did}" }},
+                session_id: {{ _eq: "{session_id}" }},
+                status: {{ _eq: "pending" }}
+            }}) {{ _docID }}
+        }}"#
+        );
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query pending session hydration request identity",
+        )
+        .await?;
+        Ok(!rows::<serde_json::Value>(&response, "SessionHydrationRequest")?.is_empty())
+    }
+
     async fn mark_rejected(&self, request: &HydrationRequestRow, detail: &str) -> Result<()> {
         let receipt = self
             .signed_receipt(request, "rejected", detail, Vec::new())
@@ -995,6 +1029,12 @@ mod tests {
         selection_loads: std::sync::atomic::AtomicUsize,
         served: std::sync::Mutex<Vec<(String, usize)>>,
         rejected: std::sync::Mutex<Vec<(String, String)>>,
+        /// `None` means every cached row is still pending. `Some(keys)` limits
+        /// that to the listed request keys, modelling a served, rejected or
+        /// replaced row.
+        pending_identity: Option<BTreeSet<String>>,
+        /// When set, the pending-identity read fails instead of answering.
+        pending_identity_error: Option<String>,
     }
 
     struct AuthorizationCheckBarrier {
@@ -1110,6 +1150,18 @@ mod tests {
                 .push((request.request_key.clone(), detail.to_string()));
             Ok(())
         }
+        /// The in-memory store models the pending row as still present unless a
+        /// test says otherwise; `pending_identity` is the seam for the stale-row
+        /// cases.
+        async fn still_pending(&self, request: &HydrationRequestRow) -> Result<bool> {
+            if let Some(error) = &self.pending_identity_error {
+                anyhow::bail!("{error}");
+            }
+            Ok(self
+                .pending_identity
+                .as_ref()
+                .is_none_or(|pending| pending.contains(&request.request_key)))
+        }
     }
 
     #[async_trait]
@@ -1224,6 +1276,8 @@ mod tests {
             selection_loads: std::sync::atomic::AtomicUsize::new(0),
             served: std::sync::Mutex::new(Vec::new()),
             rejected: std::sync::Mutex::new(Vec::new()),
+            pending_identity: None,
+            pending_identity_error: None,
         }
     }
 
@@ -1699,6 +1753,8 @@ mod tests {
             selection_loads: std::sync::atomic::AtomicUsize::new(0),
             served: std::sync::Mutex::new(Vec::new()),
             rejected: std::sync::Mutex::new(Vec::new()),
+            pending_identity: None,
+            pending_identity_error: None,
         };
         let delivery = RecordingDelivery {
             pushed: std::sync::Mutex::new(Vec::new()),

@@ -17,6 +17,10 @@ struct Store {
     checks: AtomicUsize,
     fail_write: AtomicBool,
     committed: Mutex<Vec<FileImageSelection>>,
+    /// `None` models the cached row still being pending; `Some` answers with the
+    /// configured result, including an error.
+    pending: Option<Result<bool>>,
+    pending_checks: AtomicUsize,
 }
 
 #[async_trait]
@@ -26,6 +30,15 @@ impl ImageRequestStore for Store {
     }
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>> {
         Ok(vec![self.demand.clone()])
+    }
+    async fn still_pending(&self, row: &ImageDemandRow) -> Result<bool> {
+        assert_eq!(row, &self.demand, "the preflight reads the cached row");
+        self.pending_checks.fetch_add(1, Ordering::SeqCst);
+        match &self.pending {
+            None => Ok(true),
+            Some(Ok(pending)) => Ok(*pending),
+            Some(Err(error)) => Err(anyhow::anyhow!("{error}")),
+        }
     }
     async fn admission(&self, _: &FileImageDemand) -> Result<LoadedHydrationAdmission> {
         Ok(self.admission.clone())
@@ -147,6 +160,8 @@ fn fixture(selection: FileImageSelection, authorized: Vec<bool>) -> (Store, Deli
             checks: AtomicUsize::new(0),
             fail_write: AtomicBool::new(false),
             committed: Mutex::new(Vec::new()),
+            pending: None,
+            pending_checks: AtomicUsize::new(0),
         },
         Delivery {
             attempts: AtomicUsize::new(0),

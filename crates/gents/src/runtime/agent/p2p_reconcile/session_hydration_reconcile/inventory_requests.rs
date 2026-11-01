@@ -51,12 +51,43 @@ async fn refuse(
     ))
 }
 
+/// Whether the cached row's exact physical identity is still `pending` at read
+/// time. `load_request_in_txn` already returns `Err` for an ambiguous row, an
+/// invalid row or a demand mismatch, so those stay `Err` here rather than
+/// becoming `Ok(false)`. A same-key replacement with a new `_docID` is not the
+/// cached row and must not be served as it.
+async fn still_pending(store: &GraphqlHydrationStore, row: &InventoryRequestRow) -> Result<bool> {
+    let demand = &row.demand;
+    let current = ConfigAccess::transact_local_readonly(
+        &store.node,
+        None,
+        "file_inventory.pending_identity",
+        |txn| {
+            Box::pin(crate::file_inventory::requests::load_request_in_txn(
+                txn, demand,
+            ))
+        },
+    )
+    .await?;
+    Ok(current.is_some_and(|current| {
+        current.document_id == row.document_id
+            && current.request_key == row.request_key
+            && current.demand == row.demand
+            && current.status == "pending"
+    }))
+}
+
 pub(super) async fn serve_inventory(
     store: &GraphqlHydrationStore,
     delivery: &dyn HydrationDelivery,
     row: &InventoryRequestRow,
 ) -> Result<()> {
     let demand = &row.demand;
+    // A cached row may have been served, refused or replaced since discovery.
+    // Revalidate before the prior-reply replay, delivery and commit below.
+    if !still_pending(store, row).await? {
+        return Ok(());
+    }
     if let Some(prior) =
         crate::file_inventory::load_recorded_reply(&store.node, demand, store.identity.as_ref())
             .await?
