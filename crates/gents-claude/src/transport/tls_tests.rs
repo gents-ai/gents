@@ -144,17 +144,30 @@ async fn untrusted_certificate_is_a_tls_error() {
 #[tokio::test]
 async fn wrong_server_name_is_a_tls_error() {
     let (mut t, _seen, _) = tls_server().await;
-    t.host = "127.0.0.2".into();
+    // The certificate names localhost, 127.0.0.1 and ::1. Reach the same
+    // server under another name through a CONNECT tunnel: only 127.0.0.1 is a
+    // loopback address on every OS, so no other loopback name would do.
+    let (proxy_port, _connect) = tunnel_to(format!("127.0.0.1:{}", t.port)).await;
+    t.host = "wrong-name.invalid".into();
+    let c = Client::new(ClientOptions {
+        roots: Roots::Custom(vec![ca()]),
+        proxy: Some(Proxy {
+            host: "127.0.0.1".into(),
+            port: proxy_port,
+            authorization: None,
+        }),
+        ..ClientOptions::default()
+    })
+    .unwrap();
     assert!(matches!(
-        client_trusting_ca().send(&t, &head(0), b"").await,
+        c.send(&t, &head(0), b"").await,
         Err(TransportError::Tls(_))
     ));
 }
 
-#[tokio::test]
-async fn tls_exchange_runs_through_a_connect_tunnel() {
-    let (t, mut seen, _) = tls_server().await;
-    let upstream = format!("127.0.0.1:{}", t.port);
+/// A CONNECT proxy on loopback that tunnels every request to `upstream` and
+/// hands back the CONNECT head it read.
+async fn tunnel_to(upstream: String) -> (u16, tokio::sync::oneshot::Receiver<Vec<u8>>) {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_port = l.local_addr().unwrap().port();
     let (conn_tx, conn_rx) = tokio::sync::oneshot::channel();
@@ -166,13 +179,20 @@ async fn tls_exchange_runs_through_a_connect_tunnel() {
             let n = s.read(&mut tmp).await.unwrap();
             got.extend_from_slice(&tmp[..n]);
         }
-        conn_tx.send(got).unwrap();
+        let _ = conn_tx.send(got);
         let mut up = TcpStream::connect(upstream).await.unwrap();
         s.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
             .await
             .unwrap();
         let _ = tokio::io::copy_bidirectional(&mut s, &mut up).await;
     });
+    (proxy_port, conn_rx)
+}
+
+#[tokio::test]
+async fn tls_exchange_runs_through_a_connect_tunnel() {
+    let (t, mut seen, _) = tls_server().await;
+    let (proxy_port, conn_rx) = tunnel_to(format!("127.0.0.1:{}", t.port)).await;
     let c = Client::new(ClientOptions {
         roots: Roots::Custom(vec![ca()]),
         proxy: Some(Proxy {
