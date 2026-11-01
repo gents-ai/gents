@@ -12,7 +12,7 @@ test("a read-only node's pages offer nothing that would change its settings", as
   const review = page.getByRole("alertdialog");
   if (await review.isVisible())
     await review.getByRole("button", { name: "Switch node" }).click();
-  await page.getByRole("link", { name: "Amy configuration" }).click();
+  await page.getByLabel("Active node", { exact: true }).click();
 
   await expect(
     page.getByRole("status").filter({ hasText: "Read-only here" }),
@@ -20,10 +20,19 @@ test("a read-only node's pages offer nothing that would change its settings", as
   await expect(page.getByText("Display name is required")).toBeHidden();
   await expect(page.getByRole("button", { name: "Save" })).toBeHidden();
 
-  await page
-    .getByRole("link", { name: /^Tasks/ })
-    .first()
-    .click();
+  /* a narrow window picks sections from a select */
+  const section = page.getByRole("combobox", { name: "Section" });
+  if (await section.isVisible()) {
+    await section.click();
+    await page.getByRole("option", { name: /^Tasks/ }).click();
+  } else {
+    /* off the hover nav, which stays open while the pointer is inside it */
+    await page.mouse.move(page.viewportSize()!.width - 30, 400);
+    await page
+      .getByRole("link", { name: /^Tasks/ })
+      .first()
+      .click();
+  }
   /* in the page, but not offered */
   const create = page.locator("[data-readonly-hide]").filter({ hasText: /New/ });
   await expect(create).toHaveCount(1);
