@@ -233,6 +233,7 @@ export function AgentHoverCard({
       )
     : [];
   const summary = description || b.description || undefined;
+  const tasks = deployment.tasks.filter((t) => t.agentId === b.agentId).length;
   return (
     <HoverCard open={open} onOpenChange={setOpen}>
       <HoverCardTrigger delay={500} render={children} onFocus={() => setOpen(true)} />
@@ -309,6 +310,11 @@ export function AgentHoverCard({
             </Line>
           )}
           <Line label="Sessions">{env?.sessionCount ?? 0}</Line>
+          {tasks > 0 && (
+            <Line label="Tasks" to={nodeSection(deployment.nodeDid, "tasks")}>
+              {tasks}
+            </Line>
+          )}
         </dl>
         <div className="mt-3 flex items-center gap-4 text-xs">
           <NewSessionWith
