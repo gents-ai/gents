@@ -87,7 +87,8 @@ function RailNode({ route }: { route: Route }) {
         aria-current={route.name === "agent" ? "page" : undefined}
         className={cn(
           "relative mb-2 block size-7 rounded-full ring-1 ring-border ring-offset-2 ring-offset-background transition-shadow hover:ring-muted-foreground",
-          route.name === "agent" && "ring-2 ring-ink",
+          /* the node's own pages and the list of nodes are both its place */
+          (route.name === "agent" || route.name === "nodes") && "ring-2 ring-ink",
         )}
       >
         <NodeAvatar name={nodeName ?? "Node"} className="size-7" />
