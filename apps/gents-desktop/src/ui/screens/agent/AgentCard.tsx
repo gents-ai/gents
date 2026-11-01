@@ -51,25 +51,35 @@ function pulse(
 
 /* a card under the node's header: one thing about the node right now, and
    the way to where it is set */
-function Summary({
+/** A summary card under a page's header; with `to`, the whole card leads
+    there. Node, agent and task pages share them. */
+export function Summary({
   label,
   to,
   children,
 }: {
   label: string;
-  to: Route;
+  to?: Route;
   children: ReactNode;
 }) {
-  return (
-    <a
-      href={href(to)}
-      className="group/summary grid min-w-0 gap-1 rounded-xl bg-raised/50 px-3 py-2.5 transition-colors hover:bg-raised focus-visible:bg-raised focus-visible:outline-none"
-    >
+  const content = (
+    <>
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center gap-2 truncate text-sm underline-offset-2 group-hover/summary:underline group-focus-visible/summary:underline">
         {children}
       </span>
+    </>
+  );
+  const look = "group/summary grid min-w-0 gap-1 rounded-xl bg-raised/50 px-3 py-2.5";
+  return to ? (
+    <a
+      href={href(to)}
+      className={`${look} transition-colors hover:bg-raised focus-visible:bg-raised focus-visible:outline-none`}
+    >
+      {content}
     </a>
+  ) : (
+    <div className={look}>{content}</div>
   );
 }
 
