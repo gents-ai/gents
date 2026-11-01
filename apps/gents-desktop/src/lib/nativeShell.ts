@@ -66,7 +66,8 @@ export function setWindowTitle(title: string) {
   void getCurrentWindow().setTitle(title);
 }
 
-export function setWindowTheme(theme: "light" | "dark") {
+/** null leaves the window to follow the system's appearance */
+export function setWindowTheme(theme: "light" | "dark" | null) {
   void getCurrentWindow()
     .setTheme(theme)
     .catch(() => {});

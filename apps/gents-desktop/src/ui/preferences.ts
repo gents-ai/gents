@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
 
 import { browserStorage, storedStrings } from "./lib/storage";
-import { applyTheme, systemTheme, type ThemePreference } from "./theme";
+import { applyTheme, systemTheme, type Theme, type ThemePreference } from "./theme";
 import { ZOOM_STEPS } from "./lib/zoom";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
@@ -30,7 +30,7 @@ export type Preferences = {
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
 
 const initial = (): Preferences => ({
-  theme: systemTheme(),
+  theme: "system",
   nav: "hover",
   zoom: 1,
   sentTurn: "anchor",
@@ -48,7 +48,9 @@ export function restorePreferences(
   >;
   return {
     theme:
-      saved.theme === "light" || saved.theme === "dark" ? saved.theme : defaults.theme,
+      saved.theme === "system" || saved.theme === "light" || saved.theme === "dark"
+        ? saved.theme
+        : defaults.theme,
     nav:
       typeof saved.nav === "string" && NAV_MODES.includes(saved.nav)
         ? (saved.nav as NavMode)
@@ -130,7 +132,22 @@ export function usePreferences<T>(select: (preferences: Preferences) => T): T {
   return useStore(store, select);
 }
 
-export const useTheme = () => usePreferences((p) => p.theme);
+/* the system's appearance, kept current so a page following it changes as
+   the system does */
+const system = createStore<{ theme: Theme }>(() => ({ theme: systemTheme() }));
+if (typeof matchMedia === "function")
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    system.setState({ theme: systemTheme() });
+    if (store.getState().theme === "system") applyTheme("system");
+  });
+
+/** The theme drawn: the chosen one, or the system's while following it. */
+export const useTheme = (): Theme => {
+  const chosen = usePreferences((p) => p.theme);
+  const shown = useStore(system, (s) => s.theme);
+  return chosen === "system" ? shown : chosen;
+};
+export const useThemePreference = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
 export const zoomLevel = () => store.getState().zoom;
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
