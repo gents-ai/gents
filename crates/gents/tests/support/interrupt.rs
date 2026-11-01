@@ -278,6 +278,45 @@ async fn create_runtime_request_inner(
     lookup_request_doc_id(node, request_id).await
 }
 
+/// Pin an explicit user title before the first request. The runtime spawns
+/// auxiliary title inference only while `session_needs_generated_title` holds
+/// (no title, a placeholder, or empty text), and that inference writes a
+/// sibling `title-audit` `AgentRequest` into the same session. A receipt that
+/// enumerates a session's requests must therefore pin the title first.
+pub async fn ensure_user_titled_session(
+    node: &EmbeddedNode,
+    node_did: &str,
+    agent_id: &str,
+    session_id: &str,
+    title: &str,
+) {
+    if super::snapshots::fetch_session_snapshot(node, session_id)
+        .await
+        .is_some()
+    {
+        return;
+    }
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut session = super::session_document_in_scope(node_did, session_id, agent_id, &now);
+    session.requester_did = Some(node_did.to_owned());
+    session.title = Some(gents_protocol::session::SessionTitle {
+        text: title.into(),
+        source: gents_protocol::session::SessionTitleSource::User,
+    });
+    super::create_session_document(node, &session).await;
+    let stored = super::snapshots::fetch_session_snapshot(node, session_id)
+        .await
+        .expect("pinned fixture session is missing");
+    assert_eq!(
+        stored
+            .title
+            .as_ref()
+            .map(|title| (title.text.as_str(), title.source)),
+        Some((title, gents_protocol::session::SessionTitleSource::User)),
+        "fixture session must keep its explicit user title"
+    );
+}
+
 async fn ensure_generated_session(
     node: &EmbeddedNode,
     node_did: &str,

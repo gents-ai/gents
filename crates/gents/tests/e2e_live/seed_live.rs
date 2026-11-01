@@ -7,7 +7,7 @@ use gents::store::graphql::escape_graphql_string;
 use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
 use serde::Deserialize;
 
-use crate::support::interrupt::create_runtime_request;
+use crate::support::interrupt::{create_runtime_request, ensure_user_titled_session};
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
@@ -56,31 +56,60 @@ async fn live_seeds_reach_the_provider() {
     let profile_id = default_inference_profile_id_for_agent(&agent_id);
     configure_seed_and_compaction(&db.node, &node_did, &agent_id, &profile_id).await;
 
+    // Each session is titled before its first request so the runtime does not
+    // spawn auxiliary title inference, whose `title-audit` request would be a
+    // sibling the receipt's session request set must also list.
     let profile_request_id = "req-live-profile-seed";
-    create_runtime_request(
+    let profile_session_id = "session-live-profile-seed";
+    ensure_user_titled_session(
+        &db.node,
+        &node_did,
+        &agent_id,
+        profile_session_id,
+        "Live profile seed",
+    )
+    .await;
+    let profile_request_doc_id = create_runtime_request(
         &db.node,
         &node_did,
         &agent_id,
         profile_request_id,
-        "session-live-profile-seed",
+        profile_session_id,
         "Reply with the single lowercase word: profile",
     )
     .await;
 
     let second_request_id = "req-live-second-profile-seed";
-    create_runtime_request(
+    let second_session_id = "session-live-second-profile-seed";
+    ensure_user_titled_session(
+        &db.node,
+        &node_did,
+        &agent_id,
+        second_session_id,
+        "Live second profile seed",
+    )
+    .await;
+    let second_request_doc_id = create_runtime_request(
         &db.node,
         &node_did,
         &agent_id,
         second_request_id,
-        "session-live-second-profile-seed",
+        second_session_id,
         "Reply with the single lowercase word: second",
     )
     .await;
 
     let compaction_request_id = "req-live-compaction-seed";
     let compaction_session_id = "session-live-compaction-seed";
-    create_runtime_request(
+    ensure_user_titled_session(
+        &db.node,
+        &node_did,
+        &agent_id,
+        compaction_session_id,
+        "Live compaction seed",
+    )
+    .await;
+    let compaction_request_doc_id = create_runtime_request(
         &db.node,
         &node_did,
         &agent_id,
@@ -152,23 +181,40 @@ async fn live_seeds_reach_the_provider() {
     }
 
     let receipts = [
-        (profile_request_id, "session-live-profile-seed", false),
-        (second_request_id, "session-live-second-profile-seed", false),
-        (compaction_request_id, compaction_session_id, true),
+        (
+            profile_request_id,
+            profile_session_id,
+            profile_request_doc_id,
+            false,
+        ),
+        (
+            second_request_id,
+            second_session_id,
+            second_request_doc_id,
+            false,
+        ),
+        (
+            compaction_request_id,
+            compaction_session_id,
+            compaction_request_doc_id,
+            true,
+        ),
     ]
     .into_iter()
-    .map(|(request_id, session_id, require_summary)| ReceiptRequest {
-        node_did: node_did.clone(),
-        requester_did: node_did.clone(),
-        agent_id: agent_id.clone(),
-        session_id: session_id.to_owned(),
-        request_id: request_id.to_owned(),
-        request_doc_id: None,
-        lifecycle_state: "completed".to_owned(),
-        ordinary: expected_call.clone(),
-        summary: require_summary.then(|| expected_call.clone()),
-        require_summary,
-    })
+    .map(
+        |(request_id, session_id, request_doc_id, require_summary)| ReceiptRequest {
+            node_did: node_did.clone(),
+            requester_did: node_did.clone(),
+            agent_id: agent_id.clone(),
+            session_id: session_id.to_owned(),
+            request_id: request_id.to_owned(),
+            request_doc_id: Some(request_doc_id),
+            lifecycle_state: "completed".to_owned(),
+            ordinary: expected_call.clone(),
+            summary: require_summary.then(|| expected_call.clone()),
+            require_summary,
+        },
+    )
     .collect::<Vec<_>>();
     export_live_receipts(
         &gents::ConfigAccess::local(db.node.clone()),

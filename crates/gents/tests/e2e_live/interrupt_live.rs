@@ -29,8 +29,8 @@ use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
 use crate::support::interrupt::{
-    create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
-    wait_for_runtime_ready, BootedAgent,
+    create_runtime_request, ensure_user_titled_session, wait_for_inference_call_state,
+    wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
 };
 use crate::support::live_inference::{live_target, InferenceTarget};
 use crate::support::live_receipt::{
@@ -76,6 +76,17 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
 
     let request_id = "req-live-openai-interrupt";
     let session_id = "session-live-openai-interrupt";
+    // Pin the title before the first request: auxiliary title inference would
+    // otherwise add a `title-audit` sibling request to this session, which the
+    // receipt's session request set must also list.
+    ensure_user_titled_session(
+        &db.node,
+        &agent.node_did,
+        LIVE_AGENT_ID,
+        session_id,
+        "Live interrupt mid-stream",
+    )
+    .await;
     let request_doc_id = create_runtime_request(
         &db.node,
         agent.node_did.as_str(),
