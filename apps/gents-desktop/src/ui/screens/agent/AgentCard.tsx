@@ -7,6 +7,7 @@ import type {
 import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { Switch } from "@gents/ui/components/switch";
 import { Pencil } from "lucide-react";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { href, type Route } from "@/lib/router";
@@ -152,6 +153,9 @@ export function AgentCard({
     onTags: () => void;
     controls: string;
     tags: string[];
+    /** switched here, saved with the rest of the form */
+    enabled: boolean;
+    onEnabled: (enabled: boolean) => void;
   };
 }) {
   const {
@@ -254,7 +258,22 @@ export function AgentCard({
             </ul>
           )}
         </div>
-        {isLocalNode(deployment, homeDid) && <RunNodeButton />}
+        <div className="flex shrink-0 items-center gap-3">
+          {edit && (
+            <label
+              className="flex items-center gap-2.5 text-sm"
+              title="A disabled node accepts no requests."
+            >
+              {edit.enabled ? "Enabled" : "Disabled"}
+              <Switch
+                aria-label="Enabled"
+                checked={edit.enabled}
+                onCheckedChange={edit.onEnabled}
+              />
+            </label>
+          )}
+          {isLocalNode(deployment, homeDid) && <RunNodeButton />}
+        </div>
       </div>
       <div className="grid gap-2 @xl:grid-cols-3">
         <Summary label="Activity" to={{ name: "sessions" }}>
