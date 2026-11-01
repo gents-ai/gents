@@ -66,9 +66,9 @@ const sessions = [
   }),
 ];
 
-function showNav() {
+function showNav(list: SessionSummary[] = sessions) {
   renderIn(
-    testApp({ deployments: [node({ sessions })] }),
+    testApp({ deployments: [node({ sessions: list })] }),
     <TooltipProvider>
       <NavPanel route={{ name: "sessions" }} settings={null} syncRow={false} />
     </TooltipProvider>,
@@ -113,6 +113,32 @@ describe("the side nav's recent sessions filter", () => {
 
     await waitFor(() => expect(recentTitles()).toEqual(["Worker", "Busy", "Done"]));
     expect(menu).toHaveClass("text-foreground");
+    /* marked by its starter, not nested; the others unmarked */
+    expect(screen.getByRole("img", { name: "Started by Busy" })).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: /^Started by/ })).toHaveLength(1);
+  });
+
+  it("says another session started a sub-session whose starter isn't listed", async () => {
+    const { u } = showNav([
+      ...sessions,
+      summary({
+        sessionId: "orphan",
+        title: "Orphan",
+        startedBy: {
+          nodeDid: deployment.nodeDid,
+          sessionId: "gone",
+          requesterDid: null,
+          causeRequestDocId: "request-gone",
+        },
+      }),
+    ]);
+    await u.click(screen.getByRole("button", { name: "Recent sessions options" }));
+    await u.click(
+      await screen.findByRole("menuitemcheckbox", { name: "Show sub-sessions" }),
+    );
+    expect(
+      await screen.findByRole("img", { name: "Started by another session" }),
+    ).toBeInTheDocument();
   });
 
   it("offers every agent on the node, those without recent sessions too", async () => {

@@ -1,6 +1,14 @@
 import { createContext } from "react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, Inbox, Lock, Plus, ScrollText, Waypoints } from "lucide-react";
+import {
+  ChevronRight,
+  CornerDownRight,
+  Inbox,
+  Lock,
+  Plus,
+  ScrollText,
+  Waypoints,
+} from "lucide-react";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
@@ -10,6 +18,8 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { ListedSessionStatus } from "@/screens/SessionStatus";
+import { Hint } from "@/screens/Hint";
+import { parentOf, useFleet } from "@/hooks/useFleet";
 import { SyncHealth } from "./SyncHealth";
 import { RecentFilter } from "./RecentFilter";
 import { listViews, recentDefault, useListViews } from "./listViews";
@@ -364,24 +374,37 @@ function SessionLink({
   session: SessionSummary;
   current: string | null;
 }) {
-  return (
-    <li>
-      <a
-        href={href({ name: "session", sessionId: c.sessionId, nodeDid: c.nodeDid })}
-        aria-current={current === c.sessionId ? "page" : undefined}
-        className={cn(
-          "flex h-8 items-center gap-2.5 rounded-lg px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-          current === c.sessionId && "text-foreground",
+  const starter = useFleet((s) => (c.startedBy ? parentOf(s, c) : null));
+  /* a sub-session, shown in a list ordered by time: marked, not nested */
+  const startedBy = c.startedBy
+    ? `Started by ${starter ? (starter.title ?? "Untitled session") : "another session"}`
+    : null;
+  const link = (
+    <a
+      href={href({ name: "session", sessionId: c.sessionId, nodeDid: c.nodeDid })}
+      aria-current={current === c.sessionId ? "page" : undefined}
+      className={cn(
+        "flex h-8 items-center gap-2.5 rounded-lg px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        current === c.sessionId && "text-foreground",
+      )}
+    >
+      <ListedSessionStatus session={c} />
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        {startedBy && (
+          <CornerDownRight
+            className="size-3 shrink-0 text-muted-foreground/70"
+            role="img"
+            aria-label={startedBy}
+          />
         )}
-      >
-        <ListedSessionStatus session={c} />
-        <span className="min-w-0 flex-1 truncate">{c.title ?? "Untitled session"}</span>
-        {c.unreadableReason && (
-          <Lock className="size-3 shrink-0" role="img" aria-label={c.unreadableReason}>
-            <title>{c.unreadableReason}</title>
-          </Lock>
-        )}
-      </a>
-    </li>
+        <span className="min-w-0 truncate">{c.title ?? "Untitled session"}</span>
+      </span>
+      {c.unreadableReason && (
+        <Lock className="size-3 shrink-0" role="img" aria-label={c.unreadableReason}>
+          <title>{c.unreadableReason}</title>
+        </Lock>
+      )}
+    </a>
   );
+  return <li>{startedBy ? <Hint label={startedBy}>{link}</Hint> : link}</li>;
 }
