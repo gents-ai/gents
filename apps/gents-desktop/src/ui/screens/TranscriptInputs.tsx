@@ -1,6 +1,8 @@
-import type { ReactNode } from "react";
+import { useContext, useRef, useState, type ReactNode } from "react";
 import {
+  ArrowUpRight,
   Bot,
+  ChevronDown,
   Clock,
   FileText,
   Play,
@@ -16,6 +18,7 @@ import type {
   RenderedTimelineItem,
   RequestLifecycleState,
   RequestOriginView,
+  RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../hooks/fleetStore";
 import { useSelectedNode } from "@/hooks/useClient";
@@ -26,11 +29,19 @@ type Reconstruction = Extract<
   { kind: "automatedInput" }
 >["reconstruction"];
 import { Badge } from "@gents/ui/components/badge";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@gents/ui/components/collapsible";
 import { UserMessage } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { holdRow } from "@/lib/scroll";
+import { GroupStateContext } from "./ActivityGroup";
 import { Markdown } from "./Markdown";
+import { spoken } from "./tool-summary";
+import { completionOf, type BackgroundResult } from "./transcript-groups";
 
 export function pendingInputState(
   lifecycleState: RequestLifecycleState | null | undefined,
@@ -60,19 +71,27 @@ function triggerName(triggerId: string, node: NodeView | null) {
   return trigger?.config.display_name ?? task?.name ?? triggerId;
 }
 
+type SessionMessageOrigin = Extract<RequestOriginView, { kind: "sessionMessage" }>;
+
+function senderName(
+  origin: SessionMessageOrigin,
+  node: NodeView | null,
+  senderTitle: string | null,
+): string {
+  if (senderTitle) return senderTitle;
+  if (origin.senderSessionId || origin.senderNodeDid === node?.nodeDid)
+    return "another session";
+  return "another node";
+}
+
 export function originLabel(
   origin: RequestOriginView,
   node: NodeView | null,
   senderTitle: string | null,
 ): string {
   switch (origin.kind) {
-    case "sessionMessage": {
-      if (senderTitle) return `Message from ${senderTitle}`;
-      if (origin.senderSessionId) return "Message from another session";
-      return origin.senderNodeDid === node?.nodeDid
-        ? "Message from another session"
-        : "Message from another node";
-    }
+    case "sessionMessage":
+      return `From ${senderName(origin, node, senderTitle)}`;
     case "trigger": {
       const name = triggerName(origin.triggerId, node);
       return origin.triggerKind === "schedule"
@@ -86,12 +105,67 @@ export function originLabel(
         ? `Goal continuation · ${origin.sequence}`
         : "Goal continuation";
     case "backgroundCompletion":
-      return "Background activity";
+      return "Background result";
   }
 }
 
+/** inputs with nothing for a person to read: one line, their model input
+    behind it */
+export const oneLine = (origin: RequestOriginView) =>
+  origin.kind === "backgroundCompletion" || origin.kind === "goalContinuation";
+
+/** a message's text without the routing line the runtime writes above it
+    for the model */
+export function withoutRoutingHeader(content: string): string {
+  const end = content.indexOf("\n");
+  const first = (end === -1 ? content : content.slice(0, end)).trimEnd();
+  if (!first.startsWith("[message ") || !first.endsWith("]")) return content;
+  return end === -1 ? "" : content.slice(end + 1).replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
+const OUTCOMES: Record<string, string> = {
+  failed: "failed",
+  error: "failed",
+  cancelled: "cancelled",
+  canceled: "cancelled",
+  timed_out: "timed out",
+};
+
+type BackgroundName = { subject: string; outcome: string };
+
+/** the call a background result reports on, by what it ran when that call
+    is drawn, and how it ended */
+export function backgroundName(
+  content: string | null | undefined,
+  call: RenderedToolCallView | null,
+): BackgroundName | null {
+  const completion = completionOf(content);
+  if (!completion) return null;
+  const p = call?.presentation;
+  const subject =
+    p?.kind === "command"
+      ? spoken(p.command)
+      : p?.kind === "agent" && p.name
+        ? p.name
+        : completion.toolName;
+  return {
+    subject: subject || "call",
+    outcome: OUTCOMES[completion.status] ?? "finished",
+  };
+}
+
+export const backgroundText = (named: BackgroundName | null) =>
+  named ? `Background ${named.subject} ${named.outcome}` : "Background result";
+
+/** the line a run of background results folds into */
+export function backgroundRunLabel(results: readonly BackgroundResult[]): string {
+  const named = results.flatMap((r) => backgroundName(r.item.content, r.call) ?? []);
+  const count = named.length || results.length;
+  return count === 1 ? backgroundText(named[0] ?? null) : `${count} background results`;
+}
+
 function OriginIcon({ origin }: { origin: RequestOriginView }) {
-  const className = "size-4 shrink-0";
+  const className = "size-3.5 shrink-0";
   switch (origin.kind) {
     case "sessionMessage":
       return <Bot className={className} />;
@@ -185,16 +259,94 @@ export function unavailableReason(reconstruction: Reconstruction | undefined) {
   }
 }
 
+/* kept with the transcript's row state when there is one, so a row the
+   list stops drawing comes back as the reader left it */
+function useKeptOpen(key: string | null): [boolean, (open: boolean) => void] {
+  const rows = useContext(GroupStateContext);
+  const [local, setLocal] = useState(false);
+  if (!rows || !key) return [local, setLocal];
+  return [rows.folded[key] === false, (open) => rows.setFolded(key, !open)];
+}
+
+const LINE =
+  "flex min-w-0 items-center gap-3 px-2 py-1 text-left text-sm text-muted-foreground";
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <ChevronDown
+      aria-hidden
+      className={cn(
+        "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+        !open && "-rotate-90",
+      )}
+    />
+  );
+}
+
+function Title({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+      {icon}
+      <span className="min-w-0 truncate">{children}</span>
+    </span>
+  );
+}
+
+function BackgroundTitle({ named }: { named: BackgroundName | null }) {
+  if (!named) return <>Background result</>;
+  return (
+    <>
+      Background <span className="font-mono text-xs">{named.subject}</span>{" "}
+      {named.outcome}
+    </>
+  );
+}
+
+function Sender({ sessionId, name }: { sessionId: string | null; name: string }) {
+  if (!sessionId) return <>From {name}</>;
+  return (
+    <>
+      From{" "}
+      <a
+        href={href({ name: "session", sessionId })}
+        className="underline decoration-border underline-offset-4 hover:text-foreground"
+      >
+        {name}
+        <ArrowUpRight aria-hidden className="ml-0.5 inline size-3 align-[-1px]" />
+      </a>
+    </>
+  );
+}
+
+function ModelInput({ content }: { content: string | null | undefined }) {
+  return (
+    <CollapsibleContent className="mt-1 ml-4 border-l border-border py-1 pr-2 pl-4">
+      <pre
+        className="max-h-96 overflow-auto font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
+        data-testid="automated-input-content"
+      >
+        {content ?? ""}
+      </pre>
+    </CollapsibleContent>
+  );
+}
+
 export function AutomatedInput({
   origin,
   content,
   reconstruction,
   state = null,
+  stateKey = null,
+  call = null,
 }: {
   origin: RequestOriginView;
   content: string | null | undefined;
   reconstruction?: Reconstruction;
   state?: string | null;
+  /** the row its open model input is kept under */
+  stateKey?: string | null;
+  /** the background call a result reports on, when drawn */
+  call?: RenderedToolCallView | null;
 }) {
   const unavailable = unavailableReason(reconstruction);
   const node = useSelectedNode();
@@ -203,67 +355,154 @@ export function AutomatedInput({
   const senderTitle = useFleet((fleet) =>
     senderSessionId ? (fleet.bySessionId[senderSessionId]?.title ?? null) : null,
   );
-  const label = originLabel(origin, node, senderTitle);
-  const body =
-    origin.kind === "sessionMessage" ? (origin.displayBody ?? content) : content;
-  const control =
-    origin.kind === "backgroundCompletion" || origin.kind === "goalContinuation";
+  const [open, setOpen] = useKeptOpen(stateKey && `input:${stateKey}`);
+  const root = useRef<HTMLElement>(null);
+  const toggle = (next: boolean) => {
+    holdRow(root.current);
+    setOpen(next);
+  };
+  const named =
+    origin.kind === "backgroundCompletion" ? backgroundName(content, call) : null;
+  const label = named ? backgroundText(named) : originLabel(origin, node, senderTitle);
+  const title =
+    origin.kind === "backgroundCompletion" ? (
+      <BackgroundTitle named={named} />
+    ) : origin.kind === "sessionMessage" ? (
+      <Sender
+        sessionId={senderSessionId}
+        name={senderName(origin, node, senderTitle)}
+      />
+    ) : (
+      label
+    );
+  const body = oneLine(origin)
+    ? null
+    : origin.kind === "sessionMessage"
+      ? (origin.displayBody ?? withoutRoutingHeader(content ?? ""))
+      : content;
+  const icon = <OriginIcon origin={origin} />;
+  const badge = state && (
+    <Badge variant="outline" className="shrink-0 font-normal">
+      {state}
+    </Badge>
+  );
+  const action = `${open ? "Hide" : "Show"} model input`;
   return (
     <section
+      ref={root}
       data-testid="automated-input"
       aria-label={label}
-      className="min-w-0 rounded-xl border border-border/60 px-4 py-3"
+      className="min-w-0"
     >
-      <header className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-        <OriginIcon origin={origin} />
-        <span className="min-w-0 flex-1 break-words font-medium">{label}</span>
-        {senderSessionId && (
-          <a
-            href={href({ name: "session", sessionId: senderSessionId })}
-            className="underline decoration-border underline-offset-4 hover:text-foreground"
+      <Collapsible open={open && !unavailable} onOpenChange={toggle}>
+        {unavailable ? (
+          <div className={LINE}>
+            <span className="size-4 shrink-0" />
+            <Title icon={icon}>{title}</Title>
+            {badge}
+          </div>
+        ) : oneLine(origin) ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <CollapsibleTrigger
+              aria-label={`${action}: ${label}`}
+              className={cn(LINE, "flex-1 cursor-pointer hover:text-foreground")}
+            >
+              <span className="grid size-4 shrink-0 place-items-center">
+                <Chevron open={open} />
+              </span>
+              <Title icon={icon}>{title}</Title>
+            </CollapsibleTrigger>
+            {badge}
+          </div>
+        ) : (
+          <div className={LINE}>
+            <CollapsibleTrigger
+              aria-label={action}
+              className="grid size-4 shrink-0 cursor-pointer place-items-center rounded-sm hover:text-foreground"
+            >
+              <Chevron open={open} />
+            </CollapsibleTrigger>
+            <Title icon={icon}>{title}</Title>
+            {badge}
+          </div>
+        )}
+        {unavailable ? (
+          <p
+            className="pr-2 pl-9 text-sm text-muted-foreground"
+            data-testid="automated-input-unavailable"
           >
-            Open sender
-          </a>
+            {unavailable}
+          </p>
+        ) : (
+          <>
+            {body && (
+              <div
+                className="prose-app pr-2 pl-9 break-words"
+                data-testid="automated-input-body"
+              >
+                <Markdown>{body}</Markdown>
+              </div>
+            )}
+            <ModelInput content={content} />
+          </>
         )}
-        {state && (
-          <Badge variant="outline" className="font-normal">
-            {state}
-          </Badge>
-        )}
-      </header>
-      {unavailable ? (
-        <p
-          className="mt-2 text-sm text-muted-foreground"
-          data-testid="automated-input-unavailable"
+      </Collapsible>
+    </section>
+  );
+}
+
+/** Background results that arrived with nothing between them: one line,
+    opening to each with its own model input. */
+export function BackgroundResults({ results }: { results: BackgroundResult[] }) {
+  const first = results[0]!;
+  const [open, setOpen] = useKeptOpen(`background:${first.item.itemKey}`);
+  const root = useRef<HTMLElement>(null);
+  if (results.length === 1)
+    return (
+      <AutomatedInput
+        origin={first.item.origin}
+        content={first.item.content}
+        reconstruction={first.item.reconstruction}
+        stateKey={first.item.itemKey}
+        call={first.call}
+      />
+    );
+  const label = backgroundRunLabel(results);
+  return (
+    <section
+      ref={root}
+      data-testid="background-results"
+      aria-label={label}
+      className="min-w-0"
+    >
+      <Collapsible
+        open={open}
+        onOpenChange={(next) => {
+          holdRow(root.current);
+          setOpen(next);
+        }}
+      >
+        <CollapsibleTrigger
+          className={cn(LINE, "w-full cursor-pointer hover:text-foreground")}
         >
-          {unavailable}
-        </p>
-      ) : (
-        <>
-          {!control && body && (
-            <div
-              className="prose-app mt-3 break-words"
-              data-testid="automated-input-body"
-            >
-              <Markdown>{body}</Markdown>
-            </div>
-          )}
-          <details
-            className="mt-2 min-w-0"
-            onClick={(event) => holdRow(event.currentTarget)}
-          >
-            <summary className="cursor-pointer text-xs text-muted-foreground">
-              Model input
-            </summary>
-            <pre
-              className="mt-3 max-h-96 overflow-auto font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
-              data-testid="automated-input-content"
-            >
-              {content ?? ""}
-            </pre>
-          </details>
-        </>
-      )}
+          <span className="grid size-4 shrink-0 place-items-center">
+            <Chevron open={open} />
+          </span>
+          <Title icon={<Clock className="size-3.5 shrink-0" />}>{label}</Title>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="ml-4 border-l border-border pl-1">
+          {results.map(({ item, call }) => (
+            <AutomatedInput
+              key={item.itemKey}
+              origin={item.origin}
+              content={item.content}
+              reconstruction={item.reconstruction}
+              stateKey={item.itemKey}
+              call={call}
+            />
+          ))}
+        </CollapsibleContent>
+      </Collapsible>
     </section>
   );
 }

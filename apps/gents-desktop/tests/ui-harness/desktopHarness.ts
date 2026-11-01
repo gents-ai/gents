@@ -159,6 +159,157 @@ function dayItems(): RenderedTimelineItem[] {
   ];
 }
 
+/* turns the person did not type: a message from another session, a run
+   of finished background calls and a scheduled run */
+function automatedInputItems(): RenderedTimelineItem[] {
+  const durable = (itemKey: string, sequence: number, timestamp: string) => ({
+    kind: "automatedInput" as const,
+    itemKey,
+    requestId: `request-${itemKey}`,
+    sequence,
+    timestamp,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+  });
+  const completion = (id: string, tool: string, status: string, result: string) =>
+    `<tool-completion tool_call_id="${id}" tool_name="${tool}" status="${status}">\n  <result>${result}</result>\n</tool-completion>`;
+  const command = (itemKey: string, toolCallId: string, text: string) => ({
+    itemKey,
+    toolName: "bash",
+    toolCallId,
+    statusKind: "success",
+    awaitMode: "background",
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command" as const,
+      command: text,
+      exitCode: 0,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: null,
+      executionMode: "read_only",
+      networkMode: "disabled",
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "auto-user",
+      requestId: "request-auto-user",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Run the tests and the lints in the background, and ask the reviewer.",
+      timestamp: "2026-06-03T14:06:00Z",
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "auto-tools",
+      messageSequence: 3,
+      tools: [
+        command("auto-test", "call-auto-test", "cargo test -p gents"),
+        command("auto-lint", "call-auto-lint", "make lint"),
+      ],
+    },
+    harnessAssistantItem({
+      itemKey: "auto-reply",
+      sequence: 4,
+      content: "Both are running in the background; I asked the reviewer too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:06:30Z",
+    }),
+    {
+      ...durable("auto-message", 5, "2026-06-03T14:08:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: "session-reviewer",
+        senderRequestId: "request-reviewer",
+        displayBody:
+          "The parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+      },
+      content:
+        "[message agent:default session:session-reviewer node:did:key:z6MkHarness · at:2026-06-03T14:08:00Z · cause:request-reviewer]\n\nThe parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-message-reply",
+      sequence: 6,
+      content: "Thanks — added the early return.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:08:30Z",
+    }),
+    {
+      ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-test",
+        "bash",
+        "completed",
+        "test result: ok. 412 passed; 0 failed",
+      ),
+    },
+    {
+      ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-lint",
+        "bash",
+        "failed",
+        "error: unused import: `HashMap`",
+      ),
+    },
+    {
+      ...durable("auto-bg-wake", 9, "2026-06-03T14:10:01Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-reply",
+      sequence: 10,
+      content: "Tests pass; lint flagged an unused import, which I removed.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:10:30Z",
+    }),
+    {
+      ...durable("auto-bg-single", 11, "2026-06-03T14:11:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion("call-auto-other", "spawn_process", "completed", "done"),
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-single-reply",
+      sequence: 12,
+      content: "The validation suite finished too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:11:30Z",
+    }),
+    {
+      ...durable("auto-schedule", 13, "2026-06-04T07:00:00Z"),
+      origin: {
+        kind: "trigger" as const,
+        triggerId: "nightly-report",
+        triggerKind: "schedule",
+      },
+      content: "Write the nightly report: what changed, what failed, what is next.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-schedule-reply",
+      sequence: 14,
+      content: "Nightly report: the parser fix landed and every check passes.",
+      reasoning: null,
+      timestamp: "2026-06-04T07:01:00Z",
+    }),
+    {
+      ...durable("auto-goal", 15, "2026-06-04T07:02:00Z"),
+      origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
+      content: "You are running under the durable goal controller. Continue the goal.",
+    },
+  ];
+}
+
 function harnessAssistantItem(
   item: Omit<
     Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
@@ -192,7 +343,8 @@ export type DesktopUiHarnessScenario =
   | "sync-offline"
   | "storage-recovery"
   | "sync-failed"
-  | "days";
+  | "days"
+  | "automated-inputs";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -734,6 +886,7 @@ export function createDesktopUiHarness(
           ]
         : []),
       ...(scenario === "days" ? dayItems() : []),
+      ...(scenario === "automated-inputs" ? automatedInputItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -884,6 +1037,26 @@ export function createDesktopUiHarness(
       inferenceBackends: [],
       inferenceProfiles: [],
     };
+  }
+  if (scenario === "automated-inputs") {
+    sessions.set("session-reviewer", {
+      sessionId: "session-reviewer",
+      nodeDid: NODE_DID,
+      agentId: DEFAULT_AGENT_ID,
+      title: "Review the parser change",
+      previewText: "The parser change looks right.",
+      status: "active",
+      turnState: "completed",
+      latestRequestId: "request-reviewer",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      latestRequestOutcome: null,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+      timelineItems: [],
+    });
   }
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
@@ -4184,6 +4357,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "storage-recovery":
     case "sync-failed":
     case "days":
+    case "automated-inputs":
       return value;
     default:
       return "default";

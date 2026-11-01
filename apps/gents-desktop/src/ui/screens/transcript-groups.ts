@@ -9,8 +9,22 @@ export type GroupMember =
   | { kind: "tool"; key: string; tool: RenderedToolCallView }
   | { kind: "thought"; key: string; text: string };
 
+type AutomatedInputItem = Extract<RenderedTimelineItem, { kind: "automatedInput" }>;
+
+/** a finished background call's result, with the call when it is drawn */
+export type BackgroundResult = {
+  item: AutomatedInputItem;
+  call: RenderedToolCallView | null;
+};
+
 export type TranscriptEntry =
-  | { kind: "item"; key: string; item: RenderedTimelineItem }
+  | {
+      kind: "item";
+      key: string;
+      item: RenderedTimelineItem;
+      /** results arriving with nothing between them, drawn as this one row */
+      background?: BackgroundResult[];
+    }
   | {
       kind: "group";
       key: string;
@@ -35,12 +49,44 @@ const inCallOrder = (tools: RenderedToolCallView[]) =>
     a.itemKey.localeCompare(b.itemKey, undefined, { numeric: true }),
   );
 
+const XML_ESCAPES: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&apos;": "'",
+};
+const unescapeXml = (text: string) =>
+  text.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => XML_ESCAPES[entity]!);
+
+const COMPLETION_OPENING =
+  /^<tool-completion tool_call_id="([^"]*)" tool_name="([^"]*)" status="([^"]*)">/;
+
+/** the call a background result reports on, read from the wrapper the
+    runtime gives the model */
+export function completionOf(
+  content: string | null | undefined,
+): { toolCallId: string; toolName: string; status: string } | null {
+  const opening = content && COMPLETION_OPENING.exec(content);
+  if (!opening) return null;
+  const [, toolCallId, toolName, status] = opening.map(unescapeXml);
+  return { toolCallId: toolCallId!, toolName: toolName!, status: status! };
+}
+
+const isBackgroundResult = (item: RenderedTimelineItem): item is AutomatedInputItem =>
+  item.kind === "automatedInput" && item.origin.kind === "backgroundCompletion";
+
 export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[] {
   const out: TranscriptEntry[] = [];
   let open: Extract<TranscriptEntry, { kind: "group" }> | null = null;
+  let results: BackgroundResult[] | null = null;
+  const calls = new Map<string, RenderedToolCallView>();
   for (const item of items) {
     if (item.kind === "toolGroup") {
       if (item.tools.length === 0) continue;
+      for (const tool of item.tools)
+        if (tool.toolCallId) calls.set(tool.toolCallId, tool);
+      results = null;
       if (!open) {
         open = { kind: "group", key: item.itemKey, members: [], settled: false };
         out.push(open);
@@ -54,6 +100,20 @@ export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[
         open.members.push({ kind: "thought", key: item.itemKey, text: item.reasoning });
       continue;
     }
+    if (isBackgroundResult(item)) {
+      const id = completionOf(item.content)?.toolCallId;
+      const result = { item, call: (id && calls.get(id)) || null };
+      if (results) {
+        results.push(result);
+        continue;
+      }
+      if (open) open.settled = true;
+      open = null;
+      results = [result];
+      out.push({ kind: "item", key: item.itemKey, item, background: results });
+      continue;
+    }
+    results = null;
     if (item.kind === "liveAssistant" && !says(item)) {
       out.push({ kind: "item", key: item.itemKey, item });
       continue;
