@@ -14,6 +14,10 @@ use serde_json::Value;
 
 use super::snapshots::fetch_request_snapshot;
 
+#[cfg(test)]
+#[path = "interrupt/tests.rs"]
+mod tests;
+
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
 pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -290,10 +294,14 @@ pub async fn ensure_user_titled_session(
     session_id: &str,
     title: &str,
 ) {
-    if super::snapshots::fetch_session_snapshot(node, session_id)
-        .await
-        .is_some()
-    {
+    if let Some(existing) = super::snapshots::fetch_session_snapshot(node, session_id).await {
+        // An existing session is not ours to rewrite: verify it already is the
+        // session this fixture means, with the explicit user title that
+        // suppresses auxiliary title inference, and fail closed otherwise.
+        verify_user_titled_session(&existing, node_did, agent_id, session_id, title)
+            .unwrap_or_else(|mismatch| {
+                panic!("fixture session {session_id} is not reusable: {mismatch}")
+            });
         return;
     }
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -307,14 +315,63 @@ pub async fn ensure_user_titled_session(
     let stored = super::snapshots::fetch_session_snapshot(node, session_id)
         .await
         .expect("pinned fixture session is missing");
-    assert_eq!(
-        stored
-            .title
-            .as_ref()
-            .map(|title| (title.text.as_str(), title.source)),
-        Some((title, gents_protocol::session::SessionTitleSource::User)),
-        "fixture session must keep its explicit user title"
+    verify_user_titled_session(&stored, node_did, agent_id, session_id, title).unwrap_or_else(
+        |mismatch| panic!("fixture session {session_id} did not persist: {mismatch}"),
     );
+}
+
+/// Fail-closed check that a stored session is the one a fixture pinned: same
+/// node, requester, agent and session identity, carrying exactly the expected
+/// non-empty explicit user title. Any other title source (a placeholder, or a
+/// generated title) means auxiliary title inference may still run and add a
+/// sibling request the receipt would have to list.
+pub(super) fn verify_user_titled_session(
+    stored: &gents_protocol::session::AgentSession,
+    node_did: &str,
+    agent_id: &str,
+    session_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    if stored.session_id != session_id {
+        return Err(format!(
+            "session id is {:?}, expected {session_id:?}",
+            stored.session_id
+        ));
+    }
+    if stored.node_did != node_did {
+        return Err(format!(
+            "node did is {:?}, expected {node_did:?}",
+            stored.node_did
+        ));
+    }
+    if stored.requester_did.as_deref() != Some(node_did) {
+        return Err(format!(
+            "requester did is {:?}, expected {node_did:?}",
+            stored.requester_did
+        ));
+    }
+    if stored.agent_id != agent_id {
+        return Err(format!(
+            "agent id is {:?}, expected {agent_id:?}",
+            stored.agent_id
+        ));
+    }
+    if title.is_empty() {
+        return Err("expected title is empty".to_owned());
+    }
+    match stored.title.as_ref() {
+        Some(stored_title)
+            if stored_title.source == gents_protocol::session::SessionTitleSource::User
+                && stored_title.text == title =>
+        {
+            Ok(())
+        }
+        Some(stored_title) => Err(format!(
+            "title is {:?} from {:?}, expected {title:?} from User",
+            stored_title.text, stored_title.source
+        )),
+        None => Err(format!("title is absent, expected {title:?} from User")),
+    }
 }
 
 async fn ensure_generated_session(
