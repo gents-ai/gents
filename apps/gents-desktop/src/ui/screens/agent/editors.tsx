@@ -138,6 +138,7 @@ export function DraftActions({
     <div
       ref={barRef}
       data-testid="draft-actions"
+      data-readonly-hide=""
       data-floating={floating || undefined}
       onAnimationEnd={() => setMotion(null)}
       className={`${pinned ? "sticky -bottom-px z-10" : ""} pb-4 ${motion === "entering" ? "animate-in fade-in-0 slide-in-from-bottom-full duration-200 ease-out" : motion === "leaving" ? "animate-out fade-out-0 slide-out-to-bottom-full duration-150 ease-in fill-mode-forwards" : ""}`}
@@ -755,6 +756,7 @@ export function RefRow({
             variant="quiet"
             size="icon"
             aria-label={createLabel.replace(/…$/, "")}
+            data-readonly-hide=""
             title={createLabel.replace(/…$/, "")}
             onClick={() =>
               void onCreate().then((created) => {
@@ -927,6 +929,7 @@ export function ChipsRow({
             variant="quiet"
             size="icon"
             aria-label={(createLabel ?? "New").replace(/…$/, "")}
+            data-readonly-hide=""
             title={(createLabel ?? "New").replace(/…$/, "")}
             onClick={() =>
               void onCreate().then((created) => {

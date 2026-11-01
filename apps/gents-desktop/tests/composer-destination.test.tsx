@@ -120,7 +120,7 @@ it("does not submit to the local fallback when the explicit destination disappea
   expect(send).not.toHaveBeenCalled();
 });
 
-it("shows enrolled settings read-only before an unavailable operator write", () => {
+it("shows an enrolled node's unread settings as unknown, not as an empty form", () => {
   const app = fixture();
   app.actions.selectNode(remote);
   renderIn(
@@ -130,8 +130,12 @@ it("shows enrolled settings read-only before an unavailable operator write", () 
     </TooltipProvider>,
   );
   expect(screen.getByRole("status")).toHaveTextContent(
-    "Remote configuration is read-only",
+    /^Read-only here: change .+'s settings on that machine\.$/,
   );
-  expect(screen.getByLabelText("Maximum request hop")).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+  /* nothing drawn from settings the app hasn't read */
+  expect(screen.queryByLabelText("Maximum request hop")).toBeNull();
+  expect(screen.queryByText("Display name is required")).toBeNull();
+  expect(screen.queryByText("Default agent is required")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
 });
