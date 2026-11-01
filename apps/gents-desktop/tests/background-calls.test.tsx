@@ -436,6 +436,26 @@ describe("the running in background group", () => {
     expect(screen.queryByText("Output (last part)")).toBeNull();
   });
 
+  it("marks where each day starts among finished calls, only once they span days", () => {
+    const done = (id: string, startedAt: string) =>
+      command(id, `echo ${id}`, { statusKind: "success", startedAt });
+    const { app } = appWith([
+      done("today", minutesAgo(30)),
+      done("earlier", minutesAgo(60 * 24 * 3)),
+    ]);
+    const view = render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    expect(screen.getAllByTestId("day-marker")).toHaveLength(2);
+    view.unmount();
+
+    const same = appWith([done("one", minutesAgo(30)), done("two", minutesAgo(40))]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(same.app),
+    });
+    expect(screen.queryByTestId("day-marker")).toBeNull();
+  });
+
   it("says a finished command printed nothing", () => {
     const tool = command("quiet", "true", { statusKind: "success" });
     const { app } = appWith([tool]);

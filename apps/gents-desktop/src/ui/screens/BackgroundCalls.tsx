@@ -10,6 +10,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PanelEmpty } from "./PanelEmpty";
+import { DayMarker, dayOpenings } from "./TranscriptMarker";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -142,6 +143,7 @@ export function BackgroundGroup({
         sessionId={sessionId}
         onOpen={onOpen}
         quiet
+        byDay
       />
     </>
   );
@@ -154,6 +156,7 @@ function CallGroup({
   sessionId,
   onOpen,
   quiet = false,
+  byDay = false,
 }: {
   title: string;
   calls: readonly BackgroundCall[];
@@ -161,16 +164,28 @@ function CallGroup({
   sessionId: string | null;
   onOpen: (key: string) => void;
   quiet?: boolean;
+  /** marks where each day starts, once the calls span more than one */
+  byDay?: boolean;
 }) {
   if (calls.length === 0) return null;
+  const opens = byDay
+    ? dayOpenings(
+        calls,
+        (call) => call.key,
+        (call) => call.tool?.startedAt,
+      )
+    : new Map<string, number>();
+  const days = opens.size > 1 ? opens : new Map<string, number>();
   return (
     <section aria-label={title} className="mb-3">
       <h3 className="px-1 pb-1 text-xs font-medium text-muted-foreground">{title}</h3>
       <ul className="space-y-0.5">
         {calls.map((call) => {
           const state = stateOf(call, now);
+          const day = days.get(call.key);
           return (
             <li key={call.key}>
+              {day !== undefined && <DayMarker day={day} />}
               <div
                 title={`${call.runs}\n${state.text}`}
                 className="relative flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm hover:bg-accent"

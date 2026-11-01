@@ -140,7 +140,7 @@ export function DayMarker({ day }: { day: number }) {
 /* the rows that open a day: the first dated row after one from an earlier
    day, or the first dated row drawn */
 export function dayOpenings<T>(
-  rows: T[],
+  rows: readonly T[],
   keyOf: (row: T) => string,
   timestampOf: (row: T) => string | null | undefined,
 ) {
