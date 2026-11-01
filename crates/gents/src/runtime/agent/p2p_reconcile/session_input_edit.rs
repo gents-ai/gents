@@ -71,6 +71,7 @@ async fn authority_rejection(
     txn: &ConfigApplyTxn<'_>,
     store: &GraphqlEnrollmentStore,
     command: &SessionInputEdit,
+    now: DateTime<Utc>,
 ) -> Result<Option<String>> {
     let expected_admission = match super::session_command_authority::current_admission(
         txn,
@@ -81,6 +82,7 @@ async fn authority_rejection(
             node_did: &command.node_did,
         },
         "AgentSessionInputEdit",
+        now,
     )
     .await?
     {
@@ -191,7 +193,7 @@ pub(crate) async fn process_command(
                         let rejection = if now >= DateTime::parse_from_rfc3339(&command.expires_at)? {
                             Some("edit intent has expired".into())
                         } else {
-                            authority_rejection(txn, store, &command).await?
+                            authority_rejection(txn, store, &command, now).await?
                         };
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
