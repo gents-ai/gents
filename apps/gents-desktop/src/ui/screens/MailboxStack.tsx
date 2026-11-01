@@ -13,15 +13,20 @@ import { useMinute } from "./time";
 const SCOPE = defaultScope("mailbox");
 
 /** The active node's open mailbox items: those matching `query`, grouped,
-    and the ones the selected tab shows, in the order the list draws them. */
-export function useMailboxList(query: string): {
+    and the ones the selected tab shows (or every group's, with `allTabs`),
+    in the order the list draws them. */
+export function useMailboxList(
+  query: string,
+  { allTabs = false }: { allTabs?: boolean } = {},
+): {
   items: MailboxItemView[];
   searched: MailboxItemView[];
   groups: TriageGroup[];
   shown: MailboxItemView[];
 } {
   const items = useInScope((ctx) => mailboxInScope(SCOPE, ctx));
-  const tab = useListViews((views) => views.mailboxTab);
+  const chosen = useListViews((views) => views.mailboxTab);
+  const tab = allTabs ? "all" : chosen;
   const searched = items.filter((m) => matches(m, query));
   const groups = groupItems(searched);
   const shown =
@@ -36,7 +41,9 @@ export const MAILBOX = pathFor({ name: "mailbox" });
 /** Opens `item` over the page showing now, in the tab its kind belongs to,
     so moving on goes through items like it. */
 export function openInStack(item: MailboxItemView) {
-  listViews.setMailboxTab(triageOf(item.kind));
+  /* only the Mailbox page steps through its tab; elsewhere the stack holds
+     every item */
+  if (currentRoute()?.name === "mailbox") listViews.setMailboxTab(triageOf(item.kind));
   listViews.setMailboxOpen({
     nodeDid: item.nodeDid,
     itemId: item.itemId,
@@ -55,13 +62,17 @@ export const openHere = (
 /** The mailbox's item dialog, over whatever screen is showing. The mailbox's
     rows open it, and ⌘⇧M opens it anywhere at the first item; pressed again
     it closes. An item left open to look at a session is open again on
-    coming back. On the mailbox it steps through
-    the rows the search leaves; elsewhere through the whole tab. */
+    coming back. On the Mailbox page it steps through the rows its tab and
+    search leave; elsewhere, where neither shows, through every item, with
+    a link to the Mailbox. */
 export function MailboxStack({ route }: { route: Route }) {
   const selectedNodeDid = useSelectedNodeDid();
   const now = useMinute();
   const query = useListViews((views) => views.mailboxQuery);
-  const { shown } = useMailboxList(route.name === "mailbox" ? (query ?? "") : "");
+  const onMailbox = route.name === "mailbox";
+  const { shown } = useMailboxList(onMailbox ? (query ?? "") : "", {
+    allTabs: !onMailbox,
+  });
   const kept = useListViews((views) => views.mailboxOpen);
   const where = pathFor(route);
   const openId = openHere(kept, selectedNodeDid, where);
@@ -92,6 +103,7 @@ export function MailboxStack({ route }: { route: Route }) {
       now={now}
       onOpen={open}
       onClose={close}
+      toMailbox={!onMailbox}
     />
   );
 }
