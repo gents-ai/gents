@@ -113,7 +113,10 @@ export function WindowBar({
   settings: ReactNode;
   onPaneBar: (slot: HTMLElement | null) => void;
 }) {
-  const { columns, wide, docked, dockOpen, divider } = layout;
+  const { columns, wide, docked, dockOpen, divider, shownNav } = layout;
+  /* an expanded nav's column has room for the page's own controls, so they
+     sit over it, by the mark, rather than out past its edge */
+  const navHoldsHistory = wide && shownNav === "expanded";
   const syncHealth = useSyncHealth();
   const drag = headerIsWindowBar() ? "" : undefined;
   const windows = isWindowsTauriShell();
@@ -134,6 +137,7 @@ export function WindowBar({
           >
             <MarkLink current={onNodes} />
           </div>
+          {navHoldsHistory && history && <HistoryNav history={history} />}
         </div>
       )}
       <div
@@ -148,7 +152,7 @@ export function WindowBar({
       >
         <NavSheet route={route} settings={settings} />
         <MarkLink className="md:hidden" current={onNodes} />
-        {history && <HistoryNav history={history} />}
+        {history && !navHoldsHistory && <HistoryNav history={history} />}
         <ActiveNodeLabel />
         <div
           ref={onPaneBar}

@@ -209,4 +209,33 @@ test.describe("nav modes", () => {
     expect(places.expanded!.x).toBeCloseTo(places.hover!.x, 0);
     expect(places.collapsed!.x).toBeCloseTo(places.hover!.x, 0);
   });
+
+  test("an expanded nav holds search and history by the mark", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    const history = page.getByTestId("history-nav");
+    const placed: Record<string, { history: Box; pane: Box }> = {};
+    for (const nav of ["hover", "expanded"]) {
+      await page.evaluate(
+        (mode) =>
+          localStorage.setItem(
+            "gents-preferences",
+            JSON.stringify({ state: { nav: mode }, version: 1 }),
+          ),
+        nav,
+      );
+      await page.reload();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      await expect(history).toHaveCount(1);
+      placed[nav] = {
+        history: await boxOf(history),
+        pane: await boxOf(page.getByTestId("pane")),
+      };
+    }
+    /* over the expanded nav, inside its column; past the rail otherwise */
+    expect(placed.expanded!.history.x + placed.expanded!.history.width).toBeLessThan(
+      placed.expanded!.pane.x,
+    );
+    expect(placed.hover!.history.x).toBeGreaterThanOrEqual(placed.hover!.pane.x);
+  });
 });
