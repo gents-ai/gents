@@ -19,11 +19,15 @@ import { useNodeReach } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
 
-/* the card looks the same at rest; a line that leads somewhere underlines
-   only while pointed at or focused */
+/* the card looks the same at rest; what leads somewhere underlines only
+   while pointed at or focused */
 const LINK =
   "rounded-sm underline-offset-2 outline-none hover:underline focus-visible:underline";
 
+const ROW = "col-span-2 grid grid-cols-subgrid";
+
+/** One fact of a card. One that leads somewhere is a single link over its
+    label and value: one stop for the keyboard, and a wide target. */
 function Line({
   label,
   title,
@@ -32,23 +36,97 @@ function Line({
 }: {
   label: string;
   title?: string;
-  /** where the line leads, as a link */
+  /** where the line leads */
   to?: Route;
   children: React.ReactNode;
 }) {
-  return (
+  const cells = (
     <>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd title={title} className="min-w-0 truncate text-foreground">
-        {to ? (
-          <a href={href(to)} className={LINK}>
-            {children}
-          </a>
-        ) : (
-          children
-        )}
-      </dd>
+      <span className="text-muted-foreground transition-colors group-hover/line:text-foreground/80 group-focus-visible/line:text-foreground/80">
+        {label}
+      </span>
+      <span
+        title={title}
+        className="min-w-0 truncate text-foreground underline-offset-2 group-hover/line:underline group-focus-visible/line:underline"
+      >
+        {children}
+      </span>
     </>
+  );
+  return to ? (
+    <a href={href(to)} className={cn(ROW, "group/line rounded-sm outline-none")}>
+      {cells}
+    </a>
+  ) : (
+    <div className={ROW}>{cells}</div>
+  );
+}
+
+function Facts({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+      {children}
+    </div>
+  );
+}
+
+/** A card's first line: its name, leading to its page, and its state. */
+function CardTitle({
+  name,
+  to,
+  children,
+}: {
+  name: string;
+  to: Route;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <a
+        href={href(to)}
+        className={cn(
+          "min-w-0 truncate font-heading text-base font-medium text-heading",
+          LINK,
+        )}
+      >
+        {name}
+      </a>
+      {children}
+    </div>
+  );
+}
+
+/** A card's last line, the same on every card: start a session, or open
+    its settings. */
+function CardActions({
+  nodeDid,
+  agentId,
+  enabled,
+  settings,
+  onStart,
+}: {
+  nodeDid: string;
+  /** the node's default agent when none */
+  agentId: string | null;
+  enabled: boolean;
+  settings: Route;
+  onStart: () => void;
+}) {
+  return (
+    <div className="mt-3 flex items-center gap-4 text-xs">
+      <NewSessionWith
+        nodeDid={nodeDid}
+        agentId={agentId}
+        enabled={enabled}
+        onStart={onStart}
+      />
+      <a
+        href={href(settings)}
+        className={cn("inline-flex items-center gap-1 text-foreground", LINK)}
+      >
+        Settings <ArrowUpRight className="size-3" />
+      </a>
+    </div>
   );
 }
 
@@ -110,19 +188,15 @@ export function NodeHoverCard({
   side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {
+  const [open, setOpen] = useState(false);
   const online = deployment.dialSucceeded;
+  const page = nodeSection(deployment.nodeDid, "agent");
   return (
-    <HoverCard>
+    <HoverCard open={open} onOpenChange={setOpen}>
       <HoverCardTrigger delay={500} render={children} />
       <HoverCardContent side={side} align="start" className="w-80">
-        <div className="flex items-baseline justify-between gap-3">
-          <a
-            href={href(nodeSection(deployment.nodeDid, "agent"))}
-            className={cn("font-heading text-base font-medium text-heading", LINK)}
-          >
-            {deployment.node.displayName ?? deployment.label}
-          </a>
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <CardTitle name={deployment.node.displayName ?? deployment.label} to={page}>
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
             <span
               className={cn(
                 "size-2 rounded-full",
@@ -131,8 +205,8 @@ export function NodeHoverCard({
             />
             {online ? "Online" : "Offline"}
           </span>
-        </div>
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+        </CardTitle>
+        <Facts>
           <NodeReach deployment={deployment} />
           <Line label="Agents" to={nodeSection(deployment.nodeDid, "agents")}>
             {deployment.agents.length}
@@ -143,16 +217,22 @@ export function NodeHoverCard({
           <Line label="Inference" to={nodeSection(deployment.nodeDid, "inference")}>
             <InferenceLogos backends={deployment.inferenceBackends} />
           </Line>
-        </dl>
-        <div className="mt-3 flex items-center gap-1">
-          <p
-            className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
-            title={deployment.nodeDid}
-          >
-            {shortDid(deployment.nodeDid)}
-          </p>
-          <CopyId did={deployment.nodeDid} />
-        </div>
+          <Line label="ID" title={deployment.nodeDid}>
+            <span className="inline-flex max-w-full items-center gap-1 align-middle">
+              <span className="truncate font-mono text-[11px] text-muted-foreground">
+                {shortDid(deployment.nodeDid)}
+              </span>
+              <CopyId did={deployment.nodeDid} />
+            </span>
+          </Line>
+        </Facts>
+        <CardActions
+          nodeDid={deployment.nodeDid}
+          agentId={null}
+          enabled={deployment.node.enabled !== false}
+          settings={page}
+          onStart={() => setOpen(false)}
+        />
       </HoverCardContent>
     </HoverCard>
   );
@@ -234,6 +314,12 @@ export function AgentHoverCard({
     : [];
   const summary = description || b.description || undefined;
   const tasks = deployment.tasks.filter((t) => t.agentId === b.agentId).length;
+  const settings: Route = {
+    name: "agent",
+    nodeDid: deployment.nodeDid,
+    section: "agents",
+    item: b.agentId,
+  };
   return (
     <HoverCard open={open} onOpenChange={setOpen}>
       <HoverCardTrigger delay={500} render={children} onFocus={() => setOpen(true)} />
@@ -243,14 +329,11 @@ export function AgentHoverCard({
         className="w-80"
         data-testid="agent-hover-card"
       >
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="font-heading text-base font-medium text-heading">
-            {agentName(agentId, deployment)}
-          </span>
+        <CardTitle name={agentName(agentId, deployment)} to={settings}>
           {b.isDefault && (
-            <span className="text-xs text-muted-foreground">Default</span>
+            <span className="shrink-0 text-xs text-muted-foreground">Default</span>
           )}
-        </div>
+        </CardTitle>
         {summary && (
           <p
             title={summary}
@@ -259,7 +342,7 @@ export function AgentHoverCard({
             {summary}
           </p>
         )}
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+        <Facts>
           <Line label="Status">
             {!b.enabled
               ? "Disabled"
@@ -315,26 +398,14 @@ export function AgentHoverCard({
               {tasks}
             </Line>
           )}
-        </dl>
-        <div className="mt-3 flex items-center gap-4 text-xs">
-          <NewSessionWith
-            nodeDid={deployment.nodeDid}
-            agentId={b.agentId}
-            enabled={b.enabled}
-            onStart={() => setOpen(false)}
-          />
-          <a
-            href={href({
-              name: "agent",
-              nodeDid: deployment.nodeDid,
-              section: "agents",
-              item: b.agentId,
-            })}
-            className={cn("inline-flex items-center gap-1 text-foreground", LINK)}
-          >
-            Settings <ArrowUpRight className="size-3" />
-          </a>
-        </div>
+        </Facts>
+        <CardActions
+          nodeDid={deployment.nodeDid}
+          agentId={b.agentId}
+          enabled={b.enabled}
+          settings={settings}
+          onStart={() => setOpen(false)}
+        />
       </HoverCardContent>
     </HoverCard>
   );
@@ -348,7 +419,7 @@ function NewSessionWith({
   onStart,
 }: {
   nodeDid: string;
-  agentId: string;
+  agentId: string | null;
   enabled: boolean;
   onStart: () => void;
 }) {
