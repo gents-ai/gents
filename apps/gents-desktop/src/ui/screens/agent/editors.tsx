@@ -38,6 +38,7 @@ import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
 import { Fact, Row, StackedRow } from "./rows";
 import { focusFirstProblem } from "./draft";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 export type Choice = { value: string; label: string };
 
@@ -614,6 +615,7 @@ export function RefRow({
               <ComboboxInput
                 showTrigger={false}
                 aria-label={`Search ${String(label).toLowerCase()}`}
+                {...SEARCH_FIELD}
                 placeholder={`Search ${items.length}`}
               />
             )}

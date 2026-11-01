@@ -11,6 +11,7 @@ import { AgentInitials } from "./parts";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 export function AgentPicker({
   deployment,
@@ -130,6 +131,7 @@ function MountedAgentPicker({
                     setSearching(false);
                   }
                 }}
+                {...SEARCH_FIELD}
                 placeholder="Search agents"
                 aria-label="Search agents"
                 className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
