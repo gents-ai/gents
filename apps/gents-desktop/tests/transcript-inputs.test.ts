@@ -104,18 +104,26 @@ describe("naming a background result", () => {
     );
   });
 
-  it("says only that a result came when the input names no call", () => {
-    expect(
-      backgroundName("Review the new background completion results.", null),
-    ).toBeNull();
+  it("says what an input that names no call is, by its words", () => {
+    const wake =
+      "Review the new background completion results and continue the task if needed.";
+    expect(backgroundName(wake, null)).toBeNull();
+    expect(backgroundText(null, wake)).toBe("Asked to review background results");
+    expect(backgroundText(null, "\n  <agent-notification>done  \nmore")).toBe(
+      "<agent-notification>done",
+    );
+    const long = "x".repeat(120);
+    expect(backgroundText(null, long)).toBe(`${"x".repeat(79)}…`);
+    expect(backgroundText(null, "x".repeat(80))).toBe("x".repeat(80));
+    expect(backgroundText(null, "  \n ")).toBe("Background result");
     expect(backgroundText(null)).toBe("Background result");
   });
 
-  it("counts the results a run folds, past inputs that name no call", () => {
+  it("counts the completions a run folds", () => {
     const result = (content: string): BackgroundResult =>
-      ({ item: { content }, call: null }) as unknown as BackgroundResult;
-    const wake = result("Review the new background completion results.");
-    expect(backgroundRunLabel([result(completion("completed")), wake])).toBe(
+      ({ item: { content }, call: null, prompts: [] }) as unknown as BackgroundResult;
+    const other = result("an input that names no call");
+    expect(backgroundRunLabel([result(completion("completed")), other])).toBe(
       "bash_unrestricted finished",
     );
     expect(
@@ -123,10 +131,10 @@ describe("naming a background result", () => {
         result(completion("completed")),
         result(completion("failed")),
         result(completion("completed")),
-        wake,
+        other,
       ]),
     ).toBe("3 background results");
-    expect(backgroundRunLabel([wake, wake])).toBe("2 background results");
+    expect(backgroundRunLabel([other, other])).toBe("2 background results");
   });
 });
 

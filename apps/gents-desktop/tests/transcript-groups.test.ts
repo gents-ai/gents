@@ -7,6 +7,7 @@ import {
   completionOf,
   groupLabel,
   groupTranscript,
+  isWakePrompt,
   liveGroupLabel,
 } from "@/screens/transcript-groups";
 import { assistantMessage, liveAssistant, userMessage } from "./timeline-fixture";
@@ -272,11 +273,20 @@ describe("background results", () => {
         : e.key,
     );
 
+  const WAKE =
+    "Review the new background completion results and continue the task if needed.";
+  const prompts = (entries: ReturnType<typeof groupTranscript>) =>
+    entries.flatMap((e) =>
+      e.kind === "item" && e.background
+        ? e.background.map((r) => r.prompts.map((p) => p.itemKey).join(","))
+        : [],
+    );
+
   it("draws results with nothing between them as one row, under the first one's key", () => {
     const items = [
       person(1),
       result(2, completion("x")),
-      result(3, "Review the new background completion results."),
+      result(3, "an input that names no call"),
       said(4, "Both finished."),
       result(5, completion("y")),
     ];
@@ -292,6 +302,41 @@ describe("background results", () => {
           key.split("{")[0],
         ),
       );
+  });
+
+  it("reads the wake prompt with the result it follows, not as a result", () => {
+    const items = [
+      person(1),
+      result(2, completion("x")),
+      result(3, completion("y")),
+      result(4, WAKE),
+      said(5, "Both finished."),
+      result(6, completion("z")),
+      result(7, `  ${WAKE}\n`),
+    ];
+    const out = groupTranscript(items);
+    expect(background(out)).toEqual(["u1", "b2{b2,b3}", "a5", "b6{b6}"]);
+    expect(prompts(out)).toEqual(["", "b4", "b7"]);
+    for (let i = 1; i <= items.length; i++)
+      background(groupTranscript(items.slice(0, i))).forEach((key, j) =>
+        expect(background(out)[j]!.split("{")[0]).toBe(key.split("{")[0]),
+      );
+  });
+
+  it("draws a wake prompt with no results before it as its own row", () => {
+    const out = groupTranscript([
+      said(1, "Waiting."),
+      result(2, WAKE),
+      result(3, completion("x")),
+    ]);
+    expect(background(out)).toEqual(["a1", "b2", "b3{b3}"]);
+  });
+
+  it("knows the wake prompt only by the runtime's exact words", () => {
+    expect(isWakePrompt(WAKE)).toBe(true);
+    expect(isWakePrompt(`${WAKE} Also do this.`)).toBe(false);
+    expect(isWakePrompt("Review the new background completion results.")).toBe(false);
+    expect(isWakePrompt(null)).toBe(false);
   });
 
   it("ends an open group and is ended by the next one", () => {

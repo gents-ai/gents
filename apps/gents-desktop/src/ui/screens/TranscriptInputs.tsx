@@ -52,7 +52,12 @@ import { ToolIcon } from "./tool-icon";
 import { spoken, toolSummary } from "./tool-summary";
 import { isWorkerStep } from "./WorkerStep";
 import { NO_WORKERS, type Reached, type Workers } from "./workers";
-import { completionOf, type BackgroundResult } from "./transcript-groups";
+import {
+  completionOf,
+  isWakePrompt,
+  type AutomatedInputItem,
+  type BackgroundResult,
+} from "./transcript-groups";
 
 export function pendingInputState(
   lifecycleState: RequestLifecycleState | null | undefined,
@@ -206,8 +211,23 @@ export function backgroundName(
   return { subject: subject || "call", outcome };
 }
 
-export const backgroundText = (named: BackgroundName | null) =>
-  named ? `${named.subject} ${named.outcome}` : "Background result";
+const LABEL_CHARS = 80;
+
+/** what a background input says: the call it names, else the runtime's
+    wake prompt, else its first line */
+export function backgroundText(
+  named: BackgroundName | null,
+  content?: string | null,
+): string {
+  if (named) return `${named.subject} ${named.outcome}`;
+  if (isWakePrompt(content)) return "Asked to review background results";
+  const line = content
+    ?.split("\n")
+    .map((l) => l.trim())
+    .find(Boolean);
+  if (!line) return "Background result";
+  return line.length > LABEL_CHARS ? `${line.slice(0, LABEL_CHARS - 1)}…` : line;
+}
 
 /** the line a run of background results folds into */
 export function backgroundRunLabel(
@@ -220,7 +240,8 @@ export function backgroundRunLabel(
       [],
   );
   const count = named.length || results.length;
-  return count === 1 ? backgroundText(named[0] ?? null) : `${count} background results`;
+  if (count > 1) return `${count} background results`;
+  return backgroundText(named[0] ?? null, results[0]?.item.content);
 }
 
 function OriginIcon({ origin }: { origin: RequestOriginView }) {
@@ -355,7 +376,7 @@ function SessionLink({ sessionId, name }: { sessionId: string; name: string }) {
   return (
     <a
       href={href({ name: "session", sessionId })}
-      className="underline decoration-border underline-offset-4 hover:text-foreground"
+      className="rounded-sm underline decoration-border underline-offset-4 outline-none transition-colors duration-150 hover:text-foreground hover:decoration-foreground hover:decoration-2 focus-visible:text-foreground focus-visible:decoration-foreground focus-visible:decoration-2 focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
     >
       {name}
       <ArrowUpRight aria-hidden className="ml-0.5 inline size-3 align-[-1px]" />
@@ -363,8 +384,14 @@ function SessionLink({ sessionId, name }: { sessionId: string; name: string }) {
   );
 }
 
-function BackgroundTitle({ named }: { named: BackgroundName | null }) {
-  if (!named) return <>Background result</>;
+function BackgroundTitle({
+  named,
+  content,
+}: {
+  named: BackgroundName | null;
+  content: string | null | undefined;
+}) {
+  if (!named) return <>{backgroundText(null, content)}</>;
   const sessionId = named.worker?.sessionId;
   return (
     <>
@@ -405,6 +432,7 @@ export function AutomatedInput({
   stateKey = null,
   call = null,
   reached = null,
+  prompts = [],
 }: {
   origin: RequestOriginView;
   content: string | null | undefined;
@@ -416,6 +444,8 @@ export function AutomatedInput({
   call?: RenderedToolCallView | null;
   /** the session that call reached, for a worker step */
   reached?: Reached | null;
+  /** the wake prompts sent after a background result, read with it */
+  prompts?: readonly AutomatedInputItem[];
 }) {
   const unavailable = unavailableReason(reconstruction);
   const node = useSelectedNode();
@@ -453,8 +483,8 @@ export function AutomatedInput({
       <OriginIcon origin={origin} />
     );
   } else if (origin.kind === "backgroundCompletion") {
-    label = backgroundText(named);
-    title = <BackgroundTitle named={named} />;
+    label = backgroundText(named, content);
+    title = <BackgroundTitle named={named} content={content} />;
     const agentId = named?.worker?.agentId;
     icon = agentId ? (
       avatar(agentName(agentId, node))
@@ -530,7 +560,11 @@ export function AutomatedInput({
                 <Markdown>{body}</Markdown>
               </div>
             )}
-            <ModelInput content={content} />
+            <ModelInput
+              content={[content, ...prompts.map((prompt) => prompt.content)]
+                .filter(Boolean)
+                .join("\n\n")}
+            />
           </>
         )}
       </Collapsible>
@@ -550,7 +584,7 @@ export function BackgroundResults({
   const first = results[0]!;
   const [open, setOpen] = useKeptOpen(`background:${first.item.itemKey}`);
   const root = useRef<HTMLElement>(null);
-  const row = ({ item, call }: BackgroundResult) => (
+  const row = ({ item, call, prompts }: BackgroundResult) => (
     <AutomatedInput
       key={item.itemKey}
       origin={item.origin}
@@ -559,6 +593,7 @@ export function BackgroundResults({
       stateKey={item.itemKey}
       call={call}
       reached={call && workers.byToolCall(call)}
+      prompts={prompts}
     />
   );
   if (results.length === 1) return row(first);

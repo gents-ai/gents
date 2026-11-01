@@ -345,7 +345,26 @@ function automatedInputItems(): RenderedTimelineItem[] {
       timestamp: "2026-06-03T14:13:30Z",
     }),
     {
-      ...durable("auto-schedule", 17, "2026-06-04T07:00:00Z"),
+      ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    {
+      ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-note-reply",
+      sequence: 19,
+      content: "Checked the preview.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:20:30Z",
+    }),
+    {
+      ...durable("auto-schedule", 20, "2026-06-04T07:00:00Z"),
       origin: {
         kind: "trigger" as const,
         triggerId: "nightly-report",
@@ -355,13 +374,13 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     harnessAssistantItem({
       itemKey: "auto-schedule-reply",
-      sequence: 18,
+      sequence: 21,
       content: "Nightly report: the parser fix landed and every check passes.",
       reasoning: null,
       timestamp: "2026-06-04T07:01:00Z",
     }),
     {
-      ...durable("auto-goal", 19, "2026-06-04T07:02:00Z"),
+      ...durable("auto-goal", 22, "2026-06-04T07:02:00Z"),
       origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
       content: "You are running under the durable goal controller. Continue the goal.",
     },

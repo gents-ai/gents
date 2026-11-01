@@ -9,12 +9,17 @@ export type GroupMember =
   | { kind: "tool"; key: string; tool: RenderedToolCallView }
   | { kind: "thought"; key: string; text: string };
 
-type AutomatedInputItem = Extract<RenderedTimelineItem, { kind: "automatedInput" }>;
+export type AutomatedInputItem = Extract<
+  RenderedTimelineItem,
+  { kind: "automatedInput" }
+>;
 
-/** a finished background call's result, with the call when it is drawn */
+/** a finished background call's result, with the call when it is drawn
+    and the wake prompts the runtime sent right after it */
 export type BackgroundResult = {
   item: AutomatedInputItem;
   call: RenderedToolCallView | null;
+  prompts: AutomatedInputItem[];
 };
 
 export type TranscriptEntry =
@@ -76,6 +81,14 @@ export function completionOf(
 const isBackgroundResult = (item: RenderedTimelineItem): item is AutomatedInputItem =>
   item.kind === "automatedInput" && item.origin.kind === "backgroundCompletion";
 
+/* BACKGROUND_COMPLETION_WAKE_PROMPT in crates/gents/src/tools/background/completion.rs */
+const WAKE_PROMPT =
+  "Review the new background completion results and continue the task if needed.";
+
+/** the runtime's prompt to act on the background results before it */
+export const isWakePrompt = (content: string | null | undefined) =>
+  content?.trim() === WAKE_PROMPT;
+
 export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[] {
   const out: TranscriptEntry[] = [];
   let open: Extract<TranscriptEntry, { kind: "group" }> | null = null;
@@ -101,8 +114,19 @@ export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[
       continue;
     }
     if (isBackgroundResult(item)) {
+      if (isWakePrompt(item.content)) {
+        const last = results?.[results.length - 1];
+        if (last) {
+          last.prompts.push(item);
+          continue;
+        }
+        if (open) open.settled = true;
+        open = null;
+        out.push({ kind: "item", key: item.itemKey, item });
+        continue;
+      }
       const id = completionOf(item.content)?.toolCallId;
-      const result = { item, call: (id && calls.get(id)) || null };
+      const result = { item, call: (id && calls.get(id)) || null, prompts: [] };
       if (results) {
         results.push(result);
         continue;

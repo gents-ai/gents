@@ -595,7 +595,7 @@ describe("SessionScreen automated inputs", () => {
     expect(items.map((item) => item.textContent)).toEqual([
       expect.stringContaining("From another session"),
       expect.stringContaining("Schedule · nightly"),
-      expect.stringContaining("Background result"),
+      expect.stringContaining("<agent-notification>done</agent-notification>"),
       expect.stringContaining("Goal continuation · 2"),
     ]);
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
@@ -627,7 +627,7 @@ describe("SessionScreen automated inputs", () => {
     );
     await user.click(
       within(items[2]!).getByRole("button", {
-        name: "Show model input: Background result",
+        name: "Show model input: <agent-notification>done</agent-notification>",
       }),
     );
     expect(within(items[2]!).getByTestId("automated-input-content")).toBeVisible();
@@ -773,6 +773,55 @@ describe("SessionScreen automated inputs", () => {
     ).toHaveAttribute("aria-expanded", "true");
     expect(within(items[2]!).getByTestId("automated-input-content").textContent).toBe(
       completion("call-elsewhere", "failed"),
+    );
+  });
+
+  it("reads the wake prompt with the result it follows, and alone as a request to review", async () => {
+    const user = userEvent.setup();
+    const wake =
+      "Review the new background completion results and continue the task if needed.";
+    const completion = `<tool-completion tool_call_id="call-x" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
+    const background = (key: string, sequence: number, content: string) => ({
+      kind: "automatedInput",
+      origin: { kind: "backgroundCompletion" },
+      content,
+      ...durable(key, sequence),
+    });
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          background("result", 1, completion),
+          background("wake", 2, wake),
+          {
+            kind: "assistantMessage",
+            content: "ok",
+            reasoning: null,
+            ...durable("a", 3),
+          },
+          background("alone", 4, wake),
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.queryByTestId("background-results")).toBeNull();
+    const [result, alone] = screen.getAllByTestId("automated-input");
+    expect(screen.getAllByTestId("automated-input")).toHaveLength(2);
+    expect(result).toHaveAccessibleName("bash finished");
+    await user.click(
+      within(result!).getByRole("button", { name: "Show model input: bash finished" }),
+    );
+    expect(within(result!).getByTestId("automated-input-content").textContent).toBe(
+      `${completion}\n\n${wake}`,
+    );
+    expect(alone).toHaveAccessibleName("Asked to review background results");
+    expect(alone!.querySelector(".lucide-clock")).not.toBeNull();
+    await user.click(
+      within(alone!).getByRole("button", {
+        name: "Show model input: Asked to review background results",
+      }),
+    );
+    expect(within(alone!).getByTestId("automated-input-content").textContent).toBe(
+      wake,
     );
   });
 
