@@ -12,9 +12,11 @@ import {
   ExternalLink,
   FolderOpen,
   Package,
+  Pencil,
   Plus,
   XIcon,
 } from "lucide-react";
+import { Markdown } from "../Markdown";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
 import { Button } from "@gents/ui/components/button";
@@ -328,6 +330,100 @@ export function AreaRow({
         </div>
       )}
     </Wrap>
+  );
+}
+
+/** A stacked field of Markdown, read rendered at a set height until Edit
+    opens it as text in the same place. */
+export function MarkdownRow({
+  id,
+  label,
+  description,
+  value,
+  onChange,
+  empty,
+  rows = 6,
+  error,
+  disabled,
+}: Common & {
+  value: string;
+  onChange: (v: string) => void;
+  /** what the panel says while there is no text */
+  empty: string;
+  rows?: number;
+}) {
+  const field = useRef<HTMLTextAreaElement>(null);
+  const read = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const overflowing = useOverflowing(
+    editing ? field : read,
+    true,
+    `${editing}${value}`,
+    expanded,
+  );
+  const height = expanded ? undefined : { maxHeight: `calc(${rows}lh + 1rem + 2px)` };
+  return (
+    <StackedRow
+      label={label}
+      description={description}
+      htmlFor={editing ? id : undefined}
+      error={error}
+    >
+      {editing ? (
+        <Textarea
+          ref={field}
+          id={id}
+          autoFocus
+          aria-invalid={error ? true : undefined}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={rows}
+          style={height}
+          className="w-full"
+        />
+      ) : (
+        <div
+          ref={read}
+          style={height}
+          className="prose-app min-w-0 overflow-hidden rounded-xl bg-input/50 px-3 py-2 text-sm break-words"
+        >
+          {value.trim() ? (
+            <Markdown>{value}</Markdown>
+          ) : (
+            <p className="text-muted-foreground">{empty}</p>
+          )}
+        </div>
+      )}
+      <div className="-mt-1 flex justify-end gap-1">
+        {!disabled && (
+          <Button
+            variant="quiet"
+            size="sm"
+            aria-label={`${editing ? "Done editing" : "Edit"} ${String(label).toLowerCase()}`}
+            aria-expanded={editing}
+            onClick={() => setEditing((open) => !open)}
+          >
+            {editing ? (
+              "Done"
+            ) : (
+              <>
+                <Pencil /> Edit
+              </>
+            )}
+          </Button>
+        )}
+        {(overflowing || expanded) && (
+          <Button
+            variant="quiet"
+            size="sm"
+            onClick={() => setExpanded((open) => !open)}
+          >
+            {expanded ? "Show less" : "Show all"}
+          </Button>
+        )}
+      </div>
+    </StackedRow>
   );
 }
 

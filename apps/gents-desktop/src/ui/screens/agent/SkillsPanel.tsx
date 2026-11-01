@@ -2,7 +2,15 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import type { SkillView } from "@source-inc/gents-desktop-client";
 import { navigate } from "@/lib/router";
-import { AreaRow, DraftActions, FactRow, TextRow, TagsRow, PathRow } from "./editors";
+import {
+  AreaRow,
+  DraftActions,
+  FactRow,
+  MarkdownRow,
+  TextRow,
+  TagsRow,
+  PathRow,
+} from "./editors";
 import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { newId, problemOf, useDraft } from "./draft";
 import { Group, Unfold } from "./rows";
@@ -172,14 +180,13 @@ function SkillEditor({
         </Group>
       </Unfold>
       <Group>
-        <AreaRow
+        <MarkdownRow
           id={id("instructions")}
           label="Instructions"
           description="What an agent reads when it loads the skill."
           value={d.draft.instructions}
           onChange={(v) => d.set("instructions", v)}
-          rows={6}
-          stacked
+          empty="No instructions yet."
         />
       </Group>
       <Group title="Details">
