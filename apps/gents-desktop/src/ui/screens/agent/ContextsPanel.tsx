@@ -7,7 +7,6 @@ import { href, type Route } from "@/lib/router";
 import {
   AreaRow,
   ChipsRow,
-  ChoiceRow,
   DraftActions,
   FactRow,
   RefRow,
@@ -15,6 +14,7 @@ import {
   TextRow,
 } from "./editors";
 import { ToolsSheet } from "./ToolsSheet";
+import { CompactionSheet, compactionInWords } from "./CompactionEditor";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
 import { toolsInWords } from "./automation";
@@ -104,8 +104,22 @@ function Editor({
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
   const [besideTools, setBesideTools] = useState<string | null>(null);
   const besideDoc = deployment.tools.find((t) => t.tools_id === besideTools) ?? null;
+  const [newCompaction, setNewCompaction] = useState<
+    ((id: string | null) => void) | null
+  >(null);
+  const [openCompaction, setOpenCompaction] = useState<string | null>(null);
   return (
     <>
+      <CompactionSheet
+        deployment={deployment}
+        creating={newCompaction !== null}
+        editing={openCompaction}
+        onClose={(created) => {
+          newCompaction?.(created);
+          setNewCompaction(null);
+          setOpenCompaction(null);
+        }}
+      />
       <ToolsSheet
         deployment={deployment}
         open={newTools !== null}
@@ -202,19 +216,30 @@ function Editor({
           }
           onOpen={(toolsId) => setBesideTools(toolsId)}
         />
-        <ChoiceRow
+        <RefRow
           id={id("compact")}
           label="Compaction"
+          description={compactionInWords(
+            deployment,
+            deployment.compactions.find(
+              (c) => c.compaction_id === d.draft.compactionId,
+            ),
+          )}
           value={d.draft.compactionId}
           error={d.problems.compactionId}
           onChange={(v) => d.set("compactionId", v)}
-          items={[
-            { value: "", label: "Runtime default" },
-            ...deployment.compactions.map((c) => ({
-              value: c.compaction_id,
-              label: c.display_name ?? c.compaction_id,
-            })),
-          ]}
+          none="Runtime default"
+          items={deployment.compactions.map((c) => ({
+            value: c.compaction_id,
+            label: c.display_name ?? c.compaction_id,
+          }))}
+          createLabel="New compaction…"
+          onCreate={() =>
+            new Promise<string | null>((resolve) => {
+              setNewCompaction(() => resolve);
+            })
+          }
+          onOpen={(compactionId) => setOpenCompaction(compactionId)}
         />
         <ChipsRow
           id={id("skills")}
