@@ -11,6 +11,7 @@ import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
+import { NodeSwitcher } from "./NodeSwitcher";
 import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { RecentFilter } from "./RecentFilter";
 import { listViews, useListViews } from "./listViews";
@@ -138,49 +139,57 @@ export function NavPanel({
   return (
     <>
       {selected ? (
-        <a
-          href={href({
-            name: "agent",
-            nodeDid: selected.nodeDid,
-            section: "agent",
-          })}
-          aria-current={selectedCurrent ? "page" : undefined}
-          title={`${selected.node.displayName ?? selected.label} · ${selected.nodeDid}`}
-          data-testid="working-node"
+        /* the node goes to its page; the caret beside it switches node */
+        <div
           className={cn(
-            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
+            "mr-3 ml-[14px] flex items-center gap-1",
             railAligned ? "mb-1" : "mb-2",
-            selectedCurrent && "text-ink",
           )}
         >
-          <span
+          <a
+            href={href({
+              name: "agent",
+              nodeDid: selected.nodeDid,
+              section: "agent",
+            })}
+            aria-current={selectedCurrent ? "page" : undefined}
+            title={`${selected.node.displayName ?? selected.label} · ${selected.nodeDid}`}
+            data-testid="working-node"
             className={cn(
-              "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
-              selectedCurrent && "ring-2 ring-ink",
+              "group flex h-9 min-w-0 flex-1 items-center gap-3 rounded-lg text-sm transition-colors",
+              selectedCurrent && "text-ink",
             )}
           >
-            <NodeAvatar
-              name={selected.node.displayName ?? selected.label}
-              className="size-7"
-            />
             <span
               className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
-                online ? "bg-brand" : "bg-border",
+                "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
+                selectedCurrent && "ring-2 ring-ink",
               )}
-              aria-hidden="true"
-            />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-heading font-medium text-heading">
-              {selected.node.displayName ?? selected.label}
+            >
+              <NodeAvatar
+                name={selected.node.displayName ?? selected.label}
+                className="size-7"
+              />
+              <span
+                className={cn(
+                  "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
+                  online ? "bg-brand" : "bg-border",
+                )}
+                aria-hidden="true"
+              />
             </span>
-            <span className="block text-xs text-muted-foreground">
-              {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"} ·{" "}
-              {selected.nodeDid.slice(-8)}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-heading font-medium text-heading">
+                {selected.node.displayName ?? selected.label}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"} ·{" "}
+                {selected.nodeDid.slice(-8)}
+              </span>
             </span>
-          </span>
-        </a>
+          </a>
+          <NodeSwitcher route={route} current={selected.nodeDid} />
+        </div>
       ) : (
         <a
           href={href({ name: "nodes" })}
