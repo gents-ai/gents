@@ -44,13 +44,16 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     "agents" | "agent" | "onClose"
   > | null>(null);
 
+  /* a failed read is not an empty one */
+  const [unread, setUnread] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     try {
       const report = await actions.listInstalledPacks();
       setInstalled(report.packs);
+      setUnread(null);
     } catch (error) {
       setInstalled([]);
-      toast.error(errorText(error));
+      setUnread(errorText(error));
     }
     try {
       const report = await actions.listPackPluginSlots();
@@ -221,15 +224,26 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
       )}
       <Group title="Installed">
         {installed === null && <Row label="Loading" />}
-        {installed?.length === 0 && <Row label="No packs installed" />}
+        {unread !== null && (
+          <Row label="Couldn't read the installed packs" description={unread} />
+        )}
+        {unread === null && installed?.length === 0 && (
+          <Row label="No packs installed" />
+        )}
         {installed?.map((pack) => (
           <Row
             key={pack.pack}
             label={pack.pack}
             description={
-              pack.outdated
-                ? `${pack.installed}, ${pack.latest} available`
-                : pack.installed
+              pack.outdated ? (
+                `${pack.installed}, ${pack.latest} available`
+              ) : pack.error ? (
+                <span title={pack.error}>
+                  {pack.installed} · couldn't check for updates
+                </span>
+              ) : (
+                pack.installed
+              )
             }
           >
             <div className="flex gap-2">
