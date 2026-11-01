@@ -85,7 +85,7 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
           }
           closeOnClick={false}
         >
-          Show sessions started by other sessions
+          Show sub-sessions
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>

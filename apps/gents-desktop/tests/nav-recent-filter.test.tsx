@@ -106,7 +106,7 @@ describe("the side nav's recent sessions filter", () => {
 
     await u.click(menu);
     const show = await screen.findByRole("menuitemcheckbox", {
-      name: "Show sessions started by other sessions",
+      name: "Show sub-sessions",
     });
     expect(show).toHaveAttribute("aria-checked", "false");
     await u.click(show);
