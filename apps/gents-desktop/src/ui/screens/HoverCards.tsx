@@ -1,4 +1,5 @@
 import { useState, type ReactElement } from "react";
+import { NodeAvatar } from "./AgentAvatar";
 import { ArrowUpRight, Copy, MessageSquarePlus } from "lucide-react";
 import { toast } from "sonner";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -74,23 +75,29 @@ function Facts({ children }: { children: React.ReactNode }) {
 function CardTitle({
   name,
   to,
+  avatar,
   children,
 }: {
   name: string;
   to: Route;
+  /** how the thing is recognised elsewhere, beside its name */
+  avatar?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <a
-        href={href(to)}
-        className={cn(
-          "min-w-0 truncate font-heading text-base font-medium text-heading",
-          LINK,
-        )}
-      >
-        {name}
-      </a>
+    <div className="flex items-center justify-between gap-3">
+      <span className="flex min-w-0 items-center gap-2.5">
+        {avatar}
+        <a
+          href={href(to)}
+          className={cn(
+            "min-w-0 truncate font-heading text-base font-medium text-heading",
+            LINK,
+          )}
+        >
+          {name}
+        </a>
+      </span>
       {children}
     </div>
   );
@@ -195,7 +202,16 @@ export function NodeHoverCard({
     <HoverCard open={open} onOpenChange={setOpen}>
       <HoverCardTrigger delay={500} render={children} />
       <HoverCardContent side={side} align="start" className="w-80">
-        <CardTitle name={deployment.node.displayName ?? deployment.label} to={page}>
+        <CardTitle
+          name={deployment.node.displayName ?? deployment.label}
+          to={page}
+          avatar={
+            <NodeAvatar
+              name={deployment.node.displayName ?? deployment.label}
+              className="size-8 shrink-0"
+            />
+          }
+        >
           <OnlineStatus online={online} />
         </CardTitle>
         <Facts>
