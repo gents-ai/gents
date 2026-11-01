@@ -1,5 +1,5 @@
 use super::*;
-use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use std::collections::VecDeque;
 
 /// Bounds application request preparation across peers; native P2P owns transport concurrency.
@@ -268,16 +268,20 @@ mod tests {
             .unwrap();
         assert_eq!(started_rx.try_recv().unwrap(), MAX_ACTIVE_PEERS);
         assert!(work.queued.is_empty());
-        assert!(attempts
-            .iter()
-            .all(|count| count.load(Ordering::SeqCst) == 1));
+        assert!(
+            attempts
+                .iter()
+                .all(|count| count.load(Ordering::SeqCst) == 1)
+        );
         assert!(
             work.next().now_or_never().is_none(),
             "failed peers must not busy-retry"
         );
-        assert!(attempts
-            .iter()
-            .all(|count| count.load(Ordering::SeqCst) == 1));
+        assert!(
+            attempts
+                .iter()
+                .all(|count| count.load(Ordering::SeqCst) == 1)
+        );
         for release in releases.iter_mut().take(MAX_ACTIVE_PEERS).skip(1) {
             release.take().unwrap().send(()).unwrap();
         }
@@ -290,9 +294,11 @@ mod tests {
             work.is_empty(),
             "all failed batches finish without retrying"
         );
-        assert!(attempts
-            .iter()
-            .all(|count| count.load(Ordering::SeqCst) == 1));
+        assert!(
+            attempts
+                .iter()
+                .all(|count| count.load(Ordering::SeqCst) == 1)
+        );
     }
 
     #[tokio::test]
@@ -565,7 +571,7 @@ mod tests {
             &node,
             "test.hydration.desired_generation",
             &format!(
-                r#"mutation {{ upsert_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_literal}" }} }}, add: {{ source: "enrollment", collections: ["SessionHydrationRequest"], replicator_addresses: ["test-address"], {fields} }}, update: {{ source: "enrollment", {fields} }}) {{ _docID }} }}"#,
+                r#"mutation {{ upsert_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_literal}" }} }}, add: {{ peer_id: "{peer_literal}", source: "enrollment", collections: ["SessionHydrationRequest"], replicator_addresses: ["test-address"], {fields} }}, update: {{ source: "enrollment", {fields} }}) {{ _docID }} }}"#,
             ),
         )
         .await
