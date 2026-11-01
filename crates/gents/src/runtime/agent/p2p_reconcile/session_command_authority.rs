@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 
 use super::enrollment_store::GraphqlEnrollmentStore;
@@ -12,13 +13,51 @@ pub(super) struct AuthorScope<'a> {
     pub node_did: &'a str,
 }
 
+/// A remote command is authorized only while the exact signed enrollment
+/// generation it names is still inside its authorization lease. The active
+/// projection keeps a signed Active revision after its lease lapses, so the
+/// fence alone is not current authority. Invalid or non-canonical expiries
+/// fail closed, matching the observation-time lease interpretation used by
+/// route materialization.
+pub(super) fn enrollment_authorization_is_current(expires_at: &str, now: DateTime<Utc>) -> bool {
+    gents_protocol::enrollment::authorization_lease_is_fresh_at(expires_at, now)
+}
+
+/// The owner and lease checks a remote command's exact fence must pass before
+/// it can become an expected admission. Kept pure so the fail-closed ordering
+/// is testable without a live enrollment projection.
+pub(super) fn remote_fence_rejection(
+    fence: &super::enrollment_reconcile::EnrollmentAuthorizationFence,
+    node_did: &str,
+    now: DateTime<Utc>,
+) -> Option<&'static str> {
+    if fence.owner_node != node_did {
+        return Some("enrollment targets another node");
+    }
+    if !enrollment_authorization_is_current(&fence.authorization_expires_at, now) {
+        return Some("requester enrollment authorization has expired");
+    }
+    None
+}
+
+/// A command authored by the node itself, with no peer route, is admitted as
+/// local self authority and never consults an enrollment fence.
+pub(super) fn is_local_scope(
+    requester_did: &str,
+    requester_peer_id: Option<&str>,
+    node_did: &str,
+) -> bool {
+    requester_peer_id.is_none() && requester_did == node_did
+}
+
 pub(super) async fn current_admission(
     txn: &ConfigApplyTxn<'_>,
     store: &GraphqlEnrollmentStore,
     scope: AuthorScope<'_>,
     collection: &'static str,
+    now: DateTime<Utc>,
 ) -> Result<Result<AgentRequestAdmissionRecord, String>> {
-    let local = scope.requester_peer_id.is_none() && scope.requester_did == scope.node_did;
+    let local = is_local_scope(scope.requester_did, scope.requester_peer_id, scope.node_did);
     let mut expected_admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
             scope.requester_did,
@@ -36,8 +75,8 @@ pub(super) async fn current_admission(
         else {
             return Ok(Err("requester enrollment is not current".into()));
         };
-        if fence.owner_node != scope.node_did {
-            return Ok(Err("enrollment targets another node".into()));
+        if let Some(reason) = remote_fence_rejection(&fence, scope.node_did, now) {
+            return Ok(Err(reason.into()));
         }
         expected_admission =
             gents_protocol::request_admission::AgentRequestAdmissionRecord::enrollment(
@@ -80,4 +119,102 @@ pub(super) async fn current_admission(
         }
     }
     Ok(Ok(expected_admission))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence;
+
+    const NODE: &str = "did:key:z6Mknode";
+    const MEMBER: &str = "did:key:z6Mkmember";
+
+    fn fence(owner_node: &str, expires_at: &str) -> EnrollmentAuthorizationFence {
+        EnrollmentAuthorizationFence {
+            network_id: "network-1".into(),
+            request_id: "enrollment-request-1".into(),
+            admin_did: "did:key:z6Mkadmin".into(),
+            member_did: MEMBER.into(),
+            member_peer: "member-peer".into(),
+            member_ticket: "member-ticket".into(),
+            owner_node: owner_node.into(),
+            profile: "client".into(),
+            request_digest: "enrollment-digest-1".into(),
+            authorization_sequence: 1,
+            authorization_expires_at: expires_at.into(),
+        }
+    }
+
+    fn at(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn remote_fence_accepts_a_future_lease() {
+        let current = fence(NODE, "2030-01-01T00:05:00Z");
+        assert_eq!(
+            remote_fence_rejection(&current, NODE, at("2030-01-01T00:04:59Z")),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_fence_rejects_the_exact_expiry_boundary() {
+        let current = fence(NODE, "2030-01-01T00:05:00Z");
+        assert_eq!(
+            remote_fence_rejection(&current, NODE, at("2030-01-01T00:05:00Z")),
+            Some("requester enrollment authorization has expired")
+        );
+    }
+
+    #[test]
+    fn remote_fence_rejects_a_past_lease() {
+        let current = fence(NODE, "2030-01-01T00:05:00Z");
+        assert_eq!(
+            remote_fence_rejection(&current, NODE, at("2030-01-01T00:05:01Z")),
+            Some("requester enrollment authorization has expired")
+        );
+    }
+
+    #[test]
+    fn remote_fence_fails_closed_on_a_malformed_lease() {
+        for malformed in [
+            "",
+            "not-a-timestamp",
+            "2030-01-01T00:05:00+00:00",
+            "2030-01-01T00:05:00.500Z",
+            "2030-01-01 00:05:00Z",
+        ] {
+            let current = fence(NODE, malformed);
+            assert_eq!(
+                remote_fence_rejection(&current, NODE, at("2030-01-01T00:04:59Z")),
+                Some("requester enrollment authorization has expired"),
+                "malformed lease {malformed:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_fence_still_rejects_another_owner_before_the_lease() {
+        let elsewhere = fence("did:key:z6Mkother", "2030-01-01T00:05:00Z");
+        assert_eq!(
+            remote_fence_rejection(&elsewhere, NODE, at("2030-01-01T00:04:59Z")),
+            Some("enrollment targets another node")
+        );
+        let expired_elsewhere = fence("did:key:z6Mkother", "2030-01-01T00:00:00Z");
+        assert_eq!(
+            remote_fence_rejection(&expired_elsewhere, NODE, at("2030-01-01T00:04:59Z")),
+            Some("enrollment targets another node")
+        );
+    }
+
+    #[test]
+    fn local_self_scope_is_unchanged() {
+        assert!(is_local_scope(NODE, None, NODE));
+        assert!(!is_local_scope(MEMBER, None, NODE));
+        assert!(!is_local_scope(NODE, Some("member-peer"), NODE));
+        assert!(!is_local_scope(MEMBER, Some("member-peer"), NODE));
+    }
 }
