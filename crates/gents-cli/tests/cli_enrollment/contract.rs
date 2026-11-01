@@ -21,11 +21,11 @@ mod streaming;
 const FOLLOWUP_PROMPT: &str = "Continue our existing conversation";
 
 /// Fixed stage labels for one awaited phase. The stage is recorded before the
-/// await and kept outside the timeout, so a cancelled future still reports the
-/// stage that was in flight. Concurrent branches each hold their own entry, so
-/// a `try_join!` failure names every stage that was still running. Only fixed
-/// labels and elapsed milliseconds are kept: no prompts, replies, peer ids,
-/// environment or provider payloads.
+/// await and kept outside the timeout. Records labels entered and not
+/// completed. A join error or outer timeout leaves every incomplete branch
+/// listed; these labels do not identify a unique cause. Only fixed labels and
+/// elapsed milliseconds are kept: no prompts, replies, peer ids, environment or
+/// provider payloads.
 struct StageTrace {
     started: Instant,
     in_flight: std::sync::Mutex<Vec<&'static str>>,
