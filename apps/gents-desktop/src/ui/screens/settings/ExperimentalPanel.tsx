@@ -7,7 +7,7 @@ import { Input } from "@gents/ui/components/input";
 import { Switch } from "@gents/ui/components/switch";
 import { FLAGS } from "@/lib/flags";
 import { preferences, usePreferences, useRelaunchPending } from "@/preferences";
-import { Group, Row } from "../agent/rows";
+import { Group } from "../agent/rows";
 import { Hint } from "../Hint";
 
 export function ExperimentalPanel() {
@@ -38,18 +38,6 @@ export function ExperimentalPanel() {
           </Button>
         </Hint>
       </header>
-      {relaunchPending && (
-        <Group>
-          <Row
-            label="Relaunch to apply"
-            description="Some of your changes take effect after the app relaunches."
-          >
-            <Button variant="brand" onClick={() => window.location.reload()}>
-              Relaunch
-            </Button>
-          </Row>
-        </Group>
-      )}
       <Group>
         <div className="flex items-center gap-2 px-5 py-2.5">
           <Search className="size-4 shrink-0 text-muted-foreground" />
@@ -124,6 +112,21 @@ export function ExperimentalPanel() {
           );
         })}
       </Group>
+      {relaunchPending && (
+        <div
+          data-testid="relaunch-bar"
+          className="sticky -bottom-px z-10 pb-4 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-full motion-safe:duration-200 motion-safe:ease-out"
+        >
+          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 rounded-[1.25rem] border border-border bg-raised/95 py-1.5 pr-1.5 pl-4 shadow-2xl shadow-black/60 backdrop-blur">
+            <span className="mr-auto text-xs text-muted-foreground">
+              Some changes apply after the app relaunches
+            </span>
+            <Button size="sm" variant="brand" onClick={() => window.location.reload()}>
+              Relaunch
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
