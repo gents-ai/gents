@@ -620,7 +620,12 @@ async fn fresh_connection_reset_keeps_its_io_error() {
         // Read the request, then reset rather than close cleanly.
         let mut s = s;
         let _ = read_request(&mut s).await;
-        s.set_linger(Some(std::time::Duration::ZERO)).unwrap();
+        // `SO_LINGER` with a zero timeout makes `close` send RST instead of
+        // FIN, so the client sees a reset. Tokio's own `set_linger` is
+        // deprecated; `SockRef` sets the same option on the same fd.
+        socket2::SockRef::from(&s)
+            .set_linger(Some(std::time::Duration::ZERO))
+            .unwrap();
         drop(s);
     });
     let err = client().send(&t, &head(0), b"").await.err().unwrap();
