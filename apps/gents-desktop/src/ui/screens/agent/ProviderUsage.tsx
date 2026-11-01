@@ -140,9 +140,11 @@ function WindowRow({ w, now }: { w: UsageWindowView; now: number }) {
       title={windowDetail(w, now)}
       className="col-span-4 grid grid-cols-subgrid items-center text-xs"
     >
-      <span className="truncate text-foreground">{w.label}</span>
+      <span className="truncate font-medium text-foreground">{w.label}</span>
       <Meter w={w} pct={pct} />
-      <span className={cn("text-right tabular-nums", INK[usageLevel(pct)])}>
+      <span
+        className={cn("text-right font-semibold tabular-nums", INK[usageLevel(pct)])}
+      >
         {pct}%
       </span>
       <span className="truncate text-muted-foreground tabular-nums">
@@ -179,8 +181,9 @@ function WindowBar({
     >
       <Meter w={w} pct={pct} />
       <p className="flex min-w-0 items-baseline gap-1.5 text-xs whitespace-nowrap tabular-nums">
-        <span className="text-foreground">{w.label}</span>
-        <span className={INK[usageLevel(pct)]}>{pct}%</span>
+        {/* the window and how full it is read first; when it resets, after */}
+        <span className="font-medium text-foreground">{w.label}</span>
+        <span className={cn("font-semibold", INK[usageLevel(pct)])}>{pct}%</span>
         {when && <span className="truncate text-muted-foreground">· {when}</span>}
       </p>
     </li>
