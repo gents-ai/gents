@@ -351,7 +351,10 @@ async fn pool_respects_max_idle_per_host() {
 }
 
 #[tokio::test]
-async fn stale_pooled_connection_is_retried_once() {
+async fn stale_pooled_connection_is_not_replayed() {
+    // A pooled connection the server closed while idle must not cause the
+    // request to be written twice: the server may have acted on the first
+    // copy. The failure is returned and the caller's retry owner decides.
     let (l, t) = listener().await;
     let accepts = Arc::new(AtomicUsize::new(0));
     let (closed_tx, closed_rx) = oneshot::channel();
@@ -365,6 +368,7 @@ async fn stale_pooled_connection_is_retried_once() {
             .unwrap();
         drop(s);
         closed_tx.send(()).unwrap();
+        // A second connection is only accepted if the client replays.
         let (mut s, _) = l.accept().await.unwrap();
         n.fetch_add(1, Ordering::SeqCst);
         read_request(&mut s).await.unwrap();
@@ -376,9 +380,61 @@ async fn stale_pooled_connection_is_retried_once() {
     let mut r = c.send(&t, &head(0), b"").await.unwrap();
     assert_eq!(collect(&mut r.body).await, b"one");
     closed_rx.await.unwrap();
-    let mut r = c.send(&t, &head(0), b"").await.unwrap();
-    assert_eq!(collect(&mut r.body).await, b"two");
-    assert_eq!(accepts.load(Ordering::SeqCst), 2);
+    let err = c.send(&t, &head(0), b"").await.err().unwrap();
+    assert!(matches!(err, TransportError::Closed), "{err:?}");
+    assert_eq!(accepts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn full_post_on_a_reused_connection_is_sent_once() {
+    // The regression: the server reads the whole second POST on the reused
+    // connection and closes before answering. The client must not write that
+    // POST again on a fresh connection.
+    let (l, t) = listener().await;
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let posts = Arc::new(AtomicUsize::new(0));
+    let (second_tx, second_rx) = oneshot::channel();
+    let (n, p) = (accepts.clone(), posts.clone());
+    tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        n.fetch_add(1, Ordering::SeqCst);
+        // First request: answered normally, connection stays open and pooled.
+        read_request(&mut s).await.unwrap();
+        p.fetch_add(1, Ordering::SeqCst);
+        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .await
+            .unwrap();
+        // Second request on the same connection: read it in full, then close
+        // without a response.
+        let second = read_request(&mut s).await.unwrap();
+        p.fetch_add(1, Ordering::SeqCst);
+        second_tx.send(second).unwrap();
+        drop(s);
+        // Any further connection means the client replayed the POST.
+        if let Ok((mut s, _)) = l.accept().await {
+            n.fetch_add(1, Ordering::SeqCst);
+            if read_request(&mut s).await.is_some() {
+                p.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    let c = client();
+    let mut r = c.send(&t, &head(2), b"hi").await.unwrap();
+    assert_eq!(collect(&mut r.body).await, b"ok");
+    let err = c.send(&t, &head(2), b"hi").await.err().unwrap();
+    assert!(matches!(err, TransportError::Closed), "{err:?}");
+    let second = second_rx.await.unwrap();
+    assert_eq!(second, [head(2).as_slice(), b"hi"].concat());
+    assert_eq!(
+        posts.load(Ordering::SeqCst),
+        2,
+        "the POST was written twice"
+    );
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        1,
+        "a second connection was opened"
+    );
 }
 
 #[tokio::test]
