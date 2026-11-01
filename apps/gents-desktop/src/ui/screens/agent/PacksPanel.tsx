@@ -340,29 +340,47 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
             {null}
           </Row>
         )}
-        {found.map((pack) => {
-          const name = `${pack.namespace}/${pack.name}`;
-          const have = installed?.some((p) => p.pack === name) ?? false;
-          return (
-            <Row
-              key={name}
-              label={name}
-              description={pack.description ?? pack.latest ?? undefined}
-            >
-              {have ? (
-                <span className="text-xs text-muted-foreground">Installed</span>
-              ) : (
-                <Button
-                  size="sm"
-                  disabled={busy !== null}
-                  onClick={() => install(name)}
-                >
-                  Install
-                </Button>
-              )}
-            </Row>
-          );
-        })}
+        {found.length > 0 && (
+          /* one line a pack, in a box of its own height, so a long registry
+             scrolls inside it rather than stretching the page */
+          <ul
+            aria-label="Registry packs"
+            className="max-h-80 divide-y divide-border/40 overflow-y-auto"
+          >
+            {found.map((pack) => {
+              const name = `${pack.namespace}/${pack.name}`;
+              const have = installed?.some((p) => p.pack === name) ?? false;
+              const about = pack.description ?? pack.latest ?? undefined;
+              return (
+                <li key={name} className="flex h-11 items-center gap-3 px-5">
+                  <span title={about} className="min-w-0 flex-1 truncate text-sm">
+                    <span className="font-medium text-foreground">{name}</span>
+                    {about && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {about}
+                      </span>
+                    )}
+                  </span>
+                  {have ? (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      Installed
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={busy !== null}
+                      onClick={() => install(name)}
+                    >
+                      Install
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
         {(page > 1 || hasMore) && (
           <Row label={`Page ${page}`}>
             <div className="flex gap-2">
