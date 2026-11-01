@@ -188,6 +188,38 @@ describe("the search palette", () => {
     ]);
   });
 
+  it("opens short, and lists a group's rest from its Show more row", () => {
+    open();
+    /* five actions: three, then a row for the other two */
+    expect(options("Actions")).toEqual([
+      "New session",
+      "Go to sessions",
+      "Go to mailbox",
+      "Show 2 more",
+    ]);
+    const input = screen.getByRole("combobox", { name: "Search" });
+    const rows = screen.getAllByRole("option");
+    for (let i = 0; i < rows.length - 1; i++)
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(screen.getByRole("option", { name: "Show 2 more" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(options("Actions")).toEqual([
+      "New session",
+      "Go to sessions",
+      "Go to mailbox",
+      "Go to nodes",
+      "Open settings",
+    ]);
+    /* the palette stays open, on the first row it revealed */
+    expect(screen.getByRole("option", { name: "Go to nodes" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("ranks matches, narrows by kind and opens the chosen session", async () => {
     const view = open();
     const box = screen.getByRole("combobox", { name: "Search" });
