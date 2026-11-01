@@ -237,5 +237,18 @@ test.describe("nav modes", () => {
       placed.expanded!.pane.x,
     );
     expect(placed.hover!.history.x).toBeGreaterThanOrEqual(placed.hover!.pane.x);
+
+    /* on the window's ground the current page is marked by a fill alone */
+    const current = page
+      .locator("[data-ground=window]")
+      .locator("a[aria-current=page]")
+      .first();
+    await expect(current).toBeVisible();
+    const look = await current.evaluate((a) => {
+      const style = getComputedStyle(a);
+      return { border: style.borderTopColor, fill: style.backgroundColor };
+    });
+    expect(look.border).toBe("rgba(0, 0, 0, 0)");
+    expect(look.fill).not.toBe("rgba(0, 0, 0, 0)");
   });
 });
