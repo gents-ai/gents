@@ -4,6 +4,8 @@
 mod artifact;
 #[path = "live_receipt/collect.rs"]
 mod collect;
+#[path = "live_receipt/stability.rs"]
+mod stability;
 #[cfg(test)]
 #[path = "live_receipt/tests.rs"]
 mod tests;
@@ -21,6 +23,7 @@ use serde_json::json;
 
 use artifact::{publish_receipt, validate_directory, validate_scenario};
 use collect::{collect_request, validate_session_request_sets};
+use stability::snapshot;
 
 const ARTIFACT_DIR_ENV: &str = "GENTS_LIVE_ARTIFACT_DIR";
 
@@ -179,13 +182,14 @@ pub async fn export_live_receipts(
             "duplicate requested receipt identity"
         );
     }
+    // Every row and commit fingerprint comes from one read-only transaction, so
+    // a concurrent write cannot mix a request row with a later commit.
+    let observations = snapshot(access, requests, limits).await?;
     let mut receipts = Vec::new();
-    for expected in requests {
-        receipts.push(collect_request(access, expected, limits).await?);
+    for (observation, expected) in observations.iter().zip(requests) {
+        receipts.push(collect_request(access, observation, expected, limits).await?);
     }
-    // Read the complete session set last: completion can spawn a sibling while
-    // earlier capture evidence is being read.
-    validate_session_request_sets(access, requests, limits.max_requests).await?;
+    validate_session_request_sets(&observations, requests, limits.max_requests)?;
     let bytes = serde_json::to_vec_pretty(&json!({
         "receipt_version": 1,
         "requests": receipts,

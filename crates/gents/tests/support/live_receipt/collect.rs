@@ -2,21 +2,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{ensure, Context, Result};
 use gents::inference::rendered_request::{
-    canonical_json_string, capture_key, commits, decode_capture_pair, AssemblyTrace,
-    CaptureScopeKind, ParsedProvenance, ProvenanceManifest,
+    canonical_json_string, capture_key, decode_capture_pair, AssemblyTrace, CaptureScopeKind,
+    ParsedProvenance, ProvenanceManifest,
 };
 use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 
+use super::stability::{FieldFingerprint, Observation};
 use super::validation::{
-    capture_order, digest, integer, rows, string, validate_body, validate_owner, validate_request,
+    capture_order, digest, integer, string, validate_body, validate_owner, validate_request,
 };
 use super::{ReceiptLimits, ReceiptRequest};
 
-pub(super) async fn validate_session_request_sets(
-    access: &ConfigAccess,
+/// Check the session's request set from the same snapshot as the request rows.
+pub(super) fn validate_session_request_sets(
+    observations: &[Observation],
     requests: &[ReceiptRequest],
     max_requests: usize,
 ) -> Result<()> {
@@ -28,19 +29,19 @@ pub(super) async fn validate_session_request_sets(
             .push(request);
     }
     for ((node, session), expected) in groups {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node}"}},
-            session_id: {{_eq: "{session}"}}}}, limit: {limit}) {{
-            _docID request_id node_did requester_did agent_id session_id lifecycle_state
-        }} }}"#,
-            node = escape_graphql_string(node),
-            session = escape_graphql_string(session),
-            limit = max_requests + 1
+        let observation = observations
+            .iter()
+            .find(|observation| {
+                observation.request["node_did"] == json!(node)
+                    && observation.request["session_id"] == json!(session)
+            })
+            .context("snapshot lacks the session request set")?;
+        ensure!(
+            observation.session_requests.len() <= max_requests,
+            "session request set exceeds its bound"
         );
-        let response = access.execute(&query).await?;
-        let actual = rows(&response, "AgentRequest", max_requests)?;
         let mut seen = BTreeSet::new();
-        for row in actual {
+        for row in &observation.session_requests {
             let logical = string(row, "request_id")?;
             let request = expected
                 .iter()
@@ -66,8 +67,13 @@ pub(super) async fn validate_session_request_sets(
     Ok(())
 }
 
+/// Validate one request's evidence from a single snapshot, then decode its
+/// capture payloads. Decoding reads content-addressed blocks and delta bases
+/// outside the snapshot; the existing decoder verifies each against the commit
+/// the snapshot recorded, so a rewritten block fails instead of publishing.
 pub(super) async fn collect_request(
     access: &ConfigAccess,
+    observation: &Observation,
     expected: &ReceiptRequest,
     limits: ReceiptLimits,
 ) -> Result<Value> {
@@ -88,46 +94,15 @@ pub(super) async fn collect_request(
         RequestLifecycleState::parse(&expected.lifecycle_state)?.is_terminal(),
         "receipt requires terminal request lifecycle evidence"
     );
-    let request_id = escape_graphql_string(&expected.request_id);
-    // Deliberately query the logical ID broadly: a sibling physical identity
-    // must fail validation instead of disappearing behind an ownership filter.
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request_id}"}}}}, limit: 2) {{
-            _docID request_id node_did requester_did agent_id session_id lifecycle_state
-            created_at claimed_at terminalized_at stopped_before_running
-        }} }}"#
-    );
-    let response = access.execute(&query).await?;
-    let request_rows = rows(&response, "AgentRequest", 1)?;
-    let [request] = request_rows else {
-        anyhow::bail!("receipt requires exactly one AgentRequest")
-    };
+    let request = &observation.request;
     validate_request(request, expected)?;
     let physical = string(request, "_docID")?;
     if let Some(wanted) = &expected.request_doc_id {
         ensure!(physical == wanted, "request physical identity mismatch");
     }
-    let lifecycle_commit = required_commit(access, physical, "lifecycle_state").await?;
-    let query_limit = limits.max_attempts_per_request + 1;
-    let query = format!(
-        r#"{{
-        RenderedRequest(filter: {{request_id: {{_eq: "{request_id}"}}}}, limit: {query_limit}) {{
-            _docID capture_key request_doc_id request_commit_cid request_id session_id
-            node_did requester_did agent_id capture_scope turn_index attempt capture_version
-            model_name source request_json provenance_json created_at
-        }}
-        InferenceCall(filter: {{request_id: {{_eq: "{request_id}"}}}}, limit: {query_limit}) {{
-            _docID call_id request_id request_doc_id session_id node_did agent_id call_seq
-            model_name profile_id backend_id call_kind attempt call_state queued_at started_at ended_at
-        }} }}"#
-    );
-    let response = access.execute(&query).await?;
-    let captures = rows(
-        &response,
-        "RenderedRequest",
-        limits.max_attempts_per_request,
-    )?;
-    let calls = rows(&response, "InferenceCall", limits.max_attempts_per_request)?;
+    let lifecycle_commit = required_commit(observation, physical, "lifecycle_state")?;
+    let captures = &observation.captures;
+    let calls = &observation.calls;
     ensure!(
         !captures.is_empty() && !calls.is_empty(),
         "receipt has no durable attempts"
@@ -267,8 +242,8 @@ pub(super) async fn collect_request(
             "capture_scope": manifest.capture_scope,
             "turn_index": key.turn_index, "attempt": key.attempt,
             "capture_version": version,
-            "request_json_commit": required_commit(access, capture_doc, "request_json").await?,
-            "provenance_json_commit": required_commit(access, capture_doc, "provenance_json").await?,
+            "request_json_commit": required_commit(observation, capture_doc, "request_json")?,
+            "provenance_json_commit": required_commit(observation, capture_doc, "provenance_json")?,
             "provenance": {
                 "manifest_version": manifest.manifest_version,
                 "status": manifest.status, "capture_seam": manifest.capture_seam,
@@ -280,7 +255,7 @@ pub(super) async fn collect_request(
             },
             "observed": observed,
             "call": call,
-            "call_state_commit": required_commit(access, string(call, "_docID")?, "call_state").await?,
+            "call_state_commit": required_commit(observation, string(call, "_docID")?, "call_state")?,
         }));
     }
     ensure!(
@@ -295,13 +270,11 @@ pub(super) async fn collect_request(
     Ok(json!({"request": request, "lifecycle_commit": lifecycle_commit, "attempts": attempts}))
 }
 
-async fn required_commit(access: &ConfigAccess, doc_id: &str, field: &str) -> Result<Value> {
-    let commit = commits::field_commit(access, doc_id, field)
-        .await?
-        .context("receipt lacks durable field commit")?;
-    ensure!(
-        !commit.cid.is_empty() && commit.height > 0,
-        "invalid field commit"
-    );
-    Ok(json!({"cid": commit.cid, "height": commit.height}))
+fn required_commit(observation: &Observation, doc_id: &str, field: &str) -> Result<Value> {
+    let FieldFingerprint { cid, height } = observation
+        .commits
+        .get(&(doc_id.to_owned(), field.to_owned()))
+        .with_context(|| format!("receipt lacks durable {field} commit for {doc_id}"))?;
+    ensure!(!cid.is_empty() && *height > 0, "invalid field commit");
+    Ok(json!({"cid": cid, "height": height}))
 }
