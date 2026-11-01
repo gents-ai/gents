@@ -14,10 +14,5 @@ export function morph(update: () => void) {
     matchMedia("(prefers-reduced-motion: reduce)").matches
   )
     return update();
-  const root = document.documentElement;
-  root.dataset.morph = "";
-  const transition = doc.startViewTransition(() => flushSync(update)) as {
-    finished?: Promise<unknown>;
-  };
-  void Promise.resolve(transition?.finished).finally(() => delete root.dataset.morph);
+  doc.startViewTransition(() => flushSync(update));
 }
