@@ -12,7 +12,6 @@ import {
   useState,
 } from "react";
 import { Check, Copy } from "lucide-react";
-import { toast } from "sonner";
 import type {
   DerivedCancelCauseView,
   DesktopSessionSnapshot,
@@ -64,7 +63,7 @@ import { CompactionMarker, DayMarker, dayOpenings } from "./TranscriptMarker";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
-import { useCopied } from "@/lib/clipboard";
+import { copyText, useCopied } from "@/lib/clipboard";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
 import { TurnChanges } from "./TurnChanges";
@@ -98,10 +97,7 @@ function copyActions(text: string | null | undefined) {
     {
       label: "Copy",
       icon: <Copy />,
-      onClick: () => {
-        void navigator.clipboard?.writeText(text ?? "");
-        toast("Copied");
-      },
+      onClick: () => copyText(text ?? ""),
     },
   ];
 }
