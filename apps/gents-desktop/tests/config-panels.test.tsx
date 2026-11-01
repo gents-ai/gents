@@ -1,4 +1,11 @@
-import { act, renderHook, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { selection } from "../src/hooks/selectionStore";
@@ -124,8 +131,15 @@ function harness() {
   return { api, app };
 }
 
+/* a node's or agent's name, description and tags open under its header */
+function openIdentity() {
+  const edit = screen.queryByRole("button", { name: "Edit", expanded: false });
+  if (edit) fireEvent.click(edit);
+}
+
 async function replace(label: string, value: string) {
   const user = userEvent.setup();
+  openIdentity();
   const field = screen.getByLabelText(label);
   await user.clear(field);
   await user.type(field, value);
@@ -133,6 +147,7 @@ async function replace(label: string, value: string) {
 }
 
 function expectFields(labels: string[]) {
+  openIdentity();
   for (const label of labels) {
     expect(screen.getAllByText(label, { selector: "label" }).length).toBeGreaterThan(0);
   }

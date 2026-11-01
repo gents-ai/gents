@@ -132,5 +132,6 @@ it("shows enrolled settings read-only before an unavailable operator write", () 
   expect(screen.getByRole("status")).toHaveTextContent(
     "Remote configuration is read-only",
   );
-  expect(screen.getByRole("textbox", { name: "Display name" })).toBeDisabled();
+  expect(screen.getByLabelText("Maximum request hop")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
 });

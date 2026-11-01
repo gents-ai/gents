@@ -101,6 +101,7 @@ test.describe("half-screen window", () => {
         .getByRole("link", { name: /^Ops\b/ })
         .first()
         .click();
+      await page.getByRole("button", { name: "Edit" }).click();
       const name = page.getByRole("textbox", { name: "Display name" });
       await expectInsideViewport(page, name);
       await expectNoPageHorizontalOverflow(page);

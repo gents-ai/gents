@@ -1,7 +1,14 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, ArrowUpRight, Copy, MoreHorizontal, Plus } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ArrowUpRight,
+  Copy,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+} from "lucide-react";
 import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 import {
   AlertDialog,
@@ -100,6 +107,9 @@ export function AgentEditor({
   );
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
   const [newSkill, setNewSkill] = useState<((id: string | null) => void) | null>(null);
+  /* name, description and tags show in the header; their fields open
+     under it on Edit, and always for an agent being made */
+  const [editingAbout, setEditingAbout] = useState(false);
   const [configure, setConfigure] = useState<{
     kind: "tools" | "profile";
     id: string;
@@ -351,9 +361,31 @@ export function AgentEditor({
               </h2>
               {agent.isDefault && <Badge variant="secondary">Default</Badge>}
               {draftMode && <Badge variant="secondary">Draft</Badge>}
+              {!draftMode && (
+                <Button
+                  size="xs"
+                  variant="quiet"
+                  aria-expanded={editingAbout}
+                  aria-controls={id("about")}
+                  onClick={() => setEditingAbout((open) => !open)}
+                >
+                  {editingAbout ? (
+                    "Done"
+                  ) : (
+                    <>
+                      <Pencil /> Edit
+                    </>
+                  )}
+                </Button>
+              )}
             </div>
             {draftMode ? null : (
               <>
+                {d.draft.description.trim() && (
+                  <p className="mt-0.5 text-sm text-foreground/80">
+                    {d.draft.description}
+                  </p>
+                )}
                 <p
                   data-testid="agent-summary"
                   className="mt-0.5 text-sm text-muted-foreground"
@@ -364,6 +396,18 @@ export function AgentEditor({
                     onOpen={openAccess}
                   />
                 </p>
+                {d.draft.tags.length > 0 && (
+                  <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
+                    {d.draft.tags.map((tag) => (
+                      <li
+                        key={tag}
+                        className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                      >
+                        {tag}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {attention && (
                   <p
                     id={`${agent.agentId}-status-note`}
@@ -382,34 +426,38 @@ export function AgentEditor({
         <AgentSummaryCards deployment={deployment} agentId={agent.agentId} />
       )}
 
-      <Group title="About">
-        {!draftMode && (
-          <FactRow label="Agent ID" mono>
-            {agent.agentId}
-          </FactRow>
-        )}
-        <TextRow
-          id={id("name")}
-          label="Display name"
-          value={d.draft.displayName}
-          onChange={(v) => d.set("displayName", v)}
-          error={errors.displayName}
-        />
-        <AreaRow
-          id={id("description")}
-          label="Description"
-          description="One or two sentences, shown in the agent picker."
-          value={d.draft.description}
-          onChange={(v) => d.set("description", v)}
-          rows={2}
-        />
-        <TagsRow
-          id={id("tags")}
-          label="Tags"
-          value={d.draft.tags}
-          onChange={(v) => d.set("tags", v)}
-        />
-      </Group>
+      {(draftMode || editingAbout || errors.displayName) && (
+        <div id={id("about")}>
+          <Group title="About">
+            {!draftMode && (
+              <FactRow label="Agent ID" mono>
+                {agent.agentId}
+              </FactRow>
+            )}
+            <TextRow
+              id={id("name")}
+              label="Display name"
+              value={d.draft.displayName}
+              onChange={(v) => d.set("displayName", v)}
+              error={errors.displayName}
+            />
+            <AreaRow
+              id={id("description")}
+              label="Description"
+              description="One or two sentences, shown in the agent picker."
+              value={d.draft.description}
+              onChange={(v) => d.set("description", v)}
+              rows={2}
+            />
+            <TagsRow
+              id={id("tags")}
+              label="Tags"
+              value={d.draft.tags}
+              onChange={(v) => d.set("tags", v)}
+            />
+          </Group>
+        </div>
+      )}
 
       <section
         data-testid="context-frame"
