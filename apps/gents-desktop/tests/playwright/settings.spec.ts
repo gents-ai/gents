@@ -13,11 +13,10 @@ test.describe("the app's settings screen", () => {
     await expect(screen).toHaveAttribute("data-section", "general");
     await expect(links.first()).toHaveAttribute("aria-current", "page");
     await expect(links.last()).toHaveAttribute("aria-current", "page");
-    await page.getByRole("combobox", { name: "Theme" }).click();
-    await page.getByRole("option", { name: "Dark" }).click();
+    const theme = page.getByRole("group", { name: "Theme" });
+    await theme.getByRole("button", { name: "Dark" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    await page.getByRole("combobox", { name: "Theme" }).click();
-    await page.getByRole("option", { name: "Light" }).click();
+    await theme.getByRole("button", { name: "Light" }).click();
     await expect(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
   });
 
@@ -43,6 +42,6 @@ test.describe("the app's settings screen", () => {
       "data-section",
       "general",
     );
-    await expect(page.getByRole("combobox", { name: "Theme" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
   });
 });

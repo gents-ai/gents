@@ -14,8 +14,45 @@ import {
   useThemePreference,
 } from "@/preferences";
 import { MOD } from "../Shortcuts";
+import { Monitor, Moon, Sun } from "lucide-react";
+import { ToggleGroup, ToggleGroupItem } from "@gents/ui/components/toggle-group";
+import { Hint } from "../Hint";
 import { ChoiceRow } from "../agent/editors";
-import { Group } from "../agent/rows";
+import { Group, Row } from "../agent/rows";
+
+const THEMES: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
+  { value: "system", label: "System", icon: Monitor },
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+];
+
+/* the three themes side by side, the chosen one filled; the arrow keys
+   move between them */
+function ThemeChoice({ value }: { value: ThemePreference }) {
+  return (
+    <ToggleGroup
+      aria-label="Theme"
+      value={[value]}
+      onValueChange={(next) => {
+        const chosen = next[0] as ThemePreference | undefined;
+        if (chosen) preferences.setTheme(chosen);
+      }}
+      className="shrink-0 gap-0.5 rounded-xl bg-muted/60 p-0.5"
+    >
+      {THEMES.map(({ value: theme, label, icon: Icon }) => (
+        <Hint key={theme} label={label}>
+          <ToggleGroupItem
+            value={theme}
+            aria-label={label}
+            className="size-7 rounded-lg text-muted-foreground hover:bg-transparent hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
+          >
+            <Icon className="size-4" />
+          </ToggleGroupItem>
+        </Hint>
+      ))}
+    </ToggleGroup>
+  );
+}
 
 export function GeneralPanel() {
   const theme = useThemePreference();
@@ -36,18 +73,12 @@ export function GeneralPanel() {
   return (
     <div>
       <Group title="Appearance">
-        <ChoiceRow
-          id="settings-theme"
+        <Row
           label="Theme"
           description="Follow the system, or always light or dark, for every window of the app."
-          value={theme}
-          onChange={(v) => preferences.setTheme(v as ThemePreference)}
-          items={[
-            { value: "system", label: "System" },
-            { value: "light", label: "Light" },
-            { value: "dark", label: "Dark" },
-          ]}
-        />
+        >
+          <ThemeChoice value={theme} />
+        </Row>
         <ChoiceRow
           id="settings-nav"
           label="Side nav"
