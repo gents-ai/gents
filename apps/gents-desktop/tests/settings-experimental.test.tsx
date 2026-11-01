@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -131,14 +131,28 @@ describe("the experimental features settings", () => {
       const user = userEvent.setup();
       openSection();
       await user.click(toggle(DEMO.name));
-      expect(screen.queryByRole("button", { name: "Relaunch" })).toBeNull();
+      expect(screen.queryByTestId("relaunch-bar")).toBeNull();
       await user.click(toggle("Relaunch probe"));
-      await user.click(screen.getByRole("button", { name: "Relaunch" }));
+      const bar = screen.getByTestId("relaunch-bar");
+      expect(bar).toHaveClass("sticky");
+      expect(bar).toHaveTextContent("Some changes apply after the app relaunches");
+      expect(
+        toggle("Relaunch probe").compareDocumentPosition(bar) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      await user.click(within(bar).getByRole("button", { name: "Relaunch" }));
       expect(reload).toHaveBeenCalledTimes(1);
+      await user.click(toggle("Relaunch probe"));
+      expect(screen.queryByTestId("relaunch-bar")).toBeNull();
+      await user.click(toggle("Relaunch probe"));
       await user.click(
         screen.getByRole("button", { name: "Reset Relaunch probe to default" }),
       );
-      expect(screen.queryByRole("button", { name: "Relaunch" })).toBeNull();
+      expect(screen.queryByTestId("relaunch-bar")).toBeNull();
+      await user.click(toggle("Relaunch probe"));
+      expect(screen.getByTestId("relaunch-bar")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Reset all" }));
+      expect(screen.queryByTestId("relaunch-bar")).toBeNull();
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,
@@ -150,7 +164,7 @@ describe("the experimental features settings", () => {
   it("asks for no relaunch for what the app launched with", () => {
     withFlags({ [PROBE]: true });
     openSection();
-    expect(screen.queryByRole("button", { name: "Relaunch" })).toBeNull();
+    expect(screen.queryByTestId("relaunch-bar")).toBeNull();
     expect(toggle("Relaunch probe")).toBeChecked();
   });
 });
