@@ -1,12 +1,13 @@
 import { SquareStack } from "lucide-react";
 import { PanelEmpty } from "./PanelEmpty";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { SurfaceContext } from "@/app/surfaces";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { href } from "@/lib/router";
 import { nodeOfSession } from "@/lib/nodes";
+import { cn } from "@gents/ui/lib/utils";
 import { stateOf } from "@/lib/live";
 import { useFinishedSince } from "@/lib/seen";
 import { NodeAgentStack } from "./NodeBehaviorStack";
@@ -33,6 +34,65 @@ function duration(s: SessionSummary, now: number) {
   return last && last > started ? span(last - started) : null;
 }
 
+/* a reply that arrives while its row is up grows in; one there when the
+   row opens is already in place */
+function ReplyLine({ text, enter }: { text: string; enter: boolean }) {
+  const [entering] = useState(enter);
+  return (
+    <div
+      data-entering={entering || undefined}
+      className="grid grid-rows-[1fr] motion-safe:data-entering:animate-[worker-reply-enter_200ms_ease-out]"
+    >
+      <p className="min-h-0 truncate text-xs text-muted-foreground">{text}</p>
+    </div>
+  );
+}
+
+type Look = { key: string; turnState: string | null | undefined; fresh: boolean };
+
+/* the mark crossfades from the one it last showed while its row is up */
+function EasedStatus({
+  turnState,
+  fresh,
+  className,
+}: {
+  turnState: string | null | undefined;
+  fresh: boolean;
+  className?: string;
+}) {
+  const key = `${stateOf(turnState)}:${fresh}`;
+  const [shown, setShown] = useState<{ now: Look; was: Look | null }>({
+    now: { key, turnState, fresh },
+    was: null,
+  });
+  if (shown.now.key !== key)
+    setShown({ now: { key, turnState, fresh }, was: shown.now });
+  const was = shown.was;
+  return (
+    <span className={cn("grid *:col-start-1 *:row-start-1", className)}>
+      {was && (
+        <span
+          key={was.key}
+          aria-hidden
+          onAnimationEnd={(e) => {
+            if (e.target === e.currentTarget) setShown((at) => ({ ...at, was: null }));
+          }}
+          className="animate-out fade-out-0 duration-150 ease-out fill-mode-forwards motion-reduce:hidden"
+        >
+          <SessionStatus turnState={was.turnState} fresh={was.fresh} />
+        </span>
+      )}
+      <span
+        key={key}
+        data-entering={was ? true : undefined}
+        className="motion-safe:data-entering:animate-in motion-safe:data-entering:fade-in-0 motion-safe:data-entering:duration-150 motion-safe:data-entering:ease-out"
+      >
+        <SessionStatus turnState={turnState} fresh={fresh} />
+      </span>
+    </span>
+  );
+}
+
 type Opened = { has: (key: string) => boolean; toggle: (key: string) => void };
 
 function WorkerRow({
@@ -56,6 +116,11 @@ function WorkerRow({
   const path = useMemo(() => new Set(above).add(key), [above, key]);
   const counts = useFleet(useShallow((s) => startedUnder(s, worker, path)));
   const took = duration(worker, now);
+  /* only what changes while the row is up eases in */
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+  }, []);
   /* its own mark, not its starter's: here it is a row of its own */
   const fresh = useFinishedSince(worker);
   /* while it works the reply is partial, or an earlier turn's; the link
@@ -68,7 +133,7 @@ function WorkerRow({
   return (
     <li>
       <div className="relative grid grid-cols-[auto_1fr_auto_auto] items-start gap-x-2.5 rounded-lg bg-accent/40 px-3 py-2 text-sm hover:bg-accent">
-        <SessionStatus turnState={worker.turnState} fresh={fresh} className="mt-0.5" />
+        <EasedStatus turnState={worker.turnState} fresh={fresh} className="mt-0.5" />
         <div className="min-w-0">
           <a
             href={href({ name: "session", sessionId: worker.sessionId })}
@@ -78,7 +143,7 @@ function WorkerRow({
             {worker.title ?? "Untitled"}
           </a>
           {took && <p className="truncate text-xs text-muted-foreground">{took}</p>}
-          {reply && <p className="truncate text-xs text-muted-foreground">{reply}</p>}
+          {reply && <ReplyLine text={reply} enter={mounted.current} />}
         </div>
         <span className="flex justify-end">
           <StartedCount

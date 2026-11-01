@@ -80,6 +80,14 @@ body,
   }
 }
 
+/* a started session's reply grows in under its row */
+@keyframes worker-reply-enter {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
 /* a transcript's scroll bar hides with its rows while a session lands */
 [data-slot="scroll-area"]:has(> [data-slot="scroll-area-viewport"][data-landing])
   > [data-slot="scroll-area-scrollbar"] {

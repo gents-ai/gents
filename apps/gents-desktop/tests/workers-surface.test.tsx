@@ -302,3 +302,45 @@ describe("what each started session shows", () => {
     expect(screen.getByText(empty)).toBeInTheDocument();
   });
 });
+
+describe("how a started session's changes ease in", () => {
+  beforeEach(() => {
+    workspace.reset();
+    resetSessionViews();
+  });
+
+  it("eases in a reply and a state that change while the panel is open, not what it opened with", () => {
+    const app = appWith([
+      session({}),
+      worker("early", { replyPreview: "already said" }),
+      worker("late", { turnState: "running" }),
+    ]);
+    render(<WorkersSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const line = (text: string) => screen.getByText(text).parentElement!;
+    const mark = (name: string) =>
+      within(screen.getByRole("link", { name }).closest("li") as HTMLElement).getByRole(
+        "img",
+      ).parentElement!;
+    expect(line("already said")).not.toHaveAttribute("data-entering");
+    expect(mark("late")).not.toHaveAttribute("data-entering");
+
+    act(() =>
+      publish(app, [
+        node({
+          nodeDid: "did:key:node",
+          sessions: [
+            session({}),
+            worker("early", { replyPreview: "already said" }),
+            worker("late", { replyPreview: "just finished" }),
+          ],
+        }),
+      ]),
+    );
+    expect(line("just finished")).toHaveAttribute("data-entering");
+    expect(line("already said")).not.toHaveAttribute("data-entering");
+    expect(mark("late")).toHaveAttribute("data-entering");
+    expect(mark("early")).not.toHaveAttribute("data-entering");
+  });
+});
