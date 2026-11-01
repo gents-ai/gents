@@ -224,7 +224,11 @@ export function NodeHoverCard({
 
 /* one logo per provider, however many of its accounts the node has; the
    accounts themselves are named on hover */
-function InferenceLogos({ backends }: { backends: NodeView["inferenceBackends"] }) {
+export function InferenceLogos({
+  backends,
+}: {
+  backends: NodeView["inferenceBackends"];
+}) {
   if (backends.length === 0) return <span className="text-muted-foreground">None</span>;
   const providers = new Map<string, (typeof backends)[number]>();
   for (const b of backends) {
