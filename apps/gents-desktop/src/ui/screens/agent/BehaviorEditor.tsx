@@ -14,7 +14,6 @@ import {
 } from "@gents/ui/components/alert-dialog";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
-import { cn } from "@gents/ui/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -298,15 +297,13 @@ export function AgentEditor({
     <>
       <header
         data-testid="agent-header"
-        className={cn(
-          draftMode ? "mb-8" : "mb-3",
-          "rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5",
-        )}
+        /* as the node page's header: on the page, not a box of its own */
+        className={draftMode ? "mb-8" : "mb-4"}
       >
-        <div className="flex min-w-0 items-start gap-3 max-md:flex-col">
+        <div className="flex min-w-0 items-start gap-4">
           <AgentInitials
             name={draftMode ? d.draft.displayName.trim() || "New" : agent.displayName}
-            className="size-10 shrink-0 text-sm"
+            className="size-14 shrink-0 text-base"
           />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
