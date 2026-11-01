@@ -20,6 +20,7 @@ import { ProviderLogo } from "../ProviderLogo";
 import { agentOf, backendOf } from "@/lib/agents";
 import { healthy } from "./inferenceKinds";
 import { RunNodeButton } from "./LocalServer";
+import { errorText } from "../../../lib/errorText";
 import { shortPath } from "@/lib/paths";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 
@@ -72,11 +73,13 @@ function Summary({
   );
 }
 
-/** The node's installed packs: undefined while read, null when the read
+type PacksRead = InstalledPack[] | { failed: string } | undefined;
+
+/** The node's installed packs: undefined while read, and why when the read
     failed. */
-function usePacks() {
+function usePacks(): PacksRead {
   const { actions } = useApp();
-  const [packs, setPacks] = useState<InstalledPack[] | null | undefined>(undefined);
+  const [packs, setPacks] = useState<PacksRead>(undefined);
   useEffect(() => {
     let alive = true;
     /* an adapter without the read, like one that fails it, leaves packs unknown */
@@ -84,7 +87,7 @@ function usePacks() {
       .then(() => actions.listInstalledPacks())
       .then(
         (report) => alive && setPacks(report.packs),
-        () => alive && setPacks(null),
+        (error: unknown) => alive && setPacks({ failed: errorText(error) }),
       );
     return () => {
       alive = false;
@@ -93,10 +96,14 @@ function usePacks() {
   return packs;
 }
 
-function PacksValue({ packs }: { packs: InstalledPack[] | null | undefined }) {
+function PacksValue({ packs }: { packs: PacksRead }) {
   if (packs === undefined) return <Skeleton className="h-4 w-28" />;
-  if (packs === null)
-    return <span className="text-muted-foreground">Couldn’t read</span>;
+  if (!Array.isArray(packs))
+    return (
+      <span title={packs.failed} className="truncate text-muted-foreground">
+        Couldn’t read
+      </span>
+    );
   if (packs.length === 0)
     return (
       <span className="truncate">
