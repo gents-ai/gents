@@ -70,7 +70,7 @@ describe("a node's hover card", () => {
   it("says None when a node has no inference", async () => {
     cardFor("did:key:remote", { inferenceBackends: [] });
     await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
-    expect(await screen.findByText("None", {}, { timeout: 2000 })).toBeVisible();
+    expect(await screen.findByText("None set up", {}, { timeout: 2000 })).toBeVisible();
   });
 
   it("leads from its lines to the node's sections, and copies its id", async () => {
