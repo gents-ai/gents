@@ -27,7 +27,8 @@ import {
   TagsRow,
 } from "./editors";
 import { DeleteButton } from "./ListDetail";
-import { Group, NameLinks, Row, StackedRow } from "./rows";
+import { Group, NameLinks, Row, StackedRow, Unfold } from "./rows";
+import { ProviderSummary } from "./ProviderSummary";
 import { href } from "@/lib/router";
 import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
@@ -192,6 +193,7 @@ export function BackendEditor({
     },
   );
   const [probe, setProbe] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
   const [discoveries] = useState(newestWins);
   const id = (f: string) => `${backend.backendId}-${f}`;
@@ -236,124 +238,196 @@ export function BackendEditor({
   const profiles = deployment.inferenceProfiles.filter(
     (p) => p.backend_id === backend.backendId,
   );
+  const usedByRow = (
+    <FactRow label="Used by" description="Delete is blocked while a profile uses it.">
+      {profiles.length ? (
+        <NameLinks
+          items={profiles.map((p) => ({
+            key: p.profile_id,
+            name: p.display_name ?? p.profile_id,
+            href: href({
+              name: "agent",
+              nodeDid: deployment.nodeDid,
+              section: "profiles",
+              item: p.profile_id,
+            }),
+          }))}
+        />
+      ) : (
+        "No profile yet."
+      )}
+    </FactRow>
+  );
+  const probeButton = (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={async () => {
+        const current = discoveries.begin();
+        try {
+          if (subscription) {
+            setProbe("Discovering models…");
+            const connection = SUBSCRIPTION[d.draft.providerKind]!;
+            const result = await discoverInferenceModels({
+              requestKey: `backend-${backend.backendId}-${Date.now()}`,
+              nodeDid: deployment.nodeDid,
+              provider: connection.providerId,
+              authMethod: connection.authMethod,
+              endpoint: d.draft.endpoint,
+              apiKey: null,
+              accountRef: backend.accountRef ?? null,
+            });
+            if (!result.reachable)
+              throw new Error(result.failure?.message ?? "Discovery failed");
+            if (!current()) return;
+            setDiscoveredModels(
+              result.models.map((option) => option.advertised.model_name),
+            );
+            setProbe(`Authenticated · ${result.models.length} models`);
+            return;
+          }
+          const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
+          setProbe("probing…");
+          const r = await probeInferenceEndpoint(endpoint);
+          if (!current()) return;
+          setProbe(
+            r.reachable ? `reachable · ${r.models.length} models` : "unreachable",
+          );
+          toast(r.reachable ? "Endpoint reachable" : "Endpoint unreachable");
+        } catch (error) {
+          if (!current()) return;
+          setProbe("probe failed");
+          toast(`Probe failed: ${errorText(error)}`);
+        }
+      }}
+    >
+      {subscription ? "Refresh models" : "Probe"}
+    </Button>
+  );
+  const kindLabel =
+    KINDS.find((k) => k.value === d.draft.providerKind)?.label ?? d.draft.providerKind;
   return (
     <>
-      <Group
-        title={embedded ? undefined : (backend.name ?? backend.backendId)}
-        action={
-          <span className="flex items-center gap-2">
-            <ProviderLogo
-              kind={d.draft.providerKind}
-              endpoint={d.draft.endpoint}
-              className="mr-1"
-            />
-            {subscription && <Badge variant="secondary">Subscription</Badge>}
-            <Badge variant={healthy(backend.probeStatus) ? "secondary" : "destructive"}>
-              {backend.probeStatus ?? "unprobed"}
-            </Badge>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={async () => {
-                const current = discoveries.begin();
-                try {
-                  if (subscription) {
-                    setProbe("Discovering models…");
-                    const connection = SUBSCRIPTION[d.draft.providerKind]!;
-                    const result = await discoverInferenceModels({
-                      requestKey: `backend-${backend.backendId}-${Date.now()}`,
-                      nodeDid: deployment.nodeDid,
-                      provider: connection.providerId,
-                      authMethod: connection.authMethod,
-                      endpoint: d.draft.endpoint,
-                      apiKey: null,
-                      accountRef: backend.accountRef ?? null,
-                    });
-                    if (!result.reachable)
-                      throw new Error(result.failure?.message ?? "Discovery failed");
-                    if (!current()) return;
-                    setDiscoveredModels(
-                      result.models.map((option) => option.advertised.model_name),
-                    );
-                    setProbe(`Authenticated · ${result.models.length} models`);
-                    return;
-                  }
-                  const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
-                  setProbe("probing…");
-                  const r = await probeInferenceEndpoint(endpoint);
-                  if (!current()) return;
-                  setProbe(
-                    r.reachable
-                      ? `reachable · ${r.models.length} models`
-                      : "unreachable",
-                  );
-                  toast(r.reachable ? "Endpoint reachable" : "Endpoint unreachable");
-                } catch (error) {
-                  if (!current()) return;
-                  setProbe("probe failed");
-                  toast(`Probe failed: ${errorText(error)}`);
-                }
-              }}
-            >
-              {subscription ? "Refresh models" : "Probe"}
-            </Button>
-          </span>
-        }
-      >
-        <FactRow label="Backend ID" mono>
-          {backend.backendId}
-        </FactRow>
-        <TextRow
-          id={id("name")}
-          label="Name"
-          value={d.draft.name}
-          error={d.problems.name}
-          onChange={(v) => d.set("name", v)}
-        />
-        <ChoiceRow
-          id={id("kind")}
-          label="Provider kind"
-          description="Decides how it is paid for: a key, or a subscription sign-in."
-          value={d.draft.providerKind}
-          onChange={(v) => d.set("providerKind", v)}
-          items={KINDS}
-        />
-        {!subscription && (
-          <ChoiceRow
-            id={id("wire")}
-            label="OpenAI wire API"
-            description="Leave automatic unless the endpoint requires one protocol."
-            value={d.draft.openaiWireApi}
-            onChange={(v) => d.set("openaiWireApi", v)}
-            items={[
-              { value: "responses", label: "Responses" },
-              { value: "chat_completions", label: "Chat completions" },
-            ]}
-            none="Automatic"
-          />
-        )}
-        <FactRow
-          label="Used by"
-          description="Delete is blocked while a profile uses it."
+      {embedded ? (
+        <Group
+          action={
+            <span className="flex items-center gap-2">
+              <ProviderLogo
+                kind={d.draft.providerKind}
+                endpoint={d.draft.endpoint}
+                className="mr-1"
+              />
+              {subscription && <Badge variant="secondary">Subscription</Badge>}
+              <Badge
+                variant={healthy(backend.probeStatus) ? "secondary" : "destructive"}
+              >
+                {backend.probeStatus ?? "unprobed"}
+              </Badge>
+              {probeButton}
+            </span>
+          }
         >
-          {profiles.length ? (
-            <NameLinks
-              items={profiles.map((p) => ({
-                key: p.profile_id,
-                name: p.display_name ?? p.profile_id,
-                href: href({
-                  name: "agent",
-                  nodeDid: deployment.nodeDid,
-                  section: "profiles",
-                  item: p.profile_id,
-                }),
-              }))}
+          <FactRow label="Backend ID" mono>
+            {backend.backendId}
+          </FactRow>
+          <TextRow
+            id={id("name")}
+            label="Name"
+            value={d.draft.name}
+            error={d.problems.name}
+            onChange={(v) => d.set("name", v)}
+          />
+          <ChoiceRow
+            id={id("kind")}
+            label="Provider kind"
+            description="Decides how it is paid for: a key, or a subscription sign-in."
+            value={d.draft.providerKind}
+            onChange={(v) => d.set("providerKind", v)}
+            items={KINDS}
+          />
+          {!subscription && (
+            <ChoiceRow
+              id={id("wire")}
+              label="OpenAI wire API"
+              description="Leave automatic unless the endpoint requires one protocol."
+              value={d.draft.openaiWireApi}
+              onChange={(v) => d.set("openaiWireApi", v)}
+              items={[
+                { value: "responses", label: "Responses" },
+                { value: "chat_completions", label: "Chat completions" },
+              ]}
+              none="Automatic"
             />
-          ) : (
-            "No profile yet."
           )}
-        </FactRow>
-      </Group>
+          {usedByRow}
+        </Group>
+      ) : (
+        <>
+          <ProviderSummary
+            deployment={deployment}
+            backend={backend}
+            accounts={accounts}
+            profiles={profiles}
+            draft={{
+              name: d.draft.name,
+              kind: d.draft.providerKind,
+              kindLabel,
+              endpoint: d.draft.endpoint,
+              enabled: d.draft.enabled,
+              onEnabled: (v) => d.set("enabled", v),
+            }}
+            edit={{
+              open: editing,
+              onToggle: () => setEditing((open) => !open),
+              controls: id("about"),
+            }}
+            probe={probeButton}
+          />
+          <Unfold open={editing} id={id("about")}>
+            <Group title="About">
+              <FactRow label="Backend ID" mono>
+                {backend.backendId}
+              </FactRow>
+              <TextRow
+                id={id("name")}
+                label="Name"
+                value={d.draft.name}
+                error={d.problems.name}
+                onChange={(v) => d.set("name", v)}
+              />
+              <ChoiceRow
+                id={id("kind")}
+                label="Provider kind"
+                description="Decides how it is paid for: a key, or a subscription sign-in."
+                value={d.draft.providerKind}
+                onChange={(v) => d.set("providerKind", v)}
+                items={KINDS}
+              />
+              {!subscription && (
+                <ChoiceRow
+                  id={id("wire")}
+                  label="OpenAI wire API"
+                  description="Leave automatic unless the endpoint requires one protocol."
+                  value={d.draft.openaiWireApi}
+                  onChange={(v) => d.set("openaiWireApi", v)}
+                  items={[
+                    { value: "responses", label: "Responses" },
+                    { value: "chat_completions", label: "Chat completions" },
+                  ]}
+                  none="Automatic"
+                />
+              )}
+              {usedByRow}
+              <TagsRow
+                id={id("tags")}
+                label="Tags"
+                value={d.draft.tags}
+                onChange={(v) => d.set("tags", v)}
+              />
+            </Group>
+          </Unfold>
+        </>
+      )}
       <Group title={subscription ? "Subscription" : "Credential"}>
         {subscription && canPool(backend) && (
           <ChoiceRow
@@ -514,18 +588,23 @@ export function BackendEditor({
           error={d.problems.maxQueueDepth}
           onChange={(v) => d.set("maxQueueDepth", v)}
         />
-        <SwitchRow
-          id={id("enabled")}
-          label="Enabled"
-          checked={d.draft.enabled}
-          onChange={(v) => d.set("enabled", v)}
-        />
-        <TagsRow
-          id={id("tags")}
-          label="Tags"
-          value={d.draft.tags}
-          onChange={(v) => d.set("tags", v)}
-        />
+        {/* on its own page these sit in the header and behind Edit */}
+        {embedded && (
+          <>
+            <SwitchRow
+              id={id("enabled")}
+              label="Enabled"
+              checked={d.draft.enabled}
+              onChange={(v) => d.set("enabled", v)}
+            />
+            <TagsRow
+              id={id("tags")}
+              label="Tags"
+              value={d.draft.tags}
+              onChange={(v) => d.set("tags", v)}
+            />
+          </>
+        )}
       </Group>
       <DraftActions
         draft={d}
