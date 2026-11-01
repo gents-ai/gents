@@ -65,21 +65,34 @@ export function StackedRow({
   description,
   htmlFor,
   error,
+  action,
   children,
 }: {
   label: ReactNode;
   description?: ReactNode;
   htmlFor?: string;
   error?: ReactNode;
+  /** a control at the label's right, for the field below */
+  action?: ReactNode;
   children?: ReactNode;
 }) {
+  const content = (
+    <FieldContent>
+      <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+      {description && <FieldDescription>{description}</FieldDescription>}
+      {error && <FieldError>{error}</FieldError>}
+    </FieldContent>
+  );
   return (
     <FieldRow className="flex-col items-stretch gap-3">
-      <FieldContent>
-        <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
-        {description && <FieldDescription>{description}</FieldDescription>}
-        {error && <FieldError>{error}</FieldError>}
-      </FieldContent>
+      {action ? (
+        <div className="flex items-start gap-3 *:data-[slot=field-content]:flex-1">
+          {content}
+          <div className="shrink-0">{action}</div>
+        </div>
+      ) : (
+        content
+      )}
       {children}
     </FieldRow>
   );

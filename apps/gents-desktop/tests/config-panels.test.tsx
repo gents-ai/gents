@@ -1900,6 +1900,7 @@ describe("configuration panels", () => {
     const { api, app } = harness();
     renderIn(app, <AgentsPanel deployment={deployment} agentId="ops" />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Raw" }));
     const prompt = screen.getByLabelText("System prompt");
     await user.clear(prompt);
     await user.type(prompt, "Watch the fleet");
@@ -2224,7 +2225,7 @@ describe("configuration panels", () => {
     expect(api.saveSkillConfig).not.toHaveBeenCalled();
   });
 
-  it("reads a skill's instructions as Markdown until Edit, with who uses it and where it came from", async () => {
+  it("reads a skill's instructions rendered or raw, with who uses it and where it came from", async () => {
     const user = userEvent.setup();
     const { api, app } = harness();
     const withSkill = {
@@ -2248,7 +2249,7 @@ describe("configuration panels", () => {
     expect(
       screen.queryByRole("textbox", { name: "Instructions" }),
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Edit instructions" }));
+    await user.click(screen.getByRole("button", { name: "Raw" }));
     const field = screen.getByRole("textbox", { name: "Instructions" });
     await user.clear(field);
     await user.type(field, "Run skill A");

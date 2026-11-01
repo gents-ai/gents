@@ -38,6 +38,7 @@ import {
   ChoiceRow,
   DraftActions,
   FactRow,
+  MarkdownRow,
   RefRow,
   TagsRow,
   TextRow,
@@ -600,14 +601,13 @@ export function AgentEditor({
         {(selected || creating) && (
           <div className="mt-5 [&>fieldset:last-child]:mb-0">
             <Group>
-              <AreaRow
+              <MarkdownRow
                 id={id("prompt")}
                 label="System prompt"
                 description="What the agent is told at the start of every session."
                 value={d.draft.systemPrompt}
                 onChange={(v) => d.set("systemPrompt", v)}
-                rows={6}
-                stacked
+                empty="No system prompt yet."
               />
             </Group>
             <Group title="Capabilities">
