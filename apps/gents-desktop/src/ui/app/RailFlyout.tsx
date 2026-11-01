@@ -295,6 +295,7 @@ export function RailFlyout({
   const [open, setOpen] = useState(false);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const timer = useRef<number | null>(null);
+  const pointerInside = useRef(false);
   const later = (next: boolean, ms: number) => {
     if (timer.current) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setOpen(next), ms);
@@ -312,17 +313,28 @@ export function RailFlyout({
     <div
       ref={setPortal}
       className="relative h-full"
-      onPointerEnter={(e) =>
-        hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)
-      }
-      onPointerLeave={() => hover && later(false, CLOSE_AFTER)}
+      onPointerEnter={(e) => {
+        pointerInside.current = true;
+        if (hover && e.pointerType === "mouse") later(true, OPEN_AFTER);
+      }}
+      onPointerLeave={() => {
+        pointerInside.current = false;
+        if (hover) later(false, CLOSE_AFTER);
+      }}
       onPointerDown={() => {
         if (timer.current) window.clearTimeout(timer.current);
       }}
       onPointerUp={(e) => hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)}
       onFocus={(e) => hover && e.target.matches(":focus-visible") && later(true, 0)}
       onBlur={(e) => {
-        if (hover && !e.currentTarget.contains(e.relatedTarget as Node | null))
+        /* focus leaving closes it for the keyboard; a page that focuses its
+           own field, as a session's composer does, mustn't close it under
+           the pointer */
+        if (
+          hover &&
+          !pointerInside.current &&
+          !e.currentTarget.contains(e.relatedTarget as Node | null)
+        )
           later(false, 0);
       }}
       onKeyDown={(e) => hover && e.key === "Escape" && setOpen(false)}
