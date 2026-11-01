@@ -135,7 +135,14 @@ export function AgentCard({
   edit,
 }: {
   deployment: NodeView;
-  edit?: { open: boolean; onToggle: () => void; controls: string; tags: string[] };
+  edit?: {
+    open: boolean;
+    onToggle: () => void;
+    /** opens the fields at the tags */
+    onTags: () => void;
+    controls: string;
+    tags: string[];
+  };
 }) {
   const {
     actions: { fetchOperationsSnapshot },
@@ -224,11 +231,14 @@ export function AgentCard({
           {edit && edit.tags.length > 0 && (
             <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
               {edit.tags.map((tag) => (
-                <li
-                  key={tag}
-                  className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-                >
-                  {tag}
+                <li key={tag}>
+                  <button
+                    type="button"
+                    onClick={edit.onTags}
+                    className="cursor-pointer rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                  >
+                    {tag}
+                  </button>
                 </li>
               ))}
             </ul>

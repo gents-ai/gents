@@ -10,7 +10,7 @@ import {
   TextRow,
 } from "./editors";
 import { useDraft } from "./draft";
-import { Fact, Group, PathFact, Row } from "./rows";
+import { Fact, focusField, Group, PathFact, Row, Unfold } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
@@ -77,31 +77,33 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         edit={{
           open: naming,
           onToggle: () => setNaming((open) => !open),
+          onTags: () => {
+            setNaming(true);
+            focusField("agent-tags");
+          },
           controls: "node-naming",
           tags: d.draft.tags,
         }}
       />
-      {(naming || d.problems.displayName) && (
-        <div id="node-naming">
-          <Group title="Name and tags">
-            <TextRow
-              id="agent-name"
-              label="Display name"
-              description="How this node is named across the desktop."
-              value={d.draft.displayName}
-              onChange={(v) => d.set("displayName", v)}
-              error={d.problems.displayName}
-            />
-            <TagsRow
-              id="agent-tags"
-              label="Tags"
-              description="Optional discovery labels."
-              value={d.draft.tags}
-              onChange={(v) => d.set("tags", v)}
-            />
-          </Group>
-        </div>
-      )}
+      <Unfold open={Boolean(naming || d.problems.displayName)} id="node-naming">
+        <Group title="Name and tags">
+          <TextRow
+            id="agent-name"
+            label="Display name"
+            description="How this node is named across the desktop."
+            value={d.draft.displayName}
+            onChange={(v) => d.set("displayName", v)}
+            error={d.problems.displayName}
+          />
+          <TagsRow
+            id="agent-tags"
+            label="Tags"
+            description="Optional discovery labels."
+            value={d.draft.tags}
+            onChange={(v) => d.set("tags", v)}
+          />
+        </Group>
+      </Unfold>
       <Group title="Node details">
         <RefRow
           id="agent-default"

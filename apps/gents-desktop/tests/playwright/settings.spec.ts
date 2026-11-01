@@ -66,3 +66,31 @@ test("an agent's access sentence opens the setting each part describes", async (
   await expect(sheet.locator(":focus")).toBeInViewport();
   await expect(sheet.locator(":focus")).toHaveAttribute("id", /-bash$/);
 });
+
+test("an agent's Edit opens its name and tags at the first field, and a header tag opens them at Tags", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.getByRole("link", { name: "Active node" }).click();
+  await page
+    .getByRole("link", { name: /^Agents/ })
+    .first()
+    .click();
+  await page.getByText("Default", { exact: true }).first().click();
+  /* Edit opens the fields with focus at the first */
+  await page.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByRole("textbox", { name: "Display name" })).toBeFocused();
+  await page.getByRole("textbox", { name: "Tags" }).fill("demo");
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Display name" }),
+  ).not.toBeInViewport();
+  /* a tag in the header opens them at Tags */
+  await page
+    .getByRole("list", { name: "Tags" })
+    .getByRole("button", { name: "demo" })
+    .click();
+  await expect(page.getByRole("textbox", { name: "Tags" })).toBeFocused();
+});
