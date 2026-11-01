@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Copy } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 import type {
   DerivedCancelCauseView,
@@ -71,6 +71,7 @@ import {
   groupTranscript,
   type TranscriptEntry,
 } from "./transcript-groups";
+import { copyText, useCopied } from "@/lib/clipboard";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
 import { duration } from "@/lib/duration";
@@ -106,10 +107,7 @@ function copyActions(text: string | null | undefined) {
     {
       label: "Copy",
       icon: <Copy />,
-      onClick: () => {
-        void navigator.clipboard?.writeText(text ?? "");
-        toast("Copied");
-      },
+      onClick: () => copyText(text ?? ""),
     },
   ];
 }
