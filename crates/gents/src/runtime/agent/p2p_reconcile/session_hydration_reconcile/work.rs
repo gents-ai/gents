@@ -448,6 +448,11 @@ mod tests {
     /// Every case is wrapped in this bound so a stuck scheduler fails the test
     /// instead of hanging it. It is a termination guard, never the ordering
     /// mechanism: ordering comes from the explicit `Notify`/oneshot barriers.
+    ///
+    /// Limitation: the bound ends the case's future, not the work it started.
+    /// A `spawn_blocking` fixture task or a spawned enrollment-authority task
+    /// outlives an expired case, so a timeout reports a failure without
+    /// guaranteeing that everything the case started has been cleaned up.
     const CASE_TIMEOUT: Duration = Duration::from_secs(60);
     const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -488,11 +493,12 @@ mod tests {
             .expect("subscription stays open");
     }
 
-    /// No batch is pending: the write under test produced no wake.
+    /// Observation, not proof: `try_recv` reports only that no batch is pending
+    /// right now. A notification published later would not be seen here.
     fn assert_no_pending_wake(changes: &mut events::DocumentChangeSubscription, label: &str) {
         assert!(
             matches!(changes.try_recv(), Err(events::TryRecvError::Empty)),
-            "{label} must not leave a subscription wake pending"
+            "{label} left a subscription wake pending at this observation"
         );
     }
 
@@ -754,7 +760,11 @@ mod tests {
                 drain_batch(&mut changes, "A's insert").await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
                 drive_until_started(&mut work, &delivery).await;
-                assert_eq!(delivery.pushes().len(), 1);
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string()],
+                    "the first attempt serves A"
+                );
 
                 seed_pending_request(&fixture, "session-b").await;
                 drain_batch(&mut changes, "B's insert").await;
@@ -797,7 +807,29 @@ mod tests {
                 next_within(&mut work, "the deferred batch completes").await;
                 assert_eq!(request_status(&fixture, "session-b").await, "served");
                 assert_eq!(request_status(&fixture, "session-a").await, "served");
-                assert_eq!(delivery.pushes().len(), 3);
+                // A is reattempted because its row is still pending, so the
+                // lifetime multiset is A twice and B once. The order within the
+                // second batch is not asserted.
+                let mut served = delivery.pushed_sessions(&fixture.peer);
+                assert_eq!(served.len(), 3, "three attempts in total");
+                assert_eq!(
+                    served
+                        .iter()
+                        .filter(|session| *session == "session-b")
+                        .count(),
+                    1,
+                    "B is served exactly once"
+                );
+                served.sort();
+                assert_eq!(
+                    served,
+                    vec![
+                        "session-a".to_string(),
+                        "session-a".to_string(),
+                        "session-b".to_string()
+                    ],
+                    "A twice (initial attempt plus reattempt), B once"
+                );
 
                 fixture.node.shutdown().await;
             },
