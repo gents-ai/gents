@@ -877,4 +877,103 @@ mod tests {
         )
         .await;
     }
+
+    /// Desired behavior, not current behavior. A request B observed during A's
+    /// failed attempt must run once A's attempt completes, with no further
+    /// discovery, store write, retry or other traffic. On the unchanged
+    /// scheduler this is expected to fail: `discover` skips a peer that is
+    /// active (`work.rs:173-176`) and clears the queue on a complete snapshot
+    /// (`work.rs:138-140`), so B is dropped and completion alone never starts
+    /// it. The internal queue is deliberately not asserted, so a fix may hold B
+    /// anywhere as long as it runs.
+    #[tokio::test]
+    async fn a_new_request_observed_during_a_failed_attempt_runs_after_completion_without_rediscovery(
+    ) {
+        bounded(
+            "a_new_request_observed_during_a_failed_attempt_runs_after_completion_without_rediscovery",
+            async {
+                let fixture = scheduler_fixture().await;
+                let store = fixture.store.clone();
+                let delivery = Arc::new(GatedDelivery::new(true));
+                let delivery_trait: Arc<dyn HydrationDelivery> = delivery.clone();
+                let cancel = CancellationToken::new();
+                let mut work = PeerWork::default();
+                let mut changes =
+                    crate::subscribe_collections(&fixture.node, ["SessionHydrationRequest"])
+                        .expect("subscribe to hydration requests");
+
+                seed_pending_request(&fixture, "session-a").await;
+                drain_batch(&mut changes, "A's insert").await;
+                assert_initial_admission(&store).await;
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                drive_until_started(&mut work, &delivery).await;
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string()],
+                    "the first attempt serves A"
+                );
+
+                // B is observed while A is active.
+                seed_pending_request(&fixture, "session-b").await;
+                drain_batch(&mut changes, "B's insert").await;
+                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string()],
+                    "the discovery during A's attempt pushes nothing new"
+                );
+
+                // A finishes with no terminal write and no new store write.
+                delivery.release_next();
+                next_within(&mut work, "A completes").await;
+                assert!(work.active.is_empty());
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string()],
+                    "completion alone does not retry A"
+                );
+                assert_eq!(
+                    request_status(&fixture, "session-a").await,
+                    "pending",
+                    "an indeterminate delivery writes no terminal state"
+                );
+                assert_eq!(request_status(&fixture, "session-b").await, "pending");
+                assert_no_pending_wake(&mut changes, "A's failed attempt");
+
+                // No discovery, store write, retry or other traffic from here:
+                // the scheduler alone must start the request it already observed.
+                drive_until_started(&mut work, &delivery).await;
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string(), "session-b".to_string()],
+                    "B runs after A's completion, and A is not retried"
+                );
+
+                delivery.release_next();
+                next_within(&mut work, "B completes").await;
+                assert_eq!(request_status(&fixture, "session-b").await, "served");
+                assert_eq!(
+                    request_status(&fixture, "session-a").await,
+                    "pending",
+                    "B's success does not serve A"
+                );
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string(), "session-b".to_string()],
+                    "exactly two attempts: A once, B once"
+                );
+
+                // Idle again: no third attempt and no A retry.
+                next_within(&mut work, "idle next").await;
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string(), "session-b".to_string()],
+                    "no third attempt and no A retry after B completes"
+                );
+
+                fixture.node.shutdown().await;
+            },
+        )
+        .await;
+    }
 }
