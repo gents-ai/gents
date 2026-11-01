@@ -361,3 +361,38 @@ fn the_connection_identity_covers_the_platform_settings() {
     assert_eq!(fingerprint(&base), fingerprint(&base));
     assert_ne!(fingerprint(&base), fingerprint(&moved));
 }
+
+/// A gateway may sign in with the node's OAuth credentials (Claude Code's
+/// `CLAUDE_CODE_USE_GATEWAY` mode), so node OAuth must be accepted for it while
+/// a pool stays refused. A one-sided auth/provider equality rejects this.
+#[test]
+fn a_gateway_accepts_node_oauth_but_not_a_pool() {
+    let mismatch = "backend auth selection is incompatible with the provider adapter";
+    let single = backend(
+        "ClaudeGateway",
+        "https://g.example",
+        json!({"kind": "node_oauth"}),
+        Value::Null,
+    );
+    assert!(
+        !single
+            .validation_violations()
+            .iter()
+            .any(|violation| violation == mismatch),
+        "{:?}",
+        single.validation_violations()
+    );
+    let pool = backend(
+        "ClaudeGateway",
+        "https://g.example",
+        json!({"kind": "node_oauth_pool"}),
+        Value::Null,
+    );
+    assert!(
+        pool.validation_violations()
+            .iter()
+            .any(|violation| violation == mismatch),
+        "{:?}",
+        pool.validation_violations()
+    );
+}

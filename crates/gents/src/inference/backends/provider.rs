@@ -21,6 +21,7 @@ impl BackendProviderOauthExt for BackendProviderKind {
             Self::ClaudeCliSubscription => {
                 Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER)
             }
+            Self::ClaudeGateway => Some(crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER),
             _ => None,
         }
     }

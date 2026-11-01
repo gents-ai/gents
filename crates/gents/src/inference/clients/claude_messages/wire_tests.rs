@@ -20,7 +20,7 @@ use super::lock_fixtures_for_test;
 use super::send::{stream_messages_at, Replay};
 use super::tests::{echo_request, test_account};
 use super::transport::{capturing, ClaudeHttpClient};
-use crate::oauth_credential::BearerSource;
+use crate::inference::auth::credential::BearerSource;
 use gents_loop::claude_messages_body::ClaudeAccountContext;
 
 const SSE_DONE: &str = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
@@ -539,7 +539,7 @@ fn replay_is_bounded_by_the_retry_budget_and_the_unchanged_token_count() {
 async fn usage_headers_are_observed_on_success_and_on_error() {
     use crate::usage_observation::{UsageAccount, UsageCache, UsageReporter};
     use gents_loop::account_usage::UsageSource;
-    let node = crate::oauth_credential::test_support::test_node().await;
+    let node = crate::inference::auth::credential::test_support::test_node().await;
     let cache: Arc<UsageCache> = Arc::default();
     for (index, (status, source)) in [
         ("200 OK", UsageSource::Header),

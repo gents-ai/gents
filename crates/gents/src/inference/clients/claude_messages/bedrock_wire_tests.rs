@@ -289,7 +289,7 @@ fn invoke_target(model: &str) -> String {
 #[tokio::test]
 async fn a_signed_bedrock_request_is_the_sdk_request_for_a_listed_profile() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("bedrock hello");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("bedrock hello");
     let server = Server::start(vec![
         profiles(
             &[
@@ -362,7 +362,7 @@ async fn a_signed_bedrock_request_is_the_sdk_request_for_a_listed_profile() {
 #[tokio::test]
 async fn the_bedrock_body_is_the_planned_body_without_model_and_stream() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("hi");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("hi");
     let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
     let route = bedrock_route(&server, "us-west-2", "body-1", true);
     let (_, failure) = run(&route, MODEL).await;
@@ -441,7 +441,7 @@ fn top_level_keys(text: &str) -> Vec<String> {
 #[tokio::test]
 async fn the_event_stream_parses_into_the_events_of_the_sse_path() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("same events");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("same events");
     let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
     let route = bedrock_route(&server, "us-east-1", "parse-1", true);
     let (events, failure) = run(&route, MODEL).await;
@@ -459,7 +459,7 @@ async fn the_event_stream_parses_into_the_events_of_the_sse_path() {
 #[tokio::test]
 async fn an_in_stream_exception_surfaces_as_the_stream_error() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_text("partial");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_text("partial");
     let mut bytes = event_stream_of(&sse);
     bytes.extend(exception_frame(
         "throttlingException",
@@ -485,7 +485,7 @@ async fn an_in_stream_exception_surfaces_as_the_stream_error() {
 #[tokio::test]
 async fn a_damaged_event_stream_and_a_truncated_one_fail_loud() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("x");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("x");
     let mut damaged = event_stream_of(&sse);
     let middle = damaged.len() / 2;
     damaged[middle] ^= 0xff;
@@ -535,7 +535,7 @@ async fn the_region_prefix_rewrites_the_catalog_model_id() {
         ("ca-central-1", "global"),
         ("us-gov-west-1", "us-gov"),
     ] {
-        let sse = crate::claude_messages::sse_fixture_final_text("ok");
+        let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("ok");
         // No listed profile for the model: the catalog id with the region's prefix.
         let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
         let route = bedrock_route(&server, region, &format!("prefix-{region}"), true);
@@ -556,7 +556,7 @@ async fn the_region_prefix_rewrites_the_catalog_model_id() {
 async fn discovery_pages_through_the_list_and_is_cached_per_backend() {
     let _guard = lock_fixtures_for_test().await;
     clear_profile_cache_for_test();
-    let sse = crate::claude_messages::sse_fixture_final_text("cached");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("cached");
     let server = Server::start(vec![
         profiles(
             &["us.anthropic.claude-haiku-4-5-20251001-v1:0"],
@@ -605,7 +605,7 @@ async fn discovery_pages_through_the_list_and_is_cached_per_backend() {
 #[tokio::test]
 async fn a_listing_that_cannot_be_read_falls_back_to_the_rewritten_id_and_is_not_asked_again() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("fallback");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("fallback");
     let server = Server::start(vec![
         reply(
             "403 Forbidden",
@@ -642,7 +642,7 @@ async fn a_listing_that_cannot_be_read_falls_back_to_the_rewritten_id_and_is_not
 async fn an_application_inference_profile_arn_is_sent_as_given_without_a_listing() {
     let _guard = lock_fixtures_for_test().await;
     let arn = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123";
-    let sse = crate::claude_messages::sse_fixture_final_text("arn");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("arn");
     // Only the invoke is served: a listing would find no server.
     let server = Server::start(vec![answer(&sse)]).await;
     let route = bedrock_route(&server, "us-west-2", "arn-1", true);
@@ -672,7 +672,7 @@ async fn an_application_inference_profile_arn_is_sent_as_given_without_a_listing
 #[tokio::test]
 async fn a_bearer_token_authenticates_bedrock_without_signing() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("bearer");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("bearer");
     let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
     let route = bedrock_route(&server, "us-east-1", "bearer-1", false);
     let (events, failure) = run(&route, MODEL).await;
@@ -697,7 +697,7 @@ async fn a_bearer_token_authenticates_bedrock_without_signing() {
 #[tokio::test]
 async fn tools_stream_eagerly_only_on_the_default_bedrock_endpoint() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("tools");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("tools");
     let server = Server::start(vec![
         profiles(&[], None),
         answer(&sse),
@@ -726,7 +726,7 @@ async fn tools_stream_eagerly_only_on_the_default_bedrock_endpoint() {
 #[tokio::test]
 async fn mantle_signs_the_beta_query_with_its_own_service() {
     let _guard = lock_fixtures_for_test().await;
-    let sse = crate::claude_messages::sse_fixture_final_text("mantle");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("mantle");
     let server = Server::start(vec![reply("200 OK", Box::leak(sse.into_boxed_str()))]).await;
     let endpoint = format!("http://127.0.0.1:{}/anthropic", server.port);
     let settings = settings("us-east-1");
@@ -783,7 +783,7 @@ async fn claude_platform_on_aws_signs_with_its_service_and_leaves_the_request_id
     .unwrap();
     assert!(on_default.client_request_id_header);
     // The default route aimed at the loopback server: the id travels, unsigned.
-    let sse = crate::claude_messages::sse_fixture_final_text("aws");
+    let sse = crate::inference::clients::claude_messages::sse_fixture_final_text("aws");
     let server = Server::start(vec![reply("200 OK", Box::leak(sse.into_boxed_str()))]).await;
     let local = ClaudeRoute {
         uri: format!("http://127.0.0.1:{}/v1/messages?beta=true", server.port),

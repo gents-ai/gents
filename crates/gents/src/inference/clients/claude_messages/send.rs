@@ -18,7 +18,7 @@ use super::sse::{self, stream_sse_body_observed, MessagesSseState};
 use super::transport::{capturing, url_parts, ClaudeHttpClient};
 use super::MESSAGES_URI;
 use crate::claude_subscription::ClaudeStreamResponse;
-use crate::oauth_credential::BearerSource;
+use crate::inference::auth::credential::BearerSource;
 
 use gents_claude::bedrock as bedrock_rules;
 use gents_claude::headers::{self, AgentHeaders, Auth, HeaderContext};

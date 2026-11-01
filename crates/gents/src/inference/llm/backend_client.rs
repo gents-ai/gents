@@ -359,23 +359,112 @@ pub(crate) async fn build_backend_client(
         | BackendProviderKind::ClaudeBedrock
         | BackendProviderKind::ClaudeVertex
         | BackendProviderKind::ClaudeGoogleCloud => {
-            let route = crate::inference::clients::claude_messages::ClaudeRoute::platform(
-                agent.backend_provider_kind,
-                &agent.backend_endpoint,
-                agent.claude_platform.as_ref(),
-                api_key,
-            )
-            .with_context(|| {
-                format!(
-                    "building the {} completion client for agent {}",
-                    agent.backend_provider_kind, agent.agent_id
+            let kind = agent.backend_provider_kind;
+            let endpoint = agent.backend_endpoint.as_str();
+            let settings = agent.claude_platform.as_ref();
+            let built = match &agent.backend_auth {
+                crate::documents::BackendAuth::AwsCredentials {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => {
+                    let credentials = gents_claude::sigv4::Credentials::new(
+                        access_key_id,
+                        secret_access_key,
+                        session_token.as_deref(),
+                    )?;
+                    crate::inference::clients::claude_messages::ClaudeRoute::platform_signed(
+                        kind,
+                        endpoint,
+                        settings,
+                        Arc::new(gents_claude::sigv4::Signer::new(credentials)),
+                    )
+                    .map(|route| {
+                        (
+                            route,
+                            crate::inference::clients::claude_subscription::ApiKeyBearer::new(
+                                String::new(),
+                            ),
+                        )
+                    })
+                    .map_err(anyhow::Error::from)
+                }
+                crate::documents::BackendAuth::GoogleCredentials { credentials_json } => {
+                    let credentials = Arc::new(
+                        crate::inference::clients::claude_messages::GoogleCredentials::parse(
+                            credentials_json,
+                        )?,
+                    );
+                    crate::inference::clients::claude_messages::ClaudeRoute::platform(
+                        kind, endpoint, settings, "",
+                    )
+                    .map(|route| {
+                        (
+                            route.with_quota_project(credentials.quota_project()),
+                            crate::inference::clients::claude_subscription::ApiKeyBearer::google(
+                                crate::inference::clients::claude_messages::GoogleTokenSource::new(
+                                    credentials,
+                                ),
+                            ),
+                        )
+                    })
+                    .map_err(anyhow::Error::from)
+                }
+                crate::documents::BackendAuth::NodeOAuth { account_ref } => {
+                    // A gateway signed in with `gents claude-gateway-login`.
+                    let (bearer, _) = crate::inference::auth::http::bootstrap_oauth_client_typed(
+                        node.clone(),
+                        agent.node_did(),
+                        crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER,
+                        crate::inference::auth::credential::OAuthRefreshKind::Gateway,
+                        crate::claude_gateway_login::CLAUDE_GATEWAY_PRODUCT,
+                        crate::inference::auth::credential::AccountPick::Reference(
+                            account_ref.as_deref(),
+                        ),
+                    )
+                    .await?;
+                    crate::inference::clients::claude_messages::ClaudeRoute::platform(
+                        kind, endpoint, settings, "",
+                    )
+                    .map(|route| {
+                        (
+                            route.with_signed_in_gateway(),
+                            crate::inference::clients::claude_subscription::ApiKeyBearer::account(
+                                bearer,
+                            ),
+                        )
+                    })
+                    .map_err(anyhow::Error::from)
+                }
+                _ => crate::inference::clients::claude_messages::ClaudeRoute::platform(
+                    kind, endpoint, settings, api_key,
                 )
-            })?;
+                .map(|route| {
+                    (
+                        route,
+                        crate::inference::clients::claude_subscription::ApiKeyBearer::new(api_key),
+                    )
+                })
+                .map_err(anyhow::Error::from),
+            };
+            let (route, bearer) = built
+                .map(|(route, bearer)| {
+                    (
+                        route.with_backend_id(agent.backend_id.as_deref().unwrap_or("")),
+                        bearer,
+                    )
+                })
+                .with_context(|| {
+                    format!(
+                        "building the {kind} completion client for agent {}",
+                        agent.agent_id
+                    )
+                })?;
             Ok(BackendClient::AnthropicApiKey(
                 crate::inference::clients::claude_subscription::ClaudeSubscriptionClient::with_platform(
                     agent.node_did(),
                     agent.backend_id.as_deref().unwrap_or(""),
-                    api_key.to_owned(),
+                    bearer,
                     route,
                 ),
             ))
@@ -931,5 +1020,53 @@ mod tests {
                 .family,
             BackendProviderKind::ClaudeCliSubscription.as_str()
         );
+    }
+
+    #[tokio::test]
+    async fn a_signed_in_gateway_builds_from_its_stored_account() {
+        let node = test_node().await;
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        let mut gateway = test_agent(
+            BackendProviderKind::ClaudeGateway,
+            crate::OpenAiWireApi::ChatCompletions,
+        );
+        gateway.backend_endpoint = "https://gw.example".into();
+        gateway.backend_auth = crate::documents::BackendAuth::NodeOAuth { account_ref: None };
+        let missing = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &gateway,
+            "no-key",
+            Duration::from_secs(5),
+        )
+        .await
+        .err()
+        .expect("no gateway account yet");
+        assert!(
+            format!("{missing:#}").contains("claude-gateway-login"),
+            "{missing:#}"
+        );
+        seed_oauth_credential(
+            &node,
+            &gateway,
+            crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER,
+        )
+        .await;
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node,
+            &gateway,
+            "no-key",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error:#}"));
+        assert_eq!(client.provider_family(), "ClaudeGateway");
+        let BackendClient::AnthropicApiKey(client) = &client else {
+            panic!("not a Messages client");
+        };
+        assert!(client.route.gateway_mark_from_token);
     }
 }

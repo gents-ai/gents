@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 
-use crate::oauth_credential::BearerSource;
+use crate::inference::auth::credential::BearerSource;
 
 /// The scope Claude Code asks Google for.
 pub(crate) const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";

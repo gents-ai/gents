@@ -592,22 +592,56 @@ where
     }
 }
 
-/// An Anthropic API key as the bearer. No `Debug`, so the key cannot reach logs.
-pub struct ApiKeyBearer(String);
+/// A platform's credential as the bearer: an Anthropic API key or a
+/// platform's key or token, the access tokens Google credentials mint, or a
+/// gateway's node OAuth sign-in. No `Debug`, so the key cannot reach logs.
+pub struct ApiKeyBearer(StaticCredential);
+
+enum StaticCredential {
+    Key(String),
+    Google(crate::inference::clients::claude_messages::GoogleTokenSource),
+    /// A node OAuth sign-in (a Claude gateway's), refreshed by its credential owner.
+    Account(Arc<DbCredentialBearer>),
+}
 
 impl ApiKeyBearer {
     pub fn new(key: impl Into<String>) -> Self {
-        Self(key.into())
+        Self(StaticCredential::Key(key.into()))
+    }
+
+    /// The access tokens of Google credentials, refreshed and replayed on a 401.
+    pub(crate) fn google(
+        source: crate::inference::clients::claude_messages::GoogleTokenSource,
+    ) -> Self {
+        Self(StaticCredential::Google(source))
+    }
+
+    /// A node OAuth account's tokens, refreshed and replayed on a 401.
+    pub(crate) fn account(bearer: Arc<DbCredentialBearer>) -> Self {
+        Self(StaticCredential::Account(bearer))
     }
 }
 
 impl BearerSource for ApiKeyBearer {
     async fn current_bearer(&self) -> Result<String> {
-        Ok(self.0.clone())
+        match &self.0 {
+            StaticCredential::Key(key) => Ok(key.clone()),
+            // Boxed so a static key's bearer future stays small.
+            StaticCredential::Google(source) => Box::pin(source.current_bearer()).await,
+            StaticCredential::Account(bearer) => Box::pin(bearer.current_bearer()).await,
+        }
+    }
+
+    async fn invalidate(&self) {
+        match &self.0 {
+            StaticCredential::Key(_) => {}
+            StaticCredential::Google(source) => source.invalidate(),
+            StaticCredential::Account(bearer) => bearer.invalidate().await,
+        }
     }
 
     fn is_oauth(&self) -> bool {
-        false
+        !matches!(self.0, StaticCredential::Key(_))
     }
 }
 

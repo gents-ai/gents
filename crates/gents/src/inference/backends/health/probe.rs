@@ -143,14 +143,14 @@ pub(super) async fn probe_selected_backends(
         if env.cancel.is_some_and(CancellationToken::is_cancelled) {
             return outcome;
         }
-        if backend.provider_kind.is_node_scoped_oauth() && oauth.is_none() {
+        if backend.auth.uses_node_oauth() && oauth.is_none() {
             continue;
         }
         probed_ids.insert(backend.backend_id.clone());
         if selected.is_some_and(|due| !due.contains(&backend.backend_id)) {
             continue;
         }
-        if backend.provider_kind.is_node_scoped_oauth() {
+        if backend.auth.uses_node_oauth() {
             let Some(context) = oauth.as_ref() else {
                 continue;
             };

@@ -83,6 +83,9 @@ pub(crate) fn oauth_refresh_kind(
         crate::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription => {
             OAuthRefreshKind::Claude
         }
+        crate::inference::backends::provider::BackendProviderKind::ClaudeGateway => {
+            OAuthRefreshKind::Gateway
+        }
         _ => unreachable!("only agent-scoped OAuth kinds reach OAuth probing"),
     }
 }
@@ -99,6 +102,9 @@ pub(crate) fn oauth_product(
         }
         crate::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription => {
             crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT
+        }
+        crate::inference::backends::provider::BackendProviderKind::ClaudeGateway => {
+            crate::claude_gateway_login::CLAUDE_GATEWAY_PRODUCT
         }
         _ => unreachable!("only agent-scoped OAuth kinds reach OAuth probing"),
     }

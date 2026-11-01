@@ -22,7 +22,10 @@ const SECRET: &str = "platform-secret-credential";
 pub(super) const MODEL: &str = "claude-sonnet-5";
 
 pub(super) fn sse_body() -> &'static str {
-    Box::leak(crate::claude_messages::sse_fixture_final_text("platform hello").into_boxed_str())
+    Box::leak(
+        crate::inference::clients::claude_messages::sse_fixture_final_text("platform hello")
+            .into_boxed_str(),
+    )
 }
 
 pub(super) fn settings(build: impl FnOnce(&mut ClaudePlatform)) -> ClaudePlatform {
@@ -185,7 +188,7 @@ async fn a_signed_in_gateway_marks_its_attribution_from_the_jwt_it_sends() {
     .unwrap()
     .with_signed_in_gateway();
     // The route was built before any token: the mark comes from this one.
-    let jwt = crate::oauth_credential::test_support::unsigned_jwt(
+    let jwt = crate::inference::auth::credential::test_support::unsigned_jwt(
         serde_json::json!({"aud": ["claude-gateway"], "sub": "dev"}),
     );
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);

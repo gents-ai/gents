@@ -729,3 +729,71 @@ async fn oauth_kinds_are_skipped_without_a_probe_context() {
         "no measurement without a node"
     );
 }
+
+/// A Claude gateway signed in with `gents claude-gateway-login` carries node
+/// OAuth credentials, so the probe must select its stored account and map it to
+/// the gateway refresh kind and product rather than the subscription's.
+#[tokio::test]
+async fn a_gateway_node_oauth_backend_probes_its_stored_gateway_account() {
+    let node = test_node().await;
+    let did = "did:key:z6MkProbeGateway";
+    seed_credential(
+        &node,
+        did,
+        crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER,
+        Utc::now() + chrono::Duration::hours(8),
+    )
+    .await;
+    let (options, client, health_map) = (
+        probe_options(),
+        reqwest::Client::new(),
+        BackendHealthMap::new(),
+    );
+    let mut gateway = oauth_backend(
+        crate::inference::backends::provider::BackendProviderKind::ClaudeGateway,
+        "gateway",
+        "https://gw.example",
+    );
+    gateway.node_did = did.to_string();
+    let models = ModelsListener::start();
+    gateway.endpoint = models.endpoint();
+    seed_backend_observation(&node, &gateway, "unknown").await;
+    let outcome = probe_backends_cycle(
+        &node,
+        &client,
+        std::slice::from_ref(&gateway),
+        Utc::now(),
+        &health_map,
+        &options,
+        Some(OAuthProbeContext {
+            node: node.clone(),
+            node_did: did,
+        }),
+    )
+    .await;
+    let snap = health_map.get("gateway").await.expect("entry");
+    assert_eq!(
+        outcome.promotable,
+        vec!["gateway".to_string()],
+        "{:?}",
+        snap.last_error
+    );
+    assert_eq!(snap.state, BackendHealthState::Healthy);
+    assert!(snap.last_error.is_none(), "{:?}", snap.last_error);
+}
+
+/// The gateway kind maps to the gateway refresh kind and product, so a probe
+/// never falls through the helper's `unreachable!` arm.
+#[test]
+fn a_gateway_backend_maps_to_the_gateway_refresh_kind_and_product() {
+    use crate::inference::backends::health::oauth::{oauth_product, oauth_refresh_kind};
+    use crate::inference::backends::provider::BackendProviderKind;
+    assert_eq!(
+        oauth_refresh_kind(BackendProviderKind::ClaudeGateway),
+        crate::inference::auth::credential::OAuthRefreshKind::Gateway
+    );
+    assert_eq!(
+        oauth_product(BackendProviderKind::ClaudeGateway),
+        crate::claude_gateway_login::CLAUDE_GATEWAY_PRODUCT
+    );
+}
