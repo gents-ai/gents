@@ -1,22 +1,36 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { FLAGS } from "../src/ui/lib/flags";
+import { FLAGS, type Flag, type FlagId } from "../src/ui/lib/flags";
 import { flag } from "../src/ui/preferences";
 import { SettingsScreen } from "../src/ui/screens/settings/SettingsScreen";
 import { SETTINGS_SECTIONS } from "../src/ui/screens/settings/sections";
 import { renderIn, testApp, withFlags } from "./app-fixture";
 
+/* the shipped list has no flag that applies at launch, so this file adds
+   one to cover the relaunch path */
+vi.mock("../src/ui/lib/flags", async (original) => {
+  const real = await original<typeof import("../src/ui/lib/flags")>();
+  const probe: Flag = {
+    id: "relaunch-probe",
+    name: "Relaunch probe",
+    description: "Turns on a test-only feature that applies at launch.",
+    default: false,
+    owner: "tests",
+    removeBy: "2999-01-01",
+    removeWhen: "Never; it exists only in this test file.",
+    restart: true,
+  };
+  return { ...real, FLAGS: [...real.FLAGS, probe] };
+});
+
 const DEMO = FLAGS.find((f) => f.id === "demo-feature")!;
+const PROBE: string = "relaunch-probe";
 
 const openSection = () =>
   renderIn(testApp(), <SettingsScreen section="experimental" />);
-
-async function choose(user: ReturnType<typeof userEvent.setup>, option: string) {
-  await user.click(screen.getByRole("combobox", { name: DEMO.name }));
-  await user.click(await screen.findByRole("option", { name: option }));
-}
+const toggle = (name: string) => screen.getByRole("switch", { name });
 
 describe("the experimental features settings", () => {
   it("sits last in the settings, as its own section", () => {
@@ -33,48 +47,80 @@ describe("the experimental features settings", () => {
     ).toBeVisible();
   });
 
-  it("shows a row per flag with its description and its default", () => {
+  it("shows a row per flag with its description, at its default", () => {
     openSection();
     for (const f of FLAGS) {
-      const control = screen.getByRole("combobox", { name: f.name });
-      expect(control).toHaveTextContent(`Default (${f.default ? "on" : "off"})`);
-      expect(screen.getByText(f.description, { exact: false })).toBeVisible();
+      if (f.default) expect(toggle(f.name)).toBeChecked();
+      else expect(toggle(f.name)).not.toBeChecked();
+      expect(screen.getByTitle(f.description)).toHaveTextContent(f.description);
     }
+    expect(screen.queryByText("Changed")).toBeNull();
+    expect(screen.queryByRole("button", { name: /to default$/ })).toBeNull();
   });
 
-  it("switches a flag on, off and back to its default", async () => {
+  it("marks only a flag that applies at launch", () => {
+    openSection();
+    expect(screen.getAllByText("Relaunch")).toHaveLength(1);
+  });
+
+  it("sets an explicit choice when a switch flips, and resets it to the default", async () => {
     const user = userEvent.setup();
     openSection();
-    await choose(user, "Enabled");
+    await user.click(toggle(DEMO.name));
     expect(flag("demo-feature")).toBe(true);
-    expect(screen.getByRole("combobox", { name: DEMO.name })).toHaveTextContent(
-      "Enabled",
-    );
-    await choose(user, "Disabled");
+    expect(toggle(DEMO.name)).toBeChecked();
+    expect(screen.getByText("Changed")).toBeVisible();
+    await user.click(toggle(DEMO.name));
     expect(flag("demo-feature")).toBe(false);
-    expect(screen.getByRole("combobox", { name: DEMO.name })).toHaveTextContent(
-      "Disabled",
+    expect(toggle(DEMO.name)).not.toBeChecked();
+    expect(screen.getByText("Changed")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: `Reset ${DEMO.name} to default` }),
     );
-    await choose(user, "Default (off)");
     expect(flag("demo-feature")).toBe(DEMO.default);
+    expect(screen.queryByText("Changed")).toBeNull();
+    expect(screen.queryByRole("button", { name: /to default$/ })).toBeNull();
   });
 
-  it("puts every flag back to its default with Reset all", async () => {
+  it("clears every choice with Reset all", async () => {
     const user = userEvent.setup();
-    withFlags({ "demo-feature": true });
+    withFlags({ "demo-feature": true, [PROBE]: true });
     openSection();
+    expect(screen.getAllByText("Changed")).toHaveLength(2);
     const reset = screen.getByRole("button", { name: "Reset all" });
-    expect(reset).toBeEnabled();
     await user.click(reset);
     expect(flag("demo-feature")).toBe(false);
-    expect(screen.getByRole("combobox", { name: DEMO.name })).toHaveTextContent(
-      "Default (off)",
-    );
+    expect(flag(PROBE as FlagId)).toBe(false);
+    expect(screen.queryByText("Changed")).toBeNull();
     expect(reset).toBeDisabled();
   });
 
+  it("filters by name, description and id, and clears the search with Escape", async () => {
+    const user = userEvent.setup();
+    openSection();
+    const search = screen.getByRole("searchbox", {
+      name: "Search experimental features",
+    });
+    await user.type(search, "probe");
+    expect(screen.queryByRole("switch", { name: DEMO.name })).toBeNull();
+    expect(toggle("Relaunch probe")).toBeVisible();
+    await user.clear(search);
+    await user.type(search, "how an experimental");
+    expect(toggle(DEMO.name)).toBeVisible();
+    expect(screen.queryByRole("switch", { name: "Relaunch probe" })).toBeNull();
+    await user.clear(search);
+    await user.type(search, "demo-feature");
+    expect(toggle(DEMO.name)).toBeVisible();
+    await user.clear(search);
+    await user.type(search, "nothing like this");
+    expect(screen.getByText("No experimental features match")).toBeVisible();
+    expect(screen.queryAllByRole("switch")).toHaveLength(0);
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search).toHaveValue("");
+    expect(screen.getAllByRole("switch")).toHaveLength(FLAGS.length);
+  });
+
   it("offers a relaunch once a flag that applies at launch changes", async () => {
-    expect(DEMO.restart).toBe(true);
     const reload = vi.fn();
     const original = window.location;
     Object.defineProperty(window, "location", {
@@ -84,14 +130,14 @@ describe("the experimental features settings", () => {
     try {
       const user = userEvent.setup();
       openSection();
-      expect(
-        screen.getByText("Takes effect after relaunch.", { exact: false }),
-      ).toBeVisible();
+      await user.click(toggle(DEMO.name));
       expect(screen.queryByRole("button", { name: "Relaunch" })).toBeNull();
-      await choose(user, "Enabled");
+      await user.click(toggle("Relaunch probe"));
       await user.click(screen.getByRole("button", { name: "Relaunch" }));
       expect(reload).toHaveBeenCalledTimes(1);
-      await choose(user, "Default (off)");
+      await user.click(
+        screen.getByRole("button", { name: "Reset Relaunch probe to default" }),
+      );
       expect(screen.queryByRole("button", { name: "Relaunch" })).toBeNull();
     } finally {
       Object.defineProperty(window, "location", {
@@ -102,10 +148,9 @@ describe("the experimental features settings", () => {
   });
 
   it("asks for no relaunch for what the app launched with", () => {
-    withFlags({ "demo-feature": true });
+    withFlags({ [PROBE]: true });
     openSection();
     expect(screen.queryByRole("button", { name: "Relaunch" })).toBeNull();
-    const row = screen.getByRole("combobox", { name: DEMO.name });
-    expect(within(row).getByText("Enabled")).toBeVisible();
+    expect(toggle("Relaunch probe")).toBeChecked();
   });
 });

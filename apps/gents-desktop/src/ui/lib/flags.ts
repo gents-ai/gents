@@ -37,7 +37,7 @@ export const FLAGS = [
     removeBy: "2027-02-01",
     removeWhen:
       "The first real experimental feature is added and the tests use it instead.",
-    restart: true,
+    restart: false,
   },
 ] as const satisfies readonly Flag[];
 
