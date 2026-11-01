@@ -16,9 +16,11 @@ pub(super) struct AuthorScope<'a> {
 /// A remote command is authorized only while the exact signed enrollment
 /// generation it names is still inside its authorization lease.
 ///
-/// The enrollment projection evaluates freshness at its own observation time.
-/// Recheck the exact lease at the command observation time using canonical
-/// timestamp parsing; invalid or non-canonical expiries fail closed.
+/// The projection checks decision freshness at its load instant. The exact
+/// fence carries the revision lease; do not infer its freshness or canonical
+/// spelling from the decision. Recheck that exact revision lease at the
+/// command observation time. Invalid, expired, or non-canonical expiries fail
+/// closed.
 pub(super) fn enrollment_authorization_is_current(expires_at: &str, now: DateTime<Utc>) -> bool {
     gents_protocol::enrollment::authorization_lease_is_fresh_at(expires_at, now)
 }
