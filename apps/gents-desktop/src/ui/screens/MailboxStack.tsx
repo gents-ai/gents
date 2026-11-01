@@ -6,7 +6,7 @@ import type { MailboxOpen } from "@/app/listViews";
 import { defaultScope, mailboxInScope } from "@/lib/scope";
 import { useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { listViews, useListViews } from "@/app/listViews";
-import { groupItems, matches, triageOf, type TriageGroup } from "./mailbox-triage";
+import { groupItems, matches, type TriageGroup } from "./mailbox-triage";
 import { ItemDialog } from "./MailboxItem";
 import { useMinute } from "./time";
 
@@ -41,14 +41,13 @@ export const MAILBOX = pathFor({ name: "mailbox" });
 /** Opens `item` over the page showing now, in the tab its kind belongs to,
     so moving on goes through items like it. */
 export function openInStack(item: MailboxItemView) {
-  /* only the Mailbox page steps through its tab; elsewhere the stack holds
-     every item */
-  if (currentRoute()?.name === "mailbox") listViews.setMailboxTab(triageOf(item.kind));
+  /* from outside the page's list: every item, the page's tab untouched */
   listViews.setMailboxOpen({
     nodeDid: item.nodeDid,
     itemId: item.itemId,
     at: 0,
     where: pathFor(currentRoute() ?? { name: "mailbox" }),
+    every: true,
   });
 }
 
@@ -70,16 +69,24 @@ export function MailboxStack({ route }: { route: Route }) {
   const now = useMinute();
   const query = useListViews((views) => views.mailboxQuery);
   const onMailbox = route.name === "mailbox";
-  const { shown } = useMailboxList(onMailbox ? (query ?? "") : "", {
-    allTabs: !onMailbox,
-  });
   const kept = useListViews((views) => views.mailboxOpen);
+  /* the page's rows step through what the page shows; anything else
+     through every item */
+  const every = !onMailbox || kept?.every === true;
+  const { shown } = useMailboxList(every ? "" : (query ?? ""), { allTabs: every });
   const where = pathFor(route);
   const openId = openHere(kept, selectedNodeDid, where);
+  const keepEvery = kept?.every === true;
   const open = useCallback(
     (itemId: string, at: number) =>
-      listViews.setMailboxOpen({ nodeDid: selectedNodeDid, itemId, at, where }),
-    [selectedNodeDid, where],
+      listViews.setMailboxOpen({
+        nodeDid: selectedNodeDid,
+        itemId,
+        at,
+        where,
+        ...(keepEvery ? { every: true } : {}),
+      }),
+    [selectedNodeDid, where, keepEvery],
   );
   const close = useCallback(() => listViews.setMailboxOpen(null), []);
   useEffect(() => {

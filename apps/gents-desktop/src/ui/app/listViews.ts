@@ -22,6 +22,9 @@ export type MailboxOpen = {
   itemId: string;
   at: number;
   where: string;
+  /** opened from outside the Mailbox page's own list (the nav, search): it
+      steps through every item and leaves the page's tab as it is */
+  every?: boolean;
 };
 
 export type ListViews = {
