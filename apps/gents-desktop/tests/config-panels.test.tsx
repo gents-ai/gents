@@ -2215,6 +2215,7 @@ describe("configuration panels", () => {
       "Display name",
       "Enabled",
       "Description",
+      "Instructions",
       "Tool dependencies",
       "Interface JSON",
       "Tags",
@@ -2227,7 +2228,7 @@ describe("configuration panels", () => {
     expect(api.saveSkillConfig).not.toHaveBeenCalled();
   });
 
-  it("reads a skill's instructions as Markdown, with who uses it and where it came from", async () => {
+  it("shows who uses a skill and where it came from, its instructions in their panel", async () => {
     const user = userEvent.setup();
     const { api, app } = harness();
     const withSkill = {
@@ -2235,24 +2236,14 @@ describe("configuration panels", () => {
       contexts: deployment.contexts.map((c) =>
         c.context_id === "context-a" ? { ...c, skill_ids: ["skill-a"] } : c,
       ),
-      skills: deployment.skills.map((s) => ({
-        ...s,
-        instructions: "## Steps\n\nRun **skill A** things.",
-      })),
     };
     renderIn(app, <SkillsPanel deployment={withSkill} item="skill-a" />);
-    expect(screen.getByRole("heading", { name: "Steps" })).toBeInTheDocument();
-    expect(screen.getByText("skill A", { selector: "strong" })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("textbox", { name: "Instructions" }),
-    ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Default" })).toHaveAttribute(
       "href",
       href({ ...nodeRoute, section: "agents", item: "default" }),
     );
     expect(screen.getByText(/From/)).toHaveTextContent("From Your own");
 
-    await user.click(screen.getByRole("button", { name: "Edit instructions" }));
     const field = screen.getByRole("textbox", { name: "Instructions" });
     await user.clear(field);
     await user.type(field, "Run skill A");

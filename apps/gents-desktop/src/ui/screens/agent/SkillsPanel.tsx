@@ -5,7 +5,7 @@ import { navigate } from "@/lib/router";
 import { AreaRow, DraftActions, FactRow, TextRow, TagsRow, PathRow } from "./editors";
 import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { newId, problemOf, useDraft } from "./draft";
-import { focusField, Group, Unfold } from "./rows";
+import { Group, Unfold } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { usersOf } from "./behaviorDraft";
 import { useApp } from "@/app/AppContext";
@@ -16,7 +16,6 @@ import { Button } from "@gents/ui/components/button";
 import { Switch } from "@gents/ui/components/switch";
 import { Pencil } from "lucide-react";
 import { Fragment, useState } from "react";
-import { Markdown } from "../Markdown";
 
 function SkillEditor({
   deployment,
@@ -73,7 +72,6 @@ function SkillEditor({
   );
   const id = (f: string) => `${skill.skillId}-${f}`;
   const [editing, setEditing] = useState(false);
-  const [writing, setWriting] = useState(false);
   const users = skillUsers(deployment, skill.skillId);
   const pack = packOrigin(skill.tags);
   const title = d.draft.displayName.trim() || d.draft.name.trim() || skill.skillId;
@@ -173,55 +171,17 @@ function SkillEditor({
           />
         </Group>
       </Unfold>
-      <section aria-labelledby={id("instructions-title")} className="mb-8">
-        <div className="mb-2 flex items-center gap-2">
-          <h3
-            id={id("instructions-title")}
-            className="text-sm font-medium text-heading"
-          >
-            Instructions
-          </h3>
-          <Button
-            size="xs"
-            variant="quiet"
-            aria-label={writing ? "Done editing instructions" : "Edit instructions"}
-            aria-expanded={writing}
-            onClick={() => {
-              setWriting((open) => !open);
-              if (!writing) focusField(id("instructions"));
-            }}
-          >
-            {writing ? (
-              "Done"
-            ) : (
-              <>
-                <Pencil /> Edit
-              </>
-            )}
-          </Button>
-        </div>
-        {writing ? (
-          <Group>
-            <AreaRow
-              id={id("instructions")}
-              label="Instructions"
-              description="Loaded on demand via load_skill."
-              value={d.draft.instructions}
-              onChange={(v) => d.set("instructions", v)}
-              rows={12}
-              stacked
-            />
-          </Group>
-        ) : d.draft.instructions.trim() ? (
-          <div className="prose-app min-w-0 break-words">
-            <Markdown>{d.draft.instructions}</Markdown>
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            No instructions yet. They're what an agent reads when it loads the skill.
-          </p>
-        )}
-      </section>
+      <Group>
+        <AreaRow
+          id={id("instructions")}
+          label="Instructions"
+          description="What an agent reads when it loads the skill."
+          value={d.draft.instructions}
+          onChange={(v) => d.set("instructions", v)}
+          rows={6}
+          stacked
+        />
+      </Group>
       <Group title="Details">
         <FactRow label="Skill ID" description="Cannot be renamed after creation." mono>
           {skill.skillId}
