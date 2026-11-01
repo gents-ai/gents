@@ -11,14 +11,14 @@ import {
   useFollowUp,
   useNavMode,
   useSentTurnPlacement,
-  useTheme,
+  useThemePreference,
 } from "@/preferences";
 import { MOD } from "../Shortcuts";
 import { ChoiceRow } from "../agent/editors";
 import { Group } from "../agent/rows";
 
 export function GeneralPanel() {
-  const theme = useTheme();
+  const theme = useThemePreference();
   const nav = useNavMode();
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
@@ -39,10 +39,11 @@ export function GeneralPanel() {
         <ChoiceRow
           id="settings-theme"
           label="Theme"
-          description="Light or dark, for every window of the app."
+          description="Follow the system, or always light or dark, for every window of the app."
           value={theme}
           onChange={(v) => preferences.setTheme(v as ThemePreference)}
           items={[
+            { value: "system", label: "System" },
             { value: "light", label: "Light" },
             { value: "dark", label: "Dark" },
           ]}
