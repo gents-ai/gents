@@ -198,7 +198,7 @@ export function ActivityGroup({
   const openStep = state.openStep[entry.key] ?? null;
 
   const failed = groupFailures(entry.members) > 0;
-  const folded = !single && (chosen ?? !(openStep || failed));
+  const folded = !single && (chosen ?? !openStep);
 
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
   const last = entry.members[entry.members.length - 1];

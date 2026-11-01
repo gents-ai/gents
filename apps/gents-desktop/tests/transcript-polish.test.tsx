@@ -305,7 +305,7 @@ describe("a folded group with a failure in it", () => {
   const header = () =>
     screen.getByRole("button", { name: /ran 2 commands/i, expanded: undefined });
 
-  it("names the failure on the header and starts open", () => {
+  it("names the failure on the header and stays folded", () => {
     render(
       panel(
         session({ timelineItems: [group([command("a", false), command("b", true)])] }),
@@ -314,7 +314,7 @@ describe("a folded group with a failure in it", () => {
     );
     const button = header();
     expect(button).toHaveTextContent("Ran 2 commands, 1 failed");
-    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(button).toHaveAttribute("aria-expanded", "false");
     expect(button).toHaveAttribute("data-failed", "true");
   });
 
