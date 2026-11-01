@@ -447,9 +447,8 @@ describe("configuration panels", () => {
     );
     expect(await screen.findByText("person@example.test")).toBeVisible();
     expect(screen.queryByText("private-credential-id")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Subscription", { selector: "[data-slot=badge]" }),
-    ).toBeVisible();
+    /* a subscription's card names its account, not a key */
+    expect(screen.getAllByText("Account")[0]).toBeVisible();
     expect(screen.queryByLabelText("OpenAI wire API")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Connect timeout seconds")).toHaveValue("");
     await userEvent
@@ -795,7 +794,7 @@ describe("configuration panels", () => {
         api.listProviderAccounts.mockResolvedValue(accounts);
         renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
         expect(await screen.findByText("Connected")).toBeVisible();
-        expect(screen.getByText("Personal")).toBeVisible();
+        expect(screen.getAllByText("Personal")[0]).toBeVisible();
         expect(screen.queryByText("Expired")).not.toBeInTheDocument();
         expect(screen.queryByText("Expires")).not.toBeInTheDocument();
         expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
@@ -873,7 +872,7 @@ describe("configuration panels", () => {
           screen.queryByRole("button", { name: "Reconnect" }),
         ).not.toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled();
-        expect(screen.getByText("Personal")).toBeVisible();
+        expect(screen.getAllByText("Personal")[0]).toBeVisible();
       });
 
       it("can cancel a sign-in started from the row", async () => {
