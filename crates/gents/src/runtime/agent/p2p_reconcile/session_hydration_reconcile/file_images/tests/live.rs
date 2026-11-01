@@ -65,7 +65,9 @@ impl ImageRequestStore for ObservedStore {
     /// Delegates to the real store so the live revocation and stale-row gates
     /// still observe the actual pending identity, never a default `true`.
     async fn still_pending(&self, row: &ImageDemandRow) -> Result<bool> {
-        self.inner.still_pending(row).await
+        // `GraphqlHydrationStore` implements both `HydrationRequestStore` and
+        // `ImageRequestStore`, so the call is disambiguated to the image trait.
+        ImageRequestStore::still_pending(&self.inner, row).await
     }
 
     async fn admission(&self, demand: &FileImageDemand) -> Result<LoadedHydrationAdmission> {

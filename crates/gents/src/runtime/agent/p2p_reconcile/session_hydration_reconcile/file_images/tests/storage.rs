@@ -247,21 +247,27 @@ async fn inventory_bound_receipt_roundtrips_and_refuses_a_changed_snapshot() {
 async fn still_pending_requires_the_exact_physical_row_and_demand() {
     let (_directory, store, row, _) = fixture().await;
     assert!(
-        store.still_pending(&row).await.unwrap(),
+        ImageRequestStore::still_pending(&store, &row)
+            .await
+            .unwrap(),
         "the freshly admitted row is pending"
     );
 
     // A different physical document is not the cached row.
     let mut other = row.clone();
     other.document_id.push_str("-other");
-    assert!(!store.still_pending(&other).await.unwrap());
+    assert!(!ImageRequestStore::still_pending(&store, &other)
+        .await
+        .unwrap());
 
     // The same physical document with a changed request reference is not the
     // cached demand, even though the document id and status still match.
     let mut changed = row.clone();
     changed.demand.tool_call_doc_id.push_str("-other");
     assert!(
-        !store.still_pending(&changed).await.unwrap(),
+        !ImageRequestStore::still_pending(&store, &changed)
+            .await
+            .unwrap(),
         "a changed reference on the same physical row is not the cached demand"
     );
 
@@ -271,7 +277,9 @@ async fn still_pending_requires_the_exact_physical_row_and_demand() {
         .await
         .unwrap();
     assert!(
-        !store.still_pending(&row).await.unwrap(),
+        !ImageRequestStore::still_pending(&store, &row)
+            .await
+            .unwrap(),
         "a served row is no longer pending"
     );
     store.node.shutdown().await;
@@ -283,7 +291,9 @@ async fn still_pending_requires_the_exact_physical_row_and_demand() {
 #[tokio::test]
 async fn still_pending_compares_the_inventory_reference() {
     let (_directory, store, row, _) = fixture_with_reference(true).await;
-    assert!(store.still_pending(&row).await.unwrap());
+    assert!(ImageRequestStore::still_pending(&store, &row)
+        .await
+        .unwrap());
 
     let mut changed = row.clone();
     changed
@@ -293,14 +303,18 @@ async fn still_pending_compares_the_inventory_reference() {
         .unwrap()
         .snapshot_digest = "other-snapshot".into();
     assert!(
-        !store.still_pending(&changed).await.unwrap(),
+        !ImageRequestStore::still_pending(&store, &changed)
+            .await
+            .unwrap(),
         "a changed inventory reference is not the cached demand"
     );
 
     // The unbound collection is a different purpose binding for the same id.
     let mut unbound = row.clone();
     unbound.demand.inventory_reference = None;
-    assert!(!store.still_pending(&unbound).await.unwrap());
+    assert!(!ImageRequestStore::still_pending(&store, &unbound)
+        .await
+        .unwrap());
     store.node.shutdown().await;
 }
 
