@@ -12,6 +12,7 @@ import { agentReadiness } from "@/lib/agent-readiness";
 import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
 import { agentOf, backendOf } from "@/lib/agents";
 import { ProviderLogo } from "./ProviderLogo";
+import { providerLogo } from "@/lib/provider";
 import { useNodeReach } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
@@ -87,7 +88,9 @@ export function NodeHoverCard({
           <NodeReach deployment={deployment} />
           <Line label="Agents">{deployment.agents.length}</Line>
           <Line label="Tasks">{deployment.tasks.length}</Line>
-          <Line label="Inference">{deployment.inferenceBackends.length}</Line>
+          <Line label="Inference">
+            <InferenceLogos backends={deployment.inferenceBackends} />
+          </Line>
         </dl>
         <p
           className="mt-3 truncate font-mono text-[11px] text-muted-foreground"
@@ -97,6 +100,48 @@ export function NodeHoverCard({
         </p>
       </HoverCardContent>
     </HoverCard>
+  );
+}
+
+/* one logo per provider, however many of its accounts the node has; the
+   accounts themselves are named on hover */
+function InferenceLogos({ backends }: { backends: NodeView["inferenceBackends"] }) {
+  if (backends.length === 0) return <span className="text-muted-foreground">None</span>;
+  const providers = new Map<string, (typeof backends)[number]>();
+  for (const b of backends) {
+    const key = providerLogo(b.providerKind, b.endpoint) ?? "other";
+    if (!providers.has(key)) providers.set(key, b);
+  }
+  const shown = [...providers.values()];
+  const names = backends.map((b) => b.name ?? b.backendId).join(", ");
+  return (
+    <span
+      role="img"
+      aria-label={names}
+      title={names}
+      className="-my-0.5 flex items-center"
+    >
+      {shown.slice(0, 3).map((b, i) => (
+        <span
+          key={b.backendId}
+          className={cn(
+            "grid size-5 place-items-center rounded-full bg-muted ring-2 ring-popover",
+            i > 0 && "-ml-1.5",
+          )}
+        >
+          <ProviderLogo
+            kind={b.providerKind}
+            endpoint={b.endpoint}
+            className="size-3"
+          />
+        </span>
+      ))}
+      {shown.length > 3 && (
+        <span className="ml-1 text-muted-foreground tabular-nums">
+          +{shown.length - 3}
+        </span>
+      )}
+    </span>
   );
 }
 

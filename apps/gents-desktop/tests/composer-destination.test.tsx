@@ -1,4 +1,5 @@
 import { act, renderHook, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { acceptedChatReply } from "./chat-delivery-fixture";
@@ -30,13 +31,17 @@ function fixture() {
 }
 
 describe("composer destination", () => {
-  it("shows the remote name, source and identity in the composer", () => {
+  it("shows the remote name, source and identity in the composer, and its card on hover", async () => {
     const app = fixture();
     app.actions.selectNode(remote);
     renderIn(app, <ActiveNodeLabel composer />);
     const label = screen.getByLabelText("Message destination");
     expect(label).toHaveTextContent("Remote · Amy on studio-1");
-    expect(label).toHaveAttribute("title", expect.stringContaining(remote));
+    expect(label).toHaveTextContent(remote.slice(-8));
+    /* the node's card, not a second, plain tooltip */
+    expect(label).not.toHaveAttribute("title");
+    await userEvent.hover(label);
+    expect(await screen.findByText("Agents", {}, { timeout: 2000 })).toBeVisible();
   });
 
   it("does not show the local node in place of an unavailable explicit destination", () => {
