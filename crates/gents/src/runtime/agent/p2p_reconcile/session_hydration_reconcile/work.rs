@@ -737,10 +737,12 @@ mod tests {
     }
 
     /// The same deferral when A's attempt writes no terminal state. A real
-    /// subscription is created before the first discovery, so this case also
-    /// shows that B's own insert wake is consumed by the discovery that defers
-    /// it, and that A's completion adds no further wake. It does not claim the
-    /// subscription is lossless; only that no wake is left pending here.
+    /// subscription is created before the first discovery, and each insert's
+    /// batch is drained explicitly before the discovery that follows it, so the
+    /// test does not show the discovery consuming a wake. What it does show is
+    /// that A's failed attempt adds no further wake, and that no wake is left
+    /// pending at that observation. It does not claim the subscription is
+    /// lossless.
     #[tokio::test]
     async fn a_failed_attempt_without_a_terminal_write_still_defers_the_new_request() {
         bounded(
@@ -797,8 +799,9 @@ mod tests {
                 );
 
                 // An explicit discovery serves B. A is legitimately reattempted
-                // here, because its row is still pending; only B's service is
-                // asserted, not a lifetime attempt count for A.
+                // here, because its row is still pending, so the lifetime
+                // attempt count for A is not asserted; the identity multiset
+                // below is.
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
                 drive_until_started(&mut work, &delivery).await;
                 delivery.release_next();
