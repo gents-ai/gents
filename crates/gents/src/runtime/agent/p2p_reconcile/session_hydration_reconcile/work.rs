@@ -1866,9 +1866,13 @@ mod tests {
                 );
 
                 // A later real observation makes progress: the released peer has
-                // a pending row again, and `discover` starts it.
+                // a pending row again, and `discover` starts it. It needs a fresh
+                // token: `discover`'s biased select polls `cancel.cancelled()`
+                // first, so the cancelled token above would return immediately
+                // without applying or starting anything.
                 seed_pending_request(&fixture, "session-a").await;
-                discover(&store, &delivery, &mut work, &cancel).await;
+                let later_cancel = CancellationToken::new();
+                discover(&store, &delivery, &mut work, &later_cancel).await;
                 assert_eq!(
                     work.active_peers(),
                     BTreeSet::from([other_peer, released_peer]),
