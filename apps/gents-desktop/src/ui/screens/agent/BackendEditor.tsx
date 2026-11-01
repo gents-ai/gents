@@ -14,6 +14,9 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
+import { RotateCw } from "lucide-react";
+import { Hint } from "@/screens/Hint";
 import { Input } from "@gents/ui/components/input";
 import { setupErrorMessage } from "../../../lib/setupErrors";
 import { optionalInteger, requiredHttpUrl, str, useDraft, problemOf } from "./draft";
@@ -412,17 +415,24 @@ export function BackendEditor({
         <Group
           title="Usage"
           action={
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={refreshing}
-              onClick={refreshUsage}
-            >
-              Refresh
-            </Button>
+            <Hint label="Refresh usage">
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Refresh usage"
+                disabled={refreshing}
+                onClick={refreshUsage}
+              >
+                <RotateCw className={cn(refreshing && "animate-spin")} />
+              </Button>
+            </Hint>
           }
         >
-          <UsageRows view={usage.view} />
+          {/* the meters are not rows: they take a row's padding, and lay out
+              by the group's width as on the Providers list */}
+          <div className="@container grid min-w-0 gap-3 px-5 py-4">
+            <UsageRows view={usage.view} />
+          </div>
         </Group>
       )}
       <Group title="Endpoint and models">

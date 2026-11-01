@@ -1171,7 +1171,9 @@ describe("configuration panels", () => {
             .mockResolvedValueOnce([view_("claude", { windows: [window("5h", 12)] })]);
           renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
           const user = userEvent.setup();
-          await user.click(await screen.findByRole("button", { name: "Refresh" }));
+          await user.click(
+            await screen.findByRole("button", { name: "Refresh usage" }),
+          );
           expect(await usedRow(12)).toBeVisible();
           await act(async () => land(usage()));
           expect(await usedRow(12)).toBeVisible();
@@ -1220,7 +1222,7 @@ describe("configuration panels", () => {
           expect(await screen.findByText("Disabled")).toBeVisible();
           expect(screen.queryByText(/50%/)).not.toBeInTheDocument();
           expect(
-            screen.queryByRole("button", { name: "Refresh" }),
+            screen.queryByRole("button", { name: "Refresh usage" }),
           ).not.toBeInTheDocument();
         });
 
@@ -1230,7 +1232,7 @@ describe("configuration panels", () => {
           api.readProviderUsage.mockResolvedValueOnce([
             view_("claude", { windows: [window("5h", 12)] }),
           ]);
-          await user.click(screen.getByRole("button", { name: "Refresh" }));
+          await user.click(screen.getByRole("button", { name: "Refresh usage" }));
           expect(api.readProviderUsage).toHaveBeenLastCalledWith(
             deployment.nodeDid,
             true,
@@ -1241,7 +1243,9 @@ describe("configuration panels", () => {
 
           const openrouter = setup("openrouter");
           await screen.findByText("no cap on this key");
-          await openrouter.user.click(screen.getByRole("button", { name: "Refresh" }));
+          await openrouter.user.click(
+            screen.getByRole("button", { name: "Refresh usage" }),
+          );
           expect(openrouter.api.readProviderUsage).toHaveBeenLastCalledWith(
             deployment.nodeDid,
             true,
