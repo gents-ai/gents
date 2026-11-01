@@ -258,16 +258,19 @@ const TranscriptItem = memo(function TranscriptItem({
   item,
   worked,
   background,
+  workers,
 }: {
   item: RenderedTimelineItem;
   /** how long the turn this item ends worked, in milliseconds */
   worked?: number;
   background?: BackgroundResult[];
+  workers?: Workers;
 }) {
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
     case "automatedInput":
-      if (background) return <BackgroundResults results={background} />;
+      if (background)
+        return <BackgroundResults results={background} workers={workers} />;
       return (
         <AutomatedInput
           origin={item.origin}
@@ -456,6 +459,7 @@ const ItemRow = memo(function ItemRow({
   rowKey,
   item,
   background,
+  workers,
   changes,
   worked,
   day,
@@ -464,6 +468,8 @@ const ItemRow = memo(function ItemRow({
   rowKey: string;
   item: RenderedTimelineItem;
   background?: BackgroundResult[];
+  /** the sessions this one's calls reached, for background results */
+  workers?: Workers;
   /** the files the turn this row ends changed, in its session */
   changes?: ItemChanges;
   /** how long the turn this row ends worked, in milliseconds */
@@ -484,7 +490,12 @@ const ItemRow = memo(function ItemRow({
           <DayMarker day={day} />
         </div>
       )}
-      <TranscriptItem item={item} worked={worked} background={background} />
+      <TranscriptItem
+        item={item}
+        worked={worked}
+        background={background}
+        workers={workers}
+      />
       {changes && (
         <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
       )}
@@ -958,6 +969,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
                         background={entry.background}
+                        workers={entry.background && workers}
                         changes={changes.get(entry.key)}
                         worked={worked.get(entry.key)}
                         day={dayOpens.get(entry.key) ?? null}

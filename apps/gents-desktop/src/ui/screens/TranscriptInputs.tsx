@@ -19,8 +19,14 @@ import type {
   RequestLifecycleState,
   RequestOriginView,
   RenderedToolCallView,
+  SessionSummary,
 } from "@source-inc/gents-desktop-client";
-import type { NodeView } from "../../hooks/fleetStore";
+import {
+  listedSession,
+  nodeOf,
+  type FleetState,
+  type NodeView,
+} from "../../hooks/fleetStore";
 import { useSelectedNode } from "@/hooks/useClient";
 import { useFleet } from "../hooks/useFleet";
 
@@ -39,8 +45,13 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { holdRow } from "@/lib/scroll";
 import { GroupStateContext } from "./ActivityGroup";
+import { agentName } from "./behavior";
 import { Markdown } from "./Markdown";
-import { spoken } from "./tool-summary";
+import { AgentInitials } from "./parts";
+import { ToolIcon } from "./tool-icon";
+import { spoken, toolSummary } from "./tool-summary";
+import { isWorkerStep } from "./WorkerStep";
+import { NO_WORKERS, type Reached, type Workers } from "./workers";
 import { completionOf, type BackgroundResult } from "./transcript-groups";
 
 export function pendingInputState(
@@ -73,14 +84,43 @@ function triggerName(triggerId: string, node: NodeView | null) {
 
 type SessionMessageOrigin = Extract<RequestOriginView, { kind: "sessionMessage" }>;
 
+const ROUTING_HEADER =
+  /^\[message agent:(\S+) session:(\S+) node:(\S+) · at:(\S+) · cause:(\S+)\]$/;
+
+/* the runtime shortens a long node DID in the routing line */
+const shortDid = (did: string) =>
+  did.length > 20 ? `${did.slice(0, 16)}..${did.slice(-4)}` : did;
+
+/** The sender's session as the fleet lists it. A routing line is the
+    sender's own text, so without a sender session on the origin it only
+    names a session the fleet lists under the authenticated sender node,
+    and only when its node and cause agree with the origin. */
+export function senderSession(
+  fleet: FleetState,
+  origin: SessionMessageOrigin,
+  content: string | null | undefined,
+): SessionSummary | null {
+  const node = origin.senderNodeDid;
+  if (origin.senderSessionId)
+    return (
+      listedSession(fleet, node, origin.senderSessionId) ??
+      fleet.bySessionId[origin.senderSessionId] ??
+      null
+    );
+  const header = ROUTING_HEADER.exec(content?.split("\n", 1)[0]?.trimEnd() ?? "");
+  if (!header || !node || header[3] !== shortDid(node)) return null;
+  if (origin.senderRequestId && header[5] !== origin.senderRequestId) return null;
+  return listedSession(fleet, node, header[2]);
+}
+
 function senderName(
   origin: SessionMessageOrigin,
   node: NodeView | null,
   senderTitle: string | null,
+  sessionId = origin.senderSessionId,
 ): string {
   if (senderTitle) return senderTitle;
-  if (origin.senderSessionId || origin.senderNodeDid === node?.nodeDid)
-    return "another session";
+  if (sessionId || origin.senderNodeDid === node?.nodeDid) return "another session";
   return "another node";
 }
 
@@ -131,35 +171,54 @@ const OUTCOMES: Record<string, string> = {
   timed_out: "timed out",
 };
 
-type BackgroundName = { subject: string; outcome: string };
+type BackgroundName = {
+  subject: string;
+  outcome: string;
+  /** the session a worker step reached, named as that step names it */
+  worker?: { sessionId: string | null; agentId: string | null };
+};
 
-/** the call a background result reports on, by what it ran when that call
-    is drawn, and how it ended */
+/** the call a background result reports on, by what the step that started
+    it shows when that step is drawn, and how it ended */
 export function backgroundName(
   content: string | null | undefined,
   call: RenderedToolCallView | null,
+  reached: Reached | null = null,
 ): BackgroundName | null {
   const completion = completionOf(content);
   if (!completion) return null;
+  const outcome = OUTCOMES[completion.status] ?? "finished";
   const p = call?.presentation;
-  const subject =
-    p?.kind === "command"
+  if (call && p?.kind === "agent" && isWorkerStep(call))
+    return {
+      subject: reached?.summary?.title ?? p.name ?? "a session",
+      outcome,
+      worker: {
+        sessionId: reached?.request.sessionId ?? p.sessionId ?? null,
+        agentId: reached?.summary?.agentId ?? null,
+      },
+    };
+  const subject = !call
+    ? completion.toolName
+    : p?.kind === "command"
       ? spoken(p.command)
-      : p?.kind === "agent" && p.name
-        ? p.name
-        : completion.toolName;
-  return {
-    subject: subject || "call",
-    outcome: OUTCOMES[completion.status] ?? "finished",
-  };
+      : toolSummary(call).primary;
+  return { subject: subject || "call", outcome };
 }
 
 export const backgroundText = (named: BackgroundName | null) =>
-  named ? `Background ${named.subject} ${named.outcome}` : "Background result";
+  named ? `${named.subject} ${named.outcome}` : "Background result";
 
 /** the line a run of background results folds into */
-export function backgroundRunLabel(results: readonly BackgroundResult[]): string {
-  const named = results.flatMap((r) => backgroundName(r.item.content, r.call) ?? []);
+export function backgroundRunLabel(
+  results: readonly BackgroundResult[],
+  workers: Workers = NO_WORKERS,
+): string {
+  const named = results.flatMap(
+    (r) =>
+      backgroundName(r.item.content, r.call, r.call && workers.byToolCall(r.call)) ??
+      [],
+  );
   const count = named.length || results.length;
   return count === 1 ? backgroundText(named[0] ?? null) : `${count} background results`;
 }
@@ -292,28 +351,31 @@ function Title({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   );
 }
 
-function BackgroundTitle({ named }: { named: BackgroundName | null }) {
-  if (!named) return <>Background result</>;
+function SessionLink({ sessionId, name }: { sessionId: string; name: string }) {
   return (
-    <>
-      Background <span className="font-mono text-xs">{named.subject}</span>{" "}
-      {named.outcome}
-    </>
+    <a
+      href={href({ name: "session", sessionId })}
+      className="underline decoration-border underline-offset-4 hover:text-foreground"
+    >
+      {name}
+      <ArrowUpRight aria-hidden className="ml-0.5 inline size-3 align-[-1px]" />
+    </a>
   );
 }
 
-function Sender({ sessionId, name }: { sessionId: string | null; name: string }) {
-  if (!sessionId) return <>From {name}</>;
+function BackgroundTitle({ named }: { named: BackgroundName | null }) {
+  if (!named) return <>Background result</>;
+  const sessionId = named.worker?.sessionId;
   return (
     <>
-      From{" "}
-      <a
-        href={href({ name: "session", sessionId })}
-        className="underline decoration-border underline-offset-4 hover:text-foreground"
-      >
-        {name}
-        <ArrowUpRight aria-hidden className="ml-0.5 inline size-3 align-[-1px]" />
-      </a>
+      {sessionId ? (
+        <SessionLink sessionId={sessionId} name={named.subject} />
+      ) : named.worker ? (
+        named.subject
+      ) : (
+        <span className="font-mono text-xs">{named.subject}</span>
+      )}{" "}
+      {named.outcome}
     </>
   );
 }
@@ -331,6 +393,10 @@ function ModelInput({ content }: { content: string | null | undefined }) {
   );
 }
 
+const avatar = (name: string) => (
+  <AgentInitials name={name} className="size-4 text-[8px]" />
+);
+
 export function AutomatedInput({
   origin,
   content,
@@ -338,6 +404,7 @@ export function AutomatedInput({
   state = null,
   stateKey = null,
   call = null,
+  reached = null,
 }: {
   origin: RequestOriginView;
   content: string | null | undefined;
@@ -347,14 +414,15 @@ export function AutomatedInput({
   stateKey?: string | null;
   /** the background call a result reports on, when drawn */
   call?: RenderedToolCallView | null;
+  /** the session that call reached, for a worker step */
+  reached?: Reached | null;
 }) {
   const unavailable = unavailableReason(reconstruction);
   const node = useSelectedNode();
-  const senderSessionId =
-    origin.kind === "sessionMessage" ? origin.senderSessionId : null;
-  const senderTitle = useFleet((fleet) =>
-    senderSessionId ? (fleet.bySessionId[senderSessionId]?.title ?? null) : null,
+  const sender = useFleet((fleet) =>
+    origin.kind === "sessionMessage" ? senderSession(fleet, origin, content) : null,
   );
+  const senderNode = useFleet((fleet) => nodeOf(fleet, sender?.nodeDid));
   const [open, setOpen] = useKeptOpen(stateKey && `input:${stateKey}`);
   const root = useRef<HTMLElement>(null);
   const toggle = (next: boolean) => {
@@ -362,25 +430,49 @@ export function AutomatedInput({
     setOpen(next);
   };
   const named =
-    origin.kind === "backgroundCompletion" ? backgroundName(content, call) : null;
-  const label = named ? backgroundText(named) : originLabel(origin, node, senderTitle);
-  const title =
-    origin.kind === "backgroundCompletion" ? (
-      <BackgroundTitle named={named} />
-    ) : origin.kind === "sessionMessage" ? (
-      <Sender
-        sessionId={senderSessionId}
-        name={senderName(origin, node, senderTitle)}
-      />
+    origin.kind === "backgroundCompletion"
+      ? backgroundName(content, call, reached)
+      : null;
+  let label: string;
+  let title: ReactNode;
+  let icon: ReactNode;
+  if (origin.kind === "sessionMessage") {
+    const sessionId = origin.senderSessionId ?? sender?.sessionId ?? null;
+    const name = senderName(origin, node, sender?.title ?? null, sessionId);
+    label = `From ${name}`;
+    title = sessionId ? (
+      <>
+        From <SessionLink sessionId={sessionId} name={name} />
+      </>
     ) : (
       label
     );
+    icon = sender ? (
+      avatar(agentName(sender.agentId, senderNode ?? node))
+    ) : (
+      <OriginIcon origin={origin} />
+    );
+  } else if (origin.kind === "backgroundCompletion") {
+    label = backgroundText(named);
+    title = <BackgroundTitle named={named} />;
+    const agentId = named?.worker?.agentId;
+    icon = agentId ? (
+      avatar(agentName(agentId, node))
+    ) : call ? (
+      <ToolIcon tool={call} className="size-3.5 shrink-0" />
+    ) : (
+      <OriginIcon origin={origin} />
+    );
+  } else {
+    label = originLabel(origin, node, null);
+    title = label;
+    icon = <OriginIcon origin={origin} />;
+  }
   const body = oneLine(origin)
     ? null
     : origin.kind === "sessionMessage"
       ? (origin.displayBody ?? withoutRoutingHeader(content ?? ""))
       : content;
-  const icon = <OriginIcon origin={origin} />;
   const badge = state && (
     <Badge variant="outline" className="shrink-0 font-normal">
       {state}
@@ -401,23 +493,18 @@ export function AutomatedInput({
             <Title icon={icon}>{title}</Title>
             {badge}
           </div>
-        ) : oneLine(origin) ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <CollapsibleTrigger
-              aria-label={`${action}: ${label}`}
-              className={cn(LINE, "flex-1 cursor-pointer hover:text-foreground")}
-            >
-              <span className="grid size-4 shrink-0 place-items-center">
-                <Chevron open={open} />
-              </span>
-              <Title icon={icon}>{title}</Title>
-            </CollapsibleTrigger>
-            {badge}
-          </div>
         ) : (
-          <div className={LINE}>
+          /* the chevron is the control; the rest of the line is a larger
+             target for a pointer, except its links */
+          <div
+            className={cn(LINE, "cursor-pointer hover:text-foreground")}
+            onClick={(event) => {
+              if ((event.target as Element).closest("a, button")) return;
+              toggle(!open);
+            }}
+          >
             <CollapsibleTrigger
-              aria-label={action}
+              aria-label={oneLine(origin) ? `${action}: ${label}` : action}
               className="grid size-4 shrink-0 cursor-pointer place-items-center rounded-sm hover:text-foreground"
             >
               <Chevron open={open} />
@@ -453,21 +540,29 @@ export function AutomatedInput({
 
 /** Background results that arrived with nothing between them: one line,
     opening to each with its own model input. */
-export function BackgroundResults({ results }: { results: BackgroundResult[] }) {
+export function BackgroundResults({
+  results,
+  workers = NO_WORKERS,
+}: {
+  results: BackgroundResult[];
+  workers?: Workers;
+}) {
   const first = results[0]!;
   const [open, setOpen] = useKeptOpen(`background:${first.item.itemKey}`);
   const root = useRef<HTMLElement>(null);
-  if (results.length === 1)
-    return (
-      <AutomatedInput
-        origin={first.item.origin}
-        content={first.item.content}
-        reconstruction={first.item.reconstruction}
-        stateKey={first.item.itemKey}
-        call={first.call}
-      />
-    );
-  const label = backgroundRunLabel(results);
+  const row = ({ item, call }: BackgroundResult) => (
+    <AutomatedInput
+      key={item.itemKey}
+      origin={item.origin}
+      content={item.content}
+      reconstruction={item.reconstruction}
+      stateKey={item.itemKey}
+      call={call}
+      reached={call && workers.byToolCall(call)}
+    />
+  );
+  if (results.length === 1) return row(first);
+  const label = backgroundRunLabel(results, workers);
   return (
     <section
       ref={root}
@@ -491,16 +586,7 @@ export function BackgroundResults({ results }: { results: BackgroundResult[] }) 
           <Title icon={<Clock className="size-3.5 shrink-0" />}>{label}</Title>
         </CollapsibleTrigger>
         <CollapsibleContent className="ml-4 border-l border-border pl-1">
-          {results.map(({ item, call }) => (
-            <AutomatedInput
-              key={item.itemKey}
-              origin={item.origin}
-              content={item.content}
-              reconstruction={item.reconstruction}
-              stateKey={item.itemKey}
-              call={call}
-            />
-          ))}
+          {results.map(row)}
         </CollapsibleContent>
       </Collapsible>
     </section>
