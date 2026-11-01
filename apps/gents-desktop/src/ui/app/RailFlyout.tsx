@@ -234,7 +234,7 @@ export function NavPanel({
         <>
           <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
             <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-              Recent sessions
+              Recent
             </p>
             <RecentFilter sessions={recentCandidates} />
           </div>
