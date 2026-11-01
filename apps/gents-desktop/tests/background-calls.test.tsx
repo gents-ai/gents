@@ -24,7 +24,7 @@ import {
   stateOf,
   type BackgroundCall,
   resetBackgroundPlaces,
-  briefStateOf,
+  rowStateOf,
 } from "../src/ui/screens/background";
 import { BackgroundButton } from "../src/ui/screens/BackgroundButton";
 import { BackgroundSurface } from "../src/ui/screens/BackgroundCalls";
@@ -48,6 +48,7 @@ vi.mock("../src/ui/screens/terminal", () => ({
 const NODE = "did:key:parent";
 const NOW = Date.parse("2026-10-26T12:00:00Z");
 const minutesAgo = (mins: number) => new Date(NOW - mins * 60_000).toISOString();
+const secondsAgo = (secs: number) => new Date(NOW - secs * 1000).toISOString();
 
 const command = (
   toolCallId: string,
@@ -341,13 +342,17 @@ describe("the running in background group", () => {
     expect(finished.getByRole("button").textContent).toBe("make test");
     const [build] = running.getAllByRole("listitem");
     const [test] = finished.getAllByRole("listitem");
-    expect(within(test!).getByTestId("background-state")).toHaveTextContent("3 min");
+    expect(within(test!).getByTestId("background-state")).toHaveTextContent(
+      "Done · ran 3m",
+    );
     expect(test!.firstElementChild).toHaveAttribute(
       "title",
       "make test\nFinished after 3 min",
     );
     await waitFor(() =>
-      expect(within(build!).getByTestId("background-state")).toHaveTextContent("stuck"),
+      expect(within(build!).getByTestId("background-state")).toHaveTextContent(
+        "Stuck · stopped responding 3 min ago",
+      ),
     );
     expect(build!.firstElementChild).toHaveAttribute(
       "title",
@@ -443,16 +448,94 @@ describe("the running in background group", () => {
     expect(view.container.querySelector("[data-returned]")).toBeNull();
   });
 
-  it("puts a short state at the end of a row", () => {
-    expect(briefStateOf(call({ tool: command("a", "x") }), NOW)).toBe("12 min");
+  it("says under each command where it stands, how long it ran and when it ended", () => {
+    const line = (c: BackgroundCall) => {
+      const { state, more } = rowStateOf(c, NOW);
+      return more ? `${state} · ${more}` : state;
+    };
+    const ended = (
+      id: string,
+      statusKind: string,
+      result: Record<string, unknown>,
+      over: Partial<RenderedToolCallView> = {},
+    ) =>
+      call({
+        tool: command(
+          id,
+          "x",
+          { statusKind, completedAt: minutesAgo(2), ...over },
+          result,
+        ),
+      });
+    expect(line(call({ tool: command("a", "x", { startedAt: secondsAgo(42) }) }))).toBe(
+      "Running · 42s",
+    );
     expect(
-      briefStateOf(
-        call({
-          tool: command("b", "x", { statusKind: "failed" }, {}),
-        }),
-        NOW,
+      line(
+        call({ view: viewOf("w", { waitStatus: { lifecycle: "pending" } as never }) }),
       ),
-    ).toMatch(/^(failed|exit \d+)$/);
+    ).toBe("Waiting to start");
+    expect(line(ended("f", "failed", { durationMs: 38_000 }))).toBe(
+      "Failed · ran 38s · 2 min ago",
+    );
+    expect(line(ended("e", "error", { durationMs: 38_000, exitCode: 1 }))).toBe(
+      "Exit 1 · ran 38s · 2 min ago",
+    );
+    expect(
+      line(
+        ended(
+          "t",
+          "failed",
+          { durationMs: 300_000, timedOut: true },
+          { completedAt: minutesAgo(60) },
+        ),
+      ),
+    ).toBe("Timed out · ran 5m · 1 h ago");
+    expect(
+      line(
+        ended(
+          "s",
+          "cancelled",
+          {},
+          { startedAt: secondsAgo(12), completedAt: new Date(NOW).toISOString() },
+        ),
+      ),
+    ).toBe("Stopped · ran 12s · just now");
+    expect(
+      line(
+        ended("d", "success", { durationMs: 252_000 }, { completedAt: minutesAgo(60) }),
+      ),
+    ).toBe("Done · ran 4m 12s · 1 h ago");
+    expect(
+      line(
+        call({
+          tool: command("k", "x"),
+          view: viewOf("k", { stuckSince: minutesAgo(3) }),
+        }),
+      ),
+    ).toBe("Stuck · stopped responding 3 min ago");
+  });
+
+  it("counts each second a call runs", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(NOW);
+    const { app } = appWith([
+      command("serve", "npm run dev", { startedAt: secondsAgo(42) }),
+      command(
+        "done",
+        "make",
+        { statusKind: "success", completedAt: minutesAgo(1) },
+        { durationMs: 4_000 },
+      ),
+    ]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const [serve, done] = screen.getAllByTestId("background-state");
+    expect(serve).toHaveTextContent("Running · 42s");
+    act(() => vi.advanceTimersByTime(1000));
+    expect(serve).toHaveTextContent("Running · 43s");
+    expect(done).toHaveTextContent("Done · ran 4s · 1 min ago");
   });
 
   it("says a finished spawned process's output can't be shown, without a terminal", () => {
