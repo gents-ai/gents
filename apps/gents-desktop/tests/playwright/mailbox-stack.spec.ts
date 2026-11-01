@@ -53,6 +53,48 @@ test("moves with the arrow keys from a question onto an item without one", async
   await expect(dialog).toContainText("Disk is nearly full");
 });
 
+test("moves through the stack without capturing the session's question card beneath it", async ({
+  page,
+}) => {
+  await gotoHarness(page, "mailbox-many");
+  await openMailbox(page);
+  const dialog = page.getByTestId("mailbox-dialog");
+  await rowButton(page, "Button colour").click();
+  await dialog.getByText("Open session", { exact: true }).click();
+  const session = page.getByTestId("session-screen");
+  await expect(session.getByTestId("question-panel")).toBeVisible();
+  /* the elements each transition of the stack captures, before and after */
+  await page.evaluate(() => {
+    const start = document.startViewTransition?.bind(document);
+    if (!start) return;
+    const named = () =>
+      [...document.querySelectorAll<HTMLElement>("body *")]
+        .filter((el) => getComputedStyle(el).viewTransitionName !== "none")
+        .map((el) =>
+          el.closest('[data-testid="mailbox-dialog"]') ? "dialog" : "page",
+        );
+    const seen: string[][] = [];
+    Object.assign(window, { captured: seen });
+    document.startViewTransition = (update) => {
+      seen.push(named());
+      return start(() => {
+        (update as () => void)();
+        seen.push(named());
+      });
+    };
+  });
+  await page.keyboard.press("ControlOrMeta+Shift+KeyM");
+  await expect(dialog).toContainText("1 of 5");
+  await page.keyboard.press("ArrowRight");
+  await expect(dialog).toContainText("2 of 5");
+  const captured = await page.evaluate(
+    () => (window as unknown as { captured: string[][] }).captured,
+  );
+  test.skip(captured.length === 0, "no view transitions in this browser");
+  expect(captured.flat()).toContain("dialog");
+  expect(captured.flat()).not.toContain("page");
+});
+
 test("opens the mailbox's dialog over another page with its shortcut", async ({
   page,
 }) => {

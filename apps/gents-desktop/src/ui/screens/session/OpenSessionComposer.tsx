@@ -1,10 +1,11 @@
 import { QuestionPanel } from "./QuestionPanel";
-import { morph } from "@/lib/morph";
+import { MorphProvider, useMorphCard } from "@/lib/morph";
 import { AskedChip } from "./AskedChip";
 import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
 import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
 import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -47,7 +48,7 @@ import { ActiveNodeLabel } from "@/app/ActiveNodeLabel";
 import { chipSkills, withSkillLines } from "@/lib/skillLines";
 
 /* the one card the composer box and the question panel share (morph.css) */
-const CARD = "[view-transition-name:composer-card] [view-transition-class:morph-card]";
+const CARD = "[view-transition-class:morph-card]";
 
 export function OpenSessionComposer({
   roomRef,
@@ -171,10 +172,19 @@ export function OpenSessionComposer({
   const asking = questions.length > 0 && typingFor !== questionsKey && !editing;
   /* the composer box and the question panel are one card, so a question
      arriving or leaving morphs one into the other */
+  const card = useMorphCard();
   const [shownAsking, setShownAsking] = useState(asking);
   useEffect(() => {
-    if (shownAsking !== asking) morph(() => setShownAsking(asking));
-  }, [asking, shownAsking]);
+    if (shownAsking !== asking) card.morph(() => setShownAsking(asking));
+  }, [asking, shownAsking, card]);
+  const cardPart = card.part("card");
+  const composerRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      attachmentRoot.current = element;
+      return cardPart(element);
+    },
+    [cardPart],
+  );
   const draftKey = useView((view) => view.draftKey);
   const [field, setField] = useDraftField(drafts, draftKey);
   const leaveHistory = history.leave;
@@ -302,11 +312,13 @@ export function OpenSessionComposer({
       <GoalDeliveryFeedback />
       <ChatDeliveryFeedback />
       {shownAsking && (
-        <div className={CARD}>
-          <QuestionPanel
-            items={questions}
-            onTypeInstead={() => setTypingFor(questionsKey)}
-          />
+        <div ref={cardPart} className={CARD}>
+          <MorphProvider value={card}>
+            <QuestionPanel
+              items={questions}
+              onTypeInstead={() => setTypingFor(questionsKey)}
+            />
+          </MorphProvider>
         </div>
       )}
       {!shownAsking && questions.length > 0 && (
@@ -315,7 +327,7 @@ export function OpenSessionComposer({
       <div
         data-testid="composer"
         hidden={shownAsking || undefined}
-        ref={attachmentRoot}
+        ref={composerRef}
         {...activeAttachments.dropProps}
         className={cn(
           "relative grid rounded-2xl",

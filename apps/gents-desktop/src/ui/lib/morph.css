@@ -1,4 +1,4 @@
-/* A card changing through morph() (morph.ts): its box animates from one size
+/* A card changing through useMorphCard (morph.ts): its box animates from one size
    to the next while its old and new contents cross-fade at their own size,
    top aligned, so text never stretches. Edges stacked behind a card follow
    it. */

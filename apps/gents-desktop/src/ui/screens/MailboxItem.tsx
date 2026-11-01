@@ -29,7 +29,7 @@ import type { ShellActions } from "@/../hooks/shellActions";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
 import { QuestionPanel } from "./session/QuestionPanel";
-import { morph } from "@/lib/morph";
+import { MorphProvider, useMorph, useMorphCard } from "@/lib/morph";
 import { mailboxSeen, useNewItem } from "@/app/mailboxSeen";
 import { ChatDeliveryFeedback } from "./session/ChatDeliveryFeedback";
 import { parseQuestion, useAnswerDelivery } from "./MailboxQuestion";
@@ -259,6 +259,7 @@ export function ItemDialog({
     else onClose();
   }, [openId, at, lastAt, items, onOpen, onClose]);
   const item = at >= 0 ? items[at]! : null;
+  const card = useMorphCard();
   const content = useRef<HTMLDivElement>(null);
   /* focus left with the card that held it, and keys pressed outside the
      dialog never reach its ← and →; a card that takes focus itself has done
@@ -269,7 +270,7 @@ export function ItemDialog({
   }, [item?.itemId]);
   const go = (index: number) => {
     const next = items[index];
-    if (next) morph(() => onOpen(next.itemId, index));
+    if (next) card.morph(() => onOpen(next.itemId, index));
   };
   const done = () => (at + 1 < items.length ? go(at + 1) : onClose());
   return (
@@ -325,13 +326,15 @@ export function ItemDialog({
               <X />
             </Button>
           </div>
-          <Opened
-            key={item.itemId}
-            item={item}
-            now={now}
-            behind={Math.min(2, items.length - at - 1)}
-            onDone={done}
-          />
+          <MorphProvider value={card}>
+            <Opened
+              key={item.itemId}
+              item={item}
+              now={now}
+              behind={Math.min(2, items.length - at - 1)}
+              onDone={done}
+            />
+          </MorphProvider>
         </DialogContent>
       )}
     </Dialog>
@@ -359,18 +362,21 @@ const typing = (target: EventTarget) => {
 
 /** the edges of the next items, behind the card and sized to it */
 function Stack({ behind }: { behind: number }) {
+  const { part } = useMorph();
   return (
     <>
       {behind >= 2 && (
         <span
           aria-hidden
-          className="absolute inset-x-6 top-4 -bottom-4 -z-10 rounded-2xl bg-popover/50 ring-1 ring-foreground/5 [view-transition-name:mailbox-stack-2] [view-transition-class:morph-edge]"
+          className="absolute inset-x-6 top-4 -bottom-4 -z-10 rounded-2xl bg-popover/50 ring-1 ring-foreground/5 [view-transition-class:morph-edge]"
+          ref={part("edge-2")}
         />
       )}
       {behind >= 1 && (
         <span
           aria-hidden
-          className="absolute inset-x-3 top-2 -bottom-2 -z-10 rounded-2xl bg-popover/80 ring-1 ring-foreground/10 [view-transition-name:mailbox-stack-1] [view-transition-class:morph-edge]"
+          className="absolute inset-x-3 top-2 -bottom-2 -z-10 rounded-2xl bg-popover/80 ring-1 ring-foreground/10 [view-transition-class:morph-edge]"
+          ref={part("edge-1")}
         />
       )}
     </>
@@ -388,6 +394,7 @@ function Opened({
   behind: number;
   onDone: () => void;
 }) {
+  const { part } = useMorph();
   const question = parseQuestion(m);
   const { pending, confirmed, inFlight } = useAnswerDelivery(m);
   const answered = pending || confirmed;
@@ -412,7 +419,10 @@ function Opened({
       {asking && <DialogTitle className="sr-only">{m.title}</DialogTitle>}
       <div className="relative min-h-0 min-w-0">
         <Stack behind={behind} />
-        <div className="h-full min-h-0 [view-transition-name:mailbox-card] [view-transition-class:morph-card]">
+        <div
+          ref={part("card")}
+          className="h-full min-h-0 [view-transition-class:morph-card]"
+        >
           {asking ? (
             <QuestionPanel
               items={[m]}

@@ -15,7 +15,7 @@ import { useFleet } from "../../hooks/useFleet";
 import { agentName } from "../behavior";
 import { parseQuestion } from "../MailboxQuestion";
 import { Markdown } from "../Markdown";
-import { morph } from "@/lib/morph";
+import { useMorph } from "@/lib/morph";
 
 /* a field the panel's composer hides as it opens is not one being written in */
 const writingElsewhere = (element: Element | null) =>
@@ -57,6 +57,7 @@ export function QuestionPanel({
   /** a first header line, ahead of who asks: what kind of item this is */
   kind?: ReactNode;
 }) {
+  const { morph } = useMorph();
   const [at, setAt] = useState(0);
   const shown = Math.min(at, items.length - 1);
   const item = items[shown];
