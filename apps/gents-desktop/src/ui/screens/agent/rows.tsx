@@ -73,7 +73,9 @@ export function StackedRow({
   children?: ReactNode;
 }) {
   return (
-    <FieldRow className="flex-col items-stretch gap-3">
+    /* the kit's horizontal field aligns to the start once it has a label
+       block, which would shrink what follows to its content */
+    <FieldRow className="flex-col items-stretch gap-3 has-[>[data-slot=field-content]]:items-stretch">
       <FieldContent>
         <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
         {description && <FieldDescription>{description}</FieldDescription>}
