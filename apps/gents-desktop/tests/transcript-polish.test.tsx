@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
+import { messagePlaces, openAt } from "../src/ui/app/messagePlaces";
 import { BackgroundToolButton } from "../src/ui/screens/BackgroundToolButton";
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
@@ -329,6 +330,57 @@ describe("a folded group with a failure in it", () => {
     expect(button).toHaveTextContent("Ran 2 commands");
     expect(button).not.toHaveTextContent("failed");
     expect(button).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("a step asked for from elsewhere", () => {
+  it("opens its folded group, opens the step and marks it", async () => {
+    const command = (key: string): RenderedToolCallView => ({
+      ...tool({
+        kind: "command",
+        command: `run ${key}`,
+        exitCode: 0,
+        timedOut: false,
+        failed: false,
+        durationMs: 10,
+        cwd: "~",
+        executionMode: "sandboxed",
+        networkMode: "disabled",
+        stdout: "",
+        stderr: "",
+        fallbackOutput: null,
+      }),
+      itemKey: key,
+    });
+    render(
+      panel(
+        session({
+          timelineItems: [
+            {
+              kind: "toolGroup",
+              itemKey: "group",
+              messageSequence: 1,
+              tools: [command("a"), command("b")],
+            },
+          ],
+        }),
+        false,
+      ),
+    );
+    const header = screen.getByRole("button", { name: /ran 2 commands/i });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    act(() =>
+      openAt({ sessionId: "session-1", sequence: 1, itemKey: "b", open: true }),
+    );
+    await waitFor(() => expect(header).toHaveAttribute("aria-expanded", "true"));
+    const step = document.querySelector('[data-step-key="b"]')!;
+    expect(step).toHaveAttribute("data-open");
+    expect(step).toHaveClass("bg-accent");
+    expect(document.querySelector('[data-step-key="a"]')).not.toHaveAttribute(
+      "data-open",
+    );
+    expect(messagePlaces.request()).toBeNull();
   });
 });
 

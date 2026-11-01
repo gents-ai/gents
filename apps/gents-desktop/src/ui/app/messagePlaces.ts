@@ -5,7 +5,7 @@ import { navigate } from "@/lib/router";
 
 /** A place in a session that anything can send the app to: a message, by
     its number, and optionally the row to show there (a compaction marker, a
-    reply) and whether to open it. The transcript reads the page around the
+    reply, a tool step) and whether to open it. The transcript reads the page around the
     message when it isn't loaded, so nothing reads the history before it. */
 export type MessagePlace = {
   sessionId: string;
@@ -58,4 +58,11 @@ export function usePlaceRequest(sessionId: string | null) {
 
 export function useOpening(itemKey: string) {
   return useStore(store, (state) => state.opening === itemKey);
+}
+
+/** The row asked to open, when it is one of these. */
+export function useOpeningAmong(itemKeys: readonly string[]) {
+  return useStore(store, (state) =>
+    state.opening !== null && itemKeys.includes(state.opening) ? state.opening : null,
+  );
 }

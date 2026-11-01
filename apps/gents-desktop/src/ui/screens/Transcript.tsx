@@ -852,8 +852,10 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     if (!asked || entries.length === 0) return;
     const read = readFor === asked.id;
     const byItem = asked.itemKey
-      ? entries.find(
-          (entry) => entry.kind === "item" && entry.item.itemKey === asked.itemKey,
+      ? entries.find((entry) =>
+          entry.kind === "item"
+            ? entry.item.itemKey === asked.itemKey
+            : entry.members.some((member) => member.key === asked.itemKey),
         )
       : undefined;
     const byMessage =

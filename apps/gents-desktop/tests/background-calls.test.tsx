@@ -16,6 +16,7 @@ import type {
   RenderedTimelineItem,
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
+import { messagePlaces } from "@/app/messagePlaces";
 import { workspace } from "@/app/workspace";
 import { writeSession } from "../src/hooks/sessionStore";
 import {
@@ -340,8 +341,8 @@ describe("the running in background group", () => {
     });
     const running = within(screen.getByRole("region", { name: "Running" }));
     const finished = within(screen.getByRole("region", { name: "Finished" }));
-    expect(running.getByRole("button").textContent).toBe("npm run build");
-    expect(finished.getByRole("button").textContent).toBe("make test");
+    expect(running.getAllByRole("button")[0]!.textContent).toBe("npm run build");
+    expect(finished.getAllByRole("button")[0]!.textContent).toBe("make test");
     const [build] = running.getAllByRole("listitem");
     const [test] = finished.getAllByRole("listitem");
     expect(within(test!).getByTestId("background-state")).toHaveTextContent(
@@ -538,6 +539,76 @@ describe("the running in background group", () => {
     act(() => vi.advanceTimersByTime(1000));
     expect(serve).toHaveTextContent("Running · 43s");
     expect(done).toHaveTextContent("Done · ran 4s · 1 min ago");
+  });
+
+  it("shows a call where it started in the transcript, from its row and its log", () => {
+    const tool = command("build", "npm run build", { partialOutputTail: "one" });
+    const { app } = appWith([tool]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const place = {
+      sessionId: "parent",
+      sequence: 1,
+      itemKey: "item-build",
+      open: true,
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Show in transcript" }));
+    expect(messagePlaces.request()).toMatchObject(place);
+    act(() => messagePlaces.landed(messagePlaces.request()!.id, false));
+
+    fireEvent.click(screen.getByRole("button", { name: "npm run build" }));
+    expect(screen.getByTestId("background-command")).toHaveTextContent("npm run build");
+    fireEvent.click(screen.getByRole("button", { name: "Show in transcript" }));
+    expect(messagePlaces.request()).toMatchObject(place);
+    act(() => messagePlaces.landed(messagePlaces.request()!.id, false));
+  });
+
+  it("shows a spawned process at the step that spawned it", () => {
+    const spawn = {
+      ...command("spawn", "x", { toolName: "spawn_process", awaitMode: null }),
+      presentation: {
+        kind: "process",
+        action: "spawn",
+        target: "bash",
+        description: JSON.stringify({ command: "npm run dev" }),
+        output: null,
+      },
+    } as unknown as RenderedToolCallView;
+    const { app } = appWith([spawn, command("spawned:doc-spawn", "bash")]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show in transcript" }));
+    expect(messagePlaces.request()).toMatchObject({
+      itemKey: "item-spawn",
+      sequence: 1,
+    });
+    act(() => messagePlaces.landed(messagePlaces.request()!.id, false));
+  });
+
+  it("offers no way to the transcript for a call its rows can't place", async () => {
+    const { app } = appWith(
+      [command("build", "npm run build")],
+      [viewOf("build"), viewOf("unloaded", { toolName: "cargo" })],
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const unloaded = (await screen.findByRole("button", { name: "cargo" })).closest(
+      "li",
+    )!;
+    const build = screen.getByRole("button", { name: "npm run build" }).closest("li")!;
+    expect(
+      within(build).getByRole("button", { name: "Show in transcript" }),
+    ).toBeInTheDocument();
+    expect(
+      within(unloaded).queryByRole("button", { name: "Show in transcript" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "cargo" }));
+    expect(screen.getByRole("button", { name: "Back" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Show in transcript" })).toBeNull();
   });
 
   it("says a finished spawned process's output can't be shown, without a terminal", () => {
