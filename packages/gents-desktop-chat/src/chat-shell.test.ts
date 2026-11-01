@@ -567,6 +567,112 @@ describe("a sent message held in the pending queue", () => {
   });
 });
 
+describe("why Send waits, in the person's terms", () => {
+  const base = {
+    clientAvailable: true,
+    selectedNodeDid: "did:key:node",
+    selectedSessionId: "session-1",
+    sending: false,
+    selectedSessionSummary: null,
+  } as const;
+  const sent: ChatWorkflowState = {
+    kind: "awaitingObservation",
+    nodeDid: "did:key:node",
+    sessionId: "session-1",
+    requestId: "req-sent",
+  };
+
+  test("while the send is still in flight", () => {
+    expect(
+      projectChatShell({
+        ...base,
+        sending: true,
+        session: session({ nodeDid: "did:key:node" }),
+        localWorkflow: {
+          kind: "submittingRequest",
+          nodeDid: "did:key:node",
+          sessionId: "session-1",
+        },
+      }).nonEmptyContentSendStatus,
+    ).toEqual({
+      kind: "disabled",
+      reason: "submittingRequest",
+      hint: "Still sending your last message. Try again in a moment.",
+    });
+  });
+
+  test("while the sent message has not reached the session yet", () => {
+    expect(
+      projectChatShell({
+        ...base,
+        session: session({ nodeDid: "did:key:node" }),
+        localWorkflow: sent,
+      }).nonEmptyContentSendStatus,
+    ).toEqual({
+      kind: "disabled",
+      reason: "waitingForRequestObservation",
+      hint: "Your last message is still on its way. Try again in a moment.",
+    });
+  });
+
+  test("while the selected session has not loaded", () => {
+    expect(
+      projectChatShell({
+        ...base,
+        session: null,
+        localWorkflow: { kind: "ready" },
+      }).nonEmptyContentSendStatus,
+    ).toEqual({
+      kind: "disabled",
+      reason: "sessionMissingFromSnapshot",
+      hint: "This session is still loading. Try again in a moment.",
+    });
+  });
+
+  test("while the latest message's state has not synced", () => {
+    const expected = {
+      kind: "disabled",
+      reason: "inconsistentTurnObservation",
+      hint: "Still syncing this session. Try again in a moment.",
+    };
+    expect(
+      projectChatShell({
+        ...base,
+        session: session({ nodeDid: "did:key:node", turnState: null }),
+        localWorkflow: { kind: "ready" },
+      }).nonEmptyContentSendStatus,
+    ).toEqual(expected);
+    expect(
+      projectChatShell({
+        ...base,
+        session: session({
+          nodeDid: "did:key:node",
+          turnState: null,
+          latestRequestId: "req-sent",
+        }),
+        localWorkflow: sent,
+      }).nonEmptyContentSendStatus,
+    ).toEqual(expected);
+  });
+
+  test("behind a turn that has not started or is running", () => {
+    const project = (turnState: TurnState) =>
+      projectChatShell({
+        ...base,
+        session: session({ nodeDid: "did:key:node", turnState }),
+        localWorkflow: { kind: "ready" },
+      }).nonEmptyContentSendStatus;
+    expect(project("waitingForClaim")).toMatchObject({
+      kind: "queue",
+      hint: "Queued behind the message waiting to start",
+    });
+    expect(project("running")).toMatchObject({
+      kind: "queue",
+      hint: "Queued behind the running turn",
+    });
+  });
+});
+
 describe("requestProgressPresentation", () => {
   test(
     "matches every generated Lean request lifecycle projection",
