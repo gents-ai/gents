@@ -252,14 +252,60 @@ fn no_proxy_configured_builds_no_proxied_pool() {
 }
 
 /// An unusable `HTTPS_PROXY` fails the build, so no request is ever sent silently direct.
+///
+/// The Grok review counterexample: `NO_PROXY=*` must not let an unusable value through. The
+/// pool is built by `configured_proxy`, which passes `None` for the bypass list, so the build
+/// fails closed whatever `NO_PROXY` says — including the empty list and a `:0` port entry that
+/// matches no target.
 #[test]
 fn an_unusable_proxy_value_fails_the_pool_build() {
+    for no_proxy in [None, Some("*"), Some(""), Some(":0")] {
+        assert!(
+            matches!(
+                Shared::from_env(proxy_env(Some("socks5://proxy.corp:1080"), no_proxy)),
+                Err(ClaudeTransportError::Proxy(ProxyError::UnsupportedScheme))
+            ),
+            "NO_PROXY={no_proxy:?} must not hide an unsupported proxy scheme"
+        );
+        assert!(
+            matches!(
+                Shared::from_env(proxy_env(Some("not a url"), no_proxy)),
+                Err(ClaudeTransportError::Proxy(ProxyError::Invalid))
+            ),
+            "NO_PROXY={no_proxy:?} must not hide an invalid proxy URL"
+        );
+    }
+}
+
+/// `route_for` alone may bypass an excluded target without parsing the proxy value; the build
+/// does not. Only a list that actually excludes the target answers `Direct` here.
+#[test]
+fn an_excluded_target_bypasses_without_parsing_the_proxy() {
+    let api = target("api.anthropic.com", 443, true);
+    let wildcard = proxy_env(Some("not a url"), Some("*"));
+    assert_eq!(route_for(&wildcard, &api).unwrap(), Route::Direct);
+
+    let empty = proxy_env(Some("not a url"), Some(""));
+    assert!(matches!(route_for(&empty, &api), Err(ProxyError::Invalid)));
+
+    let other_port = proxy_env(Some("not a url"), Some(":0"));
     assert!(matches!(
-        Shared::from_env(proxy_env(Some("socks5://proxy.corp:1080"), None)),
-        Err(ClaudeTransportError::Proxy(ProxyError::UnsupportedScheme))
+        route_for(&other_port, &api),
+        Err(ProxyError::Invalid)
     ));
-    assert!(matches!(
-        Shared::from_env(proxy_env(Some("not a url"), None)),
-        Err(ClaudeTransportError::Proxy(ProxyError::Invalid))
-    ));
+}
+
+/// `NO_PROXY=*` bypasses every target but still builds the pool from `HTTPS_PROXY` alone.
+#[test]
+fn a_wildcard_no_proxy_bypasses_every_target_but_still_builds_the_pool() {
+    let shared = Shared::from_env(proxy_env(Some("http://proxy.corp:3128"), Some("*"))).unwrap();
+    assert!(
+        shared.proxied.is_some(),
+        "the pool comes from HTTPS_PROXY alone, whatever NO_PROXY says"
+    );
+    let (client, proxied) = shared
+        .client_for(&target("api.anthropic.com", 443, true))
+        .unwrap();
+    assert!(!proxied, "NO_PROXY=* excludes every target");
+    assert!(std::ptr::eq(client, &shared.direct));
 }
