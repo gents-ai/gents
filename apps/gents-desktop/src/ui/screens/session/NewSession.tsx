@@ -1,4 +1,5 @@
 import { cn } from "@gents/ui/lib/utils";
+import { COMPOSER_FIELD } from "./composerField";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
 import { useMemo, useRef } from "react";
 import { ComposerReasonBox, composerReason } from "./ComposerReason";
@@ -171,6 +172,7 @@ function NewSessionComposer() {
             editorState={field}
             onEditorStateChange={setField}
             className="text-foreground"
+            fieldProps={COMPOSER_FIELD}
             value={draft}
             onChange={setDraft}
             onSend={

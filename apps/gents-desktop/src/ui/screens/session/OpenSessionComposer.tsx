@@ -1,5 +1,6 @@
 import { QuestionPanel } from "./QuestionPanel";
 import { MorphProvider, useMorphCard } from "@/lib/morph";
+import { COMPOSER_FIELD } from "./composerField";
 import { AskedChip } from "./AskedChip";
 import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
 import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
@@ -356,6 +357,7 @@ export function OpenSessionComposer({
             editorState={editing ? null : field}
             onEditorStateChange={editing ? undefined : setField}
             className="text-foreground"
+            fieldProps={COMPOSER_FIELD}
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
             onSend={
