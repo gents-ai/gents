@@ -2,6 +2,7 @@ import { useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
 
+import { FLAGS, type FlagId, type FlagSetting } from "./lib/flags";
 import { browserStorage, storedStrings } from "./lib/storage";
 import { applyTheme, systemTheme, type Theme, type ThemePreference } from "./theme";
 import { ZOOM_STEPS } from "./lib/zoom";
@@ -25,6 +26,9 @@ export type Preferences = {
   followUp: FollowUp;
   /** sessions kept at the head of the sessions list, by session key */
   pinnedSessions: string[];
+  /** experimental features switched on this device, by flag id; an absent
+      flag takes its default */
+  flags: Record<string, FlagSetting>;
 };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
@@ -36,7 +40,21 @@ const initial = (): Preferences => ({
   sentTurn: "anchor",
   followUp: "steer",
   pinnedSessions: [],
+  flags: {},
 });
+
+/* only flags this build knows survive, so an unknown id is dropped on the
+   next write of the preferences */
+function knownFlags(stored: unknown): Record<string, FlagSetting> {
+  if (typeof stored !== "object" || stored === null) return {};
+  const saved = stored as Record<string, unknown>;
+  const known: Record<string, FlagSetting> = {};
+  for (const { id } of FLAGS) {
+    const value = saved[id];
+    if (value === "on" || value === "off") known[id] = value;
+  }
+  return known;
+}
 
 export function restorePreferences(
   stored: unknown,
@@ -69,6 +87,7 @@ export function restorePreferences(
     pinnedSessions: Array.isArray(saved.pinnedSessions)
       ? storedStrings(saved.pinnedSessions)
       : defaults.pinnedSessions,
+    flags: knownFlags(saved.flags ?? defaults.flags),
   };
 }
 
@@ -106,6 +125,15 @@ export const preferences = {
     store.setState({
       pinnedSessions: [...rest.slice(0, i), sessionKey, ...rest.slice(i)],
     });
+  },
+  setFlag(id: FlagId, setting: "default" | FlagSetting) {
+    const flags = { ...store.getState().flags };
+    if (setting === "default") delete flags[id];
+    else flags[id] = setting;
+    store.setState({ flags });
+  },
+  resetFlags() {
+    store.setState({ flags: {} });
   },
 };
 
@@ -154,4 +182,31 @@ export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
 export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);
 
-export const resetPreferences = () => store.setState(initial(), true);
+const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
+  const setting = flags[id];
+  return setting === undefined
+    ? FLAGS.find((f) => f.id === id)!.default
+    : setting === "on";
+};
+
+/** whether an experimental feature is on on this device, for code outside
+    React; a component reads it with `useFlag` to follow changes */
+export const flag = (id: FlagId) => isOn(store.getState().flags, id);
+export const useFlag = (id: FlagId) => usePreferences((p) => isOn(p.flags, id));
+
+/* the flags this window started with, which the ones that apply at launch
+   keep until it relaunches */
+let launchFlags = store.getState().flags;
+
+/** whether a flag that applies at launch differs from the one this window
+    launched with */
+export const useRelaunchPending = () =>
+  usePreferences((p) =>
+    FLAGS.some((f) => f.restart && isOn(p.flags, f.id) !== isOn(launchFlags, f.id)),
+  );
+
+/** Starts the preferences afresh, as if the app launched with `flags`. */
+export function resetPreferences(flags: Partial<Record<FlagId, FlagSetting>> = {}) {
+  launchFlags = knownFlags(flags);
+  store.setState({ ...initial(), flags: launchFlags }, true);
+}
