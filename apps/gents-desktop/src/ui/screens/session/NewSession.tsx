@@ -1,14 +1,17 @@
 import { cn } from "@gents/ui/lib/utils";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
 import { useMemo, useRef } from "react";
+import { ChevronDown } from "lucide-react";
 import { RichComposer } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
 import {
   useMailboxCause,
+  useNodeCount,
   useSelectedNode,
   useSelectedNodeDid,
 } from "@/hooks/useClient";
 import { href } from "@/lib/router";
+import { NodeSwitcher } from "@/app/NodeSwitcher";
 import { placeholderFor } from "@/lib/send-status";
 import { agentOf } from "@/lib/agents";
 import { NodeAvatar } from "../AgentAvatar";
@@ -33,6 +36,7 @@ import { useDraftField } from "../../../hooks/draftStore";
 export function NewSession() {
   const mailboxCause = useMailboxCause();
   const selectedNodeDid = useSelectedNodeDid();
+  const nodeCount = useNodeCount();
   const deployment = useSelectedNode();
   const choice = useAgentChoice();
   const nodeName = deployment?.node.displayName ?? deployment?.label ?? "the agent";
@@ -48,7 +52,25 @@ export function NewSession() {
         <NodeAvatar name={nodeName} className="size-8" />
         <div>
           <h1 className="font-heading text-lg font-medium text-heading">
-            Start a new chat with {nodeName}
+            Start a new chat with{" "}
+            {selectedNodeDid && nodeCount > 1 ? (
+              <NodeSwitcher
+                route={{ name: "session", sessionId: null }}
+                current={selectedNodeDid}
+                trigger={
+                  <button
+                    type="button"
+                    title="Choose a node"
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-sm underline decoration-border underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                }
+              >
+                {nodeName}
+                <ChevronDown aria-hidden className="size-4 opacity-50" />
+              </NodeSwitcher>
+            ) : (
+              nodeName
+            )}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {mailboxCause

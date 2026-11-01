@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, type ReactElement, type ReactNode } from "react";
 import { ChevronsUpDown, Waypoints } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";
@@ -17,7 +17,7 @@ import { useApp } from "@/app/AppContext";
 import { activityOf, activityText, useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
-import { navigate, type Route } from "@/lib/router";
+import { navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 
@@ -32,15 +32,21 @@ export function switchedRoute(route: Route, nodeDid: string): Route | null {
   return null;
 }
 
-/** The nav's way to change the node the app works with. */
+/** The nav's way to change the node the app works with, and the node
+    name's in New session's heading. */
 export function NodeSwitcher({
   route,
   current,
   className,
+  trigger,
+  children,
 }: {
   route: Route;
   current: string;
   className?: string;
+  /** the element that opens it, in place of the nav's ⇅ button */
+  trigger?: ReactElement;
+  children?: ReactNode;
 }) {
   const { actions } = useApp();
   const homeDid = useHomeDid();
@@ -63,23 +69,29 @@ export function NodeSwitcher({
   ].filter((group) => group.nodes.length > 0);
   const choose = (nodeDid: string) => {
     if (nodeDid === current) return;
-    actions.selectNode(nodeDid);
     const next = switchedRoute(route, nodeDid);
-    if (next) navigate(next);
+    /* asked first like a link to the node's page, since a draft stays
+       with the node it was written for */
+    reviewNavigation({ name: "sessions", nodeDid }, () => {
+      actions.selectNode(nodeDid);
+      if (next) navigate(next);
+    });
   };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button
-            variant="quiet"
-            size="icon-xs"
-            aria-label="Switch node"
-            className={cn("shrink-0 text-muted-foreground", className)}
-          />
+          trigger ?? (
+            <Button
+              variant="quiet"
+              size="icon-xs"
+              aria-label="Switch node"
+              className={cn("shrink-0 text-muted-foreground", className)}
+            />
+          )
         }
       >
-        <ChevronsUpDown />
+        {children ?? <ChevronsUpDown />}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuRadioGroup
