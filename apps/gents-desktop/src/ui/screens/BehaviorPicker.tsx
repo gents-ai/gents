@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, Package, Plus, Search } from "lucide-react";
-import type { NodeView } from "../../hooks/fleetStore";
+import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { cn } from "@gents/ui/lib/utils";
@@ -12,6 +13,21 @@ import { AgentInitials } from "./parts";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
+import { matchesSource } from "@/lib/session-filter";
+
+const RECENT = 3;
+
+/** Agents of the sessions the person started, most recent first. Sessions
+    another session or a task started don't count, so a busy worker never
+    crowds out what the person picks. */
+export function recentAgentIds(sessions: readonly SessionSummary[]): string[] {
+  const ids = sessions
+    .filter((c) => c.agentId && matchesSource(c, "person"))
+    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
+    .map((c) => c.agentId!);
+  return [...new Set(ids)];
+}
 
 export function AgentPicker({
   deployment,
@@ -48,12 +64,15 @@ function MountedAgentPicker({
   onChange: (agentId: string) => void;
 }) {
   const readOnly = useNodeConfigReadOnly(deployment);
+  const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
+  const recentIds = useMemo(() => recentAgentIds(sessions), [sessions]);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   // Wait for the popover's exit animation so two dialogs are never open at once.
   const createAfterClose = useRef(false);
   const popover = useExclusivePopover(() => setQuery(""));
   const input = useRef<HTMLInputElement>(null);
+  const recentLabel = useId();
   /* the field takes what the person types from the moment the list opens */
   useEffect(() => {
     if (popover.open) input.current?.focus();
@@ -70,13 +89,23 @@ function MountedAgentPicker({
       b.displayName.toLowerCase().includes(q) ||
       describe(b.agentId).toLowerCase().includes(q),
   );
-  /* the person's own agents first, the default leading; a pack's agents,
-     often stages of its work rather than ones to talk to, under its name,
-     folded unless none of the person's own show, a search is on, or the
-     chosen agent is among them */
-  const own = shown
-    .filter((b) => packOrigin(b.tags) === null)
-    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+  /* the default leads, then the agents the person started sessions with
+     lately, apart, so the rest keep their places; a search ranks by match
+     alone */
+  const recent = q
+    ? []
+    : recentIds
+        .map((id) => agents.find((b) => b.agentId === id))
+        .filter((b): b is NodeView["agents"][number] => Boolean(b && !b.isDefault))
+        .slice(0, RECENT);
+  const lifted = new Set(recent.map((b) => b.agentId));
+  /* then the person's own agents; a pack's agents, often stages of its work
+     rather than ones to talk to, under its name, folded unless none of the
+     person's own show, a search is on, or the chosen agent is among them. A
+     recent pack agent stays in its pack too. */
+  const own = shown.filter((b) => packOrigin(b.tags) === null);
+  const lead = own.filter((b) => b.isDefault);
+  const rest = own.filter((b) => !b.isDefault && !lifted.has(b.agentId));
   const packs = Array.from(
     new Set(
       shown.map((b) => packOrigin(b.tags)).filter((o): o is string => o !== null),
@@ -197,8 +226,27 @@ function MountedAgentPicker({
           </div>
           <ScrollArea className="max-h-[min(20rem,calc(var(--available-height)-8rem))] [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
             <ul role="listbox" aria-label="Agent" className="p-1">
-              {own.map(row)}
-              {own.length > 0 && packs.length > 0 && (
+              {lead.map(row)}
+              {recent.length > 0 && (
+                <li role="group" aria-labelledby={recentLabel}>
+                  <div
+                    id={recentLabel}
+                    className="px-2 pt-1.5 pb-0.5 text-xs text-muted-foreground"
+                  >
+                    Recent
+                  </div>
+                  <ul className="grid">{recent.map(row)}</ul>
+                </li>
+              )}
+              {recent.length > 0 && rest.length > 0 && (
+                <li
+                  role="separator"
+                  aria-hidden
+                  className="mx-2 my-1 h-px bg-border/60"
+                />
+              )}
+              {rest.map(row)}
+              {own.length + recent.length > 0 && packs.length > 0 && (
                 <li
                   role="separator"
                   aria-hidden
