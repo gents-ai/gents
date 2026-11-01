@@ -466,15 +466,20 @@ mod tests {
     /// actually started. `discover` only enqueues; `fill_slots` pushes the
     /// future into `running`, and `FuturesUnordered` does not poll it until the
     /// scheduler is polled again.
-    async fn drive_until_started(work: &mut PeerWork, delivery: &GatedDelivery) {
+    ///
+    /// `work.next()` yields `()`, so the label is the only context a failure can
+    /// carry: it names which drive observed the peer finish without a push.
+    async fn drive_until_started(work: &mut PeerWork, delivery: &GatedDelivery, label: &str) {
         tokio::time::timeout(STEP_TIMEOUT, async {
             tokio::select! {
-                _ = work.next() => panic!("attempt completed before signalling start"),
+                _ = work.next() => {
+                    panic!("{label}: attempt completed before signalling start")
+                }
                 _ = delivery.started.notified() => {}
             }
         })
         .await
-        .expect("the gated attempt starts within the bound");
+        .unwrap_or_else(|_| panic!("{label}: the gated attempt starts within the bound"));
     }
 
     /// One scheduler step that must complete: a completion, or an idle `next`.
@@ -561,11 +566,15 @@ mod tests {
         let fields = format!(
             r#"node_did: "{node_literal}", enrollment_request_digest: "{digest}", enrollment_authorization_sequence: 1, enrollment_authorization_expires_at: "{expires}""#
         );
+        // `peer_id` must be in `add`, not only in `filter`: native upsert copies
+        // only the `add` fields into a created document, so a filter-only
+        // `peer_id` leaves the row with a null key that the admission query's
+        // `peer_id` filter can never match.
         ConfigAccess::write_local(
             &node,
             "test.hydration.desired_generation",
             &format!(
-                r#"mutation {{ upsert_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_literal}" }} }}, add: {{ source: "enrollment", collections: ["SessionHydrationRequest"], replicator_addresses: ["test-address"], {fields} }}, update: {{ source: "enrollment", {fields} }}) {{ _docID }} }}"#,
+                r#"mutation {{ upsert_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_literal}" }} }}, add: {{ peer_id: "{peer_literal}", source: "enrollment", collections: ["SessionHydrationRequest"], replicator_addresses: ["test-address"], {fields} }}, update: {{ source: "enrollment", {fields} }}) {{ _docID }} }}"#,
             ),
         )
         .await
@@ -639,6 +648,59 @@ mod tests {
         )
         .await
         .expect("seed pending hydration request");
+        assert_fixture_admits(fixture, session_id).await;
+    }
+
+    /// Fixture precondition, run through the real admission path right after the
+    /// request row is persisted. It localizes a broken fixture (a route the
+    /// admission query cannot see, a session owned by someone else, a stale
+    /// authority) to the seed, so a later scheduler failure means scheduling and
+    /// not seeding. It stubs nothing and bypasses no gate.
+    async fn assert_fixture_admits(fixture: &SchedulerFixture, session_id: &str) {
+        let request = HydrationRequest::from_row(
+            fixture.request_key(session_id),
+            fixture.requester.clone(),
+            fixture.node_did.clone(),
+            session_id.to_owned(),
+        )
+        .expect("fixture request key names its peer and session");
+        let admission = fixture
+            .store
+            .load_admission(&request)
+            .await
+            .expect("fixture admission loads");
+        let authorization = admission
+            .authorization
+            .as_ref()
+            .expect("fixture request has a current enrollment authorization");
+        assert_eq!(authorization.member_did, fixture.requester);
+        assert_eq!(authorization.member_peer, fixture.peer);
+        assert_eq!(authorization.owner_node, fixture.node_did);
+        assert!(
+            admission.catalog.applied_pairing_routes.contains(&AppliedPairingRoute {
+                peer_id: fixture.peer.clone(),
+                requester_did: fixture.requester.clone(),
+                node_did: fixture.node_did.clone(),
+            }),
+            "the seeded desired and applied pairing rows must materialize a route for the fixture peer"
+        );
+        assert!(
+            admission
+                .catalog
+                .sessions
+                .iter()
+                .any(|owner| owner.session_id == session_id
+                    && owner.requester_did == fixture.requester
+                    && owner.node_did == fixture.node_did),
+            "the fixture session must be owned by the fixture requester on the fixture node"
+        );
+        assert!(
+            matches!(
+                decide_hydration(&request, &admission.catalog),
+                HydrationVerdict::Admit(_)
+            ),
+            "the fixture request must be admitted before the scheduler is exercised"
+        );
     }
 
     async fn request_status(fixture: &SchedulerFixture, session_id: &str) -> String {
@@ -676,7 +738,7 @@ mod tests {
 
                 seed_pending_request(&fixture, "session-a").await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
-                drive_until_started(&mut work, &delivery).await;
+                drive_until_started(&mut work, &delivery, "A's first attempt").await;
                 assert_eq!(work.active, BTreeSet::from([fixture.peer.clone()]));
                 assert_eq!(delivery.pushes().len(), 1);
                 assert_eq!(
@@ -718,7 +780,7 @@ mod tests {
 
                 // An explicit discovery serves the deferred row.
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
-                drive_until_started(&mut work, &delivery).await;
+                drive_until_started(&mut work, &delivery, "B's deferred attempt").await;
                 assert_eq!(delivery.pushes().len(), 2);
                 assert_eq!(
                     delivery.pushed_sessions(&fixture.peer),
@@ -760,7 +822,7 @@ mod tests {
                 seed_pending_request(&fixture, "session-a").await;
                 drain_batch(&mut changes, "A's insert").await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
-                drive_until_started(&mut work, &delivery).await;
+                drive_until_started(&mut work, &delivery, "A's first attempt").await;
                 assert_eq!(
                     delivery.pushed_sessions(&fixture.peer),
                     vec!["session-a".to_string()],
@@ -800,9 +862,11 @@ mod tests {
                 // An explicit discovery serves B and legitimately retries pending A.
                 // The assertions below require exactly two A attempts and one B attempt.
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
-                drive_until_started(&mut work, &delivery).await;
+                drive_until_started(&mut work, &delivery, "the deferred batch's first attempt")
+                    .await;
                 delivery.release_next();
-                drive_until_started(&mut work, &delivery).await;
+                drive_until_started(&mut work, &delivery, "the deferred batch's second attempt")
+                    .await;
                 delivery.release_next();
                 next_within(&mut work, "the deferred batch completes").await;
                 assert_eq!(request_status(&fixture, "session-b").await, "served");
