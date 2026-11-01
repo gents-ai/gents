@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { SurfaceContext } from "@/app/surfaces";
 import {
@@ -118,10 +118,13 @@ function Stop({ call, sessionId }: { call: BackgroundCall; sessionId: string | n
 export function BackgroundGroup({
   calls,
   sessionId,
+  returned,
   onOpen,
 }: {
   calls: readonly BackgroundCall[];
   sessionId: string | null;
+  /* the call whose output the reader just left */
+  returned: string | null;
   onOpen: (key: string) => void;
 }) {
   const now = useMinute();
@@ -134,6 +137,7 @@ export function BackgroundGroup({
         calls={running}
         now={now}
         sessionId={sessionId}
+        returned={returned}
         onOpen={onOpen}
       />
       <CallGroup
@@ -141,6 +145,7 @@ export function BackgroundGroup({
         calls={finished}
         now={now}
         sessionId={sessionId}
+        returned={returned}
         onOpen={onOpen}
         quiet
         byDay
@@ -154,6 +159,7 @@ function CallGroup({
   calls,
   now,
   sessionId,
+  returned,
   onOpen,
   quiet = false,
   byDay = false,
@@ -162,6 +168,7 @@ function CallGroup({
   calls: readonly BackgroundCall[];
   now: number;
   sessionId: string | null;
+  returned: string | null;
   onOpen: (key: string) => void;
   quiet?: boolean;
   /** marks where each day starts, once the calls span more than one */
@@ -183,12 +190,17 @@ function CallGroup({
         {calls.map((call) => {
           const state = stateOf(call, now);
           const day = days.get(call.key);
+          const back = call.key === returned;
           return (
             <li key={call.key}>
               {day !== undefined && <DayMarker day={day} />}
               <div
                 title={`${call.runs}\n${state.text}`}
-                className="relative flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm hover:bg-accent"
+                data-returned={back || undefined}
+                className={cn(
+                  "relative flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm transition-colors duration-500 hover:bg-accent motion-reduce:transition-none",
+                  back && "bg-accent",
+                )}
               >
                 <ToneIcon tone={state.tone} />
                 <button
@@ -394,6 +406,58 @@ function Output({
   );
 }
 
+const RETURNED_MS = 1600;
+
+function BackgroundList({
+  calls,
+  sessionId,
+  returned,
+  onOpen,
+}: {
+  calls: readonly BackgroundCall[];
+  sessionId: string | null;
+  returned: string | null;
+  onOpen: (key: string) => void;
+}) {
+  const content = useRef<HTMLDivElement>(null);
+  const listed = calls.length > 0;
+  /* the list's place outlives it, as the log's does: opening a call, another
+     tab, the dock closed or another session */
+  useLayoutEffect(() => {
+    const viewport = content.current?.closest<HTMLElement>(
+      "[data-slot=scroll-area-viewport]",
+    );
+    if (!viewport || !listed) return;
+    viewport.scrollTop = backgroundPlace(sessionId).listTop;
+    /* a log opened from the transcript may be of a row out of view */
+    content.current
+      ?.querySelector("[data-returned]")
+      ?.scrollIntoView?.({ block: "nearest" });
+    const keep = () =>
+      rememberBackgroundPlace(sessionId, { listTop: viewport.scrollTop });
+    viewport.addEventListener("scroll", keep, { passive: true });
+    return () => viewport.removeEventListener("scroll", keep);
+  }, [sessionId, listed]);
+  if (!listed)
+    return (
+      <PanelEmpty icon={Terminal} title="Nothing running">
+        Commands and jobs the agent leaves running show here.
+      </PanelEmpty>
+    );
+  return (
+    <ScrollArea className="h-full">
+      <div ref={content} className="px-3 py-2">
+        <BackgroundGroup
+          calls={calls}
+          sessionId={sessionId}
+          returned={returned}
+          onOpen={onOpen}
+        />
+      </div>
+    </ScrollArea>
+  );
+}
+
 export function BackgroundSurface({ sessionId }: SurfaceContext) {
   const calls = useBackgroundCalls(sessionId);
   /* whose output is open; the dock can stay up while another session opens */
@@ -418,19 +482,29 @@ export function BackgroundSurface({ sessionId }: SurfaceContext) {
       [sessionId],
     ),
   );
+  const [returned, setReturned] = useState<string | null>(null);
+  useEffect(() => {
+    if (!returned) return;
+    const done = setTimeout(() => setReturned(null), RETURNED_MS);
+    return () => clearTimeout(done);
+  }, [returned]);
   if (log)
-    return <BackgroundLog call={log} sessionId={sessionId} onBack={() => show(null)} />;
-  if (calls.length === 0)
     return (
-      <PanelEmpty icon={Terminal} title="Nothing running">
-        Commands and jobs the agent leaves running show here.
-      </PanelEmpty>
+      <BackgroundLog
+        call={log}
+        sessionId={sessionId}
+        onBack={() => {
+          setReturned(log.key);
+          show(null);
+        }}
+      />
     );
   return (
-    <ScrollArea className="h-full">
-      <div className="px-3 py-2">
-        <BackgroundGroup calls={calls} sessionId={sessionId} onOpen={show} />
-      </div>
-    </ScrollArea>
+    <BackgroundList
+      calls={calls}
+      sessionId={sessionId}
+      returned={returned}
+      onOpen={show}
+    />
   );
 }
