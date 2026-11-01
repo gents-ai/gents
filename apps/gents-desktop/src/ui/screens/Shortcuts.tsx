@@ -11,22 +11,16 @@ import { navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedNodeDid } from "@/hooks/useClient";
 import { openSearch } from "./SearchPalette";
+import { DESKTOP_ONLY, IN_DESKTOP, IS_MAC, MAILBOX_KEYS, MOD } from "./shortcutKeys";
 
-const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
-export const MOD = IS_MAC ? "⌘" : "Ctrl+";
-/** the mailbox stack's key (MailboxStack) */
-export const MAILBOX_KEYS = IS_MAC ? "⌘⇧M" : "Ctrl+Shift+M";
-const IN_DESKTOP = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
-const DESKTOP_ONLY = new Set(["1", "2", "3", "n", "l"]);
-/** the keys that go to a page, for its tooltip; a browser keeps them */
-export const PAGE_KEYS = IN_DESKTOP
-  ? { nodes: `${MOD}1`, sessions: `${MOD}2`, newSession: `${MOD}N` }
-  : { nodes: undefined, sessions: undefined, newSession: undefined };
+export { MAILBOX_KEYS, MOD, PAGE_KEYS } from "./shortcutKeys";
+
 const ROWS: [string, string][] = [
   [`${MOD}1`, "Nodes"],
   [`${MOD}2`, "Sessions"],
   [`${MOD}3`, "Configuration"],
   [`${MOD}N`, "New session"],
+  [`${MOD},`, "Settings"],
   [`${MOD}K`, "Search"],
   [MAILBOX_KEYS, "Answer and triage the mailbox from anywhere"],
   [`${MOD}L`, "Focus the composer"],
@@ -72,6 +66,8 @@ export function Shortcuts() {
           );
         case "n":
           return go({ name: "session", sessionId: null });
+        case ",":
+          return go({ name: "settings" });
         case "k":
           e.preventDefault();
           openSearch();

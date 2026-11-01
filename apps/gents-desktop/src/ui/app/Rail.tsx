@@ -6,7 +6,7 @@ import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
 import { Kbd } from "@gents/ui/components/kbd";
-import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/Shortcuts";
+import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { TOOLTIP_KBD } from "@/screens/Hint";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
