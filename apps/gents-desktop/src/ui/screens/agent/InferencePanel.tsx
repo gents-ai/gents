@@ -336,6 +336,7 @@ export function InferencePanel({
               accounts={accounts}
               usage={{
                 view: usageOf(backend.backendId),
+                loading: providerUsage.loading,
                 refresh: providerUsage.refresh,
               }}
             />

@@ -36,7 +36,7 @@ import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
 import { healthy, isSubscriptionKind, KINDS, SUBSCRIPTION } from "./inferenceKinds";
-import { UsageRows } from "./ProviderUsage";
+import { UsageRows, UsageSkeleton } from "./ProviderUsage";
 import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
 import { errorText } from "../../../lib/errorText";
 
@@ -93,6 +93,8 @@ export function BackendEditor({
   accounts: readonly ProviderAccountView[];
   usage?: {
     view?: AccountUsageView;
+    /** the node's first usage read is still out */
+    loading?: boolean;
     refresh: (provider: string | null) => Promise<void>;
   };
   embedded?: boolean;
@@ -431,7 +433,13 @@ export function BackendEditor({
           {/* the meters are not rows: they take a row's padding, and lay out
               by the group's width as on the Providers list */}
           <div className="@container grid min-w-0 gap-3 px-5 py-4">
-            <UsageRows view={usage.view} />
+            {usage.loading && !usage.view ? (
+              <div aria-busy="true">
+                <UsageSkeleton />
+              </div>
+            ) : (
+              <UsageRows view={usage.view} />
+            )}
           </div>
         </Group>
       )}
