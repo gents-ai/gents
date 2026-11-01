@@ -108,7 +108,7 @@ function usePacks(): PacksRead {
 }
 
 function PacksValue({ packs }: { packs: PacksRead }) {
-  if (packs === undefined) return <Skeleton className="h-4 w-28" />;
+  if (packs === undefined) return <Skeleton className="h-4 w-28 bg-foreground/10" />;
   if (!Array.isArray(packs))
     return (
       <span title={packs.failed} className="truncate text-muted-foreground">
@@ -283,7 +283,7 @@ export function AgentCard({
               <span className="truncate">{now.text}</span>
             </>
           ) : (
-            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-4 w-24 bg-foreground/10" />
           )}
         </Summary>
         <Summary label="Inference" to={section("inference")}>
