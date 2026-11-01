@@ -6,7 +6,7 @@ import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
 import { Kbd } from "@gents/ui/components/kbd";
-import { MAILBOX_KEYS } from "@/screens/Shortcuts";
+import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/Shortcuts";
 import { TOOLTIP_KBD } from "@/screens/Hint";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
@@ -153,6 +153,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       <div className="mb-1 h-px w-5 bg-border" />
       <RailItem
         label="New session"
+        keys={PAGE_KEYS.newSession}
         to={{ name: "session", sessionId: null }}
         active={route.name === "session" && route.sessionId === null}
       >
@@ -169,6 +170,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       </RailItem>
       <RailItem
         label="Sessions"
+        keys={PAGE_KEYS.sessions}
         to={{ name: "sessions" }}
         active={
           route.name === "sessions" ||
@@ -186,6 +188,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
         {footer.map(contributed)}
         <RailItem
           label="Nodes"
+          keys={PAGE_KEYS.nodes}
           to={{ name: "nodes" }}
           active={route.name === "nodes" || route.name === "agents"}
         >

@@ -18,6 +18,10 @@ export const MOD = IS_MAC ? "⌘" : "Ctrl+";
 export const MAILBOX_KEYS = IS_MAC ? "⌘⇧M" : "Ctrl+Shift+M";
 const IN_DESKTOP = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 const DESKTOP_ONLY = new Set(["1", "2", "3", "n", "l"]);
+/** the keys that go to a page, for its tooltip; a browser keeps them */
+export const PAGE_KEYS = IN_DESKTOP
+  ? { nodes: `${MOD}1`, sessions: `${MOD}2`, newSession: `${MOD}N` }
+  : { nodes: undefined, sessions: undefined, newSession: undefined };
 const ROWS: [string, string][] = [
   [`${MOD}1`, "Nodes"],
   [`${MOD}2`, "Sessions"],
