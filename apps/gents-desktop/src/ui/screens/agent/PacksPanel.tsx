@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
+import { Spinner } from "@gents/ui/components/spinner";
 import { toast } from "sonner";
 import type {
   FoundPack,
@@ -34,6 +35,9 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
   const [found, setFound] = useState<FoundPack[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  /* null until the first answer; a search is in flight while true */
+  const [searched, setSearched] = useState<boolean | null>(null);
+  const searches = useRef(0);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [slots, setSlots] = useState<PackPluginSlot[]>([]);
@@ -81,19 +85,34 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     void refresh();
   }, [refresh]);
 
-  async function search(next: number) {
-    setBusy("search");
+  /* an empty query lists every pack, a page at a time; an answer to a search
+     typed over since is dropped */
+  async function search(next: number, q = query) {
+    const mine = ++searches.current;
+    setSearched((was) => (was === null ? null : true));
     try {
-      const report = await actions.searchPacks(query, next);
+      const report = await actions.searchPacks(q.trim(), next);
+      if (mine !== searches.current) return;
       setFound(report.packs);
       setHasMore(report.has_more);
       setPage(next);
     } catch (error) {
-      toast.error(errorText(error));
+      if (mine === searches.current) toast.error(errorText(error));
     } finally {
-      setBusy(null);
+      if (mine === searches.current) setSearched(false);
     }
   }
+
+  /* the registry shows its packs as the page opens, and follows what is
+     typed once typing pauses */
+  const typed = useRef(false);
+  useEffect(() => {
+    const wait = typed.current ? 300 : 0;
+    typed.current = true;
+    const timer = setTimeout(() => void search(1, query), wait);
+    return () => clearTimeout(timer);
+    /* only a change of query searches again; search reads the rest fresh */
+  }, [query]);
 
   async function install(
     pack: string,
@@ -301,27 +320,46 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
             }}
           >
             <Input
+              type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Packs and plugins"
               aria-label="Search the registry"
             />
-            <Button type="submit" disabled={busy !== null}>
-              Search
-            </Button>
           </form>
         </Row>
+        {searched === null && (
+          <Row label="Loading the registry…">
+            <Spinner />
+          </Row>
+        )}
+        {searched === false && found.length === 0 && (
+          <Row
+            label={query.trim() ? "No packs match" : "The registry has no packs yet"}
+          >
+            {null}
+          </Row>
+        )}
         {found.map((pack) => {
           const name = `${pack.namespace}/${pack.name}`;
+          const have = installed?.some((p) => p.pack === name) ?? false;
           return (
             <Row
               key={name}
               label={name}
               description={pack.description ?? pack.latest ?? undefined}
             >
-              <Button size="sm" disabled={busy !== null} onClick={() => install(name)}>
-                Install
-              </Button>
+              {have ? (
+                <span className="text-xs text-muted-foreground">Installed</span>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() => install(name)}
+                >
+                  Install
+                </Button>
+              )}
             </Row>
           );
         })}
@@ -331,7 +369,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={page === 1}
+                disabled={page === 1 || searched === true}
                 onClick={() => search(page - 1)}
               >
                 Previous
@@ -339,7 +377,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={!hasMore}
+                disabled={!hasMore || searched === true}
                 onClick={() => search(page + 1)}
               >
                 Next
