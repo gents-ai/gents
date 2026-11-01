@@ -6,6 +6,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { Badge } from "@gents/ui/components/badge";
+import { Skeleton } from "@gents/ui/components/skeleton";
 import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "../AgentAvatar";
@@ -61,7 +62,7 @@ function Summary({
   return (
     <a
       href={href(to)}
-      className="grid min-w-0 gap-1 rounded-xl border border-border/60 px-3 py-2.5 transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="group/summary grid min-w-0 gap-1 rounded-xl bg-raised/50 px-3 py-2.5 transition-colors hover:bg-raised focus-visible:bg-raised focus-visible:outline-none"
     >
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center gap-2 truncate text-sm">
@@ -71,9 +72,11 @@ function Summary({
   );
 }
 
+/** The node's installed packs: undefined while read, null when the read
+    failed. */
 function usePacks() {
   const { actions } = useApp();
-  const [packs, setPacks] = useState<InstalledPack[] | null>(null);
+  const [packs, setPacks] = useState<InstalledPack[] | null | undefined>(undefined);
   useEffect(() => {
     let alive = true;
     /* an adapter without the read, like one that fails it, leaves packs unknown */
@@ -90,18 +93,32 @@ function usePacks() {
   return packs;
 }
 
-function packsText(packs: InstalledPack[] | null) {
-  if (!packs) return "—";
-  if (packs.length === 0) return "None installed";
+function PacksValue({ packs }: { packs: InstalledPack[] | null | undefined }) {
+  if (packs === undefined) return <Skeleton className="h-4 w-28" />;
+  if (packs === null)
+    return <span className="text-muted-foreground">Couldn’t read</span>;
+  if (packs.length === 0)
+    return (
+      <span className="truncate">
+        None installed ·{" "}
+        <span className="underline-offset-2 group-hover/summary:underline group-focus-visible/summary:underline">
+          Install a pack →
+        </span>
+      </span>
+    );
   const broken = packs.filter((p) => p.error).length;
   const outdated = packs.filter((p) => p.outdated).length;
-  return [
-    `${packs.length} installed`,
-    broken ? `${broken} with a problem` : null,
-    outdated ? `${outdated} to update` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  return (
+    <span className="truncate">
+      {[
+        `${packs.length} installed`,
+        broken ? `${broken} with a problem` : null,
+        outdated ? `${outdated} to update` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+    </span>
+  );
 }
 
 export function AgentCard({ deployment }: { deployment: NodeView }) {
@@ -115,12 +132,22 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   const node = deployment.node;
   const name = node.displayName ?? deployment.label;
   const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
+  /* background jobs come from a read; until its first answer the card waits */
+  const [opsRead, setOpsRead] = useState(false);
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   useEffect(() => {
     let alive = true;
     void fetchOperationsSnapshot({ nodeDid: deployment.nodeDid }).then(
-      (o) => alive && setOps(o),
-      () => alive && setOps(null),
+      (o) => {
+        if (!alive) return;
+        setOps(o);
+        setOpsRead(true);
+      },
+      () => {
+        if (!alive) return;
+        setOps(null);
+        setOpsRead(true);
+      },
     );
     return () => {
       alive = false;
@@ -164,10 +191,12 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
             {facts.join(" · ")}
             {/* the host's id in full only on hover; its end tells hosts apart */}
             {deployment.peerId && (
-              <span title={deployment.peerId} className="font-mono">
+              <>
                 {facts.length ? " · " : ""}
-                {deployment.peerId.slice(-8)}
-              </span>
+                <span title={deployment.peerId} className="font-mono">
+                  {deployment.peerId.slice(-8)}
+                </span>
+              </>
             )}
           </p>
         </div>
@@ -175,14 +204,20 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
       </div>
       <div className="grid gap-2 @xl:grid-cols-3">
         <Summary label="Activity" to={{ name: "sessions" }}>
-          <span
-            aria-hidden
-            className={cn(
-              "size-1.5 shrink-0 rounded-full",
-              now.overdue ? "bg-destructive" : now.busy ? "bg-brand" : "bg-border",
-            )}
-          />
-          <span className="truncate">{now.text}</span>
+          {opsRead ? (
+            <>
+              <span
+                aria-hidden
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  now.overdue ? "bg-destructive" : now.busy ? "bg-brand" : "bg-border",
+                )}
+              />
+              <span className="truncate">{now.text}</span>
+            </>
+          ) : (
+            <Skeleton className="h-4 w-24" />
+          )}
         </Summary>
         <Summary label="Inference" to={section("inference")}>
           {backends.length > 0 && <InferenceLogos backends={backends} />}
@@ -195,7 +230,7 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
           </span>
         </Summary>
         <Summary label="Packs" to={section("packs")}>
-          <span className="truncate">{packsText(packs)}</span>
+          <PacksValue packs={packs} />
         </Summary>
       </div>
     </div>
