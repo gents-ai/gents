@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Columns2, Maximize2, MessageSquare, Minimize2, Plus, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -391,10 +392,28 @@ function TabBadge({
   surface: Surface;
   sessionId: string | null;
 }) {
-  const n = useFleet((fleet) => surface.badge?.(fleet, sessionId) ?? null);
-  return n === null ? null : (
-    <span className="ml-0.5 font-mono text-[10px] leading-none text-muted-foreground">
-      {n}
+  const badge = useFleet(
+    useShallow((fleet) => surface.badge?.(fleet, sessionId) ?? null),
+  );
+  if (!badge) return null;
+  const { count, label, mark } = badge;
+  return (
+    <span
+      title={label}
+      className="ml-0.5 inline-flex items-center gap-0.5 font-mono text-[10px] leading-none text-muted-foreground"
+    >
+      <span aria-hidden={label ? true : undefined}>{count}</span>
+      {label && <span className="sr-only">{label}</span>}
+      {mark && (
+        <span
+          aria-hidden="true"
+          data-testid="tab-badge-mark"
+          className={cn(
+            "size-1.5 rounded-full",
+            mark === "alert" ? "bg-destructive" : "bg-brand",
+          )}
+        />
+      )}
     </span>
   );
 }

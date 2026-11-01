@@ -1,6 +1,7 @@
 import { SquareStack } from "lucide-react";
 import { PanelEmpty } from "./PanelEmpty";
 import { useCallback, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { SurfaceContext } from "@/app/surfaces";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
@@ -13,14 +14,7 @@ import { StartedCount } from "./StartedCount";
 import { span, useMinute } from "./time";
 import { sessionViews } from "@/app/sessionViews";
 import { sessionKeyOf } from "../../hooks/fleetStore";
-import {
-  failedUnder,
-  runningUnder,
-  stoppedUnder,
-  useFleet,
-  workersOf,
-  workersOfId,
-} from "../hooks/useFleet";
+import { startedUnder, useFleet, workersOf, workersOfId } from "../hooks/useFleet";
 
 /* newest started first; a row keeps its place as its state changes */
 const ordered = (workers: readonly SessionSummary[]) =>
@@ -53,15 +47,13 @@ function WorkerRow({
   const now = useMinute();
   const key = sessionKeyOf(worker);
   const children = useFleet((s) => workersOf(s, worker));
-  const running = useFleet((s) => runningUnder(s, worker));
-  const failed = useFleet((s) => failedUnder(s, worker));
-  const stopped = useFleet((s) => stoppedUnder(s, worker));
   const shown = useMemo(
     () => ordered(children.filter((c) => !above.has(sessionKeyOf(c)))),
     [children, above],
   );
   const open = opened.has(key) && shown.length > 0;
   const path = useMemo(() => new Set(above).add(key), [above, key]);
+  const counts = useFleet(useShallow((s) => startedUnder(s, worker, path)));
   const took = duration(worker, now);
   return (
     <li>
@@ -79,10 +71,7 @@ function WorkerRow({
         <span className="flex justify-end">
           <StartedCount
             session={worker}
-            started={shown.length}
-            running={running}
-            failed={failed}
-            stopped={stopped}
+            {...counts}
             open={open}
             onToggle={() => opened.toggle(key)}
           />
