@@ -353,7 +353,7 @@ export function RailFlyout({
             /* floating over the page it is a surface of its own; always there,
                it is part of the window, on the window's ground */
             hover
-              ? "z-30 rounded-2xl border border-border/60 bg-raised shadow-lg transition-opacity duration-200 ease-out [--nav-ground:var(--color-raised)]"
+              ? "z-30 rounded-2xl border border-border/60 bg-(--nav-ground) shadow-lg transition-opacity duration-200 ease-out [--nav-ground:var(--color-raised)] dark:[--nav-ground:color-mix(in_oklab,var(--color-raised),var(--color-surface))]"
               : "[--nav-ground:var(--color-background)]",
             hover &&
               /* a fade, not a slide: its icons sit over the rail's and must
