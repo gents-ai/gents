@@ -1761,87 +1761,129 @@ mod tests {
 
     /// Real cancellation coverage, driving the production `discover` loop.
     ///
-    /// Two peers are running. The observation's loads are parked, so the select
-    /// loop is genuinely inside its `select!`. Peer-a's completion is then
-    /// released and consumed by the production arm, and the discovery future is
-    /// cancelled before its loads return. Afterwards: peer-a is out of `active`
-    /// (no orphan, so a later observation can start it again), peer-b is still
-    /// running and still owns its keys, and a later observation makes progress.
+    /// The fixture peer is running, and so is a second synthetic peer. The
+    /// observation's loads are parked, so the select loop is genuinely inside its
+    /// `select!`. The fixture peer's completion is then released and consumed by
+    /// the production arm, and the discovery future is cancelled before its loads
+    /// return. Afterwards: the consumed peer is out of `active` (no orphan), the
+    /// other peer is still running and still owns its keys, the cancelled
+    /// observation applied nothing, and a later real `discover` starts the
+    /// released peer again.
     #[tokio::test]
     async fn cancelling_a_discovery_after_a_completion_leaves_no_orphan() {
-        let fixture = scheduler_fixture().await;
-        let store = fixture.store.clone();
-        let delivery: Arc<dyn HydrationDelivery> = Arc::new(GatedDelivery::new(false));
-        let mut work = PeerWork::default();
+        bounded(
+            "cancelling_a_discovery_after_a_completion_leaves_no_orphan",
+            async {
+                let fixture = scheduler_fixture().await;
+                let store = fixture.store.clone();
+                let delivery: Arc<dyn HydrationDelivery> = Arc::new(GatedDelivery::new(false));
+                let mut work = PeerWork::default();
 
-        let peer_a = transcript_key("peer-a:session-a", "session-a");
-        let peer_b = transcript_key("peer-b:session-b", "session-b");
-        assert!(work.start_test_batch("peer-a".into(), BTreeSet::from([peer_a.clone()])));
-        assert!(work.start_test_batch("peer-b".into(), BTreeSet::from([peer_b.clone()])));
+                let released_peer = fixture.peer.clone();
+                let released_key = transcript_key(&fixture.request_key("session-a"), "session-a");
+                let other_peer = "peer-b".to_string();
+                let other_key = transcript_key("peer-b:session-b", "session-b");
+                assert!(work.start_test_batch(
+                    released_peer.clone(),
+                    BTreeSet::from([released_key.clone()])
+                ));
+                assert!(
+                    work.start_test_batch(other_peer.clone(), BTreeSet::from([other_key.clone()]))
+                );
 
-        // Park the loads so the completion arrives while `discover` is selecting.
-        let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
-        let reached = Arc::new(tokio::sync::Notify::new());
-        let consumed = work.consumed.clone();
-        let releases = work.test_releases.clone();
-        let consumed_signal = Arc::new(tokio::sync::Notify::new());
-        work.discovery_gate = Some(gate_rx);
-        work.discovery_reached = Some(reached.clone());
-        work.consumed_signal = Some(consumed_signal.clone());
+                // Park the loads so the completion arrives while `discover` is
+                // selecting. The handles are shared, so the test can act while
+                // `discover` borrows `work`.
+                let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
+                let reached = Arc::new(tokio::sync::Notify::new());
+                let consumed = work.consumed.clone();
+                let releases = work.test_releases.clone();
+                let consumed_signal = Arc::new(tokio::sync::Notify::new());
+                work.discovery_gate = Some(gate_rx);
+                work.discovery_reached = Some(reached.clone());
+                work.consumed_signal = Some(consumed_signal.clone());
 
-        let cancel = CancellationToken::new();
-        let discovery = discover(&store, &delivery, &mut work, &cancel);
-        tokio::pin!(discovery);
-        tokio::select! {
-            _ = &mut discovery => panic!("discovery returned before its loads parked"),
-            _ = reached.notified() => {}
-        }
+                let cancel = CancellationToken::new();
+                // Explicit scope: `tokio::pin!` keeps `&mut work` borrowed until
+                // the pinned future is dropped, so every assertion that borrows
+                // `work` must come after this block ends.
+                {
+                    let discovery = discover(&store, &delivery, &mut work, &cancel);
+                    tokio::pin!(discovery);
 
-        // The production select arm consumes peer-a's real completion. The
-        // barrier is the consumption signal, never a sleep.
-        assert!(release_test_peer(&releases, "peer-a"));
-        tokio::select! {
-            _ = &mut discovery => panic!("discovery returned before it was cancelled"),
-            _ = consumed_signal.notified() => {}
-        }
-        assert_eq!(
-            *consumed.lock().expect("consumed lock"),
-            vec!["peer-a".to_string()],
-            "the production select arm consumed the completion"
-        );
+                    tokio::time::timeout(STEP_TIMEOUT, async {
+                        tokio::select! {
+                            _ = &mut discovery => {
+                                panic!("discovery returned before its loads parked")
+                            }
+                            _ = reached.notified() => {}
+                        }
+                    })
+                    .await
+                    .expect("the discovery loads park within the bound");
 
-        // Cancel the real discovery future while its loads are still parked.
-        // `discover` still borrows `work`, so the bookkeeping is asserted after
-        // it returns.
-        cancel.cancel();
-        tokio::time::timeout(std::time::Duration::from_secs(1), &mut discovery)
-            .await
-            .expect("the cancelled discovery returns");
-        drop(gate_tx);
+                    // The production select arm consumes the real completion. The
+                    // barrier is the consumption signal, never a sleep.
+                    assert!(release_test_peer(&releases, &released_peer));
+                    tokio::time::timeout(STEP_TIMEOUT, async {
+                        tokio::select! {
+                            _ = &mut discovery => {
+                                panic!("discovery returned before it was cancelled")
+                            }
+                            _ = consumed_signal.notified() => {}
+                        }
+                    })
+                    .await
+                    .expect("the production arm consumes the completion within the bound");
+                    assert_eq!(
+                        *consumed.lock().expect("consumed lock"),
+                        vec![released_peer.clone()],
+                        "the production select arm consumed the completion"
+                    );
 
-        assert_eq!(
-            work.active_peers(),
-            BTreeSet::from(["peer-b".to_string()]),
-            "the consumed peer is released, the still-running peer keeps ownership,              and cancellation left no orphan"
-        );
-        assert_eq!(
-            work.active.get("peer-b"),
-            Some(&BTreeSet::from([peer_b.clone()])),
-            "the still-running peer kept its full key set"
-        );
-        assert!(
-            work.queued_is_empty(),
-            "a cancelled observation applies nothing"
-        );
+                    // Cancel the real discovery future while its loads are parked.
+                    cancel.cancel();
+                    tokio::time::timeout(STEP_TIMEOUT, &mut discovery)
+                        .await
+                        .expect("the cancelled discovery returns within the bound");
+                }
+                drop(gate_tx);
 
-        // A later observation makes progress: peer-a can be started again.
-        assert!(
-            work.start_test_batch("peer-a".into(), BTreeSet::from([peer_a])),
-            "the released peer is startable by a later observation"
-        );
-        assert_eq!(work.running.len(), 3);
+                assert_eq!(
+                    work.active_peers(),
+                    BTreeSet::from([other_peer.clone()]),
+                    "the consumed peer is released, the still-running peer keeps \
+                     ownership, and cancellation left no orphan"
+                );
+                assert_eq!(
+                    work.active.get(&other_peer),
+                    Some(&BTreeSet::from([other_key])),
+                    "the still-running peer kept its full key set"
+                );
+                assert!(
+                    work.queued_is_empty(),
+                    "a cancelled observation applies nothing"
+                );
 
-        fixture.node.shutdown().await;
+                // A later real observation makes progress: the released peer has
+                // a pending row again, and `discover` starts it.
+                seed_pending_request(&fixture, "session-a").await;
+                discover(&store, &delivery, &mut work, &cancel).await;
+                assert_eq!(
+                    work.active_peers(),
+                    BTreeSet::from([other_peer, released_peer]),
+                    "a later observation started the released peer again"
+                );
+                assert_eq!(
+                    work.running.len(),
+                    2,
+                    "the released peer plus the still-running peer"
+                );
+
+                fixture.node.shutdown().await;
+            },
+        )
+        .await;
     }
 
     /// A peer never runs twice at once: a queued batch for an active peer is
