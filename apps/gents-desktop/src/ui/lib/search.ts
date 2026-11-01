@@ -2,12 +2,14 @@ import type { ComponentType } from "react";
 import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-client";
 import type { Route } from "./router";
 
-export type SearchKind = "attention" | "session" | "agent" | "setting" | "action";
+export type SearchKind =
+  "attention" | "node" | "session" | "agent" | "setting" | "action";
 
 type Icon = ComponentType<{ className?: string }>;
 
 export type SearchTarget =
   | { kind: "attention"; item: MailboxItemView }
+  | { kind: "node"; nodeDid: string; name: string }
   | { kind: "session"; session: SessionSummary }
   | { kind: "agent"; route: Route; agentId: string; nodeDid: string }
   | { kind: "setting" | "action"; route: Route; icon: Icon };
@@ -73,6 +75,8 @@ export type SearchSources = {
   sessions: readonly SessionSummary[];
   attention: readonly MailboxItemView[];
   agents: readonly { agentId: string; nodeDid: string; name: string; node: string }[];
+  /** every node, with what it is to this app and what it has going on */
+  nodes: readonly { nodeDid: string; name: string; place: string; doing: string }[];
   agentName: (session: SessionSummary) => string;
   nodeName: (nodeDid: string) => string;
   places: readonly {
@@ -95,6 +99,15 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
         item.summary ?? "",
         [item.summary ?? ""],
         item.createdAt,
+      ),
+    ),
+    ...src.nodes.map((n) =>
+      entry(
+        { kind: "node", nodeDid: n.nodeDid, name: n.name },
+        `node:${n.nodeDid}`,
+        n.name,
+        [n.place, n.doing].filter(Boolean).join(" · "),
+        [n.place],
       ),
     ),
     ...src.sessions.map((session) => {
@@ -152,12 +165,20 @@ export type SearchGroup = {
 
 const LABEL: Record<SearchKind, string> = {
   attention: "Needs attention",
+  node: "Nodes",
   session: "Sessions",
   agent: "Agents",
   setting: "Settings",
   action: "Actions",
 };
-const ORDER: SearchKind[] = ["attention", "session", "agent", "setting", "action"];
+const ORDER: SearchKind[] = [
+  "attention",
+  "node",
+  "session",
+  "agent",
+  "setting",
+  "action",
+];
 const RECENT = 6;
 const PER_GROUP = 5;
 const FILTERED = 50;
