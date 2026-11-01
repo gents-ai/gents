@@ -400,7 +400,7 @@ function TabBadge({
   return (
     <span
       title={label}
-      className="ml-0.5 inline-flex items-center gap-0.5 font-mono text-[10px] leading-none text-muted-foreground"
+      className="ml-0.5 inline-flex items-center gap-1 text-xs leading-none text-muted-foreground tabular-nums"
     >
       <span aria-hidden={label ? true : undefined}>{count}</span>
       {label && <span className="sr-only">{label}</span>}
@@ -409,7 +409,7 @@ function TabBadge({
           aria-hidden="true"
           data-testid="tab-badge-mark"
           className={cn(
-            "size-1.5 rounded-full",
+            "size-1.5 shrink-0 rounded-full",
             mark === "alert" ? "bg-destructive" : "bg-brand",
           )}
         />
