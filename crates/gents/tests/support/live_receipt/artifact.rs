@@ -18,6 +18,13 @@ pub(super) fn validate_directory(dir: &Path) -> Result<()> {
             metadata.permissions().mode() & 0o077 == 0,
             "receipt directory permits group/other access"
         );
+        // Owner-only mode is not enough: a 0700 directory owned by another
+        // user is still writable by that user, so the receipt would not be
+        // private to this process.
+        ensure!(
+            owner_is_effective_user(metadata.uid()),
+            "receipt directory is not owned by the effective user"
+        );
     }
     #[cfg(not(unix))]
     anyhow::bail!("private receipt directory validation requires Unix permissions");
@@ -29,6 +36,12 @@ pub(super) fn validate_directory(dir: &Path) -> Result<()> {
         "receipt directory must be outside checkout"
     );
     Ok(())
+}
+
+/// The private artifact directory must belong to the user running the export.
+#[cfg(unix)]
+fn owner_is_effective_user(uid: u32) -> bool {
+    uid == unsafe { libc::geteuid() }
 }
 
 pub(super) fn publish_receipt(dir: &Path, scenario: &str, bytes: &[u8]) -> Result<PathBuf> {

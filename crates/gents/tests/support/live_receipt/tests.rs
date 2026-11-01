@@ -194,6 +194,18 @@ fn missing_sibling_scope_and_overflow_evidence_fail_closed() {
 
 #[cfg(unix)]
 #[test]
+fn private_artifact_directory_owner_must_be_the_effective_user() {
+    use super::artifact::owner_is_effective_user;
+    let euid = unsafe { libc::geteuid() };
+    assert!(owner_is_effective_user(euid));
+    // A 0700 directory owned by another user is still writable by that user,
+    // so ownership, not only the mode, decides whether the receipt is private.
+    assert!(!owner_is_effective_user(euid.wrapping_add(1)));
+    assert!(!owner_is_effective_user(0) || euid == 0);
+}
+
+#[cfg(unix)]
+#[test]
 fn private_artifact_is_complete_exclusive_and_never_overwrites() {
     use std::os::unix::fs::{symlink, PermissionsExt};
     let dir = tempfile::tempdir().unwrap();
