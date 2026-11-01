@@ -17,8 +17,10 @@
   inset: 0 0 auto 0;
   animation-duration: 240ms;
 }
-/* the rest of the page holds still rather than cross-fading */
-:root[data-morph]::view-transition-old(root),
-:root[data-morph]::view-transition-new(root) {
-  animation: none;
+/* the rest of the page is never captured and keeps drawing live: a captured
+   page is a flat image that drops a dialog backdrop's dim and blur in the
+   desktop app's WebKit until the transition ends. Unconditional, since a
+   flag set per transition is cleared by one a quicker move skips. */
+:root {
+  view-transition-name: none;
 }
