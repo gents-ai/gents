@@ -593,13 +593,16 @@ describe("SessionScreen automated inputs", () => {
     renderScreen(app);
     const items = screen.getAllByTestId("automated-input");
     expect(items.map((item) => item.textContent)).toEqual([
-      expect.stringContaining("Message from another session"),
+      expect.stringContaining("From another session"),
       expect.stringContaining("Schedule · nightly"),
-      expect.stringContaining("Background activity"),
+      expect.stringContaining("Background result"),
       expect.stringContaining("Goal continuation · 2"),
     ]);
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
-    expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
+    expect(text.indexOf("started")).toBeLessThan(text.indexOf("From another"));
+    expect(
+      within(items[0]!).getByRole("link", { name: "another session" }),
+    ).toHaveAttribute("href", expect.stringContaining("sender-session"));
     expect(within(items[0]!).getByTestId("automated-input-body")).toHaveTextContent(
       "please review the diff",
     );
@@ -610,19 +613,132 @@ describe("SessionScreen automated inputs", () => {
       "write the nightly report",
     );
     expect(within(items[2]!).queryByTestId("automated-input-body")).toBeNull();
-    expect(within(items[0]!).getByTestId("automated-input-content")).not.toBeVisible();
-    await user.click(within(items[0]!).getByText("Model input"));
+    expect(within(items[3]!).queryByTestId("automated-input-body")).toBeNull();
+    expect(within(items[0]!).queryByTestId("automated-input-content")).toBeNull();
+    const show = within(items[0]!).getByRole("button", { name: "Show model input" });
+    expect(show).toHaveAttribute("aria-expanded", "false");
+    await user.click(show);
+    expect(
+      within(items[0]!).getByRole("button", { name: "Hide model input" }),
+    ).toHaveAttribute("aria-expanded", "true");
     expect(within(items[0]!).getByTestId("automated-input-content")).toBeVisible();
     expect(within(items[0]!).getByTestId("automated-input-content").textContent).toBe(
       "[message source envelope]\n\nplease review the diff\nit is in src/",
     );
-    await user.click(within(items[2]!).getByText("Model input"));
+    await user.click(
+      within(items[2]!).getByRole("button", {
+        name: "Show model input: Background result",
+      }),
+    );
     expect(within(items[2]!).getByTestId("automated-input-content")).toBeVisible();
     expect(within(items[2]!).getByTestId("automated-input-content").textContent).toBe(
       "<agent-notification>done</agent-notification>",
     );
-    await user.click(within(items[3]!).getByText("Model input"));
+    await user.click(
+      within(items[3]!).getByRole("button", { name: /^Show model input/ }),
+    );
     expect(within(items[3]!).getByTestId("automated-input-content")).toBeVisible();
+  });
+
+  it("reads a message without its routing line when it has no friendly body", () => {
+    const routed =
+      "[message agent:default session:5c1d node:did:key:z6Mk · at:2026-11-01T13:53:39Z · cause:9a7e]\n\nthe build is green";
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "automatedInput",
+            origin: {
+              kind: "sessionMessage",
+              senderNodeDid: "did:key:elsewhere",
+              senderSessionId: null,
+              senderRequestId: null,
+            },
+            content: routed,
+            ...durable("routed", 1),
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const item = screen.getByTestId("automated-input");
+    expect(item).toHaveTextContent("From another node");
+    expect(within(item).queryByRole("link")).toBeNull();
+    expect(within(item).getByTestId("automated-input-body").textContent?.trim()).toBe(
+      "the build is green",
+    );
+  });
+
+  it("folds background results that arrive together into one line", async () => {
+    const user = userEvent.setup();
+    const completion = (id: string, status: string) =>
+      `<tool-completion tool_call_id="${id}" tool_name="bash" status="${status}">\n  <result>ok</result>\n</tool-completion>`;
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "toolGroup",
+            itemKey: "tools",
+            messageSequence: 1,
+            tools: [
+              {
+                itemKey: "tool-test",
+                toolName: "bash",
+                toolCallId: "call-test",
+                statusKind: "success",
+                awaitMode: "background",
+                reconstruction: { state: "ready" },
+                presentation: {
+                  kind: "command",
+                  command: "cargo test -p gents",
+                  exitCode: 0,
+                  timedOut: false,
+                  failed: false,
+                  durationMs: 1,
+                  cwd: null,
+                  executionMode: "read_only",
+                  networkMode: "disabled",
+                  stdout: "",
+                  stderr: "",
+                  fallbackOutput: null,
+                },
+              },
+            ],
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion" },
+            content: completion("call-test", "completed"),
+            ...durable("first", 2),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion" },
+            content: completion("call-elsewhere", "failed"),
+            ...durable("second", 3),
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const run = screen.getByTestId("background-results");
+    const fold = within(run).getByRole("button", { name: "2 background results" });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(within(run).queryAllByTestId("automated-input")).toHaveLength(0);
+    await user.click(fold);
+    const items = within(run).getAllByTestId("automated-input");
+    expect(items.map((item) => item.getAttribute("aria-label"))).toEqual([
+      "Background cargo test -p gents finished",
+      "Background bash failed",
+    ]);
+    await user.click(
+      within(items[1]!).getByRole("button", {
+        name: "Show model input: Background bash failed",
+      }),
+    );
+    expect(within(items[1]!).getByTestId("automated-input-content").textContent).toBe(
+      completion("call-elsewhere", "failed"),
+    );
   });
 
   it("says why an input is unavailable instead of expanding to nothing", async () => {
@@ -646,7 +762,7 @@ describe("SessionScreen automated inputs", () => {
     expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
       "This input is not shared with this device.",
     );
-    expect(screen.queryByText("Model input")).toBeNull();
+    expect(screen.queryByRole("button", { name: /model input/ })).toBeNull();
   });
 
   it("says why a person's message is unavailable instead of drawing it empty", () => {

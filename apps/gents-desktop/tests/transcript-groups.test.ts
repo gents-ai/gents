@@ -4,6 +4,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
+  completionOf,
   groupLabel,
   groupTranscript,
   liveGroupLabel,
@@ -249,5 +250,82 @@ describe("the order of a burst", () => {
       before.members.map((m) => m.key),
     );
     expect(after.members[after.members.length - 1]!.key).toBe(key(10));
+  });
+});
+
+describe("background results", () => {
+  const completion = (id: string) =>
+    `<tool-completion tool_call_id="${id}" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
+  const result = (n: number, content: string): RenderedTimelineItem => ({
+    kind: "automatedInput",
+    itemKey: `b${n}`,
+    sequence: n,
+    origin: { kind: "backgroundCompletion" },
+    content,
+    timestamp: null,
+    reconstruction: { state: "ready" },
+  });
+  const background = (entries: ReturnType<typeof groupTranscript>) =>
+    entries.map((e) =>
+      e.kind === "item" && e.background
+        ? `${e.key}{${e.background.map((r) => r.item.itemKey).join(",")}}`
+        : e.key,
+    );
+
+  it("draws results with nothing between them as one row, under the first one's key", () => {
+    const items = [
+      person(1),
+      result(2, completion("x")),
+      result(3, "Review the new background completion results."),
+      said(4, "Both finished."),
+      result(5, completion("y")),
+    ];
+    expect(background(groupTranscript(items))).toEqual([
+      "u1",
+      "b2{b2,b3}",
+      "a4",
+      "b5{b5}",
+    ]);
+    for (let i = 1; i <= items.length; i++)
+      background(groupTranscript(items.slice(0, i))).forEach((key, j) =>
+        expect(background(groupTranscript(items))[j]!.split("{")[0]).toBe(
+          key.split("{")[0],
+        ),
+      );
+  });
+
+  it("ends an open group and is ended by the next one", () => {
+    const run = tool("command");
+    const out = groupTranscript([
+      group(1, run),
+      result(2, completion("x")),
+      group(3, tool()),
+    ]);
+    expect(out.map((e) => e.kind)).toEqual(["group", "item", "group"]);
+    expect(out[0]!.kind === "group" && out[0]!.settled).toBe(true);
+  });
+
+  it("finds the call a result reports on among the drawn calls", () => {
+    const call = { ...tool("command"), toolCallId: "call-1" };
+    const out = groupTranscript([
+      group(1, call),
+      result(2, completion("call-1")),
+      result(3, completion("gone")),
+    ]);
+    const entry = out[1]!;
+    expect(entry.kind === "item" && entry.background?.map((r) => r.call)).toEqual([
+      call,
+      null,
+    ]);
+  });
+
+  it("reads the call from the runtime's wrapper, and nothing else", () => {
+    expect(
+      completionOf(
+        '<tool-completion tool_call_id="a&quot;b" tool_name="bash" status="failed">\n</tool-completion>',
+      ),
+    ).toEqual({ toolCallId: 'a"b', toolName: "bash", status: "failed" });
+    expect(completionOf('quoting <tool-completion tool_call_id="x"')).toBeNull();
+    expect(completionOf(null)).toBeNull();
   });
 });

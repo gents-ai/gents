@@ -53,6 +53,8 @@ import {
 import { type Workers } from "./workers";
 import {
   AutomatedInput,
+  BackgroundResults,
+  oneLine,
   UserInputWithState,
   pendingInputState,
   SentContext,
@@ -63,7 +65,11 @@ import { useEditInBranch } from "./session/editInBranch";
 import { CompactionMarker, DayMarker, dayOpenings } from "./TranscriptMarker";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
-import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
+import {
+  groupTranscript,
+  type BackgroundResult,
+  type TranscriptEntry,
+} from "./transcript-groups";
 import { useCopied } from "@/lib/clipboard";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
@@ -230,18 +236,22 @@ function ModelInputReduction({
 const TranscriptItem = memo(function TranscriptItem({
   item,
   final = false,
+  background,
 }: {
   item: RenderedTimelineItem;
   final?: boolean;
+  background?: BackgroundResult[];
 }) {
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
     case "automatedInput":
+      if (background) return <BackgroundResults results={background} />;
       return (
         <AutomatedInput
           origin={item.origin}
           content={item.content}
           reconstruction={item.reconstruction}
+          stateKey={item.itemKey}
         />
       );
     case "userMessage":
@@ -252,7 +262,12 @@ const TranscriptItem = memo(function TranscriptItem({
           : null;
       if (item.kind === "pendingUserTurn" && item.origin) {
         return (
-          <AutomatedInput origin={item.origin} content={item.content} state={state} />
+          <AutomatedInput
+            origin={item.origin}
+            content={item.content}
+            state={state}
+            stateKey={item.itemKey}
+          />
         );
       }
       const sender = parentWork?.sentBy(item.requestId) ?? null;
@@ -443,6 +458,7 @@ type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };
 const ItemRow = memo(function ItemRow({
   rowKey,
   item,
+  background,
   final,
   changes,
   day,
@@ -450,6 +466,7 @@ const ItemRow = memo(function ItemRow({
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
   item: RenderedTimelineItem;
+  background?: BackgroundResult[];
   final: boolean;
   /** the files the turn this row ends changed, in its session */
   changes?: ItemChanges;
@@ -469,7 +486,7 @@ const ItemRow = memo(function ItemRow({
           <DayMarker day={day} />
         </div>
       )}
-      <TranscriptItem item={item} final={final} />
+      <TranscriptItem item={item} final={final} background={background} />
       {changes && (
         <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
       )}
@@ -526,9 +543,11 @@ function shapeOf(entry: TranscriptEntry, changedFiles = 0): RowShape {
     return { kind: "group", open: !entry.settled, steps: entry.members.length };
   const item = entry.item;
   switch (item.kind) {
+    case "automatedInput":
+      if (oneLine(item.origin)) return { kind: "other" };
+      return { kind: "user", text: item.content ?? "" };
     case "userMessage":
     case "pendingUserTurn":
-    case "automatedInput":
       return {
         kind: "user",
         text: item.content ?? "",
@@ -939,6 +958,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                       <ItemRow
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
+                        background={entry.background}
                         final={finalKeys.has(entry.key)}
                         changes={changes.get(entry.key)}
                         day={dayOpens.get(entry.key) ?? null}
