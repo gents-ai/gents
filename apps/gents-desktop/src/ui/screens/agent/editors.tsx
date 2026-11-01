@@ -330,7 +330,8 @@ export function MarkdownRow({
   value,
   onChange,
   empty,
-  rows = 6,
+  /* a prompt is read here, not glanced at: tall enough to follow */
+  rows = 12,
   error,
   disabled,
 }: Common & {
@@ -401,7 +402,7 @@ export function MarkdownRow({
         <div
           ref={read}
           style={height}
-          className="prose-app min-w-0 overflow-hidden rounded-xl bg-input/50 px-3 py-2 text-sm break-words"
+          className="prose-app min-w-0 overflow-y-auto overscroll-contain rounded-xl bg-input/50 px-3 py-2 text-sm break-words"
         >
           {value.trim() ? (
             <Markdown>{value}</Markdown>
