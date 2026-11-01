@@ -50,14 +50,14 @@ export function StartedSessionsButton({
           <span
             aria-hidden="true"
             data-testid="started-sessions-failed"
-            className="absolute top-1 right-1 size-1.5 rounded-full bg-destructive"
+            className="size-1.5 shrink-0 rounded-full bg-destructive"
           />
         ) : (
           running > 0 && (
             <span
               aria-hidden="true"
               data-testid="started-sessions-running"
-              className="absolute top-1 right-1 size-1.5 rounded-full bg-brand motion-safe:animate-pulse"
+              className="size-1.5 shrink-0 rounded-full bg-brand motion-safe:animate-pulse"
             />
           )
         )}
