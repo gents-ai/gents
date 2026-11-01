@@ -703,6 +703,22 @@ describe("SessionScreen automated inputs", () => {
                   fallbackOutput: null,
                 },
               },
+              {
+                itemKey: "tool-worker",
+                toolName: "agent_new",
+                toolCallId: "call-worker",
+                statusKind: "success",
+                awaitMode: "background",
+                reconstruction: { state: "ready" },
+                presentation: {
+                  kind: "agent",
+                  action: "start",
+                  name: "engineer",
+                  sessionId: "session-worker",
+                  description: null,
+                  output: null,
+                },
+              },
             ],
           },
           {
@@ -714,31 +730,101 @@ describe("SessionScreen automated inputs", () => {
           {
             kind: "automatedInput",
             origin: { kind: "backgroundCompletion" },
+            content: completion("call-worker", "completed"),
+            ...durable("worker", 3),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion" },
             content: completion("call-elsewhere", "failed"),
-            ...durable("second", 3),
+            ...durable("second", 4),
           },
         ] as DesktopSessionSnapshot["timelineItems"],
       }),
     });
     renderScreen(app);
     const run = screen.getByTestId("background-results");
-    const fold = within(run).getByRole("button", { name: "2 background results" });
+    const fold = within(run).getByRole("button", { name: "3 background results" });
     expect(fold).toHaveAttribute("aria-expanded", "false");
     expect(within(run).queryAllByTestId("automated-input")).toHaveLength(0);
     await user.click(fold);
     const items = within(run).getAllByTestId("automated-input");
     expect(items.map((item) => item.getAttribute("aria-label"))).toEqual([
-      "Background cargo test -p gents finished",
-      "Background bash failed",
+      "cargo test -p gents finished",
+      "engineer finished",
+      "bash failed",
     ]);
-    await user.click(
+    expect(items[0]!.querySelector(".lucide-terminal")).not.toBeNull();
+    expect(items[2]!.querySelector(".lucide-clock")).not.toBeNull();
+    const worker = within(items[1]!).getByRole("link", { name: "engineer" });
+    expect(worker).toHaveAttribute("href", expect.stringContaining("session-worker"));
+    const stay = (event: Event) => event.preventDefault();
+    document.addEventListener("click", stay);
+    await user.click(worker);
+    document.removeEventListener("click", stay);
+    expect(
       within(items[1]!).getByRole("button", {
-        name: "Show model input: Background bash failed",
+        name: "Show model input: engineer finished",
       }),
-    );
-    expect(within(items[1]!).getByTestId("automated-input-content").textContent).toBe(
+    ).toHaveAttribute("aria-expanded", "false");
+    await user.click(within(items[2]!).getByText("failed"));
+    expect(
+      within(items[2]!).getByRole("button", { name: "Hide model input: bash failed" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(within(items[2]!).getByTestId("automated-input-content").textContent).toBe(
       completion("call-elsewhere", "failed"),
     );
+  });
+
+  it("draws the sender's agent and session, from its routing line when the origin lacks it", () => {
+    const shortNode =
+      NODE.length > 20 ? `${NODE.slice(0, 16)}..${NODE.slice(-4)}` : NODE;
+    const message = (itemKey: string, sequence: number, session: string) => ({
+      kind: "automatedInput",
+      origin: {
+        kind: "sessionMessage",
+        senderNodeDid: NODE,
+        senderSessionId: null,
+        senderRequestId: `cause-${itemKey}`,
+      },
+      content: `[message agent:default session:${session} node:${shortNode} · at:2026-11-01T13:53:39Z · cause:cause-${itemKey}]\n\nthe build is green`,
+      ...durable(itemKey, sequence),
+    });
+    const { app } = screenApp({
+      nodeOverrides: {
+        sessions: [
+          {
+            sessionId: "session-reviewer",
+            nodeDid: NODE,
+            title: "Review the parser change",
+            agentId: "default",
+            tags: [],
+          },
+        ],
+      },
+      session: heldSession({
+        timelineItems: [
+          message("known", 1, "session-reviewer"),
+          {
+            kind: "assistantMessage",
+            content: "ok",
+            reasoning: null,
+            ...durable("a", 2),
+          },
+          message("unknown", 3, "session-unlisted"),
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const [known, unknown] = screen.getAllByTestId("automated-input");
+    expect(known).toHaveAccessibleName("From Review the parser change");
+    expect(
+      within(known!).getByRole("link", { name: "Review the parser change" }),
+    ).toHaveAttribute("href", expect.stringContaining("session-reviewer"));
+    expect(known!.querySelector(".lucide-bot")).toBeNull();
+    expect(unknown).toHaveAccessibleName("From another session");
+    expect(within(unknown!).queryByRole("link")).toBeNull();
+    expect(unknown!.querySelector(".lucide-bot")).not.toBeNull();
   });
 
   it("says why an input is unavailable instead of expanding to nothing", async () => {

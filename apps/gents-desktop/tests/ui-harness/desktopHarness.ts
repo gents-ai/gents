@@ -212,6 +212,23 @@ function automatedInputItems(): RenderedTimelineItem[] {
       tools: [
         command("auto-test", "call-auto-test", "cargo test -p gents"),
         command("auto-lint", "call-auto-lint", "make lint"),
+        {
+          itemKey: "auto-worker",
+          toolName: "agent_new",
+          toolCallId: "call-auto-worker",
+          requestId: "request-auto-user",
+          statusKind: "success",
+          awaitMode: "background",
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+          presentation: {
+            kind: "agent" as const,
+            action: "start",
+            name: "ops",
+            sessionId: "session-worker",
+            description: "Profile the slow parser path.",
+            output: "Session started.",
+          },
+        },
       ],
     },
     harnessAssistantItem({
@@ -262,32 +279,73 @@ function automatedInputItems(): RenderedTimelineItem[] {
       ),
     },
     {
-      ...durable("auto-bg-wake", 9, "2026-06-03T14:10:01Z"),
+      ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-worker",
+        "agent_new",
+        "completed",
+        "The slow path was a quadratic scan; profile attached.",
+      ),
+    },
+    {
+      ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
       origin: { kind: "backgroundCompletion" as const },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
     harnessAssistantItem({
       itemKey: "auto-bg-reply",
-      sequence: 10,
+      sequence: 11,
       content: "Tests pass; lint flagged an unused import, which I removed.",
       reasoning: null,
       timestamp: "2026-06-03T14:10:30Z",
     }),
     {
-      ...durable("auto-bg-single", 11, "2026-06-03T14:11:00Z"),
+      ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
       origin: { kind: "backgroundCompletion" as const },
       content: completion("call-auto-other", "spawn_process", "completed", "done"),
     },
     harnessAssistantItem({
       itemKey: "auto-bg-single-reply",
-      sequence: 12,
+      sequence: 13,
       content: "The validation suite finished too.",
       reasoning: null,
       timestamp: "2026-06-03T14:11:30Z",
     }),
     {
-      ...durable("auto-schedule", 13, "2026-06-04T07:00:00Z"),
+      ...durable("auto-routed", 14, "2026-06-03T14:12:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: null,
+        senderRequestId: "request-worker-note",
+      },
+      content: `[message agent:ops session:session-worker node:${
+        NODE_DID.length > 20
+          ? `${NODE_DID.slice(0, 16)}..${NODE_DID.slice(-4)}`
+          : NODE_DID
+      } · at:2026-06-03T14:12:00Z · cause:request-worker-note]\n\nI also left a flame graph in \`target/profile.svg\`.`,
+    },
+    {
+      ...durable("auto-remote", 15, "2026-06-03T14:13:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: "did:key:z6MkSomeOtherNodeEntirely",
+        senderSessionId: null,
+        senderRequestId: null,
+      },
+      content: "A build on the release node is waiting for review.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-routed-reply",
+      sequence: 16,
+      content: "Noted both.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:13:30Z",
+    }),
+    {
+      ...durable("auto-schedule", 17, "2026-06-04T07:00:00Z"),
       origin: {
         kind: "trigger" as const,
         triggerId: "nightly-report",
@@ -297,13 +355,13 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     harnessAssistantItem({
       itemKey: "auto-schedule-reply",
-      sequence: 14,
+      sequence: 18,
       content: "Nightly report: the parser fix landed and every check passes.",
       reasoning: null,
       timestamp: "2026-06-04T07:01:00Z",
     }),
     {
-      ...durable("auto-goal", 15, "2026-06-04T07:02:00Z"),
+      ...durable("auto-goal", 19, "2026-06-04T07:02:00Z"),
       origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
       content: "You are running under the durable goal controller. Continue the goal.",
     },
@@ -1039,6 +1097,24 @@ export function createDesktopUiHarness(
     };
   }
   if (scenario === "automated-inputs") {
+    sessions.set("session-worker", {
+      sessionId: "session-worker",
+      nodeDid: NODE_DID,
+      agentId: "ops",
+      title: "slow worker (ops)",
+      previewText: "The slow path was a quadratic scan.",
+      status: "active",
+      turnState: "completed",
+      latestRequestId: "request-worker",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      latestRequestOutcome: null,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+      timelineItems: [],
+    });
     sessions.set("session-reviewer", {
       sessionId: "session-reviewer",
       nodeDid: NODE_DID,
@@ -3258,7 +3334,23 @@ export function createDesktopUiHarness(
         sent: [],
         received: [],
         senders: [],
-        calls: [],
+        calls:
+          scenario === "automated-inputs" && request.sessionId === "session-intro"
+            ? [
+                {
+                  requestId: "request-auto-user",
+                  toolCallId: "call-auto-worker",
+                  caused: {
+                    requestId: "request-worker",
+                    nodeDid: NODE_DID,
+                    sessionId: "session-worker",
+                    requesterDid: null,
+                    lifecycleState: "completed",
+                    createdAt: null,
+                  },
+                },
+              ]
+            : [],
       };
       return view;
     },

@@ -1,12 +1,19 @@
-import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  RenderedToolCallView,
+  RequestOriginView,
+  SessionSummary,
+} from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
+import type { FleetState } from "../src/hooks/fleetStore";
 import {
   backgroundName,
   backgroundRunLabel,
   backgroundText,
+  senderSession,
   withoutRoutingHeader,
 } from "@/screens/TranscriptInputs";
 import type { BackgroundResult } from "@/screens/transcript-groups";
+import type { Reached } from "@/screens/workers";
 
 describe("a message's routing line", () => {
   const header =
@@ -35,25 +42,65 @@ describe("a message's routing line", () => {
 describe("naming a background result", () => {
   const completion = (status: string, tool = "bash_unrestricted") =>
     `<tool-completion tool_call_id="call-1" tool_name="${tool}" status="${status}">\n  <result>ok</result>\n</tool-completion>`;
-  const command = (text: string) =>
+  const step = (presentation: object) =>
     ({
       itemKey: "t",
       toolName: "bash_unrestricted",
       statusKind: "success",
-      presentation: { kind: "command", command: text },
+      awaitMode: "background",
+      presentation,
     }) as unknown as RenderedToolCallView;
+  const command = (text: string) => step({ kind: "command", command: text });
 
-  it("says what the call ran when it is drawn, and how it ended", () => {
+  it("names the command a drawn step ran, and how it ended", () => {
     expect(
       backgroundText(
         backgroundName(completion("completed"), command("cd crates && cargo test")),
       ),
-    ).toBe("Background cargo test finished");
+    ).toBe("cargo test finished");
+    expect(
+      backgroundText(backgroundName(completion("timed_out"), command("make"))),
+    ).toBe("make timed out");
+    expect(
+      backgroundText(
+        backgroundName(
+          completion("completed"),
+          step({ kind: "process", action: "spawn", target: "npm run dev" }),
+        ),
+      ),
+    ).toBe("npm run dev finished");
+  });
+
+  it("names a worker the way its step does, by the session it reached", () => {
+    const worker = step({
+      kind: "agent",
+      action: "start",
+      name: "engineer",
+      sessionId: "session-from-call",
+    });
+    const reached = {
+      request: { sessionId: "session-worker" },
+      summary: { title: "slow worker (engineer)", agentId: "engineer" },
+      worker: null,
+    } as unknown as Reached;
+    expect(backgroundName(completion("completed"), worker, reached)).toEqual({
+      subject: "slow worker (engineer)",
+      outcome: "finished",
+      worker: { sessionId: "session-worker", agentId: "engineer" },
+    });
+    expect(backgroundName(completion("failed"), worker)).toEqual({
+      subject: "engineer",
+      outcome: "failed",
+      worker: { sessionId: "session-from-call", agentId: null },
+    });
+  });
+
+  it("names an undrawn call by its tool", () => {
     expect(backgroundText(backgroundName(completion("failed"), null))).toBe(
-      "Background bash_unrestricted failed",
+      "bash_unrestricted failed",
     );
     expect(backgroundText(backgroundName(completion("cancelled"), null))).toBe(
-      "Background bash_unrestricted cancelled",
+      "bash_unrestricted cancelled",
     );
   });
 
@@ -69,7 +116,7 @@ describe("naming a background result", () => {
       ({ item: { content }, call: null }) as unknown as BackgroundResult;
     const wake = result("Review the new background completion results.");
     expect(backgroundRunLabel([result(completion("completed")), wake])).toBe(
-      "Background bash_unrestricted finished",
+      "bash_unrestricted finished",
     );
     expect(
       backgroundRunLabel([
@@ -80,5 +127,77 @@ describe("naming a background result", () => {
       ]),
     ).toBe("3 background results");
     expect(backgroundRunLabel([wake, wake])).toBe("2 background results");
+  });
+});
+
+describe("finding who sent a message", () => {
+  const SENDER = "did:key:z6MkSenderNodeWithALongIdentifier";
+  const OTHER = "did:key:z6MkSomeOtherNodeEntirely0000";
+  const listed = (nodeDid: string, sessionId: string) =>
+    ({ nodeDid, sessionId, title: `${sessionId} title` }) as SessionSummary;
+  const reviewer = listed(SENDER, "session-reviewer");
+  const elsewhere = listed(OTHER, "session-elsewhere");
+  const fleet = {
+    byNodeSessionId: {
+      [SENDER]: new Map([[reviewer.sessionId, reviewer]]),
+      [OTHER]: new Map([[elsewhere.sessionId, elsewhere]]),
+    },
+    bySessionId: { [reviewer.sessionId]: reviewer, [elsewhere.sessionId]: elsewhere },
+  } as unknown as FleetState;
+  const origin = (
+    over: Partial<Extract<RequestOriginView, { kind: "sessionMessage" }>> = {},
+  ): Extract<RequestOriginView, { kind: "sessionMessage" }> => ({
+    kind: "sessionMessage",
+    senderNodeDid: SENDER,
+    senderSessionId: null,
+    senderRequestId: "request-1",
+    ...over,
+  });
+  const routed = (
+    session: string,
+    node = "did:key:z6MkSend..fier",
+    cause = "request-1",
+  ) =>
+    `[message agent:engineer session:${session} node:${node} · at:2026-11-01T13:53:39Z · cause:${cause}]\n\nhello`;
+
+  it("finds the sender session the origin names, under the sender node first", () => {
+    expect(
+      senderSession(fleet, origin({ senderSessionId: "session-reviewer" }), null),
+    ).toBe(reviewer);
+    expect(
+      senderSession(
+        fleet,
+        origin({ senderNodeDid: null, senderSessionId: "session-elsewhere" }),
+        null,
+      ),
+    ).toBe(elsewhere);
+    expect(
+      senderSession(fleet, origin({ senderSessionId: "unlisted" }), null),
+    ).toBeNull();
+  });
+
+  it("reads the routing line only when it agrees with the authenticated sender", () => {
+    expect(senderSession(fleet, origin(), routed("session-reviewer"))).toBe(reviewer);
+    expect(senderSession(fleet, origin(), routed("session-elsewhere"))).toBeNull();
+    expect(
+      senderSession(
+        fleet,
+        origin(),
+        routed("session-reviewer", "did:key:z6MkSome..0000"),
+      ),
+    ).toBeNull();
+    expect(
+      senderSession(
+        fleet,
+        origin(),
+        routed("session-reviewer", undefined, "request-2"),
+      ),
+    ).toBeNull();
+    expect(
+      senderSession(fleet, origin({ senderNodeDid: null }), routed("session-reviewer")),
+    ).toBeNull();
+    expect(
+      senderSession(fleet, origin(), `hello\n${routed("session-reviewer")}`),
+    ).toBeNull();
   });
 });
