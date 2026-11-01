@@ -32,6 +32,15 @@ describe("switching node", () => {
           nodeDid: "did:key:z6MkJuno",
           label: "Juno",
           source: "enrollment",
+          sessions: [
+            {
+              sessionId: "juno-1",
+              nodeDid: "did:key:z6MkJuno",
+              title: "Busy",
+              turnState: "running",
+              updatedAt: "2026-11-01T10:00:00Z",
+            },
+          ],
           node: { ...deployment.node, nodeDid: "did:key:z6MkJuno", displayName: null },
         }),
       ],
@@ -50,6 +59,8 @@ describe("switching node", () => {
     expect(screen.getByText("Local")).toBeVisible();
     expect(screen.getByText("Remote")).toBeVisible();
     expect(juno).toHaveAttribute("aria-checked", "false");
+    /* what it has going on, before switching to it */
+    expect(juno).toHaveTextContent("1 running");
     await user.click(juno);
     await waitFor(() =>
       expect(app.stores.selection.getState().nodeDid).toBe("did:key:z6MkJuno"),
