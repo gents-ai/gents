@@ -14,9 +14,7 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
-import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
-import { isLive } from "@/lib/live";
-import { nodeKeyOf } from "../../hooks/fleetStore";
+import { activityOf, activityText, useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { navigate, type Route } from "@/lib/router";
@@ -51,21 +49,10 @@ export function NodeSwitcher({
   const doing = useFleet(
     useShallow((state) =>
       Object.fromEntries(
-        fleetNodes(state).map((node) => {
-          const key = nodeKeyOf(node);
-          const running = (state.sessionsOf[key] ?? NO_SESSIONS).filter((c) =>
-            isLive(c.turnState),
-          ).length;
-          const waiting = (state.mailboxOf[key] ?? []).filter(
-            (m) => m.status === "open",
-          ).length;
-          return [
-            node.nodeDid,
-            [running && `${running} running`, waiting && `${waiting} waiting`]
-              .filter(Boolean)
-              .join(" · "),
-          ];
-        }),
+        fleetNodes(state).map((node) => [
+          node.nodeDid,
+          activityText(activityOf(state, node.nodeDid)),
+        ]),
       ),
     ),
   );
