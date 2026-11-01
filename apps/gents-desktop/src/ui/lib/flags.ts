@@ -39,6 +39,17 @@ export const FLAGS = [
       "The first real experimental feature is added and the tests use it instead.",
     restart: false,
   },
+  {
+    id: "customize-nav",
+    name: "Customize navigation",
+    description:
+      "Reorder and hide the side nav's items, and add Tasks, Skills, Tools or Packs to it.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-02-01",
+    removeWhen: "Customizing the side nav ships to everyone.",
+    restart: false,
+  },
 ] as const satisfies readonly Flag[];
 
 export type FlagId = (typeof FLAGS)[number]["id"];

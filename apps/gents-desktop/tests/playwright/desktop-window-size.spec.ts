@@ -233,6 +233,70 @@ test.describe("nav modes", () => {
     await expect.poll(opacity).toBe("1");
   });
 
+  test("a nav too tall for a short window scrolls its middle and keeps its foot", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 520 });
+    await gotoHarness(page);
+    /* every configuration page and both mailbox sections added, on a
+       window too short for them */
+    const shown = Object.fromEntries(
+      [
+        "agents",
+        "tasks",
+        "skills",
+        "schedules",
+        "event-sources",
+        "workflows",
+        "tools",
+        "tool-services",
+        "packs",
+      ].map((id) => [`config:${id}`, true]),
+    );
+    for (const nav of ["expanded", "hover"]) {
+      await page.evaluate(
+        ([mode, rows]) =>
+          localStorage.setItem(
+            "gents-preferences",
+            JSON.stringify({
+              state: {
+                nav: mode,
+                flags: { "customize-nav": "on" },
+                navLayout: {
+                  order: [],
+                  shown: { ...rows, "mailbox-decide": true, "mailbox-look": true },
+                },
+              },
+              version: 1,
+            }),
+          ),
+        [nav, shown] as const,
+      );
+      await page.reload();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      const ground = nav === "expanded" ? "window" : "raised";
+      if (nav === "hover") await page.locator("nav").first().hover();
+      const panel = page.locator(`[data-ground=${ground}]`);
+      const middle = panel.getByTestId("nav-scroll");
+      const settings = panel.getByRole("link", { name: "Settings" });
+      await expect(settings).toBeVisible();
+      const foot = await boxOf(settings);
+      expect(foot.y + foot.height).toBeLessThanOrEqual(520);
+      /* the middle ends above the sync status, which nothing passes under */
+      const sync = await boxOf(
+        page.getByRole("button", { name: /Show sync diagnostics/ }).last(),
+      );
+      const scroll = await boxOf(middle);
+      expect(scroll.y + scroll.height).toBeLessThanOrEqual(sync.y + 1);
+      /* and it scrolls, since it holds more than it shows */
+      expect(
+        await middle
+          .locator("[data-slot=scroll-area-viewport]")
+          .evaluate((el) => el.scrollHeight > el.clientHeight),
+      ).toBe(true);
+    }
+  });
+
   test("an expanded nav holds search and history by the mark", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoHarness(page);

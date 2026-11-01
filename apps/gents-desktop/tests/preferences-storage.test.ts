@@ -21,6 +21,7 @@ const defaults: Preferences = {
   followUp: "steer",
   pinnedSessions: [],
   flags: {},
+  navLayout: { order: [], shown: {} },
 };
 
 describe("preferences read back from storage", () => {
@@ -35,6 +36,7 @@ describe("preferences read back from storage", () => {
       followUp: "steer",
       pinnedSessions: [],
       flags: {},
+      navLayout: { order: [], shown: {} },
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",
