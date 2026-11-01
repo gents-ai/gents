@@ -3,6 +3,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -25,6 +26,7 @@ import {
   type BackgroundCall,
   resetBackgroundPlaces,
   briefStateOf,
+  useBackgroundCalls,
 } from "../src/ui/screens/background";
 import { BackgroundButton } from "../src/ui/screens/BackgroundButton";
 import { BackgroundSurface } from "../src/ui/screens/BackgroundCalls";
@@ -683,6 +685,46 @@ describe("the running in background group", () => {
       action: "stop",
     });
     expect(processControl).not.toHaveBeenCalled();
+  });
+});
+
+describe("reading running calls again", () => {
+  const showWindow = (shown: boolean) =>
+    act(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => (shown ? "visible" : "hidden"),
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    vi.useRealTimers();
+  });
+
+  it("waits while the window is hidden and reads at once when it shows", async () => {
+    const { app, fetchOperationsSnapshot } = appWith(
+      [command("build", "npm run build")],
+      [viewOf("build")],
+    );
+    renderHook(() => useBackgroundCalls("parent"), { wrapper: withApp(app) });
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(2);
+
+    showWindow(false);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(2);
+
+    showWindow(true);
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(3);
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(4);
   });
 });
 
