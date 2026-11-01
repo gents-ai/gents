@@ -109,4 +109,29 @@ describe("an agent's hover card", () => {
       agentId: "default",
     });
   });
+
+  it("counts the tasks that run with the agent, and leaves the line out at none", async () => {
+    const task = (taskId: string, agentId: string) => ({
+      ...deployment.tasks[0]!,
+      taskId,
+      agentId,
+    });
+    const app = testApp({
+      deployments: [
+        node({
+          tasks: [task("a", "default"), task("b", "default"), task("c", "other")],
+        }),
+      ],
+    });
+    const [shown] = fleetNodes(app.stores.fleet.getState());
+    renderIn(
+      app,
+      <AgentHoverCard deployment={shown!} agentId="default">
+        <button type="button">agent</button>
+      </AgentHoverCard>,
+    );
+    await userEvent.hover(screen.getByRole("button", { name: "agent" }));
+    const card = await screen.findByTestId("agent-hover-card", {}, { timeout: 2000 });
+    expect(card).toHaveTextContent("Tasks2");
+  });
 });
