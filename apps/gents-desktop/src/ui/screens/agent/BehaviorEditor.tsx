@@ -42,7 +42,7 @@ import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
 import { ProfileEditor, modelSentence } from "./ProfileEditor";
 import { focusFirstProblem, newId, useDraft } from "./draft";
-import { ConfirmDelete, DeleteButton } from "./ListDetail";
+import { ConfirmDelete, DeleteButton, packOrigin } from "./ListDetail";
 import { Group } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
 import { useApp } from "@/app/AppContext";
@@ -517,6 +517,7 @@ export function AgentEditor({
                 items={deployment.tools.map((t) => ({
                   value: t.tools_id,
                   label: `${t.display_name ?? t.tools_id} · ${toolsInWords(t)}`,
+                  pack: packOrigin(t.tags),
                 }))}
                 createLabel="New tools…"
                 onCreate={() =>
@@ -576,6 +577,7 @@ export function AgentEditor({
           items={deployment.inferenceProfiles.map((p) => ({
             value: p.profile_id,
             label: profileLabel(deployment, p.profile_id),
+            pack: packOrigin(p.tags),
           }))}
           createLabel="New profile…"
           onCreate={() =>

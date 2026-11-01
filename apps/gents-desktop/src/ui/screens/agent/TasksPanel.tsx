@@ -19,7 +19,7 @@ import {
 } from "./editors";
 import { optionalInteger, problemOf, str, useDraft } from "./draft";
 import { HooksRows, hooksFromDraft, toHookDraft } from "./HooksRows";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { newId } from "./draft";
 import { Group, Row } from "./rows";
 import { RowMenu } from "./RowMenu";
@@ -126,6 +126,7 @@ export function TaskEditor({
   const id = (f: string) => `${task.taskId}-${f}`;
   const agents = deployment.agents.map((b) => ({
     value: b.agentId,
+    pack: packOrigin(b.tags),
     label: b.displayName,
   }));
   const run = async () => {

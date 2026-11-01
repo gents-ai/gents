@@ -13,6 +13,7 @@ import { Fact, Group, PathFact, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
+import { packOrigin } from "./ListDetail";
 import { useApp } from "@/app/AppContext";
 import { useBootstrap, useNodeReach } from "@/hooks/useClient";
 
@@ -23,6 +24,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const agent = deployment.node;
   const agents = deployment.agents.map((b) => ({
     value: b.agentId,
+    pack: packOrigin(b.tags),
     label: b.enabled
       ? b.displayName
       : `${b.displayName} · disabled, enabled when saved as default`,

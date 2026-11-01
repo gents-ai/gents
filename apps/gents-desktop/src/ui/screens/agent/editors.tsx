@@ -7,7 +7,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
+import { ExternalLink, FolderOpen, Package, Plus, XIcon } from "lucide-react";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
 import { Button } from "@gents/ui/components/button";
@@ -17,9 +17,12 @@ import {
   ComboboxChips,
   ComboboxChipsInput,
   ComboboxContent,
+  ComboboxCollection,
   ComboboxEmpty,
+  ComboboxGroup,
   ComboboxItem,
   ComboboxInput,
+  ComboboxLabel,
   ComboboxList,
   ComboboxTrigger,
   ComboboxValue,
@@ -37,7 +40,9 @@ import { Textarea } from "@gents/ui/components/textarea";
 import { Fact, Row, StackedRow } from "./rows";
 import { focusFirstProblem } from "./draft";
 
-export type Choice = { value: string; label: string };
+/** `pack` names the pack a document came from; a reference list groups
+    those under it, after the person's own */
+export type Choice = { value: string; label: string; pack?: string | null };
 
 type Common = {
   id: string;
@@ -455,6 +460,35 @@ export function RefRow({
       ? { name: full, hint: "" }
       : { name: full.slice(0, at), hint: full.slice(at + 3) };
   };
+  const packOf = (v: string) => shown.find((i) => i.value === v)?.pack ?? "";
+  const packs = [
+    ...new Set(shown.map((i) => i.pack).filter(Boolean)),
+  ].sort() as string[];
+  /* the person's own first, unlabelled, then each pack's under its name */
+  const groups = packs.length
+    ? [
+        { value: "", items: shown.filter((i) => !i.pack).map((i) => i.value) },
+        ...packs.map((pack) => ({
+          value: pack,
+          items: shown.filter((i) => i.pack === pack).map((i) => i.value),
+        })),
+      ].filter((g) => g.items.length)
+    : null;
+  const option = (v: string) => {
+    const l = labelOf(v);
+    return (
+      <ComboboxItem key={v || "∅"} value={v}>
+        <span className="flex min-w-0 flex-1 items-baseline justify-between gap-4">
+          <span className="truncate">{l.name}</span>
+          {l.hint && (
+            <span className="max-w-48 shrink-0 truncate text-xs text-muted-foreground">
+              {l.hint}
+            </span>
+          )}
+        </span>
+      </ComboboxItem>
+    );
+  };
   return (
     <Row
       label={label}
@@ -469,7 +503,7 @@ export function RefRow({
     >
       <span className="flex w-72 items-center gap-1 max-md:w-full">
         <Combobox
-          items={shown.map((i) => i.value)}
+          items={groups ?? shown.map((i) => i.value)}
           value={value}
           onValueChange={(v) => {
             popover.onOpenChange(false);
@@ -483,7 +517,7 @@ export function RefRow({
           filter={(v: string, query: string) => {
             const q = query.trim().toLowerCase();
             const l = labelOf(v);
-            return !q || `${l.name} ${l.hint}`.toLowerCase().includes(q);
+            return !q || `${l.name} ${l.hint} ${packOf(v)}`.toLowerCase().includes(q);
           }}
         >
           <ComboboxTrigger
@@ -511,21 +545,19 @@ export function RefRow({
             )}
             <ComboboxEmpty>Nothing by that name.</ComboboxEmpty>
             <ComboboxList>
-              {(v: string) => {
-                const l = labelOf(v);
-                return (
-                  <ComboboxItem key={v || "∅"} value={v}>
-                    <span className="flex min-w-0 flex-1 items-baseline justify-between gap-4">
-                      <span className="truncate">{l.name}</span>
-                      {l.hint && (
-                        <span className="max-w-48 shrink-0 truncate text-xs text-muted-foreground">
-                          {l.hint}
-                        </span>
+              {groups
+                ? (group: { value: string; items: string[] }) => (
+                    <ComboboxGroup key={group.value || "own"} items={group.items}>
+                      {group.value && (
+                        <ComboboxLabel className="flex items-center gap-1.5">
+                          <Package aria-hidden className="size-3.5 shrink-0" />
+                          <span className="truncate">{group.value}</span>
+                        </ComboboxLabel>
                       )}
-                    </span>
-                  </ComboboxItem>
-                );
-              }}
+                      <ComboboxCollection>{option}</ComboboxCollection>
+                    </ComboboxGroup>
+                  )
+                : option}
             </ComboboxList>
           </ComboboxContent>
         </Combobox>

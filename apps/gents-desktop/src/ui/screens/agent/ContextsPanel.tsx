@@ -19,7 +19,7 @@ import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
 import { toolsInWords } from "./automation";
 import { useDraft } from "./draft";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { Group, NameLinks } from "./rows";
 import { someNames } from "./behaviorDraft";
 import { contextOrigin, forgetContextOrigins } from "./contextOrigin";
@@ -192,6 +192,7 @@ function Editor({
           items={deployment.tools.map((t) => ({
             value: t.tools_id,
             label: `${t.display_name ?? t.tools_id} · ${toolsInWords(t)}`,
+            pack: packOrigin(t.tags),
           }))}
           createLabel="New tools…"
           onCreate={() =>
