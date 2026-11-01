@@ -11,6 +11,7 @@ import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
+import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { RecentFilter } from "./RecentFilter";
 import { listViews, useListViews } from "./listViews";
 import { emptyFilter, hasFilter } from "@/lib/session-filter";
@@ -32,17 +33,34 @@ const OPEN_AFTER = 80;
 const CLOSE_AFTER = 180;
 const RECENT = 8;
 
+/* a row's key, faint, once the pointer rests on it or it has focus; a sweep
+   down the nav shows none */
+export function KeyHint({ keys }: { keys?: string }) {
+  if (!keys) return null;
+  return (
+    <span
+      aria-hidden
+      className="shrink-0 font-mono text-[10px] text-muted-foreground/60 opacity-0 transition-opacity delay-0 group-hover/item:opacity-100 group-hover/item:delay-500 group-focus-visible/item:opacity-100"
+    >
+      {keys}
+    </span>
+  );
+}
+
 function Item({
   to,
   active,
   count,
   icon,
+  keys,
   children,
 }: {
   to: string;
   active?: boolean;
   count?: number;
   icon: ReactNode;
+  /** the key that goes here, named on hover */
+  keys?: string;
   children: ReactNode;
 }) {
   return (
@@ -50,7 +68,7 @@ function Item({
       href={to}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pr-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        "group/item mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pr-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
         active && "border-border/60 bg-background text-ink shadow-xs",
         /* on the window's ground the page colour wouldn't show; the rail's
            fill alone marks the page there */
@@ -60,6 +78,7 @@ function Item({
     >
       <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
+      <KeyHint keys={keys} />
       {count ? (
         <span className="grid h-4 min-w-4 place-items-center rounded-full bg-brand px-1 font-mono text-[10px] leading-none text-brand-foreground">
           {count}
@@ -185,6 +204,7 @@ export function NavPanel({
       <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
       <Item
         to={href({ name: "session", sessionId: null })}
+        keys={PAGE_KEYS.newSession}
         active={route.name === "session" && route.sessionId === null}
         icon={<Plus className="size-4" />}
       >
@@ -192,6 +212,7 @@ export function NavPanel({
       </Item>
       <Item
         to={href({ name: "mailbox" })}
+        keys={MAILBOX_KEYS}
         active={route.name === "mailbox"}
         count={mailboxCount}
         icon={<Inbox className="size-4" />}
@@ -200,6 +221,7 @@ export function NavPanel({
       </Item>
       <Item
         to={href({ name: "sessions" })}
+        keys={PAGE_KEYS.sessions}
         active={
           route.name === "sessions" ||
           route.name === "sessionsUnder" ||
@@ -267,6 +289,7 @@ export function NavPanel({
         {footer.map(contributed)}
         <Item
           to={href({ name: "nodes" })}
+          keys={PAGE_KEYS.nodes}
           active={route.name === "nodes" || route.name === "agents"}
           count={nodeCount}
           icon={<Waypoints className="size-4" />}
