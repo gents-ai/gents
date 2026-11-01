@@ -405,17 +405,20 @@ export function useAskedLog(sessionId: string | null, take: (key: string) => voi
 }
 
 /* where the reader was in each session's Background tab, while the app runs:
-   the log they had open and how far above its newest line */
-const places = new Map<string, { log: string | null; above: number }>();
+   the log they had open and how far above its newest line, and how far down
+   the list they were */
+type Place = { log: string | null; above: number; listTop: number };
+const places = new Map<string, Place>();
+const NO_PLACE: Place = { log: null, above: 0, listTop: 0 };
 
 export const backgroundPlace = (sessionId: string | null) =>
-  (sessionId && places.get(sessionId)) || { log: null, above: 0 };
+  (sessionId && places.get(sessionId)) || NO_PLACE;
 
 export function rememberBackgroundPlace(
   sessionId: string | null,
-  place: { log: string | null; above: number },
+  place: Partial<Place>,
 ) {
-  if (sessionId) places.set(sessionId, place);
+  if (sessionId) places.set(sessionId, { ...backgroundPlace(sessionId), ...place });
 }
 
 export const resetBackgroundPlaces = () => places.clear();

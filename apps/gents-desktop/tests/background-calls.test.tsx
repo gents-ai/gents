@@ -410,6 +410,39 @@ describe("the running in background group", () => {
     reading.above = 0;
   });
 
+  it("goes Back to the row it opened, where the list was, and keeps that place", () => {
+    const { app } = appWith(
+      ["one", "two", "three"].map((id) =>
+        command(id, `run ${id}`, { statusKind: "success" }),
+      ),
+    );
+    const surface = () =>
+      render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+        wrapper: withApp(app),
+      });
+    let view = surface();
+    const viewport = () =>
+      view.container.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")!;
+    viewport().scrollTop = 120;
+    fireEvent.scroll(viewport());
+
+    fireEvent.click(screen.getByRole("button", { name: "run two" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(viewport().scrollTop).toBe(120);
+    const returned = view.container.querySelectorAll("[data-returned]");
+    expect(returned).toHaveLength(1);
+    expect(returned[0]).toHaveClass("bg-accent");
+    expect(returned[0]).toContainElement(
+      screen.getByRole("button", { name: "run two" }),
+    );
+
+    /* another tab or the dock closed, then back */
+    view.unmount();
+    view = surface();
+    expect(viewport().scrollTop).toBe(120);
+    expect(view.container.querySelector("[data-returned]")).toBeNull();
+  });
+
   it("puts a short state at the end of a row", () => {
     expect(briefStateOf(call({ tool: command("a", "x") }), NOW)).toBe("12 min");
     expect(
