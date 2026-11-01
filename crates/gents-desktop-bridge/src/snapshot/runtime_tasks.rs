@@ -11,6 +11,17 @@ use super::super::types::{
     TaskView, TriggerView,
 };
 
+/// The session list travels whole in every client snapshot, so a reply stays
+/// a one-line glance rather than the node's full recorded preview.
+const SESSION_REPLY_PREVIEW_CHARS: usize = 120;
+
+fn session_reply_preview(reply: &str) -> String {
+    match reply.char_indices().nth(SESSION_REPLY_PREVIEW_CHARS) {
+        Some((cut, _)) => format!("{}…", reply[..cut].trim_end()),
+        None => reply.to_owned(),
+    }
+}
+
 fn recent_runs_view(runs: &TaskRecentRuns) -> TaskRecentRunsView {
     TaskRecentRunsView {
         total_fires: runs.total_fires,
@@ -182,6 +193,9 @@ pub(crate) fn session_summaries(
                     .as_ref()
                     .map(gents::session::display_session_title),
                 preview_text: observation.and_then(|value| value.preview.clone()),
+                reply_preview: observation
+                    .and_then(|value| value.reply_preview.as_deref())
+                    .map(session_reply_preview),
                 status: lifecycle.map(|state| state.as_str().to_owned()),
                 agent_id: Some(session.agent_id.clone()),
                 latest_request_id: request
