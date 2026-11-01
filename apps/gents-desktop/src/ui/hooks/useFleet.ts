@@ -2,7 +2,7 @@ import { useStore } from "zustand";
 
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
-import { sessionKeyOf, type FleetState } from "../../hooks/fleetStore";
+import { nodeKeyOf, sessionKeyOf, type FleetState } from "../../hooks/fleetStore";
 import { useApp } from "../app/AppContext";
 import { isLive, stateOf, turnLabel } from "../lib/live";
 
@@ -52,3 +52,26 @@ export const failedUnder = (state: FleetState, session: SessionSummary) =>
 /* stopped by someone, not replaced by an edit */
 export const stoppedUnder = (state: FleetState, session: SessionSummary) =>
   countUnder(state, session, (s) => turnLabel(s.turnState) === "Stopped");
+
+/** What a node has going on: its running sessions and its open mailbox
+    items, as the Nodes page, the node switcher and the nav count them. */
+export function activityOf(state: FleetState, nodeDid: string) {
+  const key = nodeKeyOf({ nodeDid });
+  return {
+    running: (state.sessionsOf[key] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
+      .length,
+    waiting: (state.mailboxOf[key] ?? []).filter((m) => m.status === "open").length,
+  };
+}
+
+/** The same, in words: "2 running · 1 waiting", or nothing when idle. */
+export const activityText = ({
+  running,
+  waiting,
+}: {
+  running: number;
+  waiting: number;
+}) =>
+  [running && `${running} running`, waiting && `${waiting} waiting`]
+    .filter(Boolean)
+    .join(" · ");

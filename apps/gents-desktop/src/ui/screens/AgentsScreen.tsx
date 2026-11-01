@@ -36,7 +36,6 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
-import { isLive } from "@/lib/live";
 import { NodeAvatar } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
@@ -50,9 +49,9 @@ import {
 } from "@/hooks/useClient";
 import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 import { SetupScreen } from "./setup/SetupScreen";
-import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
+import { activityOf, useFleet } from "@/hooks/useFleet";
 import { fleetNodes } from "@/lib/scope";
-import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
+import type { NodeView } from "../../hooks/fleetStore";
 import { useShallow } from "zustand/react/shallow";
 import { errorText } from "../../lib/errorText";
 
@@ -403,13 +402,8 @@ const AgentRow = memo(function AgentRow({
   const configRead = useStore(stores.client, (state) =>
     state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
   );
-  const live = useFleet(
-    (s) =>
-      (s.sessionsOf[nodeKeyOf(d)] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
-        .length,
-  );
-  const waiting = useFleet(
-    (s) => (s.mailboxOf[nodeKeyOf(d)] ?? []).filter((m) => m.status === "open").length,
+  const { running: live, waiting } = useFleet(
+    useShallow((s) => activityOf(s, d.nodeDid)),
   );
   const name = d.node.displayName ?? d.label;
   const online = d.dialSucceeded;
