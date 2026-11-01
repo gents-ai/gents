@@ -1,4 +1,5 @@
 import { cn } from "@gents/ui/lib/utils";
+import { COMPOSER_FIELD } from "./composerField";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
 import { useMemo, useRef } from "react";
 import { RichComposer } from "@gents/ui/conversation";
@@ -134,6 +135,7 @@ function NewSessionComposer() {
         editorState={field}
         onEditorStateChange={setField}
         className="text-foreground"
+        fieldProps={COMPOSER_FIELD}
         value={draft}
         onChange={setDraft}
         onSend={
