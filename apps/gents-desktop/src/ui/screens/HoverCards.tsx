@@ -17,6 +17,8 @@ import { closestWindow, resetsIn, usageLevel, UsageRing } from "./agent/Provider
 import { useNodeReach } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
+import { Skeleton } from "@gents/ui/components/skeleton";
+import { SUBSCRIPTION } from "./agent/inferenceKinds";
 
 function Line({
   label,
@@ -39,11 +41,33 @@ function Line({
 
 /* the agent's provider account at its closest limit; read only while the
    card is open, since the card's content mounts with it */
-function AgentLimits({ nodeDid, backendId }: { nodeDid: string; backendId: string }) {
-  const { usage } = useProviderUsage(nodeDid);
+function AgentLimits({
+  nodeDid,
+  backend,
+}: {
+  nodeDid: string;
+  backend: { backendId: string; providerKind?: string | null };
+}) {
+  /* only a subscription account reports usage; other backends have no
+     limits to read, so their cards keep no place for one */
+  if (!SUBSCRIPTION[backend.providerKind ?? ""]) return null;
+  return <AccountLimits nodeDid={nodeDid} backendId={backend.backendId} />;
+}
+
+function AccountLimits({ nodeDid, backendId }: { nodeDid: string; backendId: string }) {
+  const { usage, loading } = useProviderUsage(nodeDid);
   const view = usage.find((account) => account.backendIds.includes(backendId));
   const top = closestWindow(view);
-  if (!view || !top) return null;
+  /* the line holds its place while the first read is out, so the card opens
+     at its full height; a read with nothing for this account drops it */
+  if (!view || !top)
+    return loading ? (
+      <Line label="Limits">
+        <span aria-busy="true" className="flex h-4 items-center">
+          <Skeleton className="h-3 w-28 rounded-sm bg-foreground/10" />
+        </span>
+      </Line>
+    ) : null;
   const pct = Math.round(top.usedPct);
   const now = Date.now();
   return (
@@ -211,9 +235,7 @@ export function AgentHoverCard({
               "no backend"
             )}
           </Line>
-          {backend && (
-            <AgentLimits nodeDid={deployment.nodeDid} backendId={backend.backendId} />
-          )}
+          {backend && <AgentLimits nodeDid={deployment.nodeDid} backend={backend} />}
           <Line label="Files">{fileAccess(env?.fileAccess ?? "off")}</Line>
           <Line label="Commands">{bashAccess(env?.bashAccess ?? "off")}</Line>
           <Line label="Network">{network(env?.networkAccess)}</Line>

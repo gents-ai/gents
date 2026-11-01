@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,16 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { renderIn, testApp } from "./app-fixture";
 
 /* the card reads the agent's provider usage while open */
+/* a Claude subscription, which reports its usage limits */
+const onSubscription = {
+  ...deployment,
+  inferenceBackends: deployment.inferenceBackends.map((backend) =>
+    backend.backendId === "backend-a"
+      ? { ...backend, providerKind: "ClaudeCliSubscription" }
+      : backend,
+  ),
+};
+
 const cardApp = (usage: unknown[] = []) =>
   testApp({ api: { readProviderUsage: vi.fn().mockResolvedValue(usage) } });
 
@@ -121,6 +131,50 @@ describe("settings polish", () => {
     expect(card.querySelector("img")).toBeNull();
   });
 
+  it("holds the Limits line while a subscription's usage is read, and drops it when none comes", async () => {
+    let answer!: (usage: unknown[]) => void;
+    const app = testApp({
+      api: {
+        readProviderUsage: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        ),
+      },
+    });
+    renderIn(
+      app,
+      <AgentHoverCard deployment={onSubscription} agentId="default">
+        <button type="button">Default agent</button>
+      </AgentHoverCard>,
+    );
+    await userEvent
+      .setup()
+      .hover(screen.getByRole("button", { name: "Default agent" }));
+    const card = await screen.findByTestId("agent-hover-card");
+    const held = within(card).getByText("Limits").nextElementSibling!;
+    expect(held.querySelector('[aria-busy="true"]')).not.toBeNull();
+
+    await act(async () => answer([]));
+    await waitFor(() => expect(within(card).queryByText("Limits")).toBeNull());
+  });
+
+  it("keeps no Limits line for a backend that reports no usage", async () => {
+    const readProviderUsage = vi.fn(() => new Promise(() => {}));
+    renderIn(
+      testApp({ api: { readProviderUsage } }),
+      <AgentHoverCard deployment={deployment} agentId="default">
+        <button type="button">Default agent</button>
+      </AgentHoverCard>,
+    );
+    await userEvent
+      .setup()
+      .hover(screen.getByRole("button", { name: "Default agent" }));
+    const card = await screen.findByTestId("agent-hover-card");
+    expect(within(card).queryByText("Limits")).toBeNull();
+  });
+
   it("shows the agent's closest limit, amber once it nears it", async () => {
     const observedAt = new Date().toISOString();
     const window = (label: string, usedPct: number) => ({
@@ -146,7 +200,7 @@ describe("settings polish", () => {
           read: "read",
         },
       ]),
-      <AgentHoverCard deployment={deployment} agentId="default">
+      <AgentHoverCard deployment={onSubscription} agentId="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
     );
