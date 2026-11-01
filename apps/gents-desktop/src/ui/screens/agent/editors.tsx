@@ -7,7 +7,14 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ExternalLink, FolderOpen, Package, Plus, XIcon } from "lucide-react";
+import {
+  ChevronRight,
+  ExternalLink,
+  FolderOpen,
+  Package,
+  Plus,
+  XIcon,
+} from "lucide-react";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
 import { Button } from "@gents/ui/components/button";
@@ -22,7 +29,6 @@ import {
   ComboboxGroup,
   ComboboxItem,
   ComboboxInput,
-  ComboboxLabel,
   ComboboxList,
   ComboboxTrigger,
   ComboboxValue,
@@ -39,6 +45,7 @@ import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
 import { Fact, Row, StackedRow } from "./rows";
 import { focusFirstProblem } from "./draft";
+import { usePackGroups } from "./ListDetail";
 
 /** `pack` names the pack a document came from; a reference list groups
     those under it, after the person's own */
@@ -424,6 +431,55 @@ export function PathRow({
   );
 }
 
+/* a pack's heading in a reference list: a toggle, unless a search or the
+   chosen document holds it open */
+function PackHeading({
+  pack,
+  count,
+  open,
+  onToggle,
+}: {
+  pack: string;
+  count: number;
+  open: boolean;
+  onToggle?: () => void;
+}) {
+  const inner = (
+    <>
+      <ChevronRight
+        aria-hidden
+        className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+      />
+      <Package aria-hidden className="size-3.5 shrink-0" />
+      <span className="truncate">{pack}</span>
+      <span className="shrink-0">· {count}</span>
+    </>
+  );
+  return (
+    /* not the group's ComboboxLabel: Base UI hides that from assistive
+       technology, which would hide the toggle too; the group is named by
+       aria-label instead */
+    <div className="text-xs">
+      {onToggle ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          /* the search field keeps focus, so typing goes on working */
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onToggle}
+          className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          {inner}
+        </button>
+      ) : (
+        <span className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground">
+          {inner}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function RefRow({
   id,
   label,
@@ -464,7 +520,16 @@ export function RefRow({
   const packs = [
     ...new Set(shown.map((i) => i.pack).filter(Boolean)),
   ].sort() as string[];
-  /* the person's own first, unlabelled, then each pack's under its name */
+  const [query, setQuery] = useState("");
+  const packGroups = usePackGroups(`ref:${String(label)}`);
+  const searching = query.trim() !== "";
+  /* a pack's documents fold under its name, as in the agent picker; a
+     search or the chosen document holds its pack open */
+  const held = (pack: string) => searching || packOf(value) === pack;
+  const isOpen = (pack: string) => held(pack) || packGroups.isOpen(pack, false);
+  /* the person's own first, unlabelled, then each pack's under its name.
+     A folded pack keeps its items here, unrendered: Base UI drops a group
+     with none, and its heading with it */
   const groups = packs.length
     ? [
         { value: "", items: shown.filter((i) => !i.pack).map((i) => i.value) },
@@ -510,7 +575,11 @@ export function RefRow({
             onChange(v ?? "");
           }}
           open={popover.open}
-          onOpenChange={popover.onOpenChange}
+          onOpenChange={(next) => {
+            if (!next) setQuery("");
+            popover.onOpenChange(next);
+          }}
+          onInputValueChange={(next) => setQuery(String(next))}
           onOpenChangeComplete={popover.onOpenChangeComplete}
           disabled={disabled}
           itemToStringLabel={(v: string) => labelOf(v).name}
@@ -547,14 +616,26 @@ export function RefRow({
             <ComboboxList>
               {groups
                 ? (group: { value: string; items: string[] }) => (
-                    <ComboboxGroup key={group.value || "own"} items={group.items}>
+                    <ComboboxGroup
+                      key={group.value || "own"}
+                      items={group.items}
+                      aria-label={group.value || undefined}
+                    >
                       {group.value && (
-                        <ComboboxLabel className="flex items-center gap-1.5">
-                          <Package aria-hidden className="size-3.5 shrink-0" />
-                          <span className="truncate">{group.value}</span>
-                        </ComboboxLabel>
+                        <PackHeading
+                          pack={group.value}
+                          count={shown.filter((i) => i.pack === group.value).length}
+                          open={isOpen(group.value)}
+                          onToggle={
+                            held(group.value)
+                              ? undefined
+                              : () => packGroups.toggle(group.value, false)
+                          }
+                        />
                       )}
-                      <ComboboxCollection>{option}</ComboboxCollection>
+                      {(!group.value || isOpen(group.value)) && (
+                        <ComboboxCollection>{option}</ComboboxCollection>
+                      )}
                     </ComboboxGroup>
                   )
                 : option}
