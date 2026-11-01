@@ -16,7 +16,7 @@ use super::route::{ClaudeRoute, ClaudeRouteError};
 use super::send::stream_messages_routed;
 use super::tests::echo_request;
 use super::wire_tests::{reply, Server, Wire};
-use crate::claude_subscription::{AccountIdentity, ApiKeyBearer};
+use crate::inference::clients::claude_subscription::{AccountIdentity, ApiKeyBearer};
 
 const SECRET: &str = "platform-secret-credential";
 pub(super) const MODEL: &str = "claude-sonnet-5";

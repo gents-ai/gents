@@ -111,7 +111,7 @@ pub fn account_failure_state(text: &str) -> Option<&'static str> {
     [
         CHATGPT_OAUTH_PRODUCT,
         XAI_OAUTH_PRODUCT,
-        crate::claude_oauth::CLAUDE_OAUTH_PRODUCT,
+        crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT,
     ]
     .iter()
     .any(|product| text.contains(&format!("{} account \"", product.name)))

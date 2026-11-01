@@ -164,7 +164,7 @@ async fn resolver_reads_through_config_access() {
     ] {
         upsert_oauth_credential(&node, &credential).await.unwrap();
     }
-    let access = crate::config_client::ConfigAccess::local(node);
+    let access = crate::store::config_client::ConfigAccess::local(node);
     for (pick, expected) in [
         (AccountPick::Reference(Some("b")), "xai-oauth:b"),
         (AccountPick::Reference(None), "xai-oauth:original"),

@@ -691,7 +691,7 @@ impl PendingAgent {
                     None,
                 ),
                 backend_endpoint,
-                backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+                backend_auth: crate::documents::BackendAuth::Unauthenticated,
                 claude_platform: None,
             },
             &ToolCeiling::meta_only(),

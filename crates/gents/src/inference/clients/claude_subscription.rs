@@ -272,17 +272,17 @@ impl ClaudeSubscriptionClient<ApiKeyBearer> {
         }
     }
 
-    /// A Claude platform backend sending its static `key` along `route`.
+    /// A Claude platform backend sending `bearer` along `route`.
     pub(crate) fn with_platform(
         node_did: &str,
         backend_id: &str,
-        key: String,
+        bearer: ApiKeyBearer,
         route: ClaudeRoute,
     ) -> Self {
         Self {
             accounts: Arc::from([ClaudeAccount {
                 credential_id: String::new(),
-                bearer: Arc::new(ApiKeyBearer::new(key)),
+                bearer: Arc::new(bearer),
                 usage: None,
                 identity: AccountIdentity::of_platform(node_did, backend_id),
             }]),

@@ -84,7 +84,7 @@ async fn refresh_xai_token_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth_credential::test_support::one_shot_token_server;
+    use crate::inference::auth::credential::test_support::one_shot_token_server;
 
     async fn refresh_against(
         status: u16,

@@ -37,7 +37,7 @@ pub(crate) async fn publish(
     notice: RuntimeNotice,
 ) -> std::result::Result<MailboxItem, RuntimeNoticeError> {
     let session_id = notice.session_id.as_str();
-    let owner = crate::config_client::ConfigAccess::transact_local_readonly(
+    let owner = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "mailbox.runtime_notice.session",
@@ -49,7 +49,7 @@ pub(crate) async fn publish(
     )
     .await?
     .ok_or(RuntimeNoticeScopeError::MissingSession)?;
-    let response = crate::config_client::ConfigAccess::local(node.clone()).execute(&format!(
+    let response = crate::store::config_client::ConfigAccess::local(node.clone()).execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}) {{ session_id agent_id requester_did }} }}"#,
         escape_graphql_string(node_did), escape_graphql_string(&notice.request_id),
     )).await.map_err(anyhow::Error::new)?;
@@ -135,7 +135,7 @@ mod tests {
         crate::session::create_session_with_id(&node, "original-session", "operator", did)
             .await
             .unwrap();
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         access.write("test.runtime_notice.request", r#"mutation { create_AgentRequest(input: {
             request_id: "original-request", purpose: "normal", node_did: "did:test:agent",
             agent_id: "operator", session_id: "original-session", content: "update",
@@ -169,7 +169,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_notice_preserves_desktop_requester_scope() {
         let node = super::super::tests::test_node().await;
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         access.write("test.runtime_notice.desktop_session", r#"mutation { create_AgentSession(input: {
             session_id: "desktop-session", node_did: "did:test:agent", requester_did: "did:test:owner",
             agent_id: "operator", created_at: "2026-01-01T00:00:00Z"

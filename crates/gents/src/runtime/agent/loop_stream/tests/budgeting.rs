@@ -15,7 +15,10 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             case.name
         );
         assert_eq!(
-            crate::turn::provider_input::budget::effective_input_budget(case.context_window, threshold),
+            crate::turn::provider_input::budget::effective_input_budget(
+                case.context_window,
+                threshold
+            ),
             case.effective_input_budget,
             "{}: effective input budget drifted from Lean",
             case.name
@@ -51,7 +54,8 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             .iter()
             .map(|tokens| {
                 crate::inference::compaction::ReductionAdmission::for_context(
-                    crate::turn::provider_input::budget::ContextCalibration::default().context(*tokens),
+                    crate::turn::provider_input::budget::ContextCalibration::default()
+                        .context(*tokens),
                     compaction_budget,
                 )
                 .is_some()
@@ -137,7 +141,8 @@ fn generated_retention_cases_drive_production_compaction_target() {
         );
         assert!(actual <= case.configured_keep_recent, "{}", case.name);
         assert!(actual <= case.available_input, "{}", case.name);
-        let band = crate::turn::provider_input::budget::recovery_band_budget(case.effective_input_budget);
+        let band =
+            crate::turn::provider_input::budget::recovery_band_budget(case.effective_input_budget);
         let reserved = case.fixed_input + case.effective_summary_output;
         if reserved <= band {
             assert!(
@@ -173,8 +178,12 @@ fn generated_retention_cases_drive_production_compaction_target() {
 fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
     let third = usize::MAX / 3;
     for value in [0, 1, third, third.saturating_add(1), usize::MAX] {
-        let retained =
-            crate::turn::provider_input::budget::compaction_retention_target(usize::MAX, value, 0, 0);
+        let retained = crate::turn::provider_input::budget::compaction_retention_target(
+            usize::MAX,
+            value,
+            0,
+            0,
+        );
         assert_eq!(retained.checked_add(value.div_ceil(5)), Some(value));
         assert_eq!(
             crate::turn::provider_input::budget::compaction_retention_target(
@@ -549,19 +558,19 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                         .collect::<Vec<_>>()
                 };
                 let associations =
-                    crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                    crate::turn::provider_context_reduction::ReplayAssociations::from_tagged_split(
                         Vec::new(),
                         &tagged(&compacted_prefix),
                         &tagged(&retained_suffix),
                     );
-                let boundary = crate::provider_context_reduction::SourceBoundary {
+                let boundary = crate::turn::provider_context_reduction::SourceBoundary {
                     boundary_version: 2,
                     request_doc_id: request_doc_id.to_string(),
                     request_commit_cid: "claim-cid-3283".to_string(),
                     canonical_through: None,
                 };
-                crate::provider_context_reduction::stage(
-                    crate::provider_context_reduction::NewProviderContextReduction {
+                crate::turn::provider_context_reduction::stage(
+                    crate::turn::provider_context_reduction::NewProviderContextReduction {
                         node_did: "did:test:test",
                         requester_did: None,
                         session_id: "session-3283",
@@ -611,7 +620,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             }
         }
 
-        let rows = crate::provider_context_reduction::load_for_request(&node, request_doc_id)
+        let rows = crate::turn::provider_context_reduction::load_for_request(&node, request_doc_id)
             .await
             .unwrap();
         assert_eq!(
@@ -646,16 +655,20 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
     loop_config.compaction_threshold = 0.25;
     loop_config.turn_compactor = Some(Arc::new(move |_request| {
         Box::pin(async move {
-            Err(crate::inference::compaction::CompactionError::GuidedBudgetExhausted(
-                gents_loop::loop_stream::OneShotError::LoopStream(rig_compat::loop_verdict_error(
-                    crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
-                    format!(
-                        "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit=10000, used=9000, \
+            Err(
+                crate::inference::compaction::CompactionError::GuidedBudgetExhausted(
+                    gents_loop::loop_stream::OneShotError::LoopStream(
+                        rig_compat::loop_verdict_error(
+                            crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                            format!(
+                                "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit=10000, used=9000, \
                      estimated_input_tokens=2000, remaining=1000"
+                            ),
+                        ),
                     ),
-                )),
+                )
+                .into(),
             )
-            .into())
         })
     }));
 
@@ -1328,8 +1341,10 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
         let threshold = case.threshold_basis_points as f64 / 10_000.0;
         let configured =
             crate::turn::provider_input::budget::threshold_budget(case.context_window, threshold);
-        let effective =
-            crate::turn::provider_input::budget::effective_input_budget(case.context_window, threshold);
+        let effective = crate::turn::provider_input::budget::effective_input_budget(
+            case.context_window,
+            threshold,
+        );
         let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
         let effective_output = crate::turn::provider_input::budget::effective_output_budget(
             input_tokens,
@@ -1380,7 +1395,8 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
         );
         assert_eq!(
             crate::inference::compaction::ReductionAdmission::for_context(
-                crate::turn::provider_input::budget::ContextCalibration::default().context(input_tokens),
+                crate::turn::provider_input::budget::ContextCalibration::default()
+                    .context(input_tokens),
                 compaction_budget,
             )
             .is_some(),
@@ -1445,8 +1461,9 @@ fn generated_compaction_trigger_cases_drive_the_production_trigger() {
             "{}: compaction input budget drifted from Lean",
             case.name
         );
-        let admission = crate::inference::compaction::ReductionAdmission::for_context(context, budget)
-            .map(|admission| (admission.input_tokens(), admission.effective_input_budget()));
+        let admission =
+            crate::inference::compaction::ReductionAdmission::for_context(context, budget)
+                .map(|admission| (admission.input_tokens(), admission.effective_input_budget()));
         assert_eq!(
             admission,
             case.admission
@@ -1694,7 +1711,8 @@ async fn provider_context_overflow_without_a_compactor_fails_with_its_reason() {
     assert!(collected.attempts.iter().all(|attempt| !attempt.will_retry));
 }
 
-type CapturedAccounting = Arc<std::sync::Mutex<Vec<crate::inference::rendered_request::ContextAccounting>>>;
+type CapturedAccounting =
+    Arc<std::sync::Mutex<Vec<crate::inference::rendered_request::ContextAccounting>>>;
 
 fn capture_accounting(loop_config: &mut LoopConfig) -> CapturedAccounting {
     let captured = CapturedAccounting::default();
@@ -1717,9 +1735,10 @@ async fn calibrated_estimate_compacts_before_the_provider_rejects_the_input() {
     ]);
     let admitted = AdmittedReduction::default();
     let mut loop_config = overflow_loop_config(admitted.clone());
-    loop_config.context_calibration = crate::turn::provider_input::budget::ContextCalibration::with_ratio(
-        crate::turn::provider_input::budget::CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS,
-    );
+    loop_config.context_calibration =
+        crate::turn::provider_input::budget::ContextCalibration::with_ratio(
+            crate::turn::provider_input::budget::CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS,
+        );
     let captured = capture_accounting(&mut loop_config);
 
     let collected = collect_scripted_stream(run_loop_stream(
@@ -1767,9 +1786,7 @@ async fn calibrated_estimate_compacts_before_the_provider_rejects_the_input() {
     );
     assert_eq!(
         accounting.pre_compaction_input_tokens,
-        Some(crate::turn::provider_input::budget::calibrated_input_tokens(
-            raw_before, 18_000
-        ))
+        Some(crate::turn::provider_input::budget::calibrated_input_tokens(raw_before, 18_000))
     );
     assert_eq!(
         accounting.compaction_reason,
@@ -1824,11 +1841,8 @@ async fn provider_usage_calibrates_the_next_dispatch() {
         "the first call's cache-inclusive usage calibrates the next dispatch"
     );
     let second_raw = accounting[1].raw_estimated_input_tokens.unwrap();
-    let anchored = crate::turn::provider_input::budget::ContextCalibration::with_ratio(
-        observed,
-    )
-    .anchored_at(
-        crate::turn::provider_input::budget::ContextAnchor {
+    let anchored = crate::turn::provider_input::budget::ContextCalibration::with_ratio(observed)
+        .anchored_at(crate::turn::provider_input::budget::ContextAnchor {
             input_tokens: 15_006,
             output_tokens: 10,
             estimated_input_tokens: first_raw,
@@ -1932,9 +1946,10 @@ async fn pre_turn_admissions(incoming_bytes: usize) -> usize {
     ]);
     let admitted = AdmittedReduction::default();
     let mut loop_config = overflow_loop_config(admitted.clone());
-    loop_config.context_calibration = crate::turn::provider_input::budget::ContextCalibration::with_ratio(
-        crate::turn::provider_input::budget::CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS,
-    );
+    loop_config.context_calibration =
+        crate::turn::provider_input::budget::ContextCalibration::with_ratio(
+            crate::turn::provider_input::budget::CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS,
+        );
     let history = vec![
         TaggedMessage::unassociated(Message::user("h".repeat(1_200_000))),
         TaggedMessage::unassociated(Message::assistant("ok")),

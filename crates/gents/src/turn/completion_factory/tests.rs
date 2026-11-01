@@ -536,7 +536,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         claude_platform: None,
-        backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+        backend_auth: crate::documents::BackendAuth::Unauthenticated,
         model_name: crate::inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
@@ -1292,7 +1292,7 @@ fn claude_subscription_requests_carry_the_session_key_and_hops_reach_the_policy(
     let config = loop_config_for_request(&agent, "system".into(), &request(), None, 0, 3).unwrap();
     let params = config.additional_params.unwrap();
     assert_eq!(
-        params[crate::claude_messages::SESSION_KEY_PARAM],
+        params[crate::inference::clients::claude_messages::SESSION_KEY_PARAM],
         "session-456"
     );
     assert_eq!(config.retry_policy.account_hops, 3);

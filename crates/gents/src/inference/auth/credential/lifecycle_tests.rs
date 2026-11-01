@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use super::test_support::{test_node, unsigned_jwt};
 use super::*;
-use crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-use crate::config_client::ConfigAccess;
-use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+use crate::store::config_client::ConfigAccess;
 
 #[derive(Debug, Clone, Copy)]
 enum Product {
@@ -45,10 +45,10 @@ impl Product {
                     Utc::now(),
                 )
             }
-            Self::Claude => crate::claude_oauth::credential_from_login_tokens(
+            Self::Claude => crate::inference::auth::claude::credential_from_login_tokens(
                 did,
                 CLAUDE_OAUTH_PROVIDER,
-                &crate::claude_oauth::ClaudeLoginTokens {
+                &crate::inference::auth::claude::ClaudeLoginTokens {
                     access_token: "access-TEST".into(),
                     refresh_token: refresh_token.into(),
                     expires_in: Some(3600),
@@ -122,10 +122,10 @@ fn chatgpt_with(
 }
 
 fn claude(did: &str, label: &str, account: Option<&str>, refresh_token: &str) -> OAuthCredential {
-    crate::claude_oauth::credential_from_login_tokens(
+    crate::inference::auth::claude::credential_from_login_tokens(
         did,
         CLAUDE_OAUTH_PROVIDER,
-        &crate::claude_oauth::ClaudeLoginTokens {
+        &crate::inference::auth::claude::ClaudeLoginTokens {
             access_token: "access-TEST".into(),
             refresh_token: refresh_token.into(),
             expires_in: Some(3600),
@@ -194,7 +194,7 @@ fn node(access: &ConfigAccess) -> &Arc<EmbeddedNode> {
 }
 
 async fn backends(access: &ConfigAccess, did: &str) -> Vec<crate::InferenceBackend> {
-    crate::backend_registry::list_all_backends(node(access))
+    crate::inference::backends::registry::list_all_backends(node(access))
         .await
         .unwrap()
         .into_iter()

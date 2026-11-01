@@ -1682,8 +1682,8 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 
 #[tokio::test]
 async fn an_account_pool_agent_follows_its_enabled_accounts() {
-    use crate::config_client::ConfigAccess;
-    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use crate::store::config_client::ConfigAccess;
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-pool"));
@@ -1692,10 +1692,10 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     bind_default_agent_claude_backend(&node, &did, &default_agent_id).await;
     let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
-        crate::claude_oauth::credential_from_login_tokens(
+        crate::inference::auth::claude::credential_from_login_tokens(
             did.clone(),
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: format!("access-{who}"),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -1710,9 +1710,9 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
-    let pool_with = |auth: crate::document_config::BackendAuth| {
+    let pool_with = |auth: crate::documents::BackendAuth| {
         let node = node.clone();
         let did = did.clone();
         let resolve_context = &resolve_context;
@@ -1735,7 +1735,7 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
             agent.oauth_pool.clone()
         }
     };
-    let pool = crate::document_config::BackendAuth::NodeOAuthPool {
+    let pool = crate::documents::BackendAuth::NodeOAuthPool {
         allow_overage: false,
     };
     let a = store_sign_in(&access, sign_in("a"), None).await.unwrap();
@@ -1757,7 +1757,7 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
         "a disabled account leaves the pool"
     );
     assert!(
-        pool_with(crate::document_config::BackendAuth::NodeOAuth { account_ref: None })
+        pool_with(crate::documents::BackendAuth::NodeOAuth { account_ref: None })
             .await
             .is_empty(),
         "a single-account backend carries no pool"

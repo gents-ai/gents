@@ -25,11 +25,13 @@ pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
 
 pub(super) fn sign_in_product(provider: &str) -> Option<OAuthProduct> {
     match provider {
-        crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => Some(CHATGPT_OAUTH_PRODUCT),
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => {
-            Some(crate::claude_oauth::CLAUDE_OAUTH_PRODUCT)
+        crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
+            Some(CHATGPT_OAUTH_PRODUCT)
         }
-        crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => Some(XAI_OAUTH_PRODUCT),
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER => {
+            Some(crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT)
+        }
+        crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => Some(XAI_OAUTH_PRODUCT),
         _ => None,
     }
 }

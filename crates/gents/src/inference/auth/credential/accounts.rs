@@ -50,9 +50,9 @@ pub fn no_switch_candidate_note(provider: &str, model: &str) -> String {
 }
 
 const ACCOUNT_PROVIDERS: [&str; 3] = [
-    crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-    crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-    crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+    crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+    crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+    crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
 ];
 
 fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
@@ -65,13 +65,13 @@ fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
         .map(|id| {
             format!(
                 r#", credential_id: {{ _eq: "{}" }}"#,
-                crate::graphql::escape_graphql_string(id)
+                crate::store::graphql::escape_graphql_string(id)
             )
         })
         .unwrap_or_default();
     format!(
         r#"{{ node_did: {{ _eq: "{}" }}, provider: {{ _in: [{providers}] }}{credential} }}"#,
-        crate::graphql::escape_graphql_string(node_did)
+        crate::store::graphql::escape_graphql_string(node_did)
     )
 }
 
@@ -80,7 +80,7 @@ fn account_not_found(credential_id: &str) -> anyhow::Error {
 }
 
 pub async fn list_accounts(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<AccountSummary>> {
     let response = access
@@ -118,7 +118,7 @@ pub async fn list_accounts(
 }
 
 pub async fn set_account_label(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     credential_id: &str,
     label: &str,
@@ -150,7 +150,7 @@ pub async fn set_account_label(
                     .context("stored OAuthCredential has no _docID")?;
                 txn.execute(&format!(
                     r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(doc_id),
+                    crate::store::graphql::escape_graphql_string(doc_id),
                     gents_protocol::graphql::nullable_string_field("label", Some(&label)),
                 ))
                 .await?;
@@ -166,7 +166,7 @@ pub async fn set_account_label(
 }
 
 pub async fn set_account_enabled(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     credential_id: &str,
     enabled: bool,
@@ -185,7 +185,7 @@ pub async fn set_account_enabled(
 }
 
 pub async fn remove_account_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     credential_id: &str,
 ) -> Result<()> {
@@ -212,7 +212,7 @@ fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<
     if response
         .get("data")
         .and_then(|data| data.get(field))
-        .is_some_and(crate::graphql::response_has_documents)
+        .is_some_and(crate::store::graphql::response_has_documents)
     {
         Ok(())
     } else {

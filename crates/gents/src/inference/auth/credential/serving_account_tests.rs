@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::document_config::BackendAuth;
+use crate::documents::BackendAuth;
 
 fn account(account_ref: Option<&str>, label: &str, enabled: bool) -> AccountSummary {
     AccountSummary {
@@ -9,7 +9,7 @@ fn account(account_ref: Option<&str>, label: &str, enabled: bool) -> AccountSumm
             "claude-subscription:did:key:z6MkTest{}",
             account_ref.unwrap_or("")
         ),
-        provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
+        provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
         account_ref: account_ref.map(str::to_owned),
         label: label.into(),
         identity: Some("IDENTITY".into()),
@@ -56,7 +56,7 @@ fn an_account_backend_names_its_account() {
         ServingAccount {
             label: "Claude".into(),
             state: AccountState::Enabled,
-            provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
         }
     );
     let b = backend(
@@ -70,7 +70,7 @@ fn an_account_backend_names_its_account() {
         ServingAccount {
             label: "label-b".into(),
             state: AccountState::Disabled,
-            provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
         }
     );
 }
@@ -88,7 +88,7 @@ fn a_backend_whose_account_is_gone_is_missing_by_its_name() {
         ServingAccount {
             label: "label-gone".into(),
             state: AccountState::Missing,
-            provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
         }
     );
 }

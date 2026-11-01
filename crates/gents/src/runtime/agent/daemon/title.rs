@@ -444,7 +444,7 @@ where
                     crate::claude_request_context::apply(
                         &mut config,
                         crate::claude_request_context::for_request(
-                            &crate::config_client::ConfigAccess::local(self.node.clone()),
+                            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
                             &self.agent_config,
                             &request,
                             gents_claude::origin::Kind::Title,

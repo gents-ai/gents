@@ -239,7 +239,7 @@ impl DbCredentialBearer {
         let mut last_error = None;
         let mut delay_ms = 200u64;
         for attempt in 0..3u32 {
-            match crate::config_client::ConfigAccess::write_local(
+            match crate::store::config_client::ConfigAccess::write_local(
                 &self.node,
                 "oauth_credential.refresh",
                 &mutation,
@@ -250,7 +250,7 @@ impl DbCredentialBearer {
                     let written = response
                         .get("data")
                         .and_then(|data| data.get("update_OAuthCredential"))
-                        .is_some_and(crate::graphql::response_has_documents);
+                        .is_some_and(crate::store::graphql::response_has_documents);
                     return Ok(if written {
                         RefreshPersist::Written
                     } else {

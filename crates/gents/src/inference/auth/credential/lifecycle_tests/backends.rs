@@ -21,7 +21,7 @@ async fn only_added_accounts_create_a_backend() {
         assert_eq!(Some(backend.name.clone()), b.credential.label);
         assert_eq!(
             backend.auth,
-            crate::document_config::BackendAuth::NodeOAuth {
+            crate::documents::BackendAuth::NodeOAuth {
                 account_ref: Some(reference.clone())
             }
         );
@@ -68,7 +68,7 @@ async fn each_accounts_backend_keeps_its_own_models() {
             openai_wire_api: spec.openai_wire_api,
             endpoint: spec.endpoint.clone(),
             claude_platform: None,
-            auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+            auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
             max_concurrent: None,
@@ -76,7 +76,7 @@ async fn each_accounts_backend_keeps_its_own_models() {
             enabled: true,
             tags: Vec::new(),
         };
-        crate::config_client::write_inference_backend_document(&access, &original)
+        crate::store::config_client::write_inference_backend_document(&access, &original)
             .await
             .unwrap();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
@@ -87,17 +87,16 @@ async fn each_accounts_backend_keeps_its_own_models() {
             .find(|backend| backend.backend_id != original.backend_id)
             .expect("the added account's backend");
         for (backend, model) in [(&original, "model-a"), (&added, "model-b")] {
-            let advertised: crate::document_config::AdvertisedModel =
-                serde_json::from_value(json!({
-                    "model_name": model,
-                    "display_name": null,
-                    "context_window": null,
-                    "max_context_window": null,
-                    "max_output_tokens": null,
-                    "reasoning_efforts": null,
-                }))
-                .unwrap();
-            crate::backend_registry::record_discovered_catalog_on(
+            let advertised: crate::documents::AdvertisedModel = serde_json::from_value(json!({
+                "model_name": model,
+                "display_name": null,
+                "context_window": null,
+                "max_context_window": null,
+                "max_output_tokens": null,
+                "reasoning_efforts": null,
+            }))
+            .unwrap();
+            crate::inference::backends::registry::record_discovered_catalog_on(
                 &access,
                 backend,
                 vec![advertised],
@@ -106,7 +105,7 @@ async fn each_accounts_backend_keeps_its_own_models() {
             .unwrap();
         }
         for (backend, model) in [(&original, "model-a"), (&added, "model-b")] {
-            let observation = crate::backend_registry::lookup_backend_observation(
+            let observation = crate::inference::backends::registry::lookup_backend_observation(
                 node(&access),
                 &did,
                 &backend.backend_id,

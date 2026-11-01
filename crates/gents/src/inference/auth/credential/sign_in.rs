@@ -49,7 +49,7 @@ fn trimmed(value: Option<&str>) -> Option<&str> {
 }
 
 pub async fn store_sign_in(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     credential: OAuthCredential,
     label: Option<&str>,
 ) -> Result<SignIn> {
@@ -70,14 +70,14 @@ pub async fn store_sign_in(
 
 fn identity_keys(credential: &OAuthCredential) -> Vec<String> {
     let keys = match credential.provider.as_str() {
-        crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
+        crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
             crate::chatgpt_oauth_refresh::chatgpt_account_keys(
                 &credential.access_token,
                 credential.id_token.as_deref(),
                 credential.account_id.as_deref(),
             )
         }
-        crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => {
+        crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => {
             crate::xai_oauth_login::xai_account_key(&credential.access_token)
                 .into_iter()
                 .collect()
@@ -111,7 +111,7 @@ fn sign_in_match(
 }
 
 async fn store_sign_in_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     mut credential: OAuthCredential,
     label: Option<String>,
 ) -> Result<SignIn> {
@@ -155,7 +155,7 @@ async fn store_sign_in_in_txn(
                     {}
                 }}) {{ _docID }}
             }}"#,
-            crate::graphql::escape_graphql_string(&doc_id),
+            crate::store::graphql::escape_graphql_string(&doc_id),
             render_oauth_input(&fields, &set_once),
         );
         txn.execute(&mutation).await?;
@@ -198,7 +198,7 @@ async fn store_sign_in_in_txn(
                 {}
             }}) {{ _docID }}
         }}"#,
-        crate::graphql::escape_graphql_string(&credential.credential_id),
+        crate::store::graphql::escape_graphql_string(&credential.credential_id),
         render_oauth_input(&fields, &[]),
     );
     let response = txn.execute(&mutation).await?;
@@ -220,24 +220,24 @@ async fn store_sign_in_in_txn(
 }
 
 async fn original_account_profiles(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
 ) -> Result<Vec<String>> {
-    use crate::backend_provider::BackendProviderOauthExt;
+    use crate::inference::backends::provider::BackendProviderOauthExt;
     let backends: Vec<_> =
-        crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| {
                 matches!(
                     backend.auth,
-                    crate::document_config::BackendAuth::NodeOAuth { account_ref: None }
+                    crate::documents::BackendAuth::NodeOAuth { account_ref: None }
                 ) && backend.provider_kind.oauth_provider() == Some(credential.provider.as_str())
             })
             .map(|backend| backend.backend_id)
             .collect();
     Ok(
-        crate::config_client::list_inference_profiles_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_profiles_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|profile| backends.contains(&profile.backend_id))

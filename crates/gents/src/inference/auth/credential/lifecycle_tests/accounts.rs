@@ -125,7 +125,7 @@ async fn a_label_change_is_validated_unique_and_renames_the_backend() {
 
     let mut custom = backend.clone();
     custom.name = "Custom".into();
-    crate::config_client::write_inference_backend_document(&access, &custom)
+    crate::store::config_client::write_inference_backend_document(&access, &custom)
         .await
         .unwrap();
     set_account_label(&access, did, id, "Home").await.unwrap();
@@ -183,7 +183,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             openai_wire_api: spec.openai_wire_api,
             endpoint: spec.endpoint,
             claude_platform: None,
-            auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+            auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
             max_concurrent: None,
@@ -191,7 +191,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             enabled: true,
             tags: Vec::new(),
         };
-        crate::config_client::write_inference_backend_document(&access, &original)
+        crate::store::config_client::write_inference_backend_document(&access, &original)
             .await
             .unwrap();
         let profile = serde_json::from_value(json!({
@@ -201,7 +201,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             "model_name": "model-x",
         }))
         .unwrap();
-        crate::config_client::write_inference_profile_document(&access, &profile)
+        crate::store::config_client::write_inference_profile_document(&access, &profile)
             .await
             .unwrap();
     }

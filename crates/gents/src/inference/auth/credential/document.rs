@@ -10,7 +10,7 @@ pub(super) const OAUTH_PICK_FIELDS: &str =
     "_docID credential_id node_did provider enabled account_ref connected_at provider_account_key";
 
 pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
-    let credential_id = crate::graphql::escape_graphql_string(credential_id);
+    let credential_id = crate::store::graphql::escape_graphql_string(credential_id);
     format!(
         r#"query {{
             OAuthCredential(
@@ -30,7 +30,7 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     let add_input = render_oauth_input(&fields, &[]);
     // `node_did` is immutable, so the update branch must omit it on this DefraDB pin.
     let update_input = render_oauth_input(&fields, SET_ONCE_FIELDS);
-    let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
+    let credential_id = crate::store::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
             upsert_OAuthCredential(
@@ -52,8 +52,8 @@ pub(super) fn enabled_oauth_credentials_query(
     provider: &str,
     fields: &str,
 ) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let provider = crate::store::graphql::escape_graphql_string(provider);
     format!(
         r#"query {{
             OAuthCredential(
@@ -94,7 +94,7 @@ pub(super) fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
 }
 
 pub fn oauth_credentials_for_node_query(node_did: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
     format!(
         r#"query {{
             OAuthCredential(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
@@ -105,7 +105,7 @@ pub fn oauth_credentials_for_node_query(node_did: &str) -> String {
 }
 
 pub fn oauth_credential_by_doc_id_query(doc_id: &str) -> String {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     format!(
         r#"query {{
             OAuthCredential(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
@@ -116,8 +116,8 @@ pub fn oauth_credential_by_doc_id_query(doc_id: &str) -> String {
 }
 
 pub(super) fn oauth_credentials_of_provider_query(node_did: &str, provider: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let provider = crate::store::graphql::escape_graphql_string(provider);
     format!(
         r#"query {{
             OAuthCredential(filter: {{
@@ -143,7 +143,7 @@ pub(super) fn oauth_credential_input_fields(
     let field = |name: &str, value: &str| {
         format!(
             r#"{name}: "{}""#,
-            crate::graphql::escape_graphql_string(value)
+            crate::store::graphql::escape_graphql_string(value)
         )
     };
     let datetime_field = |name: &str, value: Option<DateTime<Utc>>| {
@@ -321,11 +321,11 @@ pub(super) fn refresh_update_mutation(
     let document = match &credential.doc_id {
         Some(doc_id) => format!(
             r#"_docID: {{ _eq: "{}" }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ),
         None => format!(
             r#"credential_id: {{ _eq: "{}" }}"#,
-            crate::graphql::escape_graphql_string(&credential.credential_id)
+            crate::store::graphql::escape_graphql_string(&credential.credential_id)
         ),
     };
     let fields: Vec<_> = oauth_credential_input_fields(credential)
@@ -343,7 +343,7 @@ pub(super) fn refresh_update_mutation(
                 }}
             ) {{ _docID }}
         }}"#,
-        crate::graphql::escape_graphql_string(stored_refresh_token),
+        crate::store::graphql::escape_graphql_string(stored_refresh_token),
         render_oauth_input(&fields, &[]),
     )
 }

@@ -11,7 +11,7 @@ use super::*;
 async fn failed_refresh_is_not_retried_during_the_cooldown() {
     let node = test_node().await;
     let did = "did:key:z6MkRevoked";
-    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
     let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
     // Process-global; hold TOKEN_URL_ENV while it is set.
@@ -46,7 +46,7 @@ async fn failed_refresh_is_not_retried_during_the_cooldown() {
 async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token() {
     let node = test_node().await;
     let did = "did:key:z6MkRejected";
-    let provider = crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    let provider = crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     seed_credential(&node, did, provider, Utc::now() + Duration::hours(1)).await;
     let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
     // Process-global; hold TOKEN_URL_ENV while it is set.
@@ -80,7 +80,7 @@ async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token
 }
 
 fn grok_bearer(node: Arc<EmbeddedNode>, did: &str) -> DbCredentialBearer {
-    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     DbCredentialBearer::new(
         node,
         did,
@@ -93,12 +93,13 @@ fn grok_bearer(node: Arc<EmbeddedNode>, did: &str) -> DbCredentialBearer {
 }
 
 async fn set_label(node: &std::sync::Arc<EmbeddedNode>, did: &str, label: Option<&str>) {
-    let credential_id = oauth_credential_id(did, crate::xai_grok_oauth::XAI_OAUTH_PROVIDER);
+    let credential_id =
+        oauth_credential_id(did, crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER);
     let mutation = format!(
         r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
         gents_protocol::graphql::nullable_string_field("label", label),
     );
-    crate::config_client::ConfigAccess::write_local(node, "test.label", &mutation)
+    crate::store::config_client::ConfigAccess::write_local(node, "test.label", &mutation)
         .await
         .unwrap();
 }
@@ -122,7 +123,7 @@ async fn a_revoked_refresh_names_the_account() {
     for (label, named) in [(Some("label-a"), "label-a"), (None, "Grok")] {
         let node = test_node().await;
         let did = "did:key:z6MkTestRevokedNamed";
-        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
         seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
         set_label(&node, did, label).await;
         let (first, second, _) = revoked_twice(&grok_bearer(node, did)).await;
@@ -150,7 +151,7 @@ async fn a_revoked_refresh_names_the_account() {
 async fn a_revoked_refresh_never_uses_another_account() {
     let node = test_node().await;
     let did = "did:key:z6MkTestRevokedOther";
-    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
     let mut other = lookup_oauth_credential_by_id(&node, &oauth_credential_id(did, provider))
         .await
@@ -171,7 +172,7 @@ async fn a_revoked_refresh_never_uses_another_account() {
 async fn a_reused_slot_names_the_new_account() {
     let node = test_node().await;
     let did = "did:key:z6MkTestReusedSlot";
-    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     let credential_id = oauth_credential_id(did, provider);
     seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
     set_label(&node, did, Some("label-a")).await;
@@ -189,7 +190,7 @@ async fn a_reused_slot_names_the_new_account() {
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
     );
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     access
         .transact_write("test.remove", |txn| {
             let credential_id = credential_id.clone();
@@ -219,7 +220,7 @@ async fn a_reused_slot_names_the_new_account() {
 async fn a_disabled_or_removed_row_names_the_account() {
     let node = test_node().await;
     let did = "did:key:z6MkTestDisabledNamed";
-    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     let credential_id = oauth_credential_id(did, provider);
     seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
     set_label(&node, did, Some("label-a")).await;
@@ -237,7 +238,7 @@ async fn a_disabled_or_removed_row_names_the_account() {
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
     );
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     set_account_enabled(&access, did, &credential_id, false)
         .await
         .unwrap();
@@ -281,7 +282,7 @@ async fn a_limit_like_label_is_not_a_limit() {
     for label in ["usage limit", "maximum context length"] {
         let node = test_node().await;
         let did = "did:key:z6MkTestLimitLabel";
-        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
         seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
         set_label(&node, did, Some(label)).await;
         let (first, _, _) = revoked_twice(&grok_bearer(node, did)).await;

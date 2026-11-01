@@ -45,9 +45,9 @@ pub(crate) async fn seed_credential_with_refresh_token(
     expires_at: DateTime<Utc>,
     refresh_token: &str,
 ) {
-    let credential = crate::oauth_credential::OAuthCredential {
+    let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
-        credential_id: crate::oauth_credential::oauth_credential_id(node_did, provider),
+        credential_id: crate::inference::auth::credential::oauth_credential_id(node_did, provider),
         node_did: node_did.to_string(),
         provider: provider.to_string(),
         access_token: "access-TEST".into(),
@@ -64,7 +64,7 @@ pub(crate) async fn seed_credential_with_refresh_token(
         provider_account_key: None,
         label: None,
     };
-    crate::oauth_credential::upsert_oauth_credential(node, &credential)
+    crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
         .await
         .expect("seed credential");
 }

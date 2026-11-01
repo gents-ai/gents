@@ -677,7 +677,9 @@ fn request_additional_params(
         }
         BackendProviderKind::ClaudeCliSubscription => {
             let session = normalize_cache_scope(request.session_id.as_str())?;
-            Some(serde_json::json!({ crate::claude_messages::SESSION_KEY_PARAM: session }))
+            Some(
+                serde_json::json!({ crate::inference::clients::claude_messages::SESSION_KEY_PARAM: session }),
+            )
         }
         BackendProviderKind::OpenRouter
         | BackendProviderKind::XaiGrokOAuth

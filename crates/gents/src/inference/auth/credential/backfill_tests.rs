@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use super::test_support::{one_shot_token_server, test_node, unsigned_jwt, TOKEN_URL_ENV};
 use super::*;
-use crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-use crate::config_client::ConfigAccess;
-use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+use crate::store::config_client::ConfigAccess;
 
 const XAI_ENV: &str = crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
 const CHATGPT_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;

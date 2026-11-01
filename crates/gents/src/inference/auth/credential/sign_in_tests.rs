@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use super::test_support::{test_node, unsigned_jwt};
 use super::*;
-use crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-use crate::config_client::ConfigAccess;
+use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+use crate::store::config_client::ConfigAccess;
 
 const DID: &str = "did:key:zSignIn";
 
@@ -39,10 +39,10 @@ fn chatgpt(member: Option<&str>, refresh_token: &str) -> OAuthCredential {
 }
 
 fn claude(label: &str, account_uuid: &str, refresh_token: &str) -> OAuthCredential {
-    crate::claude_oauth::credential_from_login_tokens(
+    crate::inference::auth::claude::credential_from_login_tokens(
         DID,
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-        &crate::claude_oauth::ClaudeLoginTokens {
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        &crate::inference::auth::claude::ClaudeLoginTokens {
             access_token: "access-TEST".into(),
             refresh_token: refresh_token.into(),
             expires_in: Some(3600),
@@ -58,7 +58,7 @@ fn claude(label: &str, account_uuid: &str, refresh_token: &str) -> OAuthCredenti
 fn grok(access_claims: Value, refresh_token: &str) -> OAuthCredential {
     crate::xai_oauth_login::credential_from_login_tokens(
         DID,
-        crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+        crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
         &crate::xai_oauth_login::XaiLoginTokens {
             access_token: unsigned_jwt(access_claims),
             refresh_token: refresh_token.into(),

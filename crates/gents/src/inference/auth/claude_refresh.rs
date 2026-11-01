@@ -224,7 +224,7 @@ mod tests {
     async fn refresh_honors_the_token_url_override_env() {
         let (url, handle) =
             one_shot_token_server(200, r#"{"access_token":"access-NEW","expires_in":3600}"#).await;
-        let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
+        let _env = crate::inference::auth::credential::test_support::TOKEN_URL_ENV
             .lock()
             .await;
         std::env::set_var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV, &url);

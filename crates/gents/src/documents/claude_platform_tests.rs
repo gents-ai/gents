@@ -1,6 +1,6 @@
 use gents_loop::claude_platform::ClaudePlatform;
 
-use crate::backend_provider::BackendProviderKind;
+use crate::inference::backends::provider::BackendProviderKind;
 
 #[test]
 fn generated_claude_platform_cases_match_the_lean_owner() {

@@ -6,8 +6,8 @@ pub fn backend_account<'a>(
     backend: &crate::InferenceBackend,
     accounts: &'a [AccountSummary],
 ) -> Option<Option<&'a AccountSummary>> {
-    use crate::backend_provider::BackendProviderOauthExt;
-    let crate::document_config::BackendAuth::NodeOAuth { account_ref } = &backend.auth else {
+    use crate::inference::backends::provider::BackendProviderOauthExt;
+    let crate::documents::BackendAuth::NodeOAuth { account_ref } = &backend.auth else {
         return None;
     };
     let provider = backend.provider_kind.oauth_provider()?;
@@ -63,10 +63,10 @@ pub fn serving_account(
             AccountState::Disabled
         }
     };
-    use crate::backend_provider::BackendProviderOauthExt;
+    use crate::inference::backends::provider::BackendProviderOauthExt;
     let provider = matches!(
         backend.auth,
-        crate::document_config::BackendAuth::NodeOAuth { .. }
+        crate::documents::BackendAuth::NodeOAuth { .. }
     )
     .then(|| backend.provider_kind.oauth_provider())
     .flatten();

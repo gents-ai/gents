@@ -57,7 +57,7 @@ pub fn pick_oauth_pool<'c>(
 }
 
 pub async fn resolve_oauth_credential(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,
@@ -73,7 +73,7 @@ pub async fn resolve_oauth_credential(
 }
 
 pub async fn resolve_oauth_pool(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
 ) -> Result<Vec<OAuthCredential>> {
@@ -94,7 +94,7 @@ pub async fn resolve_oauth_pool(
 }
 
 pub(crate) async fn provider_default_account_ref(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
 ) -> Result<Option<String>> {
@@ -106,7 +106,7 @@ pub(crate) async fn provider_default_account_ref(
 }
 
 pub(crate) async fn resolve_oauth_credential_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,

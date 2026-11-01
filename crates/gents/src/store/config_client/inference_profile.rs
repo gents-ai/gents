@@ -238,7 +238,7 @@ mod tests {
             openai_wire_api: spec.openai_wire_api,
             endpoint: spec.endpoint,
             claude_platform: None,
-            auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+            auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
             max_concurrent: None,

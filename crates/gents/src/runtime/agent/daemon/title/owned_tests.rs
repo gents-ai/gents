@@ -1241,7 +1241,7 @@ impl TitleFixture {
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:1/v1".into(),
             claude_platform: None,
-            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+            backend_auth: crate::documents::BackendAuth::Unauthenticated,
             model_name: "scripted".into(),
             service_tier: None,
             resolved_reasoning_efforts: None,

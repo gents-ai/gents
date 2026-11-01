@@ -20,7 +20,7 @@ use super::send::stream_messages_routed;
 use super::tests::echo_request;
 use super::wire_tests::{reply, Reply, Server, Wire};
 use super::{GoogleCredentials, GoogleTokenSource};
-use crate::claude_subscription::{AccountIdentity, ApiKeyBearer};
+use crate::inference::clients::claude_subscription::{AccountIdentity, ApiKeyBearer};
 
 const MINTED: Reply = reply(
     "200 OK",

@@ -81,10 +81,10 @@ impl DocumentRuntimeView {
         if !matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
             return Vec::new();
         }
-        crate::oauth_credential::pick_oauth_pool(
+        crate::inference::auth::credential::pick_oauth_pool(
             self.oauth_rows(),
             &self.node.value.node_did,
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
         .into_iter()
         .map(|row| row.credential_id.clone())

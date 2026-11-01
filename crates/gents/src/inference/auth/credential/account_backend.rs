@@ -22,9 +22,11 @@ pub(crate) fn preset_account_backend(
 ) -> Result<crate::InferenceBackend> {
     use crate::inference_setup::{InferenceAuthMethod as Auth, InferenceProviderId as Id};
     let (provider_id, auth) = match provider {
-        crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => (Id::OpenAi, Auth::ChatGptOauth),
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
-        crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
+        crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
+            (Id::OpenAi, Auth::ChatGptOauth)
+        }
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
+        crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
         other => anyhow::bail!("no backend reads sign-ins of provider {other:?}"),
     };
     let spec = crate::inference_setup::connection_spec(provider_id, auth, "")?;
@@ -39,7 +41,7 @@ pub(crate) fn preset_account_backend(
         openai_wire_api: spec.openai_wire_api,
         endpoint: spec.endpoint,
         claude_platform: None,
-        auth: crate::document_config::BackendAuth::NodeOAuth {
+        auth: crate::documents::BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         },
         connect_timeout_secs: None,
@@ -52,10 +54,10 @@ pub(crate) fn preset_account_backend(
 }
 
 async fn write_account_backend(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     backend: &crate::InferenceBackend,
 ) -> Result<()> {
-    crate::config_client::write_inference_backend_in_txn(txn, backend)
+    crate::store::config_client::write_inference_backend_in_txn(txn, backend)
         .await
         .context(
             "the account's backend could not be stored, so the sign-in was not saved; \
@@ -64,7 +66,7 @@ async fn write_account_backend(
 }
 
 pub(super) async fn sync_account_backend(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
     old_label: Option<&str>,
 ) -> Result<()> {
@@ -72,7 +74,7 @@ pub(super) async fn sync_account_backend(
         return Ok(());
     };
     let serving: Vec<_> =
-        crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| backend.auth.oauth_account_ref() == Some(account_ref))

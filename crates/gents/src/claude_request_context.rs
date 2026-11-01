@@ -15,9 +15,9 @@ use gents_loop::loop_stream::LoopConfig;
 use gents_protocol::session::SessionCreationCause;
 
 use crate::config::ResolvedAgent;
-use crate::config_client::ConfigAccess;
 use crate::lifecycle::ExecutionOrigin;
 use crate::session_origin::{self, CreationOrigin, SessionScope};
+use crate::store::config_client::ConfigAccess;
 use crate::AgentRequest;
 
 /// Longest starter chain read to find the session a conversation started from.

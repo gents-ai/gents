@@ -25,7 +25,7 @@ mod sse;
 mod transport;
 
 #[cfg(test)]
-use crate::claude_subscription::ClaudeStreamResponse;
+use crate::inference::clients::claude_subscription::ClaudeStreamResponse;
 pub(crate) use error::non_success_message;
 #[cfg(test)]
 pub(crate) use error::{body_prefix, non_success_error, NON_SUCCESS_BODY_PREFIX_BYTES};

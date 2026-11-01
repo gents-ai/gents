@@ -1950,7 +1950,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         claude_platform: None,
-        backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+        backend_auth: crate::documents::BackendAuth::Unauthenticated,
         model_name: "default".to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,

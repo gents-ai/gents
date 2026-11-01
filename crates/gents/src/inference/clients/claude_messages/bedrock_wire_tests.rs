@@ -25,7 +25,9 @@ use super::route::ClaudeRoute;
 use super::send::stream_messages_routed;
 use super::tests::echo_request;
 use super::wire_tests::{raw_reply, reply, Reply, Server, Wire};
-use crate::claude_subscription::{AccountIdentity, ApiKeyBearer, ClaudeStreamResponse};
+use crate::inference::clients::claude_subscription::{
+    AccountIdentity, ApiKeyBearer, ClaudeStreamResponse,
+};
 
 const ACCESS_KEY: &str = "AKIDEXAMPLE";
 const SECRET_KEY: &str = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
@@ -125,7 +127,7 @@ fn profiles(ids: &[&str], next: Option<&str>) -> Reply {
     )
 }
 
-fn account() -> crate::claude_subscription::AccountIdentity {
+fn account() -> crate::inference::clients::claude_subscription::AccountIdentity {
     AccountIdentity::of_platform("did:key:z6MkBedrock", "backend-bedrock")
 }
 

@@ -131,7 +131,7 @@ fn settings_outside_the_kind_are_refused_on_every_kind() {
     );
     for kind in ["OpenAiCompatible", "OpenRouter", "AnthropicApiKey"] {
         let endpoint = if kind == "AnthropicApiKey" {
-            crate::claude_subscription::ANTHROPIC_API_ENDPOINT
+            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT
         } else {
             "https://example.test/v1"
         };
@@ -173,7 +173,7 @@ fn a_platform_credential_must_suit_the_platform() {
             _ => settings.clone(),
         };
         let endpoint = if kind == "AnthropicApiKey" {
-            crate::claude_subscription::ANTHROPIC_API_ENDPOINT
+            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT
         } else {
             "https://example.test/v1"
         };
@@ -206,7 +206,7 @@ fn a_platform_credential_must_suit_the_platform() {
     assert_eq!(
         backend(
             "ClaudeCliSubscription",
-            crate::claude_subscription::ANTHROPIC_API_ENDPOINT,
+            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT,
             key(),
             Value::Null
         )
