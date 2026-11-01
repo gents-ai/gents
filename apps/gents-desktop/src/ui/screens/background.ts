@@ -11,6 +11,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
 import { dockScopeOf, workspace } from "@/app/workspace";
+import { usePageShown } from "@/lib/visibility";
 import {
   useSelectedSessionFields,
   useSelectedSessionValue,
@@ -330,17 +331,18 @@ export function useBackgroundCalls(sessionId: string | null): BackgroundCall[] {
   const fromRows = useMemo(() => backgroundCalls(tools ?? [], [], new Set()), [tools]);
   const watching = fromRows.length > 0 && nodeDid !== null;
   const running = fromRows.some(isActive);
+  const shown = usePageShown();
   const [held, setHeld] = useState<Held | null>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (!watching || !running) return;
+    if (!watching || !running || !shown) return;
     const timer = setInterval(() => setTick((n) => n + 1), POLL_MS);
     return () => clearInterval(timer);
-  }, [watching, running]);
+  }, [watching, running, shown]);
   /* read again as calls start or end, not on every line they write */
   const shape = fromRows.map((c) => `${c.key}\u0000${c.tool?.statusKind}`).join("\n");
   useEffect(() => {
-    if (!watching || !nodeDid) return;
+    if (!watching || !nodeDid || !shown) return;
     let live = true;
     void fetchOperationsSnapshot({ nodeDid }).then(
       (value) => live && setHeld({ scope: nodeDid, value }),
@@ -349,7 +351,7 @@ export function useBackgroundCalls(sessionId: string | null): BackgroundCall[] {
     return () => {
       live = false;
     };
-  }, [fetchOperationsSnapshot, watching, nodeDid, shape, tick]);
+  }, [fetchOperationsSnapshot, watching, nodeDid, shown, shape, tick]);
   const views =
     watching && held?.scope === nodeDid ? held.value.backgroundedTools : null;
   const latestRequestId = session?.latestRequestId ?? null;
