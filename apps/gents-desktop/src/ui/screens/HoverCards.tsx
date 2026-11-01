@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from "react";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Copy, MessageSquarePlus } from "lucide-react";
+import { toast } from "sonner";
 import type { NodeView } from "../../hooks/fleetStore";
 import {
   HoverCard,
@@ -7,7 +8,8 @@ import {
   HoverCardTrigger,
 } from "@gents/ui/components/hover-card";
 import { cn } from "@gents/ui/lib/utils";
-import { href } from "@/lib/router";
+import { href, navigate, type Route } from "@/lib/router";
+import { useApp } from "@/app/AppContext";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
 import { agentOf, backendOf } from "@/lib/agents";
@@ -21,20 +23,34 @@ import { shortPath } from "@/lib/paths";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { SUBSCRIPTION } from "./agent/inferenceKinds";
 
+/* the card looks the same at rest; a line that leads somewhere underlines
+   only while pointed at or focused */
+const LINK =
+  "rounded-sm underline-offset-2 outline-none hover:underline focus-visible:underline";
+
 function Line({
   label,
   title,
+  to,
   children,
 }: {
   label: string;
   title?: string;
+  /** where the line leads, as a link */
+  to?: Route;
   children: React.ReactNode;
 }) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
       <dd title={title} className="min-w-0 truncate text-foreground">
-        {children}
+        {to ? (
+          <a href={href(to)} className={LINK}>
+            {children}
+          </a>
+        ) : (
+          children
+        )}
       </dd>
     </>
   );
@@ -100,6 +116,31 @@ function AccountLimits({ nodeDid, backendId }: { nodeDid: string; backendId: str
   );
 }
 
+function CopyId({ did }: { did: string }) {
+  return (
+    <button
+      type="button"
+      aria-label="Copy node id"
+      title="Copy node id"
+      onClick={() =>
+        void navigator.clipboard?.writeText(did).then(
+          () => toast("Copied node id"),
+          () => toast("Couldn’t copy the node id"),
+        )
+      }
+      className="grid size-5 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none"
+    >
+      <Copy className="size-3" />
+    </button>
+  );
+}
+
+const nodeSection = (nodeDid: string, section: string): Route => ({
+  name: "agent",
+  nodeDid,
+  section,
+});
+
 const shortDid = (did: string) =>
   did.length > 22 ? `${did.slice(0, 12)}…${did.slice(-4)}` : did;
 
@@ -108,10 +149,14 @@ function NodeReach({ deployment }: { deployment: NodeView }) {
   const home = useHomeFolder();
   return (
     <>
-      <Line label="Can touch" title={root ?? undefined}>
+      <Line
+        label="Can touch"
+        title={root ?? undefined}
+        to={nodeSection(deployment.nodeDid, "folders")}
+      >
         {root ? shortPath(root, { home: local ? home : null, max: 40 }) : "—"}
       </Line>
-      <Line label="At most">
+      <Line label="At most" to={nodeSection(deployment.nodeDid, "agent")}>
         {ceiling ? access(ceiling) : env ? access(env.fileAccess) : "—"}
         {env ? `, ${network(env.networkAccess)}` : ""}
       </Line>
@@ -135,9 +180,12 @@ export function NodeHoverCard({
       <HoverCardTrigger delay={500} render={children} />
       <HoverCardContent side={side} align="start" className="w-80">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="font-heading text-base font-medium text-heading">
+          <a
+            href={href(nodeSection(deployment.nodeDid, "agent"))}
+            className={cn("font-heading text-base font-medium text-heading", LINK)}
+          >
             {deployment.node.displayName ?? deployment.label}
-          </span>
+          </a>
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span
               className={cn(
@@ -150,18 +198,25 @@ export function NodeHoverCard({
         </div>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <NodeReach deployment={deployment} />
-          <Line label="Agents">{deployment.agents.length}</Line>
-          <Line label="Tasks">{deployment.tasks.length}</Line>
-          <Line label="Inference">
+          <Line label="Agents" to={nodeSection(deployment.nodeDid, "agents")}>
+            {deployment.agents.length}
+          </Line>
+          <Line label="Tasks" to={nodeSection(deployment.nodeDid, "tasks")}>
+            {deployment.tasks.length}
+          </Line>
+          <Line label="Inference" to={nodeSection(deployment.nodeDid, "inference")}>
             <InferenceLogos backends={deployment.inferenceBackends} />
           </Line>
         </dl>
-        <p
-          className="mt-3 truncate font-mono text-[11px] text-muted-foreground"
-          title={deployment.nodeDid}
-        >
-          {shortDid(deployment.nodeDid)}
-        </p>
+        <div className="mt-3 flex items-center gap-1">
+          <p
+            className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
+            title={deployment.nodeDid}
+          >
+            {shortDid(deployment.nodeDid)}
+          </p>
+          <CopyId did={deployment.nodeDid} />
+        </div>
       </HoverCardContent>
     </HoverCard>
   );
@@ -183,7 +238,7 @@ function InferenceLogos({ backends }: { backends: NodeView["inferenceBackends"] 
       role="img"
       aria-label={names}
       title={names}
-      className="-my-0.5 flex items-center"
+      className="-my-0.5 inline-flex items-center align-middle"
     >
       {shown.slice(0, 3).map((b, i) => (
         <span
@@ -255,7 +310,14 @@ export function AgentHoverCard({
             <span className="text-xs text-muted-foreground">Default</span>
           )}
         </div>
-        {summary && <p className="mt-1.5 text-sm text-muted-foreground">{summary}</p>}
+        {summary && (
+          <p
+            title={summary}
+            className="mt-1.5 line-clamp-2 text-xs leading-snug text-muted-foreground"
+          >
+            {summary}
+          </p>
+        )}
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <Line label="Status">
             {!b.enabled
@@ -264,7 +326,19 @@ export function AgentHoverCard({
                 ? "Enabled"
                 : `Enabled, can’t run: ${readiness.reason}`}
           </Line>
-          <Line label="Runs on">
+          <Line
+            label="Runs on"
+            to={
+              backend
+                ? {
+                    name: "agent",
+                    nodeDid: deployment.nodeDid,
+                    section: "inference",
+                    item: backend.backendId,
+                  }
+                : undefined
+            }
+          >
             {env?.modelName ? (
               <span className="flex min-w-0 items-center gap-1.5">
                 {backend && (
@@ -297,18 +371,59 @@ export function AgentHoverCard({
           )}
           <Line label="Sessions">{env?.sessionCount ?? 0}</Line>
         </dl>
-        <a
-          href={href({
-            name: "agent",
-            nodeDid: deployment.nodeDid,
-            section: "agents",
-            item: b.agentId,
-          })}
-          className="mt-3 inline-flex items-center gap-1 text-xs text-foreground underline-offset-2 hover:underline"
-        >
-          Settings <ArrowUpRight className="size-3" />
-        </a>
+        <div className="mt-3 flex items-center gap-4 text-xs">
+          <NewSessionWith
+            nodeDid={deployment.nodeDid}
+            agentId={b.agentId}
+            enabled={b.enabled}
+            onStart={() => setOpen(false)}
+          />
+          <a
+            href={href({
+              name: "agent",
+              nodeDid: deployment.nodeDid,
+              section: "agents",
+              item: b.agentId,
+            })}
+            className={cn("inline-flex items-center gap-1 text-foreground", LINK)}
+          >
+            Settings <ArrowUpRight className="size-3" />
+          </a>
+        </div>
       </HoverCardContent>
     </HoverCard>
+  );
+}
+
+/* in the card's content, so it reads the app only once the card is open */
+function NewSessionWith({
+  nodeDid,
+  agentId,
+  enabled,
+  onStart,
+}: {
+  nodeDid: string;
+  agentId: string;
+  enabled: boolean;
+  onStart: () => void;
+}) {
+  const { actions } = useApp();
+  return (
+    <button
+      type="button"
+      disabled={!enabled}
+      onClick={() => {
+        onStart();
+        actions.selectNode(nodeDid);
+        actions.selectAgent(agentId);
+        navigate({ name: "session", sessionId: null });
+      }}
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-1 text-foreground disabled:cursor-default disabled:text-muted-foreground disabled:no-underline",
+        LINK,
+      )}
+    >
+      <MessageSquarePlus className="size-3" /> New session
+    </button>
   );
 }
