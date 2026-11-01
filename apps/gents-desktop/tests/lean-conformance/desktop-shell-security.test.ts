@@ -91,6 +91,7 @@ it("binds plugin loading and message consent to the executable shell model", asy
     });
     const result = buildUxHost(app, () => ({ name: "sessions" })).shell.send(
       "Exact proposed text ✓",
+      { id: "probe", name: "probe" },
     );
     if (row.expected) await expect(result).resolves.toBeUndefined();
     else await expect(result).rejects.toThrow("ctx.send:");

@@ -31,6 +31,7 @@ const appOver = (answer: (command: string, args: unknown) => unknown) =>
   testApp({ api: apiOver(answer) });
 
 const route = () => ({ name: "sessions" as const });
+const caller = { id: "board", name: "Task Board" };
 
 describe("buildUxHost: ctx.send", () => {
   beforeEach(() => vi.spyOn(window, "confirm").mockReturnValue(true));
@@ -50,7 +51,9 @@ describe("buildUxHost: ctx.send", () => {
     const app = testApp({ selection: { sessionId: null } });
     const sendMessage = vi.spyOn(app.actions, "sendMessage");
     const host = buildUxHost(app, route);
-    await expect(host.shell.send("hi")).rejects.toThrow("no session is selected");
+    await expect(host.shell.send("hi", caller)).rejects.toThrow(
+      "no session is selected",
+    );
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -59,7 +62,7 @@ describe("buildUxHost: ctx.send", () => {
     const app = testApp({ selection: { sessionId: "s1", nodeDid: "did:a" } });
     const sendMessage = vi.spyOn(app.actions, "sendMessage");
     const host = buildUxHost(app, route);
-    await expect(host.shell.send("hi")).rejects.toThrow("user gesture");
+    await expect(host.shell.send("hi", caller)).rejects.toThrow("user gesture");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -70,8 +73,10 @@ describe("buildUxHost: ctx.send", () => {
     });
     const sendMessage = vi.spyOn(app.actions, "sendMessage").mockResolvedValue(null);
     const host = buildUxHost(app, route);
-    await host.shell.send("hi");
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("hi"));
+    await host.shell.send("hi", caller);
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Task Board wants to send this message to the selected chat:\n\nhi",
+    );
     expect(sendMessage).toHaveBeenCalledWith("hi", "b1");
   });
 
@@ -80,9 +85,9 @@ describe("buildUxHost: ctx.send", () => {
     vi.mocked(window.confirm).mockReturnValue(false);
     const app = testApp({ selection: { sessionId: "s1", nodeDid: "did:a" } });
     const send = vi.spyOn(app.actions, "sendMessage");
-    await expect(buildUxHost(app, route).shell.send("proposed text")).rejects.toThrow(
-      "not confirmed",
-    );
+    await expect(
+      buildUxHost(app, route).shell.send("proposed text", caller),
+    ).rejects.toThrow("not confirmed");
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -98,7 +103,7 @@ describe("buildUxHost: ctx.send", () => {
         return true;
       });
       const send = vi.spyOn(app.actions, "sendMessage");
-      await expect(buildUxHost(app, route).shell.send("text")).rejects.toThrow(
+      await expect(buildUxHost(app, route).shell.send("text", caller)).rejects.toThrow(
         "selected chat changed",
       );
       expect(send).not.toHaveBeenCalled();
@@ -109,12 +114,12 @@ describe("buildUxHost: ctx.send", () => {
     gesture(true);
     vi.mocked(window.confirm).mockReturnValue(false);
     const host = buildUxHost(testApp({ selection: { sessionId: "s1" } }), route);
-    const first = host.shell.send("first");
-    await expect(host.shell.send("second")).rejects.toThrow(
+    const first = host.shell.send("first", caller);
+    await expect(host.shell.send("second", caller)).rejects.toThrow(
       "already awaiting confirmation",
     );
     await expect(first).rejects.toThrow("not confirmed");
-    await expect(host.shell.send("third")).rejects.toThrow("not confirmed");
+    await expect(host.shell.send("third", caller)).rejects.toThrow("not confirmed");
     expect(window.confirm).toHaveBeenCalledTimes(2);
   });
 });
