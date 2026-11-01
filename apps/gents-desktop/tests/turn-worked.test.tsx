@@ -2,19 +2,25 @@ import type {
   RenderedTimelineItem,
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/ui/screens/Markdown", () => ({
   CopyButton: () => null,
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
-import { LONG_TURN_MS, turnsWorked, turnWorked } from "@/lib/turnWorked";
+import {
+  groupTook,
+  LONG_TURN_MS,
+  runningSince,
+  turnsWorked,
+  turnWorked,
+} from "@/lib/turnWorked";
 import { groupTranscript } from "@/screens/transcript-groups";
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { NO_WORKERS } from "../src/ui/screens/workers";
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderIn, testApp } from "./app-fixture";
 import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixture";
@@ -90,6 +96,28 @@ describe("how long a turn worked, from its rows", () => {
   });
 });
 
+describe("how long a group of steps took", () => {
+  it("runs from its first call's start to its last call's end", () => {
+    expect(
+      groupTook([call(after(2_000), after(9_000)), call(after(1_000), after(4_000))]),
+    ).toBe(8_000);
+  });
+
+  it("is not told while a call runs or when a call's times are missing or reversed", () => {
+    const running = { ...call(after(0), null), statusKind: "running" };
+    expect(groupTook([call(after(0)), running])).toBeNull();
+    expect(groupTook([call(after(0), null)])).toBeNull();
+    expect(groupTook([call(after(5_000), after(1_000))])).toBeNull();
+    expect(groupTook([])).toBeNull();
+  });
+
+  it("counts a running call from its start, and nothing else", () => {
+    expect(runningSince({ ...call(after(0), null), statusKind: "running" })).toBe(T0);
+    expect(runningSince(call(after(0)))).toBeNull();
+    expect(runningSince(undefined)).toBeNull();
+  });
+});
+
 describe("how long a turn worked, on its reply's time", () => {
   const render = (workedMs: number) => {
     const replied = after(1_000 + workedMs);
@@ -143,3 +171,70 @@ async function hovered(element: Element) {
   await userEvent.hover(element);
   return (await screen.findByText(/Worked for/, {}, { timeout: 2000 })).textContent;
 }
+
+describe("how long steps took, in the transcript", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const command = (startedAt: string, completedAt: string | null, running = false) =>
+    ({
+      ...call(startedAt, completedAt),
+      toolName: "shell",
+      statusKind: running ? "running" : "success",
+      presentation: {
+        kind: "command",
+        command: "sleep 70",
+        output: "",
+        exitCode: running ? null : 0,
+      },
+    }) as unknown as RenderedToolCallView;
+
+  const panel = (items: RenderedTimelineItem[], inFlight: boolean) =>
+    renderIn(
+      testApp(),
+      <TranscriptPanel
+        inFlight={inFlight}
+        scroller={null}
+        session={sessionSnapshot({ timelineItems: items })}
+        workers={NO_WORKERS}
+        parentWork={NO_PARENT}
+        workerActions={{ interrupt: () => {} }}
+      />,
+    );
+
+  it("counts up beside a running step", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(T0 + 42_000);
+    panel([person(1, after(0)), group(2, command(after(0), null, true))], true);
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(screen.getByText("43s")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("1m 43s")).toBeInTheDocument();
+  });
+
+  it("says how long a finished group took over its line", async () => {
+    panel(
+      [
+        person(1, after(0)),
+        group(
+          2,
+          command(after(1_000), after(3_000)),
+          call(after(3_000), after(71_000)),
+        ),
+        said(3, after(72_000)),
+      ],
+      false,
+    );
+    const line = document.querySelector("[aria-expanded] span.truncate")!;
+    expect(line.textContent).toBe("Read 1 file, ran 1 command");
+    await userEvent.hover(line);
+    expect(
+      await screen.findByText("Took 1m 10s", {}, { timeout: 2000 }),
+    ).toBeInTheDocument();
+  });
+});

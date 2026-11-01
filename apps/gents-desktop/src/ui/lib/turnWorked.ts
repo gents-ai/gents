@@ -51,3 +51,25 @@ export function turnsWorked(
   }
   return worked;
 }
+
+/** How long a finished group of steps took: from its first call's start to
+    its last call's end. Null while any runs or when the times can't be told. */
+export function groupTook(tools: readonly RenderedToolCallView[]): number | null {
+  let start: number | null = null;
+  let end: number | null = null;
+  for (const tool of tools) {
+    if (tool.statusKind === "running") return null;
+    const began = at(tool.startedAt);
+    const done = at(tool.completedAt);
+    if (began === null || done === null || done < began) return null;
+    if (start === null || began < start) start = began;
+    if (end === null || done > end) end = done;
+  }
+  if (start === null || end === null) return null;
+  const ms = end - start;
+  return ms > ABSURD_TURN_MS ? null : ms;
+}
+
+/** When a running call began, for a time that counts up from it. */
+export const runningSince = (tool: RenderedToolCallView | undefined) =>
+  tool?.statusKind === "running" ? at(tool.startedAt) : null;
