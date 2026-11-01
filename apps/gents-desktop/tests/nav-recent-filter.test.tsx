@@ -98,31 +98,55 @@ describe("the side nav's recent sessions filter", () => {
     }
   });
 
-  it("leaves out sessions another session started until that choice is checked", async () => {
+  it("leaves out sessions another session started until the menu shows them", async () => {
     const { u } = showNav();
     expect(recentTitles()).toEqual(["Busy", "Done"]);
-    const filter = screen.getByRole("button", { name: "Filter recent sessions" });
-    expect(filter).not.toHaveClass("text-foreground");
+    const menu = screen.getByRole("button", { name: "Recent sessions options" });
+    expect(menu).not.toHaveClass("text-foreground");
 
-    await u.click(filter);
-    (await screen.findByRole("menuitem", { name: /Started by/ })).focus();
-    await u.keyboard("{ArrowRight}");
-    await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(1));
-    const sources = within(screen.getAllByRole("menu").at(-1)!);
-    expect(
-      sources.getByRole("menuitemcheckbox", { name: /Another session/ }),
-    ).toHaveAttribute("aria-checked", "false");
-    await u.click(sources.getByRole("menuitemcheckbox", { name: /Another session/ }));
+    await u.click(menu);
+    const show = await screen.findByRole("menuitemcheckbox", {
+      name: "Show sessions started by other sessions",
+    });
+    expect(show).toHaveAttribute("aria-checked", "false");
+    await u.click(show);
 
     await waitFor(() => expect(recentTitles()).toEqual(["Worker", "Busy", "Done"]));
-    expect(filter).toHaveClass("text-foreground");
+    expect(menu).toHaveClass("text-foreground");
+  });
+
+  it("offers every agent on the node, those without recent sessions too", async () => {
+    renderIn(
+      testApp({
+        deployments: [
+          node({
+            sessions,
+            agents: [
+              { agentId: "default", displayName: "Default" },
+              { agentId: "pack-worker", displayName: "Pack worker" },
+            ],
+          }),
+        ],
+        selection: { nodeDid: deployment.nodeDid },
+      }),
+      <TooltipProvider>
+        <NavPanel route={{ name: "sessions" }} settings={null} syncRow={false} />
+      </TooltipProvider>,
+    );
+    const u = userEvent.setup({ pointerEventsCheck: 0 });
+    await u.click(screen.getByRole("button", { name: "Recent sessions options" }));
+    (await screen.findByRole("menuitem", { name: /Agent/ })).focus();
+    await u.keyboard("{ArrowRight}");
+    expect(
+      await screen.findByRole("menuitemcheckbox", { name: /Pack worker/ }),
+    ).toBeInTheDocument();
   });
 
   it("starts with every state checked, and hides a state when it is unchecked", async () => {
     const { u } = showNav();
     expect(recentTitles()).toEqual(["Busy", "Done"]);
 
-    await u.click(screen.getByRole("button", { name: "Filter recent sessions" }));
+    await u.click(screen.getByRole("button", { name: "Recent sessions options" }));
     /* a pointer both hovers the submenu open and clicks it, which can close it again */
     (await screen.findByRole("menuitem", { name: /State/ })).focus();
     await u.keyboard("{ArrowRight}");
