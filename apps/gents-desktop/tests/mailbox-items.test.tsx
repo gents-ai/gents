@@ -513,6 +513,24 @@ describe("a question in the mailbox", () => {
     expect(within(dialog()).getByRole("heading", { name: "Second" })).toBeVisible();
   });
 
+  it("keeps the arrow keys working past a question onto an item without one", () => {
+    renderMailbox(
+      mailboxWith([
+        { ...questionItem({}), createdAt: new Date().toISOString() },
+        item({ itemId: "b", title: "Second" }),
+        item({ itemId: "c", title: "Third", createdAt: "2020-01-01T00:00:00Z" }),
+      ]),
+    );
+    open("Backend");
+    /* the keys go where focus is, as a keyboard's do */
+    const press = (key: string) => fireEvent.keyDown(document.activeElement!, { key });
+    press("ArrowRight");
+    expect(within(dialog()).getByRole("heading", { name: "Second" })).toBeVisible();
+    expect(dialog()).toContainElement(document.activeElement as HTMLElement);
+    press("ArrowRight");
+    expect(within(dialog()).getByRole("heading", { name: "Third" })).toBeVisible();
+  });
+
   it("shows a malformed question as its details", () => {
     for (const bad of [
       {
