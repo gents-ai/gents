@@ -210,6 +210,29 @@ test.describe("nav modes", () => {
     expect(places.collapsed!.x).toBeCloseTo(places.hover!.x, 0);
   });
 
+  test("an expanded nav names a row's key only once the pointer rests on it", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    await page.evaluate(() =>
+      localStorage.setItem(
+        "gents-preferences",
+        JSON.stringify({ state: { nav: "expanded" }, version: 1 }),
+      ),
+    );
+    await page.reload();
+    const row = page.locator("[data-ground=window] a", { hasText: "Mailbox" }).first();
+    const hint = row.locator("span[aria-hidden].font-mono");
+    const opacity = () => hint.evaluate((el) => getComputedStyle(el).opacity);
+    expect(await opacity()).toBe("0");
+    await row.hover();
+    /* a sweep down the nav passes before it shows */
+    await page.waitForTimeout(150);
+    expect(await opacity()).toBe("0");
+    await expect.poll(opacity).toBe("1");
+  });
+
   test("an expanded nav holds search and history by the mark", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoHarness(page);
