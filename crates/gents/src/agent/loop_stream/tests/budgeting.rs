@@ -1146,6 +1146,7 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
         transport_backoff: Vec::new(),
         max_resample: 0,
         allow_repair: false,
+        account_hops: 0,
     };
 
     let stream = run_loop_stream(

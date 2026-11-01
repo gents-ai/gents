@@ -4,7 +4,7 @@ pub const AGENT_OUTPUT_SEGMENT_FIELDS: &str = "node_did requester_did session_id
 request_doc_id source ordinal writer runs payload close created_at _docID";
 
 pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id node_did requester_did \
-request_doc_id publication outcome sequence role native_id blocks created_at _docID";
+request_doc_id publication outcome sequence role native_id native_request_id blocks created_at _docID";
 
 #[derive(Debug, Clone)]
 pub struct OutputSegmentRow {

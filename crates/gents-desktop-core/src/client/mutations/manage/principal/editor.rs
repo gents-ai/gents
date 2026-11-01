@@ -1,7 +1,9 @@
 use anyhow::{ensure, Context, Result};
 use gents::config_client::{
+    backend_pool_members,
     patch::{SelfConfigPatch, SelfConfigTarget},
-    read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn,
+    read_desired_state_record_in_txn, set_backend_rotation_in_txn, BackendRotation, ConfigAccess,
+    ConfigApplyTxn, RotationOutcome,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -139,6 +141,29 @@ pub async fn save_backend_authentication_on(
                 &[(SelfConfigTarget::InferenceBackend, id.to_owned(), patch.clone())]).await
         })
     }).await
+}
+
+/// Switches a subscription backend between one account and the account pool
+/// through the shared operator write. A caller holding a revision gets the same
+/// stale-edit refusal as the authentication control.
+pub async fn set_backend_rotation_on(
+    access: &ConfigAccess,
+    node_did: &str,
+    id: &str,
+    expected: Option<&ConfigEditorRevision>,
+    rotation: BackendRotation,
+) -> Result<RotationOutcome> {
+    let backend = access.transact_write("client.backend.rotation.save", |txn| {
+        Box::pin(async move {
+            if let Some(expected) = expected {
+                let (current, _) = read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
+                ensure!(revision_matches(Some(expected), Some(&current)), "Configuration changed since Accounts opened. Reopen Accounts before changing the account pool.");
+            }
+            set_backend_rotation_in_txn(txn, node_did, id, rotation).await
+        })
+    }).await?;
+    let members = backend_pool_members(access, &backend).await?;
+    Ok(RotationOutcome { backend, members })
 }
 
 /// A committed save remains successful when its follow-up observation fails.
@@ -389,6 +414,138 @@ mod tests {
         )
         .await?;
         assert!(!public.content.contains("replacement-private-key"));
+        Ok(())
+    }
+
+    async fn claude_backend(access: &ConfigAccess) -> Result<()> {
+        let backend: gents::InferenceBackend = serde_json::from_value(json!({
+            "node_did":"did:test:editor","backend_id":"claude","name":"Claude",
+            "provider_kind":"ClaudeCliSubscription","endpoint":"claude-cli://subscription",
+            "auth":{"kind":"node_oauth"}
+        }))?;
+        gents::config_client::write_inference_backend_document(access, &backend).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn backend_rotation_round_trips_and_keeps_the_other_fields() -> Result<()> {
+        let access = fixture().await?;
+        claude_backend(&access).await?;
+        let did = "did:test:editor";
+        let (revision, before) = read_backend_authentication_on(&access, did, "claude").await?;
+        let pool = set_backend_rotation_on(
+            &access,
+            did,
+            "claude",
+            Some(&revision),
+            BackendRotation::Pool {
+                allow_overage: Some(true),
+            },
+        )
+        .await?;
+        assert_eq!(
+            pool.backend.auth,
+            gents::document_config::BackendAuth::NodeOAuthPool {
+                allow_overage: true
+            }
+        );
+        let (revision, stored) = read_backend_authentication_on(&access, did, "claude").await?;
+        assert_eq!(stored.auth, pool.backend.auth);
+        assert_eq!(stored.endpoint, before.endpoint);
+        assert_eq!(stored.name, before.name);
+        let kept = set_backend_rotation_on(
+            &access,
+            did,
+            "claude",
+            Some(&revision),
+            BackendRotation::Pool {
+                allow_overage: None,
+            },
+        )
+        .await?;
+        assert_eq!(kept.backend.auth.pool_allow_overage(), Some(true));
+        let (revision, _) = read_backend_authentication_on(&access, did, "claude").await?;
+        let single = set_backend_rotation_on(
+            &access,
+            did,
+            "claude",
+            Some(&revision),
+            BackendRotation::Single,
+        )
+        .await?;
+        assert_eq!(
+            single.backend.auth,
+            gents::document_config::BackendAuth::NodeOAuth { account_ref: None }
+        );
+        assert!(single.members.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn backend_rotation_refuses_a_stale_revision_and_changes_nothing() -> Result<()> {
+        let access = fixture().await?;
+        claude_backend(&access).await?;
+        let did = "did:test:editor";
+        let (stale, _) = read_backend_authentication_on(&access, did, "claude").await?;
+        set_backend_rotation_on(
+            &access,
+            did,
+            "claude",
+            None,
+            BackendRotation::Pool {
+                allow_overage: None,
+            },
+        )
+        .await?;
+        let error = set_backend_rotation_on(
+            &access,
+            did,
+            "claude",
+            Some(&stale),
+            BackendRotation::Single,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("Configuration changed"),
+            "{error:#}"
+        );
+        let (_, stored) = read_backend_authentication_on(&access, did, "claude").await?;
+        assert_eq!(stored.auth.pool_allow_overage(), Some(false));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn backend_rotation_refuses_a_backend_that_cannot_rotate() -> Result<()> {
+        let access = fixture().await?;
+        let did = "did:test:editor";
+        let (revision, _) = read_backend_authentication_on(&access, did, "backend").await?;
+        let error = set_backend_rotation_on(
+            &access,
+            did,
+            "backend",
+            Some(&revision),
+            BackendRotation::Pool {
+                allow_overage: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("subscription"), "{error:#}");
+        let (after, stored) = read_backend_authentication_on(&access, did, "backend").await?;
+        assert_eq!(after, revision);
+        assert!(matches!(
+            stored.auth,
+            gents::document_config::BackendAuth::ApiKey { .. }
+        ));
+        let missing =
+            set_backend_rotation_on(&access, did, "absent", None, BackendRotation::Single)
+                .await
+                .unwrap_err();
+        assert!(
+            missing.to_string().contains("does not exist"),
+            "{missing:#}"
+        );
         Ok(())
     }
 

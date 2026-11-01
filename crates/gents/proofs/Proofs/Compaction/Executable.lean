@@ -355,7 +355,7 @@ theorem multiple_native_results_cannot_fit_one_row :
           , outcome := .complete, role := .user, publication := .toolDelivery physical }
       , key := "multi", sequence := 7, nativeId := none, blocks := [], createdAt := 0 }
     let native : CanonicalOutput.ReconstructedMessage :=
-      ⟨.user, none,
+      ⟨.user, none, none,
         [.toolResult physical "1" none [], .toolResult physical "1" none []]⟩
     PromptView.kindMatches row message native = false := by
   native_decide

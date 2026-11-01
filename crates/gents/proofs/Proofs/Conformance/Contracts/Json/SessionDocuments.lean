@@ -157,7 +157,8 @@ private def publicationJson : CanonicalOutput.MessagePublication → Json
 private def messageJson (message : CanonicalOutput.MessageEnvelope) : Json := Json.mkObj
   [("doc_id", toJson message.header.id), ("session", toJson message.header.session),
    ("message_key", toJson message.key), ("sequence", toJson message.sequence),
-   ("native_id", toJson message.nativeId), ("created_at", toJson message.createdAt),
+   ("native_id", toJson message.nativeId),
+   ("native_request_id", toJson message.nativeRequestId), ("created_at", toJson message.createdAt),
    ("request_doc_id", toJson message.header.request),
    ("origin_header_id", toJson message.header.origin),
    ("payload_refs", toJson (message.header.refs.map fun ref => Json.mkObj

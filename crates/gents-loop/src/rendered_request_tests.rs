@@ -76,6 +76,7 @@ fn tool_result_message(id: &str, call_id: Option<&str>, text: &str) -> Message {
 
 fn assistant_with_tool_call(id: Option<&str>, tool_call_id: &str) -> Message {
     Message::Assistant {
+        request_id: None,
         id: id.map(str::to_string),
         content: vec![AssistantContent::ToolCall(ToolCall::new(
             tool_call_id.to_string(),

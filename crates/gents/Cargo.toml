@@ -35,6 +35,8 @@ ts-rs = { version = "10.1", optional = true, default-features = false, features 
 anyhow.workspace = true
 async-stream = "0.3"
 async-trait = "0.1"
+# RS256 for Google service account assertions; the same build rustls already links.
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
 base64.workspace = true
 bs58 = "0.5"
 bytes.workspace = true
@@ -47,6 +49,7 @@ cursor.workspace = true
 defra-core.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
+gents-claude = { workspace = true, features = ["transport"] }
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 gents-migration = { path = "../gents-migration" }

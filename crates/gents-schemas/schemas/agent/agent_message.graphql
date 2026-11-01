@@ -9,6 +9,7 @@ type AgentMessage @branchable @index(fields: ["node_did", "session_id", "sequenc
     sequence: Int @index @immutable
     role: String @immutable
     native_id: String @immutable
+    native_request_id: String @immutable
     blocks: JSON @immutable
     created_at: String @index @immutable
 }

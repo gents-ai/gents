@@ -53,6 +53,7 @@ def outputCasesJson : Json := toJson <|
     List (Option (List String) × Option String)).map fun (supported, effort) => Json.mkObj [
       ("schema", schema.getD .null), ("supported", toJson supported),
       ("effort", toJson effort),
-      ("expected", (PromptAssembly.ClaudeOutput.select supported effort schema).toJson.getD .null)]
+      ("expected", (PromptAssembly.ClaudeOutput.select PromptAssembly.ClaudeBody.sonnet5
+        PromptAssembly.ClaudeBody.interactiveTurn supported effort schema).toJson.getD .null)]
 
 end Conformance.CompactionCheckpoint

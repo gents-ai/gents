@@ -46,7 +46,11 @@ where
     http_client::Error::Instance(Box::new(error))
 }
 
-fn observe(usage: &Option<Arc<UsageReporter>>, headers: &HeaderMap, source: UsageSource) {
+pub(crate) fn observe(
+    usage: &Option<Arc<UsageReporter>>,
+    headers: &HeaderMap,
+    source: UsageSource,
+) {
     if let Some(usage) = usage {
         usage.observe(headers, source);
     }

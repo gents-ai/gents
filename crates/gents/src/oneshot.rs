@@ -129,6 +129,10 @@ where
         crate::rendered_request::CaptureScopeKind::OneShot,
     );
     config.replay.issuer = replay_issuer;
+    crate::claude_request_context::apply(
+        &mut config,
+        crate::claude_request_context::for_one_shot(agent).as_ref(),
+    )?;
     run_oneshot_owned(
         node,
         agent,

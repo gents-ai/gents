@@ -880,7 +880,11 @@ impl AssistantTurnAccumulator {
 
     fn build_message(&mut self) -> Option<CompletionMessage> {
         let content = std::mem::take(&mut self.content);
-        (!content.is_empty()).then_some(CompletionMessage::Assistant { id: None, content })
+        (!content.is_empty()).then_some(CompletionMessage::Assistant {
+            request_id: None,
+            id: None,
+            content,
+        })
     }
 
     fn has_content(&self) -> bool {

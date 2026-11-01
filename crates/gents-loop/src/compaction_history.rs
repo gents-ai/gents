@@ -53,7 +53,11 @@ pub fn strip_tool_results_sourced(
     } in messages
     {
         match message {
-            Message::Assistant { id, content } => {
+            Message::Assistant {
+                id,
+                request_id,
+                content,
+            } => {
                 let opens_turn = content
                     .iter()
                     .any(|item| matches!(item, AssistantContent::ToolCall(_)));
@@ -70,7 +74,11 @@ pub fn strip_tool_results_sourced(
                 stripped_messages.push(SourcedMessage {
                     source_index,
                     block_indices,
-                    message: Message::Assistant { id, content },
+                    message: Message::Assistant {
+                        request_id,
+                        id,
+                        content,
+                    },
                 });
             }
             Message::User { content } => {
@@ -150,7 +158,11 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
             message,
         } = sourced;
         match message {
-            Message::Assistant { id, content } => {
+            Message::Assistant {
+                id,
+                request_id,
+                content,
+            } => {
                 let resolved = &resolved_per_turn[index];
                 let mut announced: rapidhash::RapidHashSet<String> =
                     rapidhash::RapidHashSet::default();
@@ -178,7 +190,11 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
                     kept_messages.push(SourcedMessage {
                         source_index,
                         block_indices: kept_indices,
-                        message: Message::Assistant { id, content: kept },
+                        message: Message::Assistant {
+                            request_id,
+                            id,
+                            content: kept,
+                        },
                     });
                 }
             }
@@ -208,7 +224,11 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
     } in messages
     {
         match message {
-            Message::Assistant { id, content } => {
+            Message::Assistant {
+                id,
+                request_id,
+                content,
+            } => {
                 pending_calls.clear();
                 for item in content.iter() {
                     if let AssistantContent::ToolCall(tool_call) = item {
@@ -218,7 +238,11 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
                 kept_messages.push(SourcedMessage {
                     source_index,
                     block_indices,
-                    message: Message::Assistant { id, content },
+                    message: Message::Assistant {
+                        request_id,
+                        id,
+                        content,
+                    },
                 });
             }
             Message::User { content } => {
@@ -285,7 +309,11 @@ pub fn normalize_assistant_content_order_sourced(
             } = sourced;
             let mut block_indices = block_indices;
             let message = match message {
-                Message::Assistant { id, content } => {
+                Message::Assistant {
+                    id,
+                    request_id,
+                    content,
+                } => {
                     let mut text = Vec::new();
                     let mut middle = Vec::new();
                     let mut calls = Vec::new();
@@ -301,6 +329,7 @@ pub fn normalize_assistant_content_order_sourced(
                     block_indices = ordered.iter().filter_map(|(index, _)| *index).collect();
                     let ordered = ordered.into_iter().map(|(_, item)| item).collect();
                     Message::Assistant {
+                        request_id,
                         id,
                         content: ordered,
                     }

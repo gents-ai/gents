@@ -713,6 +713,7 @@ async fn publish_native_tool_notification(
         "canonical tool notification presentation does not reproduce rendered content"
     );
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: message_key.to_owned(),
         session_id: parent.session_id.clone(),
         node_did: parent.node_did.clone(),

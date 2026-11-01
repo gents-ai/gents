@@ -63,12 +63,33 @@ impl DocumentRuntimeView {
         pick: crate::oauth_credential::AccountPick<'_>,
     ) -> bool {
         crate::oauth_credential::pick_oauth_credential(
-            self.oauth_credentials.values().map(|record| &record.value),
+            self.oauth_rows(),
             &self.node.value.node_did,
             provider,
             pick,
         )
         .is_some()
+    }
+
+    fn oauth_rows(&self) -> impl Iterator<Item = &OAuthCredential> {
+        self.oauth_credentials.values().map(|record| &record.value)
+    }
+
+    /// The enabled accounts a backend rotates, as credential ids in rotation
+    /// order; empty unless the backend rotates an account pool. The runtime's
+    /// pool build resolves the same rows.
+    pub(super) fn oauth_pool_ids(&self, backend: &InferenceBackend) -> Vec<String> {
+        if !matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
+            return Vec::new();
+        }
+        crate::oauth_credential::pick_oauth_pool(
+            self.oauth_rows(),
+            &self.node.value.node_did,
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        )
+        .into_iter()
+        .map(|row| row.credential_id.clone())
+        .collect()
     }
 
     pub(crate) fn has_unresolved_agent_references(&self) -> bool {

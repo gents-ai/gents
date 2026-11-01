@@ -77,18 +77,34 @@ fn bound_split_parts(
         .collect()
 }
 
+/// The identifiers a provider stream reported for its assistant message.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ProviderIds {
+    pub(super) message_id: Option<String>,
+    pub(super) request_id: Option<String>,
+}
+
+impl ProviderIds {
+    /// Records the identifiers on an assistant message; follow-up Responses
+    /// requests reference the provider message id, and the Claude request
+    /// carries the previous response's request id.
+    pub(super) fn stamp(&self, message: &mut Message) {
+        if let Message::Assistant { id, request_id, .. } = message {
+            id.clone_from(&self.message_id);
+            request_id.clone_from(&self.request_id);
+        }
+    }
+}
+
 pub(super) fn close_streaming_turn(
     new_messages: &mut Vec<TaggedMessage>,
     accumulator: &mut AssistantTurnAccumulator,
-    message_id: Option<String>,
+    ids: ProviderIds,
     assistant_source: Option<crate::claude_messages_body::ReplayTag>,
     pending_results: Vec<(ToolCall, String, Vec<ToolResultContent>)>,
 ) -> Vec<LoopStreamItem> {
     if let Some(mut assistant_message) = accumulator.take_message() {
-        // Follow-up Responses requests reference the provider message id.
-        if let Message::Assistant { id, .. } = &mut assistant_message {
-            *id = message_id;
-        }
+        ids.stamp(&mut assistant_message);
         new_messages.push(TaggedMessage {
             message: assistant_message,
             source: assistant_source,
@@ -163,6 +179,7 @@ mod tests {
             let messages = vec![
                 Message::user("draw it"),
                 Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![AssistantContent::ToolCall(call)],
                 },

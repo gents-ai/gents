@@ -144,6 +144,7 @@ mod tests {
         let preview = visible_reply_preview(&Message::assistant("界".repeat(300))).unwrap();
         assert_eq!(preview.chars().count(), 240);
         let reasoning = Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![
                 gents_protocol::message::AssistantContent::Reasoning(

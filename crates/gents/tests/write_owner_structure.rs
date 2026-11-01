@@ -998,7 +998,11 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/provider_usage.rs",
     "crates/gents-loop/src/rendered_request/transport.rs",
     "crates/gents/src/chatgpt_codex.rs",
-    "crates/gents/src/claude_messages.rs",
+    "crates/gents/src/claude_messages/error.rs",
+    "crates/gents/src/claude_messages/mod.rs",
+    "crates/gents/src/claude_messages/send.rs",
+    "crates/gents/src/claude_messages/sse.rs",
+    "crates/gents/src/claude_messages/transport.rs",
     "crates/gents/src/claude_subscription.rs",
     "crates/gents/src/inference_http.rs",
     "crates/gents/src/llm/backend_client.rs",
@@ -1572,6 +1576,7 @@ fn ambient_context_counts_statics_outside_test_items() {
 /// which failure occurred. They return module-owned `thiserror` enums and
 /// classifiers match those enums; application code may use `anyhow`.
 const OWNER_MODULES: &[&str] = &[
+    "crates/gents-claude/src",
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
     "crates/gents-migration/src",

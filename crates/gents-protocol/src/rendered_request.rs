@@ -26,6 +26,16 @@ const COMPLETION_REQUEST_PATHS: &[(&str, RenderedRequestSource)] = &[
         RenderedRequestSource::OpenAiChatCompletions,
     ),
     ("/messages", RenderedRequestSource::ClaudeCliSubscription),
+    // Amazon Bedrock's streaming invoke of a Claude model: `/model/<id>/invoke-with-response-stream`.
+    (
+        "/invoke-with-response-stream",
+        RenderedRequestSource::ClaudeCliSubscription,
+    ),
+    // Google Vertex AI's streaming predict of a Claude model.
+    (
+        ":streamRawPredict",
+        RenderedRequestSource::ClaudeCliSubscription,
+    ),
 ];
 
 /// The provider wire shape a captured body was actually sent on, derived from
@@ -748,6 +758,28 @@ mod calibrated_components_tests {
             compaction_reason: ContextCompactionReason::BelowThreshold,
             pre_compaction_input_tokens: None,
         }
+    }
+
+    #[test]
+    fn completion_request_paths_include_claude_messages_and_the_bedrock_invoke() {
+        for (path, source) in [
+            ("/v1/messages", RenderedRequestSource::ClaudeCliSubscription),
+            (
+                "/model/us.anthropic.claude-sonnet-5/invoke-with-response-stream",
+                RenderedRequestSource::ClaudeCliSubscription,
+            ),
+            (
+                "/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-sonnet-5:streamRawPredict",
+                RenderedRequestSource::ClaudeCliSubscription,
+            ),
+            ("/v1/responses", RenderedRequestSource::OpenAiResponses),
+        ] {
+            assert_eq!(RenderedRequestSource::for_request_path(path), Some(source));
+        }
+        assert_eq!(
+            RenderedRequestSource::for_request_path("/model/x/invoke"),
+            None
+        );
     }
 
     #[test]

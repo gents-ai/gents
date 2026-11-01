@@ -322,7 +322,7 @@ theorem native_result_uses_provider_key (message : MessageEnvelope)
     (physical : DocId) (id : String) (callId : Option String)
     (parts : List (ResultPart (List UInt8)))
     (hpublication : message.header.publication = .toolDelivery physical) :
-    nativeKind? message ⟨.user, none, [.toolResult physical id callId parts]⟩ =
+    nativeKind? message ⟨.user, none, none, [.toolResult physical id callId parts]⟩ =
       some (.toolResult (providerCallSymbol id callId)
         ⟨message.header.session, physical, message.header.id⟩) := by
   simp [nativeKind?, nativeToolCallSymbols, nativeToolResultFacts,
@@ -330,7 +330,7 @@ theorem native_result_uses_provider_key (message : MessageEnvelope)
 
 theorem ordinary_notification_is_not_a_native_result (message : MessageEnvelope)
     (bytes : List UInt8) :
-    nativeKind? message ⟨.user, none, [.text bytes]⟩ = some .ordinary := by
+    nativeKind? message ⟨.user, none, none, [.text bytes]⟩ = some .ordinary := by
   simp [nativeKind?, nativeToolCallSymbols, nativeToolResultFacts]
 
 theorem native_row_preserves_canonical_identity

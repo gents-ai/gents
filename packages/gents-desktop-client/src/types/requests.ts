@@ -4,6 +4,7 @@ import type { NodeConfigSaveRequest as GeneratedNodeConfigSaveRequest } from "..
 import type { DefaultAgentSetRequest as GeneratedDefaultAgentSetRequest } from "../generated/DefaultAgentSetRequest.js";
 import type { BackendDeleteRequest as GeneratedBackendDeleteRequest } from "../generated/BackendDeleteRequest.js";
 import type { BackendSaveRequest as GeneratedBackendSaveRequest } from "../generated/BackendSaveRequest.js";
+import type { BackendRotationSetRequest as GeneratedBackendRotationSetRequest } from "../generated/BackendRotationSetRequest.js";
 import type { AgentDeleteRequest as GeneratedAgentDeleteRequest } from "../generated/AgentDeleteRequest.js";
 import type { ContextDeleteRequest as GeneratedContextDeleteRequest } from "../generated/ContextDeleteRequest.js";
 import type { AgentSaveRequest as GeneratedAgentSaveRequest } from "../generated/AgentSaveRequest.js";
@@ -37,6 +38,7 @@ export type NodeConfigSaveRequest = GeneratedNodeConfigSaveRequest;
 export type DefaultAgentSetRequest = GeneratedDefaultAgentSetRequest;
 export type BackendDeleteRequest = GeneratedBackendDeleteRequest;
 export type BackendSaveRequest = GeneratedBackendSaveRequest;
+export type BackendRotationSetRequest = GeneratedBackendRotationSetRequest;
 export type AgentDeleteRequest = GeneratedAgentDeleteRequest;
 export type ContextDeleteRequest = GeneratedContextDeleteRequest;
 export type AgentSaveRequest = GeneratedAgentSaveRequest;

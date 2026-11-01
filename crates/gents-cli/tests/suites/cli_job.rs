@@ -353,6 +353,7 @@ pub(crate) async fn seed_admission(
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(node_did, session, Some(node_did), 1),
         session_id: session.into(),
         node_did: node_did.into(),
@@ -436,6 +437,7 @@ pub(crate) async fn seed_receipt(
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: key,
         session_id: session.into(),
         node_did: node_did.into(),

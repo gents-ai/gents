@@ -1180,6 +1180,7 @@ mod tests {
                 None,
                 2,
                 gents_protocol::message::Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![gents_protocol::message::AssistantContent::Reasoning(
                         gents_protocol::message::Reasoning {
@@ -1212,6 +1213,7 @@ mod tests {
                 None,
                 4,
                 gents_protocol::message::Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![
                         gents_protocol::message::AssistantContent::Reasoning(

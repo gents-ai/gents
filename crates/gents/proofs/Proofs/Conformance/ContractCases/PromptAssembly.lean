@@ -894,30 +894,81 @@ def promptAssemblyClaudeMapCases : List PromptAssemblyClaudeMapCase :=
 
 structure PromptAssemblyClaudeBodyCase where
   name : String
+  /-- The model name the case sends; its facts are `facts`. -/
+  model : String
+  /-- The text of the history's first user message, which the version fingerprint hashes. -/
+  firstUserText : String
+  origin : PromptAssembly.ClaudeOrigin.Origin
+  promptId : String
+  /-- `system[0]`; `claudeFingerprintPlaceholder` stands for the SHA-256 fingerprint of
+  `firstUserText`, which the Rust attribution owner computes. -/
+  attribution : String
   preamble : Option String
   rows : List String
   tools : List String
   system : List String
+  systemMarked : List Bool
   toolsPresent : Bool
   supportedEfforts : Option (List String) := none
   effort : Option String := none
   selectedEffort : Option String := none
+  facts : PromptAssembly.ClaudeBody.ModelFacts
+  request : PromptAssembly.ClaudeBody.Request
+  decision : PromptAssembly.ClaudeBody.Decision
   deriving Repr
 
 private def msgTag : PromptAssembly.ClaudeMap.Msg → String
   | .system t => "system:" ++ t
   | .other tag => "other:" ++ tag
 
+def claudeFingerprintPlaceholder : String := "{fingerprint}"
+
+def claudeBodyPromptId : String := "0f8e9a3c-1b2d-4c5e-8f90-a1b2c3d4e5f6"
+
+def claudeBodyOrigin : PromptAssembly.ClaudeOrigin.Origin :=
+  { cause := .client, rootClient := true, scheduled := false, kind := .turn,
+    appendsSystemPrompt := false }
+
+private def isUserRow : PromptAssembly.ClaudeMap.Msg → Bool
+  | .other "user" => true
+  | _ => false
+
 private def claudeBodyCase (name : String) (preamble : Option String)
-    (rows : List PromptAssembly.ClaudeMap.Msg) (tools : List String) :
+    (rows : List PromptAssembly.ClaudeMap.Msg) (tools : List String)
+    (supported : Option (List String) := none) (effort : Option String := none) :
     PromptAssemblyClaudeBodyCase :=
   let (sys, _) := PromptAssembly.ClaudeMap.splitSystem rows
+  let origin := claudeBodyOrigin
+  let mode := PromptAssembly.ClaudeOrigin.wireMode origin
+  let position := PromptAssembly.ClaudeOrigin.turnPosition origin (rows.filter isUserRow).length false
+  let attribution := PromptAssembly.ClaudeAttribution.header
+    { version := "2.1.311", fingerprint := claudeFingerprintPlaceholder, entrypoint := mode.entrypoint,
+      provider := .firstParty, firstPartyBaseUrl := true, workload := mode.workload,
+      subagent := mode.subagent, promptId := some claudeBodyPromptId,
+      turnOrigin := PromptAssembly.ClaudeOrigin.turnOrigin origin,
+      promptIndex := position.map (·.1), turnIndex := position.map (·.2) }
+  let blocks := PromptAssembly.ClaudeMap.systemBlocks
+    (attribution :: PromptAssembly.ClaudeOrigin.identity origin :: (preamble.toList ++ sys))
+  let selected := PromptAssembly.ClaudeMap.selectedEffort supported effort
+  let request := PromptAssembly.ClaudeBody.interactiveTurn selected
   { name := name
+  , model := "claude-sonnet-5"
+  , firstUserText := "hi"
+  , origin := origin
+  , promptId := claudeBodyPromptId
+  , attribution := attribution
   , preamble := preamble
   , rows := rows.map msgTag
   , tools := tools
-  , system := PromptAssembly.ClaudeMap.systemBlocks preamble sys
-  , toolsPresent := (PromptAssembly.ClaudeMap.toolsField tools).isSome }
+  , system := blocks.map (·.text)
+  , systemMarked := blocks.map (·.marked)
+  , toolsPresent := (PromptAssembly.ClaudeMap.toolsField tools).isSome
+  , supportedEfforts := supported
+  , effort := effort
+  , selectedEffort := selected
+  , facts := PromptAssembly.ClaudeBody.sonnet5
+  , request := request
+  , decision := PromptAssembly.ClaudeBody.evaluate PromptAssembly.ClaudeBody.sonnet5 request }
 
 def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
   [ claudeBodyCase "identity-only" none [.other "user"] []
@@ -926,18 +977,275 @@ def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
       [.system "S1", .other "user", .system "S2", .other "assistant"] ["echo"]
   , claudeBodyCase "system-rows-without-preamble" none
       [.system "workspace context", .other "user"] []
-  , claudeBodyCase "empty-tools-omitted" (some "P") [.other "user"] []
+  , claudeBodyCase "empty-tools-sent-as-empty-list" (some "P") [.other "user"] []
   , claudeBodyCase "two-tools-present" none [.other "user"] ["echo", "list_files"]
+  , claudeBodyCase "empty-preamble-and-rows-dropped" (some "")
+      [.system "", .other "user", .system "S1"] []
+  , claudeBodyCase "second-prompt-advances-the-indices" none
+      [.other "user", .other "assistant", .other "user"] []
   ]
   ++ ([none, some "low", some "medium", some "high", some "xhigh", some "max", some "ultra"].map fun effort =>
-    { (claudeBodyCase ("effort-" ++ effort.getD "absent") none [.other "user"] []) with
-      supportedEfforts := some ["low", "medium", "high", "xhigh", "max"]
-      effort := effort
-      selectedEffort := PromptAssembly.ClaudeMap.selectedEffort
-        (some ["low", "medium", "high", "xhigh", "max"]) effort })
-  ++ [{ (claudeBodyCase "effort-unknown-metadata" none [.other "user"] []) with
-        effort := some "high"
-        selectedEffort := PromptAssembly.ClaudeMap.selectedEffort none (some "high") }]
+    claudeBodyCase ("effort-" ++ effort.getD "absent") none [.other "user"] []
+      (some ["low", "medium", "high", "xhigh", "max"]) effort)
+  ++ [claudeBodyCase "effort-unknown-metadata" none [.other "user"] [] none (some "high")]
+
+structure PromptAssemblyClaudeAttributionCase where
+  name : String
+  fields : PromptAssembly.ClaudeAttribution.Fields
+  header : String
+  deriving Repr
+
+private def attributionCase (name : String) (fields : PromptAssembly.ClaudeAttribution.Fields) :
+    PromptAssemblyClaudeAttributionCase :=
+  { name, fields, header := PromptAssembly.ClaudeAttribution.header fields }
+
+private def firstPartyFields : PromptAssembly.ClaudeAttribution.Fields :=
+  { version := "2.1.311", fingerprint := "7f3", entrypoint := "cli",
+    provider := .firstParty, firstPartyBaseUrl := true }
+
+def promptAssemblyClaudeAttributionCases : List PromptAssemblyClaudeAttributionCase :=
+  [ attributionCase "first_party_minimal" firstPartyFields
+  , attributionCase "first_party_every_field"
+      { firstPartyFields with
+        workload := some "cron", subagent := true,
+        previousRequestId := some "req_011CVz9-Ab_c",
+        promptId := some "0f8e9a3c-1b2d-4c5e-8f90-a1b2c3d4e5f6",
+        turnOrigin := some "user", promptIndex := some 3, turnIndex := some 2,
+        project := some ("claude_proj_01ABCDEFGHJKLMNPQRSTUVWX", "user") }
+  , attributionCase "first_party_invalid_fields_dropped"
+      { firstPartyFields with
+        previousRequestId := some "request_1", promptId := some "not-a-uuid",
+        turnOrigin := some "User", promptIndex := some 0, turnIndex := some 0,
+        project := some ("claude_proj_01ABCDEFGHJKLMNPQRSTUVWX", "team") }
+  , attributionCase "uppercase_prompt_id_accepted"
+      { firstPartyFields with promptId := some "0F8E9A3C-1B2D-4C5E-8F90-A1B2C3D4E5F6" }
+  , attributionCase "request_id_over_36_chars_dropped"
+      { firstPartyFields with previousRequestId := some "req_0123456789012345678901234567890123456" }
+  , attributionCase "index_bounds"
+      { firstPartyFields with promptIndex := some 10000000, turnIndex := some 10000001 }
+  , attributionCase "empty_workload_omitted" { firstPartyFields with workload := some "" }
+  , attributionCase "custom_base_url_keeps_build_fields_only"
+      { firstPartyFields with
+        firstPartyBaseUrl := false, previousRequestId := some "req_abc",
+        gateway := some "env" }
+  , attributionCase "vertex_keeps_cch"
+      { firstPartyFields with provider := .vertex, previousRequestId := some "req_abc" }
+  , attributionCase "bedrock_subagent"
+      { firstPartyFields with provider := .bedrock, entrypoint := "sdk-cli", subagent := true }
+  , attributionCase "gateway_vouched" { firstPartyFields with provider := .gateway, gateway := some "1" }
+  ]
+
+structure PromptAssemblyClaudeOriginCase where
+  name : String
+  origin : PromptAssembly.ClaudeOrigin.Origin
+  mode : PromptAssembly.ClaudeOrigin.WireMode
+  identity : String
+  turnOrigin : Option String
+  /-- `turnPosition` for three prompt rows and a position that was not lost. -/
+  position : Option (Nat × Nat)
+  deriving Repr
+
+open PromptAssembly.ClaudeOrigin in
+def claudeOriginCauseName : Cause → String
+  | .client => "client"
+  | .agentNew => "agent_new"
+  | .taskTrigger => "task_trigger"
+  | .pluginJob => "plugin_job"
+
+open PromptAssembly.ClaudeOrigin in
+def claudeOriginKindName : Kind → String
+  | .turn => "turn"
+  | .compaction => "compaction"
+  | .title => "title"
+  | .oneShot => "one_shot"
+
+open PromptAssembly.ClaudeOrigin in
+/-- Every origin: the mapping is total over a finite input, so the cases are
+exhaustive rather than sampled. -/
+def promptAssemblyClaudeOriginCases : List PromptAssemblyClaudeOriginCase := Id.run do
+  let mut cases : List PromptAssemblyClaudeOriginCase := []
+  for cause in [Cause.client, .agentNew, .taskTrigger, .pluginJob] do
+    for rootClient in [true, false] do
+      for scheduled in [false, true] do
+        for kind in [Kind.turn, .compaction, .title, .oneShot] do
+          for appends in [false, true] do
+            let origin : Origin := { cause, rootClient, scheduled, kind, appendsSystemPrompt := appends }
+            let name := s!"{claudeOriginCauseName cause}-{if rootClient then "root_client" else "root_other"}-"
+              ++ s!"{if scheduled then "scheduled" else "unscheduled"}-{claudeOriginKindName kind}-"
+              ++ s!"{if appends then "appends" else "bare"}"
+            let entry : PromptAssemblyClaudeOriginCase :=
+              { name := name, origin := origin, mode := wireMode origin
+              , identity := identity origin, turnOrigin := turnOrigin origin
+              , position := turnPosition origin 3 false }
+            cases := cases ++ [entry]
+  return cases
+
+structure PromptAssemblyClaudeFieldCase where
+  name : String
+  facts : PromptAssembly.ClaudeBody.ModelFacts
+  request : PromptAssembly.ClaudeBody.Request
+  decision : PromptAssembly.ClaudeBody.Decision
+  deriving Repr
+
+open PromptAssembly.ClaudeBody in
+/-- Representative model fact sets: an always-thinking adaptive model, a
+temperature-free adaptive model that caps effort when thinking is off, an
+adaptive model with a default and a `max` effort, a budget model with effort,
+a budget model without effort, and a model without thinking. -/
+def claudeFieldFactSets : List (String × ModelFacts) :=
+  [ ("opus55", { adaptive := true, alwaysThinks := true, thinkingSupported := true
+                 rejectsDisabled := true, acceptsTemperature := false, effortCapable := true
+                 maxEffort := true, xhighEffort := true, capsEffortWhenDisabled := false
+                 perTurnEffort := true, outputDefault := 128000, outputUpper := 128000
+                 defaultEffort := some "medium" })
+  , ("opus5", { adaptive := true, alwaysThinks := false, thinkingSupported := true
+                rejectsDisabled := false, acceptsTemperature := false, effortCapable := true
+                maxEffort := true, xhighEffort := true, capsEffortWhenDisabled := true
+                perTurnEffort := false, outputDefault := 64000, outputUpper := 128000
+                defaultEffort := some "high" })
+  , ("sonnet46", { adaptive := true, alwaysThinks := false, thinkingSupported := true
+                   rejectsDisabled := false, acceptsTemperature := true, effortCapable := true
+                   maxEffort := true, xhighEffort := false, capsEffortWhenDisabled := false
+                   perTurnEffort := false, outputDefault := 32000, outputUpper := 128000
+                   defaultEffort := none })
+  , ("opus45", { adaptive := false, alwaysThinks := false, thinkingSupported := true
+                 rejectsDisabled := false, acceptsTemperature := true, effortCapable := true
+                 maxEffort := false, xhighEffort := false, capsEffortWhenDisabled := false
+                 perTurnEffort := false, outputDefault := 32000, outputUpper := 64000
+                 defaultEffort := none })
+  , ("haiku45", { adaptive := false, alwaysThinks := false, thinkingSupported := true
+                  rejectsDisabled := false, acceptsTemperature := true, effortCapable := false
+                  maxEffort := false, xhighEffort := false, capsEffortWhenDisabled := false
+                  perTurnEffort := false, outputDefault := 32000, outputUpper := 64000
+                  defaultEffort := none })
+  , ("claude3", { adaptive := false, alwaysThinks := false, thinkingSupported := false
+                  rejectsDisabled := false, acceptsTemperature := true, effortCapable := false
+                  maxEffort := false, xhighEffort := false, capsEffortWhenDisabled := false
+                  perTurnEffort := false, outputDefault := 8192, outputUpper := 8192
+                  defaultEffort := none }) ]
+
+open PromptAssembly.ClaudeBody in
+def claudeFieldBaseRequest : Request :=
+  { thinking := .adaptive, maxTokensOverride := none, requestedEffort := none
+    firstParty := true, firstPartyDefaultUrl := true, experimentalBetasDisabled := false
+    agentic := true, fork := false, displayUpdates := true, contextManagementBeta := true
+    perTurnControlBeta := true, previousMessageId := none }
+
+open PromptAssembly.ClaudeBody in
+def claudeFieldThinkingConfigs : List (String × ThinkingConfig) :=
+  [ ("adaptive", .adaptive), ("disabled", .disabled false), ("mechanical", .disabled true)
+  , ("enabled_default", .enabled none), ("enabled_4000", .enabled (some 4000))
+  , ("enabled_100", .enabled (some 100)), ("enabled_huge", .enabled (some 1000000)) ]
+
+open PromptAssembly.ClaudeBody in
+private def claudeFieldCase (name : String) (facts : ModelFacts) (request : Request) :
+    PromptAssemblyClaudeFieldCase :=
+  { name, facts, request, decision := evaluate facts request }
+
+open PromptAssembly.ClaudeBody in
+/-- Every thinking config against every fact set with each override and each
+requested effort, then the request flags against the decisions they gate. -/
+def promptAssemblyClaudeFieldCases : List PromptAssemblyClaudeFieldCase := Id.run do
+  let mut cases := []
+  for (fname, facts) in claudeFieldFactSets do
+    for (tname, thinking) in claudeFieldThinkingConfigs do
+      for (oname, override) in [("none", none), ("500", some 500), ("2000", some 2000), ("zero", some 0)] do
+        let request := { claudeFieldBaseRequest with thinking, maxTokensOverride := override }
+        cases := cases ++ [claudeFieldCase s!"{fname}-{tname}-override_{oname}" facts request]
+      for effort in ["low", "xhigh", "max", "ultra"] do
+        let request := { claudeFieldBaseRequest with thinking, requestedEffort := some effort }
+        cases := cases ++ [claudeFieldCase s!"{fname}-{tname}-effort_{effort}" facts request]
+  let some (_, opus) := claudeFieldFactSets.head? | return cases
+  for firstParty in [true, false] do
+    for url in [true, false] do
+      for disabled in [false, true] do
+        for (aname, agentic, fork) in [("neither", false, false), ("agentic", true, false), ("fork", false, true)] do
+          for previous in [none, some "msg_01"] do
+            let request := { claudeFieldBaseRequest with
+              firstParty, firstPartyDefaultUrl := url, experimentalBetasDisabled := disabled
+              agentic, fork, previousMessageId := previous }
+            cases := cases ++ [claudeFieldCase
+              s!"diagnostics-fp{firstParty}-url{url}-nobetas{disabled}-{aname}-prev{previous.isSome}" opus request]
+  for (fname, facts) in claudeFieldFactSets do
+    for (tname, thinking) in claudeFieldThinkingConfigs.take 4 do
+      for firstParty in [true, false] do
+        for display in [true, false] do
+          for context in [true, false] do
+            for perTurn in [true, false] do
+              let request := { claudeFieldBaseRequest with
+                thinking, firstParty, displayUpdates := display, contextManagementBeta := context
+                perTurnControlBeta := perTurn }
+              cases := cases ++ [claudeFieldCase
+                s!"gates-{fname}-{tname}-fp{firstParty}-display{display}-context{context}-perturn{perTurn}" facts request]
+  return cases
+
+structure PromptAssemblyClaudeFieldRowCase where
+  name : String
+  isUser : List Bool
+  index : Option Nat
+  deriving Repr
+
+/-- Every sequence of up to four messages, user or not. -/
+def promptAssemblyClaudeFieldRowCases : List PromptAssemblyClaudeFieldRowCase :=
+  let sequences : Nat → List (List Bool) := fun n =>
+    (List.range (2 ^ n)).map fun bits => (List.range n).map fun i => bits / 2 ^ i % 2 == 1
+  (List.range 5).flatMap fun n => (sequences n).map fun isUser =>
+    { name := s!"roles-{String.intercalate "" (isUser.map fun u => if u then "u" else "a")}"
+      isUser, index := PromptAssembly.ClaudeBody.rowIndex isUser }
+
+structure PromptAssemblyClaudeCacheCase where
+  name : String
+  caching : Bool
+  skipWrite : Bool
+  subscriber : Bool
+  mainThread : Bool
+  usingOverage : Bool
+  messages : List PromptAssembly.ClaudeCache.Message
+  placed : List PromptAssembly.ClaudeCache.Placed
+  ttl : PromptAssembly.ClaudeCache.Ttl
+  deriving Repr
+
+private def cacheCase (name : String) (messages : List PromptAssembly.ClaudeCache.Message)
+    (caching : Bool := true) (skipWrite : Bool := false) (subscriber : Bool := true)
+    (mainThread : Bool := true) (usingOverage : Bool := false) : PromptAssemblyClaudeCacheCase :=
+  { name, caching, skipWrite, subscriber, mainThread, usingOverage, messages,
+    placed := PromptAssembly.ClaudeCache.place caching skipWrite messages,
+    ttl := PromptAssembly.ClaudeCache.ttl subscriber mainThread usingOverage }
+
+open PromptAssembly.ClaudeCache in
+def promptAssemblyClaudeCacheCases : List PromptAssemblyClaudeCacheCase :=
+  [ cacheCase "user_text_tail_marked" [⟨.user, .str "hi"⟩]
+  , cacheCase "user_blocks_last_marked"
+      [⟨.user, .blocks [.text "a", .other "tool_result"]⟩]
+  , cacheCase "blank_user_text_dropped_everywhere"
+      [⟨.user, .blocks [.text " ", .text "a"]⟩, ⟨.assistant, .str "ok"⟩,
+       ⟨.user, .blocks [.text "\n\t"]⟩]
+  , cacheCase "assistant_thinking_tail_skipped"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text "a", .thinking]⟩]
+  , cacheCase "assistant_tool_use_tail_marked"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.thinking, .other "tool_use"]⟩]
+  , cacheCase "assistant_empty_text_tail_skipped"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text ""]⟩]
+  , cacheCase "assistant_whitespace_text_tail_marked"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text " "]⟩]
+  , cacheCase "assistant_fallback_tail_skipped"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text "a", .fallback]⟩]
+  , cacheCase "skip_write_marks_previous"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.other "tool_use"]⟩,
+       ⟨.user, .blocks [.other "tool_result"]⟩] (skipWrite := true)
+  , cacheCase "caching_off_marks_nothing" [⟨.user, .str "q"⟩] (caching := false)
+  , cacheCase "empty_user_blocks_unmarked" [⟨.user, .blocks []⟩]
+  , cacheCase "unicode_space_is_blank"
+      [⟨.user, .blocks [.text "\u00A0\u2028", .other "image"]⟩]
+  , cacheCase "subagent_keeps_five_minutes" [⟨.user, .str "q"⟩] (mainThread := false)
+  , cacheCase "overage_keeps_five_minutes" [⟨.user, .str "q"⟩] (usingOverage := true)
+  , cacheCase "api_key_keeps_five_minutes" [⟨.user, .str "q"⟩] (subscriber := false)
+  , cacheCase "per_turn_effort_row_is_skipped"
+      [⟨.user, .str "q"⟩, ⟨.system, .blocks []⟩]
+  , cacheCase "per_turn_effort_row_is_skipped_on_skip_write"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .str "a"⟩, ⟨.user, .str "r"⟩, ⟨.system, .blocks []⟩]
+      (skipWrite := true)
+  ]
 
 structure PromptAssemblyClaudeStreamCase where
   name : String

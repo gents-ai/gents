@@ -684,11 +684,13 @@ mod tests {
             )
             .await;
         let message = Message::Assistant {
+            request_id: None,
             id: Some("cancel-provider-message".into()),
             content: ["cancel-native-tool", "sibling-native-tool"]
                 .into_iter()
                 .map(|id| {
                     AssistantContent::ToolCall(ToolCall {
+                        raw_arguments: None,
                         id: id.into(),
                         call_id: Some(format!("{id}-provider-call")),
                         function: ToolFunction::new(
@@ -959,8 +961,10 @@ mod tests {
             )
             .await;
         let message = Message::Assistant {
+            request_id: None,
             id: Some("custom-provider-message".into()),
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "custom-native-tool".into(),
                 call_id: Some("custom-provider-call".into()),
                 function: ToolFunction::new("bash_unrestricted".into(), serde_json::json!({})),

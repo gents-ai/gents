@@ -57,9 +57,11 @@ async fn publish_hook_action(
         )
         .await;
     let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
         id: Some(format!("hook-assistant-{internal_id}")),
         content: vec![gents_protocol::message::AssistantContent::ToolCall(
             gents_protocol::message::ToolCall {
+                raw_arguments: None,
                 id: internal_id.into(),
                 call_id: None,
                 function: gents_protocol::message::ToolFunction::new(

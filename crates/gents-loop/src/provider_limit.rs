@@ -42,9 +42,16 @@ pub struct ProviderLimitHeaders {
     pub retry_at: Option<DateTime<Utc>>,
     pub reset_at: Option<DateTime<Utc>>,
     pub usage_exhausted: bool,
+    /// Another account of the pool can serve the request now.
+    pub account_rotated: bool,
 }
 
 impl ProviderLimitHeaders {
+    /// The limits an annotated failure text carries; none when it has no marker.
+    pub fn from_text(text: &str) -> Self {
+        Self::parse_marker(split_annotated_body(text).1).unwrap_or_default()
+    }
+
     pub fn from_headers<'a>(
         headers: impl IntoIterator<Item = (&'a str, &'a str)>,
         now: DateTime<Utc>,
@@ -127,6 +134,9 @@ impl ProviderLimitHeaders {
         if self.usage_exhausted {
             marker.push_str(" usage-exhausted");
         }
+        if self.account_rotated {
+            marker.push_str(" account-rotated");
+        }
         marker.push(']');
         marker
     }
@@ -139,11 +149,21 @@ impl ProviderLimitHeaders {
                 Some(("retry-at", value)) => limits.retry_at = Some(parse_rfc3339(value)?),
                 Some(("reset-at", value)) => limits.reset_at = Some(parse_rfc3339(value)?),
                 None if field == "usage-exhausted" => limits.usage_exhausted = true,
+                None if field == "account-rotated" => limits.account_rotated = true,
                 _ => return None,
             }
         }
         Some(limits)
     }
+}
+
+/// `text` with its marker rewritten to say another account of the pool can serve now.
+pub fn mark_account_rotated(text: &str) -> String {
+    ProviderLimitHeaders {
+        account_rotated: true,
+        ..ProviderLimitHeaders::from_text(text)
+    }
+    .annotate(split_annotated_body(text).0)
 }
 
 pub fn split_provider_limit_marker(text: &str) -> (&str, &str) {

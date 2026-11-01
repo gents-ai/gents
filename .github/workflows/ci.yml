@@ -106,9 +106,12 @@ jobs:
 
       - name: Check compiler-tool download recovery
         run: |
-          bash -n .github/scripts/setup-afterburner-toolchains.sh
-          shellcheck .github/scripts/setup-afterburner-toolchains.sh
+          bash -n .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
           python3 .github/scripts/test-afterburner-downloads.py
+
+      - name: Check the macOS toolchain selection
+        run: python3 .github/scripts/test-macos-rust-toolchain.py
 
   publish-control-tests:
     if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
@@ -160,6 +163,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # A Command Line Tools update repointed the default SDK to MacOSX27.2.sdk,
+      # whose libSystem.B.tbd declares arm64e.x1-macos targets that neither
+      # linker on this runner understands. Pin SDKROOT to the SDK of the
+      # developer directory the linker comes from (as release/rc1 does).
+      - name: Select a matching macOS SDK for the linker
+        run: .github/scripts/setup-macos-rust-toolchain.sh
+
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
       # explicitly instead of relying on mutable host toolchain state.
@@ -184,6 +194,9 @@ jobs:
 
       - name: Install protobuf compiler
         run: .github/scripts/setup-protoc.sh
+
+      - name: Install CMake for native dependencies
+        run: bash .github/scripts/setup-cmake.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
@@ -309,7 +322,7 @@ jobs:
         # --no-fail-fast: a node flake in gents-migration must not mask the
         # 140 pure gents-protocol/gents-schemas assertions that run after it.
         run: |
-          cargo test --no-fail-fast \
+          cargo test --no-fail-fast --features gents-claude/transport \
             -p gents-migration \
             -p gents-lens-fixture-add-label \
             -p gents-callback-fixture-create-workspace \
@@ -317,6 +330,7 @@ jobs:
             -p gents-schemas \
             -p gents-codex-protocol \
             -p gents-chatgpt-login \
+            -p gents-claude \
             -p gents-claude-login \
             -p gents-fs-runner \
             -p gents-lean-contract

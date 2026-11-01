@@ -184,6 +184,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
 
     export_types!(
         crate::accounts::BackendAuthenticationView,
+        crate::accounts::BackendRotationView,
+        crate::accounts::PoolAccountView,
+        crate::accounts::BackendRotationSaveRequest,
         ConfiguredActionView,
         crate::host::settings::ConfigEditorEntry,
         gents_desktop_core::client::ConfigEditorDocument,
@@ -267,6 +270,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         AgentDeleteRequest,
         ContextDeleteRequest,
         BackendSaveRequest,
+        BackendRotationSetRequest,
         InferenceProfileSaveRequest,
         ToolsSaveRequest,
         ToolServiceSaveRequest,

@@ -1681,6 +1681,90 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 }
 
 #[tokio::test]
+async fn an_account_pool_agent_follows_its_enabled_accounts() {
+    use crate::config_client::ConfigAccess;
+    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-account-pool"));
+    let did = identity.did().to_string();
+    let default_agent_id = crate::default_agent_id_for_node(&did);
+    bind_default_agent_claude_backend(&node, &did, &default_agent_id).await;
+    let access = ConfigAccess::local(node.clone());
+    let sign_in = |who: &str| {
+        crate::claude_oauth::credential_from_login_tokens(
+            did.clone(),
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &crate::claude_oauth::ClaudeLoginTokens {
+                access_token: format!("access-{who}"),
+                refresh_token: format!("refresh-{who}"),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some(format!("label-{who}")),
+                organization_uuid: Some("org-1".into()),
+                account_uuid: Some(format!("account-{who}")),
+            },
+            chrono::Utc::now(),
+        )
+    };
+    let resolve_context = DocumentResolveContext::for_tests(
+        identity.clone(),
+        ToolCeiling::readonly(),
+        crate::backend_health::BackendHealthMap::new(),
+    );
+    let pool_with = |auth: crate::document_config::BackendAuth| {
+        let node = node.clone();
+        let did = did.clone();
+        let resolve_context = &resolve_context;
+        let default_agent_id = default_agent_id.clone();
+        async move {
+            let mut view = load_document_runtime_view(&node, &did)
+                .await
+                .expect("document view");
+            for backend in view.backends.values_mut() {
+                backend.value.auth = auth.clone();
+            }
+            let snapshot =
+                resolve_document_runtime_snapshot_from_view(&node, resolve_context, &view)
+                    .await
+                    .expect("snapshot");
+            let agent = snapshot
+                .agents
+                .get(&default_agent_id)
+                .unwrap_or_else(|| panic!("agent runs: {:?}", snapshot.unavailable_agents));
+            agent.oauth_pool.clone()
+        }
+    };
+    let pool = crate::document_config::BackendAuth::NodeOAuthPool {
+        allow_overage: false,
+    };
+    let a = store_sign_in(&access, sign_in("a"), None).await.unwrap();
+    let a_id = a.credential.credential_id.clone();
+    assert_eq!(pool_with(pool.clone()).await, vec![a_id.clone()]);
+
+    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
+    let b_id = b.credential.credential_id.clone();
+    let grown = pool_with(pool.clone()).await;
+    assert_eq!(grown.len(), 2, "a sign-in joins the pool: {grown:?}");
+    assert!(grown.contains(&a_id) && grown.contains(&b_id));
+
+    set_account_enabled(&access, &did, &b_id, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        pool_with(pool).await,
+        vec![a_id],
+        "a disabled account leaves the pool"
+    );
+    assert!(
+        pool_with(crate::document_config::BackendAuth::NodeOAuth { account_ref: None })
+            .await
+            .is_empty(),
+        "a single-account backend carries no pool"
+    );
+}
+
+#[tokio::test]
 async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     use crate::config_client::ConfigAccess;
     use crate::oauth_credential::{set_account_enabled, store_sign_in};

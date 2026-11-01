@@ -1723,6 +1723,7 @@ mod tests {
                 timestamp: Some("2026-05-04T12:00:02Z".to_string()),
                 node_did: None,
                 header: gents_protocol::output::TranscriptMessage {
+                    native_request_id: None,
                     message_key: "session-1:2".to_string(),
                     session_id: "session-1".to_string(),
                     node_did: "did:test:agent".to_string(),

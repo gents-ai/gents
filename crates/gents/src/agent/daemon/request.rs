@@ -84,6 +84,7 @@ where
             request,
             aggregate_token_budget,
             self.loop_tools.len(),
+            self.account_hops,
         )?;
         let provider_history = skill_reminders
             .iter()
@@ -454,6 +455,7 @@ where
                             aggregate_token_budget.clone(),
                             effective_seed,
                             context_calibration.clone(),
+                            self.compaction_provider_params(&request).await?,
                         );
                         let projected = provider_view_tagged(history)?;
                         options.max_compacted_prefix_messages =

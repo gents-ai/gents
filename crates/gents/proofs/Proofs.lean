@@ -10,6 +10,7 @@ import Proofs.Scheduling
 import Proofs.Request
 import Proofs.RequestExecutionLease
 import Proofs.InferenceCall
+import Proofs.AccountRotation
 import Proofs.AuxiliaryAdmission
 import Proofs.TitleText
 import Proofs.CrossMachineComposed

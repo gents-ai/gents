@@ -65,6 +65,8 @@ pub enum OAuthRefreshKind {
     ChatGpt,
     Claude,
     Xai,
+    /// A Claude Code cloud gateway sign-in; the credential's `account_id` names the gateway.
+    Gateway,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,6 +310,42 @@ pub fn pick_oauth_credential<'c>(
             AccountPick::Reference(account_ref) => row.account_ref.as_deref() == account_ref,
         })
         .min_by(|a, b| resolver_order(a, b))
+}
+
+/// The accounts a pool backend rotates over (Lean `oauthPool`): every enabled
+/// row of `provider` the node owns, in the resolver's order.
+pub fn pick_oauth_pool<'c>(
+    rows: impl IntoIterator<Item = &'c OAuthCredential>,
+    node_did: &str,
+    provider: &str,
+) -> Vec<&'c OAuthCredential> {
+    let mut pool: Vec<_> = rows
+        .into_iter()
+        .filter(|row| row.node_did == node_did && row.provider == provider && row.enabled)
+        .collect();
+    pool.sort_by(|a, b| resolver_order(a, b));
+    pool
+}
+
+pub async fn resolve_oauth_pool(
+    access: &crate::config_client::ConfigAccess,
+    node_did: &str,
+    provider: &str,
+) -> Result<Vec<OAuthCredential>> {
+    let response = access
+        .execute(&enabled_oauth_credentials_query(
+            node_did,
+            provider,
+            OAUTH_CREDENTIAL_FIELDS,
+        ))
+        .await?;
+    let rows = oauth_credentials_from_response(&response)
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(pick_oauth_pool(&rows, node_did, provider)
+        .into_iter()
+        .cloned()
+        .collect())
 }
 
 fn enabled_oauth_credentials_query(node_did: &str, provider: &str, fields: &str) -> String {
@@ -648,6 +686,7 @@ pub(crate) fn preset_account_backend(
         auth: crate::document_config::BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         },
+        claude_platform: None,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
         max_concurrent: None,
@@ -1436,6 +1475,7 @@ fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) ->
         ),
         OAuthRefreshKind::Xai => crate::xai_oauth_login::xai_account_key(&credential.access_token),
         OAuthRefreshKind::Claude => None,
+        OAuthRefreshKind::Gateway => credential.provider_account_key.clone(),
     }
 }
 
@@ -1777,8 +1817,9 @@ impl DbCredentialBearer {
 
     async fn refresh_tokens(
         &self,
-        refresh_token: &str,
+        credential: &OAuthCredential,
     ) -> Result<RefreshedTokens, OAuthAuthProblem> {
+        let refresh_token = credential.refresh_token.as_str();
         match self.refresh_kind {
             OAuthRefreshKind::ChatGpt => {
                 crate::chatgpt_oauth_refresh::refresh_chatgpt_token(refresh_token, &self.http).await
@@ -1788,6 +1829,14 @@ impl DbCredentialBearer {
             }
             OAuthRefreshKind::Xai => {
                 crate::xai_oauth_refresh::refresh_xai_token(refresh_token, &self.http).await
+            }
+            OAuthRefreshKind::Gateway => {
+                crate::claude_gateway_login::refresh_gateway_token(
+                    credential.account_id.as_deref(),
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
         }
     }
@@ -1854,7 +1903,7 @@ impl DbCredentialBearer {
             }
         }
 
-        let refreshed = match self.refresh_tokens(&credential.refresh_token).await {
+        let refreshed = match self.refresh_tokens(&credential).await {
             Ok(refreshed) => refreshed,
             Err(problem) => {
                 let error = self.auth_error(&credential, &problem);
@@ -2413,6 +2462,48 @@ mod resolver_tests {
 
     fn picked<'c>(rows: &'c [OAuthCredential], pick: AccountPick<'_>) -> Option<&'c str> {
         pick_oauth_credential(rows, DID, PROVIDER, pick).map(|row| row.credential_id.as_str())
+    }
+
+    #[test]
+    fn pool_holds_every_enabled_account_of_the_node_in_resolver_order() {
+        let rows = [
+            row(DID, PROVIDER, "late", Some("late"), Some(2_000), true),
+            row(DID, PROVIDER, "off", Some("off"), Some(500), false),
+            row(
+                "did:key:zOther",
+                PROVIDER,
+                "foreign",
+                Some("f"),
+                Some(100),
+                true,
+            ),
+            row(
+                DID,
+                "chatgpt-codex",
+                "other-provider",
+                None,
+                Some(100),
+                true,
+            ),
+            row(DID, PROVIDER, "original", None, None, true),
+            row(DID, PROVIDER, "early", Some("early"), Some(1_000), true),
+        ];
+        let pool: Vec<_> = pick_oauth_pool(&rows, DID, PROVIDER)
+            .into_iter()
+            .map(|row| row.credential_id.as_str())
+            .collect();
+        assert_eq!(pool, ["original", "early", "late"]);
+        assert_eq!(
+            pool.first().copied(),
+            picked(&rows, AccountPick::ProviderDefault),
+            "a pool resolves through its first account"
+        );
+    }
+
+    #[test]
+    fn pool_is_empty_without_an_enabled_account() {
+        let rows = [row(DID, PROVIDER, "off", None, None, false)];
+        assert!(pick_oauth_pool(&rows, DID, PROVIDER).is_empty());
     }
 
     #[test]
@@ -3466,6 +3557,7 @@ mod lifecycle_tests {
                 provider_kind: spec.provider_kind,
                 openai_wire_api: spec.openai_wire_api,
                 endpoint: spec.endpoint.clone(),
+                claude_platform: None,
                 auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
                 connect_timeout_secs: None,
                 discovery_timeout_secs: None,
@@ -3775,6 +3867,7 @@ mod lifecycle_tests {
                 provider_kind: spec.provider_kind,
                 openai_wire_api: spec.openai_wire_api,
                 endpoint: spec.endpoint,
+                claude_platform: None,
                 auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
                 connect_timeout_secs: None,
                 discovery_timeout_secs: None,

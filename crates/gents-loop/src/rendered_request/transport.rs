@@ -80,8 +80,39 @@ fn provider_endpoint_of(scheme: Option<&str>, authority: Option<&str>) -> Option
     })
 }
 
-fn provider_route_path_sha256(path: &str, has_query: bool) -> Option<String> {
-    (!has_query).then(|| format!("{:x}", Sha256::digest(path.as_bytes())))
+/// The route identity of a destination: its path and query. A query can route
+/// to another tenant or deployment behind the same authority, so it is part of
+/// the issuer; Claude Code sends every Messages call to `/v1/messages?beta=true`.
+/// A route without a query hashes its path alone, as stored captures did.
+///
+/// A Bedrock invoke path (`/model/<id>/invoke-with-response-stream`) and a
+/// Vertex predict path (`.../models/<id>:streamRawPredict`) carry the model,
+/// which is not part of the route: they hash with the model segment masked, so
+/// a reasoning block captured on one model stays replayable on the same backend.
+pub fn provider_route_path_sha256(path: &str, query: Option<&str>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(route_identity_path(path).as_bytes());
+    if let Some(query) = query {
+        digest.update(b"?");
+        digest.update(query.as_bytes());
+    }
+    format!("{:x}", digest.finalize())
+}
+
+/// The path of a route with a Bedrock or Vertex model segment masked.
+fn route_identity_path(path: &str) -> std::borrow::Cow<'_, str> {
+    for (model, method) in [
+        ("/model/", "/invoke-with-response-stream"),
+        ("/models/", ":streamRawPredict"),
+    ] {
+        if let Some(head) = path
+            .strip_suffix(method)
+            .and_then(|head| head.rfind(model).map(|at| &head[..at + model.len()]))
+        {
+            return std::borrow::Cow::Owned(format!("{head}{{model}}{method}"));
+        }
+    }
+    std::borrow::Cow::Borrowed(path)
 }
 
 pub fn replay_issuer_for_destination(
@@ -94,7 +125,7 @@ pub fn replay_issuer_for_destination(
             destination.scheme_str(),
             destination.authority().map(|authority| authority.as_str()),
         )?,
-        &provider_route_path_sha256(destination.path(), destination.query().is_some())?,
+        &provider_route_path_sha256(destination.path(), destination.query()),
     )
 }
 
@@ -286,13 +317,10 @@ where
                 parts.uri.scheme_str(),
                 parts.uri.authority().map(|authority| authority.as_str()),
             ),
-            provider_route_path_sha256(
+            Some(provider_route_path_sha256(
                 parts.uri.path(),
-                parts
-                    .uri
-                    .path_and_query()
-                    .is_some_and(|value| value.query().is_some()),
-            ),
+                parts.uri.query(),
+            )),
             Sha256::digest(parts.uri.to_string().as_bytes()).into(),
         );
         async move {
@@ -333,13 +361,10 @@ where
                 parts.uri.scheme_str(),
                 parts.uri.authority().map(|authority| authority.as_str()),
             ),
-            provider_route_path_sha256(
+            Some(provider_route_path_sha256(
                 parts.uri.path(),
-                parts
-                    .uri
-                    .path_and_query()
-                    .is_some_and(|value| value.query().is_some()),
-            ),
+                parts.uri.query(),
+            )),
             Sha256::digest(parts.uri.to_string().as_bytes()).into(),
         );
         let activity = match &decision {
@@ -520,16 +545,82 @@ mod tests {
     }
 
     #[test]
-    fn route_evidence_excludes_userinfo_and_query_routed_destinations() {
+    fn route_evidence_excludes_userinfo_and_binds_the_query() {
         assert_eq!(
             provider_endpoint_of(Some("https"), Some("user:secret@example.test:8443")),
             Some("https://example.test:8443".into())
         );
         assert_ne!(
-            provider_route_path_sha256("/proxy/a/v1/responses", false),
-            provider_route_path_sha256("/proxy/b/v1/responses", false)
+            provider_route_path_sha256("/proxy/a/v1/responses", None),
+            provider_route_path_sha256("/proxy/b/v1/responses", None)
         );
-        assert!(provider_route_path_sha256("/v1/responses", true).is_none());
+        assert_eq!(
+            provider_route_path_sha256("/v1/responses", None),
+            format!("{:x}", Sha256::digest(b"/v1/responses"))
+        );
+        let plain = provider_route_path_sha256("/v1/responses", None);
+        let tenant_a = provider_route_path_sha256("/v1/responses", Some("tenant=a"));
+        let tenant_b = provider_route_path_sha256("/v1/responses", Some("tenant=b"));
+        assert_ne!(plain, tenant_a);
+        assert_ne!(tenant_a, tenant_b);
+        assert_ne!(plain, provider_route_path_sha256("/v1/responses", Some("")));
+    }
+
+    #[test]
+    fn a_bedrock_route_identity_does_not_depend_on_the_model() {
+        let bedrock = |model: &str| {
+            replay_issuer_for_destination(
+                "ClaudeBedrock",
+                &format!(
+                    "https://bedrock-runtime.us-west-2.amazonaws.com/model/{model}/invoke-with-response-stream"
+                )
+                .parse()
+                .expect("URI"),
+            )
+            .expect("route")
+        };
+        let first = bedrock("us.anthropic.claude-sonnet-5");
+        assert_eq!(first, bedrock("eu.anthropic.claude-opus-5"));
+        assert_eq!(
+            first,
+            bedrock("arn:aws:bedrock:us-west-2:123:application-inference-profile%2Fabc")
+        );
+        assert_ne!(
+            first,
+            replay_issuer_for_destination(
+                "ClaudeBedrock",
+                &"https://bedrock-runtime.eu-west-1.amazonaws.com/model/x/invoke-with-response-stream"
+                    .parse()
+                    .expect("URI")
+            )
+            .unwrap()
+        );
+        let vertex = |model: &str| {
+            provider_route_path_sha256(
+                &format!("/v1/projects/p/locations/us-east5/publishers/anthropic/models/{model}:streamRawPredict"),
+                None,
+            )
+        };
+        assert_eq!(
+            vertex("claude-opus-4-5@20251101"),
+            vertex("claude-sonnet-5")
+        );
+        assert_ne!(
+            vertex("m"),
+            provider_route_path_sha256(
+                "/v1/projects/q/locations/us-east5/publishers/anthropic/models/m:streamRawPredict",
+                None
+            )
+        );
+        // Another route under the same host is another route.
+        assert_ne!(
+            provider_route_path_sha256("/model/x/invoke", None),
+            provider_route_path_sha256("/model/y/invoke", None)
+        );
+        assert_eq!(
+            provider_route_path_sha256("/v1/messages", Some("beta=true")),
+            provider_route_path_sha256("/v1/messages", Some("beta=true"))
+        );
     }
 
     #[test]
@@ -556,7 +647,22 @@ mod tests {
             )
             .unwrap()
         );
-        assert!(route("https://example.test/proxy/a/v1/responses?tenant=other").is_none());
+        assert_ne!(
+            base,
+            route("https://example.test/proxy/a/v1/responses?tenant=other").expect("query route")
+        );
+        let claude = |uri: &str| {
+            replay_issuer_for_destination("claude_subscription", &uri.parse().expect("URI"))
+        };
+        let beta = claude("https://api.anthropic.com/v1/messages?beta=true").expect("beta route");
+        assert_eq!(
+            beta,
+            claude("https://api.anthropic.com/v1/messages?beta=true").unwrap()
+        );
+        assert_ne!(
+            beta,
+            claude("https://api.anthropic.com/v1/messages").unwrap()
+        );
         assert!(!base.endpoint.contains("proxy/a"));
     }
 
@@ -609,7 +715,7 @@ mod tests {
         );
         assert_eq!(
             manifest.provider_route_path_sha256,
-            provider_route_path_sha256("/v1/responses", false)
+            Some(provider_route_path_sha256("/v1/responses", None))
         );
         assert_eq!(rendered.request_json["instructions"], "hoisted");
         assert_eq!(rendered.request_json["store"], false);

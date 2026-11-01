@@ -47,6 +47,7 @@ import type {
   DefaultAgentSetRequest,
   BackendDeleteRequest,
   BackendSaveRequest,
+  BackendRotationSetRequest,
   AgentDeleteRequest,
   ContextDeleteRequest,
   AgentSaveRequest,
@@ -353,6 +354,9 @@ export type DesktopApiAdapter = {
   ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (
     request: BackendSaveRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  setBackendRotation: (
+    request: BackendRotationSetRequest,
   ) => Promise<DesktopClientSnapshot>;
   probeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
   getInferenceSetupCatalog: () => Promise<InferenceSetupCatalog>;

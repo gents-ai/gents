@@ -3,6 +3,8 @@ namespace PromptAssembly.ServiceTier
 inductive Family where
   | openAiCompatible | chatGptCodex | openRouter | xaiGrokOAuth
   | claudeSubscription | anthropicApiKey
+  | claudeBedrock | claudeVertex | claudeFoundry | claudeAnthropicAws
+  | claudeMantle | claudeGoogleCloud | claudeGateway
   deriving DecidableEq, Repr
 
 inductive Tier where
@@ -16,6 +18,13 @@ def Family.wireName : Family → String
   | .xaiGrokOAuth => "XaiGrokOAuth"
   | .claudeSubscription => "ClaudeCliSubscription"
   | .anthropicApiKey => "AnthropicApiKey"
+  | .claudeBedrock => "ClaudeBedrock"
+  | .claudeVertex => "ClaudeVertex"
+  | .claudeFoundry => "ClaudeFoundry"
+  | .claudeAnthropicAws => "ClaudeAnthropicAws"
+  | .claudeMantle => "ClaudeMantle"
+  | .claudeGoogleCloud => "ClaudeGoogleCloud"
+  | .claudeGateway => "ClaudeGateway"
 
 def Tier.configName : Tier → String
   | .standard => "default"
@@ -78,7 +87,8 @@ structure Case where
 
 def cases : List Case :=
   [Family.openAiCompatible, .chatGptCodex, .openRouter, .xaiGrokOAuth,
-    .claudeSubscription, .anthropicApiKey].flatMap fun family =>
+    .claudeSubscription, .anthropicApiKey, .claudeBedrock, .claudeVertex, .claudeFoundry,
+    .claudeAnthropicAws, .claudeMantle, .claudeGoogleCloud, .claudeGateway].flatMap fun family =>
       [none, some Tier.standard, some Tier.fast].map fun requested => { family, requested }
 
 end PromptAssembly.ServiceTier

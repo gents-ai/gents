@@ -7,13 +7,15 @@ namespace CompletionRetry.Contracts
 open Conformance.Contracts
 
 def failureClassVocabulary : List String :=
-  ["transport", "parse_bad_request", "reasoning_rejected", "context_overflow", "permanent"]
+  ["transport", "parse_bad_request", "reasoning_rejected", "context_overflow",
+   "account_limited", "permanent"]
 
 def failureClassName : FailureClass → String
   | .transport => "transport"
   | .parseBadRequest => "parse_bad_request"
   | .reasoningRejected => "reasoning_rejected"
   | .contextOverflow => "context_overflow"
+  | .accountLimited => "account_limited"
   | .permanent => "permanent"
 
 def failureOriginName : FailureOrigin → String
@@ -21,6 +23,7 @@ def failureOriginName : FailureOrigin → String
   | .retryableTransport => "retryable_transport"
   | .providerStreamMalformed => "provider_stream_malformed"
   | .providerReasoningRejected => "provider_reasoning_rejected"
+  | .providerAccountLimited => "provider_account_limited"
 
 def phaseName : Phase → String
   | .issuing => "issuing"
@@ -82,6 +85,8 @@ def RetryCase.toJson (c : RetryCase) : String :=
       (c.post.map (fun state => toString state.resampleUsed)).getD "null" ++ ","
     ++ "\"expected_attempt\":" ++
       (c.post.map (fun state => toString state.attempt)).getD "null" ++ ","
+    ++ "\"expected_account_used\":" ++
+      (c.post.map (fun state => toString state.accountUsed)).getD "null" ++ ","
     ++ "\"expected_repair_used\":" ++
       (c.post.map (fun state => boolJson state.repairUsed)).getD "null" ++ ","
     ++ "\"expected_usage_charged\":" ++

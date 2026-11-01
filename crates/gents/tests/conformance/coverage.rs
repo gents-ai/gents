@@ -483,6 +483,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     ));
     for (category, domain, present) in [
         (
+            "claude_platform_cases",
+            "ClaudePlatformCases",
+            !snapshot.claude_platform_cases.is_empty(),
+        ),
+        (
             "catalog_refresh_cases",
             "CatalogRefreshCases",
             !snapshot.catalog_refresh_cases.is_empty(),
@@ -1457,6 +1462,24 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "completionRetry".to_string(),
         ));
     }
+    for (cases_present, domain) in [
+        (
+            !snapshot.account_rotation_select_cases.is_empty(),
+            "AccountRotationSelectCases",
+        ),
+        (
+            !snapshot.account_rotation_attempt_cases.is_empty(),
+            "AccountRotationAttemptCases",
+        ),
+        (
+            !snapshot.account_rotation_observe_cases.is_empty(),
+            "AccountRotationObserveCases",
+        ),
+    ] {
+        if cases_present {
+            emitted.insert(("account_rotation_cases".to_string(), domain.to_string()));
+        }
+    }
     if !snapshot.command_policy_cases.is_empty() {
         emitted.insert((
             "command_policy_cases".to_string(),
@@ -1750,6 +1773,36 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "prompt_assembly_cases".to_string(),
             "PromptAssemblyClaudeBodyCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_claude_attribution_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeAttributionCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_claude_cache_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeCacheCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_claude_origin_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeOriginCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_claude_field_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeFieldCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_claude_field_row_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeFieldRowCases".to_string(),
         ));
     }
     if !snapshot.prompt_assembly_claude_stream_cases.is_empty() {

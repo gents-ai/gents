@@ -82,6 +82,7 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
         hook,
         request_id,
         Message::Assistant {
+            request_id: None,
             id: Some(format!("final-{request_id}")),
             content: vec![AssistantContent::Text(Text {
                 text: "process controls complete".into(),

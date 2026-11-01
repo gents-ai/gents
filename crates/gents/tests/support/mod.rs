@@ -743,6 +743,7 @@ pub async fn create_agent_message_in_scope(
             .to_owned();
 
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(
             node_did,
             session_id,

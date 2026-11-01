@@ -133,6 +133,8 @@ const NON_PREFIX_FIELDS: &[&str] = &[
     "stop_sequences",
     "service_tier",
     "parallel_tool_calls",
+    // Claude's `previous_message_id` changes on every request.
+    "diagnostics",
 ];
 
 fn canonical_bytes(value: &Value) -> Result<Vec<u8>> {
@@ -173,6 +175,13 @@ pub fn flatten(body: &Value, wire: ReplayWire) -> Result<Vec<FlatItem>> {
         }
     }
     if wire == ReplayWire::ClaudeMessages {
+        if let Some(system) = context.get_mut("system").and_then(Value::as_array_mut) {
+            system.retain(|block| {
+                !block["text"]
+                    .as_str()
+                    .is_some_and(gents_claude::attribution::is_header)
+            });
+        }
         for field in ["system", "tools"] {
             if let Some(blocks) = context.get_mut(field).and_then(Value::as_array_mut) {
                 for block in blocks.iter_mut() {
@@ -283,6 +292,89 @@ mod tests {
         let tool: Value = serde_json::from_slice(tool).unwrap();
         assert_eq!(tool["input"], input);
         assert!(tool.get("cache_control").is_none());
+    }
+
+    #[test]
+    fn claude_attribution_and_diagnostics_stay_out_of_the_prefix() {
+        let body = |attribution: &str, previous: Option<&str>| {
+            json!({
+                "model": "model",
+                "messages": [{"role": "user", "content": "plain"}],
+                "system": [
+                    {"type": "text", "text": attribution},
+                    {"type": "text", "text": "identity", "cache_control": {"type": "ephemeral"}}
+                ],
+                "tools": [],
+                "metadata": {"user_id": previous.unwrap_or("none")},
+                "diagnostics": {"previous_message_id": previous},
+                "stream": true
+            })
+        };
+        let first = flatten(
+            &body(
+                "x-anthropic-billing-header: cc_version=2.1.311.abc; cch=00000;",
+                None,
+            ),
+            ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        let later = flatten(
+            &body(
+                "x-anthropic-billing-header: cc_version=2.1.311.abc; cc_prompt_index=2;",
+                Some("msg_1"),
+            ),
+            ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        assert_eq!(first, later);
+        let FlatItem::Ordinary(context) = &first[0] else {
+            panic!("context first")
+        };
+        let context: Value = serde_json::from_slice(context).unwrap();
+        assert_eq!(
+            context["system"],
+            json!([{"type": "text", "text": "identity"}])
+        );
+        assert!(context.get("diagnostics").is_none());
+    }
+
+    #[test]
+    fn a_bedrock_body_keeps_one_prefix_across_turns() {
+        // Bedrock drops `model` and `stream` and appends the constant version and
+        // the model's beta array: all request constants, so consecutive turns of
+        // one backend flatten to the same context item and the replay frontier holds.
+        let turn = |messages: Value| {
+            json!({
+                "messages": messages,
+                "system": [{"type": "text", "text": "identity"}],
+                "tools": [],
+                "metadata": {"user_id": "u"},
+                "max_tokens": 64000,
+                "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+                "anthropic_version": "bedrock-2023-05-31"
+            })
+        };
+        let first = flatten(
+            &turn(json!([{"role": "user", "content": "one"}])),
+            ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        let later = flatten(
+            &turn(json!([
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+                {"role": "user", "content": "two"}
+            ])),
+            ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        assert_eq!(first[..2], later[..2]);
+        let FlatItem::Ordinary(context) = &first[0] else {
+            panic!("context first")
+        };
+        let context: Value = serde_json::from_slice(context).unwrap();
+        assert_eq!(context["anthropic_version"], "bedrock-2023-05-31");
+        assert!(context.get("model").is_none() && context.get("stream").is_none());
     }
 
     #[test]

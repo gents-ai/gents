@@ -434,6 +434,17 @@ where
                         0,
                         crate::rendered_request::CaptureScopeKind::Title,
                     );
+                    crate::claude_request_context::apply(
+                        &mut config,
+                        crate::claude_request_context::for_request(
+                            &crate::config_client::ConfigAccess::local(self.node.clone()),
+                            &self.agent_config,
+                            &request,
+                            gents_claude::origin::Kind::Title,
+                        )
+                        .await?
+                        .as_ref(),
+                    )?;
                     config.temperature = Some(0.0);
                     config.max_tokens =
                         title_max_tokens(config.additional_params.as_ref(), config.max_tokens);

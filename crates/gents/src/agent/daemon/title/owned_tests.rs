@@ -1206,6 +1206,7 @@ impl TitleFixture {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:1/v1".into(),
+            claude_platform: None,
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: "scripted".into(),
             service_tier: None,
@@ -1228,6 +1229,7 @@ impl TitleFixture {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
+            oauth_pool: Vec::new(),
         });
         crate::test_support::install_test_agent(&node, identity.did(), &agent_config.agent_id)
             .await;

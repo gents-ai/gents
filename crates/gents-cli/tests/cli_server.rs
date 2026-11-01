@@ -1021,6 +1021,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: "self-budget-session:1".into(),
         session_id: "self-budget-session".into(),
         node_did: node_did.clone(),
@@ -2426,6 +2427,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
 
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(&node_did, "trace-session", None, 1),
         session_id: "trace-session".to_string(),
         node_did: node_did.clone(),

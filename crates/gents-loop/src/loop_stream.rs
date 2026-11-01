@@ -87,7 +87,7 @@ use request_assembly::{
     prepare_dispatch_attempt, rebuild_after_provider_overflow, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
-use turn_threading::{bounded_tool_result, close_streaming_turn};
+use turn_threading::{bounded_tool_result, close_streaming_turn, ProviderIds};
 pub use turn_threading::{
     replayed_tool_result_text, TOOL_RESULT_IMAGE_NOT_REPLAYED, TOOL_RESULT_IMAGE_OMITTED,
 };
@@ -517,6 +517,7 @@ where
             let mut turn_text = String::new();
             let mut saw_stream_item = false;
             let mut saw_final_usage_event = false;
+            let mut provider_request_id = None::<String>;
             // The attempt's provider count; it anchors later requests only
             // once the turn is accepted into the transcript.
             let mut completed_anchor = None;
@@ -836,6 +837,7 @@ where
                     }
                     StreamedAssistantContent::Final(raw) => {
                         saw_final_usage_event = true;
+                        provider_request_id = rig_compat::observed_request_id(&raw);
                         let usage = raw.token_usage();
                         if let Some((observed, output)) = usage.as_ref().and_then(|usage| {
                             crate::provider_usage::contract_usage_input_tokens(usage)
@@ -876,6 +878,11 @@ where
                 }
             }
 
+            let turn_ids = ProviderIds {
+                message_id: stream.message_id.clone(),
+                request_id: provider_request_id,
+            };
+
             if !saw_stream_item {
                 ensure_rendered_request_was_captured(turn_index, attempt)?;
             }
@@ -897,7 +904,7 @@ where
                 for item in close_streaming_turn(
                     &mut new_messages,
                     &mut accumulator,
-                    stream.message_id.clone(),
+                    turn_ids.clone(),
                     None,
                     pending_results,
                 ) {
@@ -909,7 +916,7 @@ where
 
             if crate::execution_policy::provider_eof_is_failure(saw_final_usage_event) {
                 for item in close_streaming_turn(
-                    &mut new_messages, &mut accumulator, stream.message_id.clone(), None, pending_results,
+                    &mut new_messages, &mut accumulator, turn_ids.clone(), None, pending_results,
                 ) {
                     yield item;
                 }
@@ -940,7 +947,7 @@ where
                 for item in close_streaming_turn(
                     &mut new_messages,
                     &mut accumulator,
-                    stream.message_id.clone(),
+                    turn_ids.clone(),
                     None,
                     pending_results,
                 ) {
@@ -1073,9 +1080,7 @@ where
                 config.context_calibration.anchor_accepted(anchor);
             }
             retry.on_turn_accepted();
-            if let Message::Assistant { id, .. } = &mut accepted_message {
-                *id = stream.message_id.clone();
-            }
+            turn_ids.stamp(&mut accepted_message);
             let accepted_reasoning = match &accepted_message {
                 Message::Assistant { content, .. } =>
                     crate::claude_messages_body::reasoning_witness(content),
@@ -1159,7 +1164,7 @@ where
                         pending_results.push((rig_compat::from_rig_tool_call(&result.call), result.internal_id, bounded));
                     }
                     if invalid_tool_progress.exhausted() {
-                        for item in close_streaming_turn(&mut new_messages, &mut accumulator, stream.message_id.clone(), accepted_source.clone(), pending_results) { yield item; }
+                        for item in close_streaming_turn(&mut new_messages, &mut accumulator, turn_ids.clone(), accepted_source.clone(), pending_results) { yield item; }
                         Err(StreamingError::Completion(CompletionError::ProviderError(invalid_tool_progress.exhaustion_reason())))?;
                         unreachable!("invalid tool budget exhaustion ends the stream");
                     }
@@ -1173,7 +1178,7 @@ where
                     for item in close_streaming_turn(
                         &mut new_messages,
                         &mut accumulator,
-                        stream.message_id.clone(),
+                        turn_ids.clone(),
                         accepted_source.clone(),
                         pending_results,
                     ) {
@@ -1226,7 +1231,7 @@ where
                         for item in close_streaming_turn(
                             &mut new_messages,
                             &mut accumulator,
-                            stream.message_id.clone(),
+                            turn_ids.clone(),
                             accepted_source.clone(),
                             pending_results,
                         ) {
@@ -1347,7 +1352,7 @@ where
                     for item in close_streaming_turn(
                         &mut new_messages,
                         &mut accumulator,
-                        stream.message_id.clone(),
+                        turn_ids.clone(),
                         accepted_source.clone(),
                         pending_results,
                     ) {
@@ -1367,9 +1372,7 @@ where
                     let committed = receive_steering(committed).await?;
                     if !committed.is_empty() {
                         if let Some(mut message) = accumulator.take_message() {
-                            if let Message::Assistant { id, .. } = &mut message {
-                                *id = stream.message_id.clone();
-                            }
+                            turn_ids.stamp(&mut message);
                             new_messages.push(TaggedMessage {
                                 message, source: accepted_source.clone(),
                                 physical_header: None, block_indices: Vec::new(),
@@ -1387,9 +1390,7 @@ where
                     })?;
                     if !unmet.is_empty() {
                         if let Some(mut assistant_message) = accumulator.take_message() {
-                            if let Message::Assistant { id, .. } = &mut assistant_message {
-                                *id = stream.message_id.clone();
-                            }
+                            turn_ids.stamp(&mut assistant_message);
                             new_messages.push(TaggedMessage {
                                 message: assistant_message,
                                 source: accepted_source.clone(),
@@ -1416,7 +1417,7 @@ where
                         },
                         FinishOrIntake::Continue(inputs) => {
                             if let Some(mut message) = accumulator.take_message() {
-                                if let Message::Assistant { id, .. } = &mut message { *id = stream.message_id.clone(); }
+                                turn_ids.stamp(&mut message);
                                 new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new() });
                             }
                             new_messages.extend(inputs.into_iter().map(|input| TaggedMessage::unassociated(input.message)));
@@ -1431,7 +1432,7 @@ where
             for item in close_streaming_turn(
                 &mut new_messages,
                 &mut accumulator,
-                stream.message_id.clone(),
+                turn_ids.clone(),
                 accepted_source,
                 pending_results,
             ) {
@@ -1564,7 +1565,9 @@ where
         tool_defs.push(crate::rig_compat::to_rig_tool_definition(&native));
     }
 
-    let mut chat_history = assemble_rig_chat_history(config, &prompt, history, prior)?;
+    let mut additional_params = config.additional_params.clone();
+    let mut chat_history =
+        assemble_rig_chat_history(config, &prompt, history, prior, &mut additional_params)?;
     let rig_prompt = chat_history.pop().expect("assembled prompt is last");
 
     let mut builder = model
@@ -1572,7 +1575,7 @@ where
         .messages(chat_history)
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
-        .additional_params_opt(config.additional_params.clone())
+        .additional_params_opt(additional_params)
         .output_schema_opt(
             config
                 .structured_output
@@ -1593,6 +1596,7 @@ fn assemble_rig_chat_history(
     prompt: &Message,
     history: &[Message],
     prior: &[Message],
+    additional_params: &mut Option<serde_json::Value>,
 ) -> Result<Vec<rig::completion::Message>, StreamingError> {
     let messages = history
         .iter()
@@ -1602,6 +1606,7 @@ fn assemble_rig_chat_history(
         .collect();
     let ordered =
         request_assembly::provider_order(config.provider_input_counter.profile(), messages);
+    crate::claude_messages_body::stamp_history_params(additional_params, &ordered);
     let mut projected = config
         .preamble
         .as_ref()
@@ -1643,7 +1648,11 @@ fn replace_core_chat_history(
         .map(|row| row.message.clone())
         .collect::<Vec<_>>();
     request.chat_history = rig::one_or_many::OneOrMany::many(assemble_rig_chat_history(
-        config, prompt, &history, &prior,
+        config,
+        prompt,
+        &history,
+        &prior,
+        &mut request.additional_params,
     )?)
     .expect("assembled prompt makes chat history nonempty");
     Ok(())

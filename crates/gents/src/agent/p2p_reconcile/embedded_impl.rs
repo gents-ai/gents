@@ -894,6 +894,7 @@ pub(super) mod tests {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+            claude_platform: None,
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             service_tier: None,
@@ -916,6 +917,7 @@ pub(super) mod tests {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
+            oauth_pool: Vec::new(),
         })
     }
 
@@ -980,8 +982,10 @@ pub(super) mod tests {
             )
             .await;
         let message = Message::Assistant {
+            request_id: None,
             id: Some(format!("remote-provider-{turn}")),
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: tool_call_id.into(),
                 call_id: Some(tool_call_id.into()),
                 function: ToolFunction::new(

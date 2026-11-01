@@ -2056,6 +2056,32 @@ impl ClientCore {
         }
     }
 
+    /// Switches a subscription backend between one account and the account
+    /// pool. `expected` is the revision the caller last read, when it holds one.
+    pub async fn set_backend_rotation(
+        &self,
+        node_did: &str,
+        id: &str,
+        expected: Option<&mutations::ConfigEditorRevision>,
+        rotation: gents::config_client::BackendRotation,
+    ) -> Result<gents::config_client::RotationOutcome> {
+        let access = self.operator_access(node_did)?;
+        match mutations::set_backend_rotation_on(&access, node_did, id, expected, rotation).await {
+            Ok(outcome) => {
+                self.refresh_config_source(node_did).await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "backend",
+                    row_id = %id,
+                    "desktop write saved"
+                );
+                Ok(outcome)
+            }
+            Err(error) => Err(self.record_mutation_error("set backend rotation", error)),
+        }
+    }
+
     pub async fn save_tools(&self, row: &gents::Tools) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         let result = mutations::upsert_tools_on(&access, row).await;

@@ -36,6 +36,8 @@ futures = "0.3"
 # An independent version requirement sidesteps inheritance entirely; the
 # root `[patch.crates-io]` still redirects it to the sibling fork.
 gents-protocol = { path = "../gents-protocol", default-features = false }
+# Default features only: the wire model stays I/O-free for wasm32-wasip1.
+gents-claude = { path = "../gents-claude" }
 rand = { workspace = true }
 rig-core = { version = "0.35.0", default-features = false }
 schemars = "1"

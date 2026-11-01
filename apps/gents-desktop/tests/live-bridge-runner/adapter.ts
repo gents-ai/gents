@@ -186,6 +186,8 @@ export function createBridgeHttpAdapter(
       client.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
     saveBackendConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/backend/save", request),
+    setBackendRotation: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/backend/rotation", request),
     saveInferenceProfileConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>(
         "/desktop/inference-profile/save",

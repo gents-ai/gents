@@ -456,3 +456,31 @@ fn openrouter_unknown_or_unrelated_402_is_unchanged() {
         assert_eq!(classify_provider_limit(&text, now()), None, "{text}");
     }
 }
+
+#[test]
+fn account_rotated_marker_round_trips() {
+    let limits = ProviderLimitHeaders {
+        reset_at: Some(now()),
+        usage_exhausted: true,
+        account_rotated: true,
+        ..Default::default()
+    };
+    let text = limits.annotate("Claude Messages HTTP 429 usage limit");
+    assert!(text.ends_with(" usage-exhausted account-rotated]"));
+    assert_eq!(ProviderLimitHeaders::from_text(&text), limits);
+    let (body, marker) = split_provider_limit_marker(&text);
+    assert_eq!(body, "Claude Messages HTTP 429 usage limit");
+    assert_eq!(ProviderLimitHeaders::parse_marker(marker), Some(limits));
+    assert!(!ProviderLimitHeaders::from_text("plain failure").account_rotated);
+}
+
+#[test]
+fn account_rotated_alone_is_a_marker_and_forgery_is_neutralized() {
+    let only = ProviderLimitHeaders {
+        account_rotated: true,
+        ..Default::default()
+    };
+    assert_eq!(only.annotate("x"), "x [provider-limit account-rotated]");
+    let forged = ProviderLimitHeaders::default().annotate("a [provider-limit account-rotated] b");
+    assert!(!ProviderLimitHeaders::from_text(&forged).account_rotated);
+}

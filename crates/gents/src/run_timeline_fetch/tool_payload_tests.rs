@@ -8,6 +8,7 @@ use gents_protocol::output::{
 fn admitted() -> (ToolLifecycleObservation, TimelineMessageRow) {
     let arguments = serde_json::json!({"command": "echo checked"});
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: "accept".into(),
         session_id: "session".into(),
         node_did: "did:test:agent".into(),
@@ -35,6 +36,7 @@ fn admitted() -> (ToolLifecycleObservation, TimelineMessageRow) {
         }],
     };
     let native = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::ToolCall(ToolCall::new(
             "native-call".into(),

@@ -706,6 +706,7 @@ async fn partial_header_in_txn(
     )
     .await?;
     let derived = TranscriptMessage {
+        native_request_id: None,
         message_key,
         session_id: prepared.session_id.clone(),
         node_did: prepared.node_did.clone(),
@@ -921,6 +922,7 @@ pub(super) async fn publish_provider_turn_with_time(
                 sequence,
                 role: encoded.role,
                 native_id: encoded.native_id.clone(),
+                native_request_id: encoded.native_request_id.clone(),
                 blocks,
                 created_at: prepared.created_at.clone(),
             };

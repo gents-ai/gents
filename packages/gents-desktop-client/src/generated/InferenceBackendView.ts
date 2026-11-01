@@ -5,4 +5,8 @@ export type InferenceBackendView = { backendId: string, name: string | null, pro
 /**
  * The account a subscription backend runs on; `None` is the original.
  */
-accountRef: string | null, };
+accountRef: string | null,
+/**
+ * Whether a pool backend may draw paid extra usage; `None` for any other backend.
+ */
+allowOverage: boolean | null, };

@@ -6,6 +6,42 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Claude platform backends. Seven provider kinds (`ClaudeBedrock`,
+  `ClaudeVertex`, `ClaudeFoundry`, `ClaudeAnthropicAws`, `ClaudeMantle`,
+  `ClaudeGoogleCloud`, `ClaudeGateway`) join the Messages wire, with a typed
+  `claude_platform` settings object on the backend (`region`, `project`,
+  `location`, `workspace_id`, `resource`, and Foundry's `bearer_token`) from
+  which each platform's default base URL derives. `ClaudeGateway`,
+  `ClaudeFoundry`, `ClaudeAnthropicAws` and `ClaudeMantle` send with a static
+  key or token (`api_key` or `environment` auth), the body, betas, model ids
+  and headers Claude Code sends on that platform. `ClaudeBedrock` sends the
+  Bedrock runtime request (the model in the path, the rewritten body, the
+  region-prefix and inference-profile model id, the event-stream answer) with a
+  bearer token or AWS credentials, and `ClaudeMantle` and `ClaudeAnthropicAws`
+  also sign with AWS credentials. `ClaudeVertex` sends the `streamRawPredict`
+  request (the model in the path, the rewritten body, the key file's quota
+  project) and `ClaudeGoogleCloud` the Messages request under its workspace,
+  both with access tokens minted from `google_credentials`. Backend auth gains
+  `aws_credentials` (static keys, signed with AWS Signature Version 4) and
+  `google_credentials` (a service account key or an authorized user file),
+  stored secrets an agent can keep but never set. AWS profiles, SSO and
+  instance credentials, and other Google credential types, are not read.
+- `gents claude-gateway-login <url>` signs in to a Claude Code cloud gateway
+  with its device authorization flow (the gateway's advertised same-origin
+  endpoints, else `/oauth/device_authorization` and `/oauth/token`) and stores
+  the account as a node OAuth credential of provider `claude-gateway`. A
+  `ClaudeGateway` backend with `node_oauth` auth sends that account's JWT,
+  refreshed with the gateway's refresh token five minutes before it expires,
+  and marks its attribution from the JWT it sends; the static-token gateway
+  backend is unchanged. Gateway certificate pinning and sign-out revocation
+  are not done.
+- `gents config backend pool <backend-id>` and the desktop backend editor
+  switch a Claude subscription backend between one account and an account pool,
+  and set whether the pool may use paid extra usage. Both call one operator
+  write that replaces only the backend's `auth`; an agent still cannot add a
+  pool or change its overage choice. Editing another field of a pool backend in
+  the desktop no longer turns it back into a single-account backend.
+
 ## 1.0.0-rc0 - 2026-10-29
 
 - A job plugin may declare `host_imports: ["run_script"]`. The host then

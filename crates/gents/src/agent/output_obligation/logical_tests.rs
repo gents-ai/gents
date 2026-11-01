@@ -87,9 +87,11 @@ async fn publish_accepted_turn(
         )
         .await;
     let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
         id: Some("provider-message".into()),
         content: vec![gents_protocol::message::AssistantContent::ToolCall(
             gents_protocol::message::ToolCall {
+                raw_arguments: None,
                 id: tool_call_id.into(),
                 call_id: None,
                 function: gents_protocol::message::ToolFunction::new(
@@ -564,10 +566,12 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         )
         .await;
     let message = gents_protocol::message::Message::Assistant {
+        request_id: None,
         id: Some("provider-message".into()),
         content: vec![
             gents_protocol::message::AssistantContent::ToolCall(
                 gents_protocol::message::ToolCall {
+                    raw_arguments: None,
                     id: "native-write-a".into(),
                     call_id: None,
                     function: gents_protocol::message::ToolFunction::new(
@@ -580,6 +584,7 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
             ),
             gents_protocol::message::AssistantContent::ToolCall(
                 gents_protocol::message::ToolCall {
+                    raw_arguments: None,
                     id: "native-write-b".into(),
                     call_id: None,
                     function: gents_protocol::message::ToolFunction::new(

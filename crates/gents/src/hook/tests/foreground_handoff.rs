@@ -141,11 +141,13 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .map(|id| (id.as_str(), None))
         .collect::<Vec<_>>();
     let filler_message = Message::Assistant {
+        request_id: None,
         id: Some("handoff-capacity-turn".into()),
         content: filler_ids
             .iter()
             .map(|id| {
                 AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: id.clone(),
                     call_id: None,
                     function: ToolFunction {
@@ -472,11 +474,13 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
         .collect::<Vec<_>>();
     let calls = ids.iter().map(|id| (id.as_str(), None)).collect::<Vec<_>>();
     let message = Message::Assistant {
+        request_id: None,
         id: Some("concurrent-start-turn".into()),
         content: ids
             .iter()
             .map(|id| {
                 AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: id.clone(),
                     call_id: None,
                     function: ToolFunction {

@@ -224,6 +224,8 @@ export function createDesktopApiAdapter(
       }),
     saveBackendConfig: (request) =>
       invokeDesktop("desktop_backend_save", { request }),
+    setBackendRotation: (request) =>
+      invokeDesktop("desktop_backend_rotation_set", { request }),
     probeInferenceEndpoint: (endpoint) =>
       invokeDesktop("desktop_probe_inference_endpoint", {
         request: { endpoint },

@@ -133,6 +133,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
             .unwrap()
             .to_owned();
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(
             node_did,
             session_id,

@@ -1979,6 +1979,7 @@ mod tests {
                 .expect("pinned add_AgentOutputSegment response shape");
             let close_doc_id = segment_doc_id;
             let message = gents_protocol::output::TranscriptMessage {
+                native_request_id: None,
                 message_key: (*message_key).to_string(),
                 session_id: "session-a".to_string(),
                 node_did: node_did.to_string(),

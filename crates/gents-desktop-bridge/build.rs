@@ -102,6 +102,7 @@ const COMMANDS: &[&str] = &[
     "desktop_agent_delete",
     "desktop_context_delete",
     "desktop_backend_save",
+    "desktop_backend_rotation_set",
     "desktop_inference_profile_save",
     "desktop_tools_save",
     "desktop_tool_service_save",

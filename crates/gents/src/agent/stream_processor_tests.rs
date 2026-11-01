@@ -41,6 +41,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
     assert_eq!(
         accumulator.take_message(),
         Some(Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::Reasoning(Reasoning {
                 id: None,
@@ -865,6 +866,7 @@ fn tool_call_item_with_ids(
 ) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
     Ok(LoopStreamItem::ToolCall {
         tool_call: ToolCall {
+            raw_arguments: None,
             id: tool_id.to_string(),
             call_id: call_id.map(ToOwned::to_owned),
             function: ToolFunction {
@@ -1010,8 +1012,10 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             turn: 0,
             attempt: 0,
             message: Message::Assistant {
+                request_id: None,
                 id: Some("provider-message".to_string()),
                 content: vec![AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: model_result_id.to_string(),
                     call_id: Some(model_result_id.to_string()),
                     function: ToolFunction {
@@ -1629,6 +1633,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .unwrap();
     processor.process_item(text_item("done")).await.unwrap();
     let final_message = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::Text(Text {
             text: "done".into(),
@@ -1768,6 +1773,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
             turn: 0,
             attempt: 1,
             message: Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![AssistantContent::Text(Text {
                     text: "Hello world".into(),
@@ -2026,6 +2032,7 @@ fn coalesced_reasoning_fragments_encode_as_one_native_stream() {
         accumulator.push_reasoning_delta(Some("reasoning".into()), "fragment 🦀 ");
     }
     let fragmented = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::Reasoning(Reasoning {
             id: Some("reasoning".into()),

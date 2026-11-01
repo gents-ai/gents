@@ -104,6 +104,11 @@ pub(crate) enum Command {
     )]
     GrokAuthProbe(GrokAuthProbeArgs),
     #[command(
+        name = "claude-gateway-login",
+        about = "Sign in to a Claude Code cloud gateway and store the account in DefraDB"
+    )]
+    ClaudeGatewayLogin(ClaudeGatewayLoginArgs),
+    #[command(
         name = "claude-login",
         about = "Sign in with the Claude subscription (OAuth) and store credentials in DefraDB",
         after_help = "Default: opens the browser and listens on a localhost callback. Use --manual on hosts without a browser: open the printed URL anywhere, then paste the code shown on Anthropic's page."
@@ -1455,6 +1460,20 @@ pub(crate) struct GrokLoginArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct ClaudeGatewayLoginArgs {
+    /// The gateway URL, such as https://claude-gateway.example.com.
+    pub(crate) url: String,
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
+    #[arg(long, help = LOGIN_LABEL_HELP)]
+    pub(crate) label: Option<String>,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct ClaudeLoginArgs {
     #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
@@ -2713,6 +2732,11 @@ pub(crate) enum BackendCommand {
     Set(BackendSetArgs),
     #[command(name = "discover-models")]
     DiscoverModels(BackendDiscoverModelsArgs),
+    #[command(
+        name = "pool",
+        about = "Rotate a Claude subscription backend over the node's enabled accounts"
+    )]
+    Pool(BackendPoolArgs),
     #[command(name = "list", about = "List InferenceBackend documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an InferenceBackend document")]
@@ -3242,6 +3266,25 @@ pub(crate) struct BackendSetArgs {
     /// Canonical InferenceBackend JSON document, including its owning node DID.
     #[arg(long)]
     pub(crate) file: PathBuf,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct BackendPoolArgs {
+    /// The Claude subscription backend to switch.
+    pub(crate) backend_id: String,
+    /// Let a call draw paid extra usage once every account is past its limit.
+    #[arg(long, conflicts_with_all = ["no_overage", "single"])]
+    pub(crate) allow_overage: bool,
+    /// Never draw paid extra usage (the default for a new pool).
+    #[arg(long, conflicts_with = "single")]
+    pub(crate) no_overage: bool,
+    /// Go back to the provider's default account instead of a pool.
+    #[arg(long)]
+    pub(crate) single: bool,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]

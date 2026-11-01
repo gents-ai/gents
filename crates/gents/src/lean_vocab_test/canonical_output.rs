@@ -323,6 +323,7 @@ pub(crate) struct LeanCanonicalMessage<T> {
     pub(crate) key: String,
     pub(crate) sequence: u64,
     pub(crate) native_id: Option<String>,
+    pub(crate) native_request_id: Option<String>,
     pub(crate) blocks: Vec<LeanMessageBlock<T>>,
     pub(crate) created_at: u64,
 }
@@ -445,5 +446,6 @@ pub(crate) struct LeanCanonicalStream {
 pub(crate) struct LeanReconstructedMessage {
     pub(crate) role: LeanMessageRole,
     pub(crate) native_id: Option<String>,
+    pub(crate) native_request_id: Option<String>,
     pub(crate) blocks: Vec<LeanMessageBlock<Vec<u8>>>,
 }

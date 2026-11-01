@@ -294,6 +294,18 @@ where
                         request,
                         aggregate_token_budget.clone(),
                         self.loop_tools.len(),
+                        self.account_hops,
+                    )?;
+                    let claude_context = crate::claude_request_context::for_request(
+                        &crate::config_client::ConfigAccess::local(self.node.clone()),
+                        &self.agent_config,
+                        request,
+                        gents_claude::origin::Kind::Turn,
+                    )
+                    .await?;
+                    crate::claude_request_context::apply(
+                        &mut loop_config,
+                        claude_context.as_ref(),
                     )?;
                     loop_config.deadline = request_deadline;
                     loop_config.context_calibration = context_calibration.clone();
@@ -308,6 +320,10 @@ where
                         aggregate_token_budget,
                         effective_seed,
                         context_calibration.clone(),
+                        claude_context
+                            .as_ref()
+                            .map(crate::claude_request_context::compaction_params)
+                            .transpose()?,
                     );
                     let turn_node = self.node.clone();
                     let turn_request = request.clone();
@@ -1284,6 +1300,7 @@ pub(super) mod tests {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+            claude_platform: None,
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             service_tier: None,
@@ -1306,6 +1323,7 @@ pub(super) mod tests {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
+            oauth_pool: Vec::new(),
         })
     }
 
@@ -1525,8 +1543,10 @@ pub(super) mod tests {
                 };
                 let native = match value.as_u64().unwrap() {
                     2 => crate::llm::message::Message::Assistant {
+                        request_id: None,
                         id: None,
                         content: vec![AssistantContent::ToolCall(ToolCall {
+                            raw_arguments: None,
                             id: "call-1".into(),
                             call_id: Some("call-1".into()),
                             signature: None,

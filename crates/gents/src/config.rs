@@ -33,6 +33,7 @@ pub struct ResolvedAgent {
     pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
     pub backend_auth: crate::document_config::BackendAuth,
+    pub claude_platform: Option<crate::document_config::ClaudePlatform>,
     pub model_name: String,
     pub profile_id: Option<String>,
     pub service_tier: Option<ServiceTier>,
@@ -57,6 +58,10 @@ pub struct ResolvedAgent {
     /// Effective skill set for this agent. Their tool deps are intersected with
     /// the tool ceiling and never widen it. See `crate::skills`.
     pub skills: Vec<crate::skills::Skill>,
+    /// Credential ids of the backend's account pool in rotation order; empty
+    /// unless the backend rotates a pool. Part of the slot fingerprint, so an
+    /// account signing in, out or being disabled rebuilds the live client.
+    pub oauth_pool: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -366,6 +371,7 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("openai_wire_api", &self.openai_wire_api)
             .field("backend_endpoint", &self.backend_endpoint)
             .field("backend_auth", &self.backend_auth)
+            .field("claude_platform", &self.claude_platform)
             .field("model_name", &self.model_name)
             .field("service_tier", &self.service_tier)
             .field(
@@ -388,6 +394,7 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
             .field("skills", &self.skills)
+            .field("oauth_pool", &self.oauth_pool)
             .finish()
     }
 }
@@ -471,11 +478,10 @@ pub fn backend_catalog<'a>(
     backend: &crate::document_config::InferenceBackend,
     observation: Option<&'a crate::document_config::InferenceBackendObservation>,
 ) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
-    let credential_scope = matches!(
-        backend.auth,
-        crate::document_config::BackendAuth::NodeOAuth { .. }
-    )
-    .then_some(backend.node_did.as_str());
+    let credential_scope = backend
+        .auth
+        .uses_node_oauth()
+        .then_some(backend.node_did.as_str());
     Ok(observation
         .filter(|observation| observation.backend_id == backend.backend_id)
         .map(|observation| observation.catalog_for(credential_scope))
@@ -614,6 +620,7 @@ mod tests {
             openai_wire_api,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+            claude_platform: None,
             model_name: DEFAULT_MODEL_NAME.to_string(),
             service_tier: None,
             resolved_reasoning_efforts: None,
@@ -633,7 +640,21 @@ mod tests {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
+            oauth_pool: Vec::new(),
         }
+    }
+
+    #[test]
+    fn an_account_pool_change_recreates_the_agent_slot() {
+        let agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
+        let mut grown = agent.clone();
+        grown.oauth_pool = vec!["claude-a".to_string(), "claude-b".to_string()];
+        let mut shrunk = grown.clone();
+        shrunk.oauth_pool.pop();
+        let fingerprint = crate::completion_factory::agent_slot_fingerprint;
+        assert_ne!(fingerprint(&agent), fingerprint(&grown));
+        assert_ne!(fingerprint(&grown), fingerprint(&shrunk));
+        assert_eq!(fingerprint(&grown), fingerprint(&grown.clone()));
     }
 
     #[test]

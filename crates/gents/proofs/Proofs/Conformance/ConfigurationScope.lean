@@ -74,6 +74,14 @@ private def authText : BackendAuth → String
   | .nodeOAuth none => "{\"kind\":\"node_oauth\"}"
   | .nodeOAuth (some a) =>
     s!"\{\"kind\":\"node_oauth\",\"account_ref\":{(toJson a).compress}}"
+  | .nodeOAuthPool allowOverage =>
+    s!"\{\"kind\":\"node_oauth_pool\",\"allow_overage\":{(toJson allowOverage).compress}}"
+  | .awsCredentials id secret none =>
+    s!"\{\"kind\":\"aws_credentials\",\"access_key_id\":{(toJson id).compress},\"secret_access_key\":{(toJson secret).compress}}"
+  | .awsCredentials id secret (some token) =>
+    s!"\{\"kind\":\"aws_credentials\",\"access_key_id\":{(toJson id).compress},\"secret_access_key\":{(toJson secret).compress},\"session_token\":{(toJson token).compress}}"
+  | .googleCredentials json =>
+    s!"\{\"kind\":\"google_credentials\",\"credentials_json\":{(toJson json).compress}}"
 
 private def oauthRows : List OAuthAccountRow := [
   ⟨"alice", "ChatGptCodex", none, true⟩,
@@ -89,7 +97,15 @@ private def oauthAccountCases : List (String × String × String × String × Ba
   ("environment_has_no_owner", "alice", "alice", "OpenAiCompatible", .environment "KEY"),
   ("foreign_node_row_rejected", "alice", "alice", "ChatGptCodex",
     .nodeOAuth (some "acct-2")),
-  ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .nodeOAuth (some "acct-off"))]
+  ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .nodeOAuth (some "acct-off")),
+  ("pool_holds_every_enabled_scope_row", "alice", "alice", "ChatGptCodex", .nodeOAuthPool false),
+  ("pool_overage_choice_kept", "alice", "alice", "ChatGptCodex", .nodeOAuthPool true),
+  ("aws_credentials_have_no_owner", "alice", "alice", "ClaudeMantle",
+    .awsCredentials "AKIDEXAMPLE" "secret" none),
+  ("aws_session_credentials_have_no_owner", "alice", "alice", "ClaudeAnthropicAws",
+    .awsCredentials "AKIDEXAMPLE" "secret" (some "token")),
+  ("google_credentials_have_no_owner", "alice", "alice", "ClaudeGoogleCloud",
+    .googleCredentials "{}")]
 
 private def oauthRowJson (row : OAuthAccountRow) : Json := Json.mkObj
   [("owner", toJson row.owner), ("provider_kind", toJson row.kind),
@@ -98,6 +114,7 @@ private def oauthRowJson (row : OAuthAccountRow) : Json := Json.mkObj
 private def oauthResolvedJson (scope kind : String) : BackendAuth → Json
   | .nodeOAuth account =>
     (oauthResolve scope kind account oauthRows).map oauthRowJson |>.getD Json.null
+  | .nodeOAuthPool _ => toJson ((oauthPool scope kind oauthRows).map oauthRowJson)
   | _ => Json.null
 
 private def oauthAccountJson : Json := Json.mkObj

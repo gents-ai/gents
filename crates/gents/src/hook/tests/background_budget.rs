@@ -132,12 +132,14 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         .collect::<Vec<_>>();
     let calls = ids.iter().map(|id| (id.as_str(), None)).collect::<Vec<_>>();
     let message = Message::Assistant {
+        request_id: None,
         id: Some("concurrent-budget-turn".into()),
         content: ids
             .iter()
             .zip(&batch)
             .map(|(id, case)| {
                 AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: id.clone(),
                     call_id: None,
                     function: ToolFunction {

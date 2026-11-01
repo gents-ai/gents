@@ -905,7 +905,7 @@ pub(crate) fn validate_replay_associations(
     ] {
         for (message, association) in messages.iter().zip(sources) {
             match message {
-                Message::Assistant { id, content } => {
+                Message::Assistant { id, content, .. } => {
                     assistant_rows.push(TaggedAssistantRow {
                         source: association.source.clone(),
                         physical_header: association.physical_header.clone(),
@@ -1551,8 +1551,10 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let call = Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: "call-1".to_string(),
                 call_id: Some("call-1".to_string()),
                 function: ToolFunction {

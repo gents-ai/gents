@@ -56,7 +56,7 @@ pub(crate) use behavior::{list_agent_records, load_agent_record};
 pub use behavior::{list_agents, load_agent, upsert_agent, Agent};
 
 pub use inference_backend::{
-    AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackend,
+    AdvertisedModel, BackendAuth, BackendModelCatalog, ClaudePlatform, InferenceBackend,
     InferenceBackendObservation,
 };
 pub use inference_execution::{
@@ -192,5 +192,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod claude_platform_tests;
 #[cfg(test)]
 mod config_model_tests;

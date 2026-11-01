@@ -819,6 +819,7 @@ mod overlay_tests {
         TranscriptMessageRow {
             doc_id: doc_id.to_owned(),
             message: TranscriptMessage {
+                native_request_id: None,
                 message_key: doc_id.to_owned(),
                 session_id: "shared-session".to_owned(),
                 node_did: node_did.to_owned(),

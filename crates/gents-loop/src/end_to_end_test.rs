@@ -838,3 +838,101 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         assert!(requests[1].contains("late correction"));
     }
 }
+
+/// A final provider response that reports the provider request id as the
+/// documented top-level `request_id` field of its serialized form.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct RequestIdResponse {
+    request_id: Option<String>,
+}
+
+impl rig::completion::GetTokenUsage for RequestIdResponse {
+    fn token_usage(&self) -> Option<rig::completion::Usage> {
+        None
+    }
+}
+
+#[derive(Clone)]
+struct RequestIdModel {
+    request_id: Option<String>,
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for RequestIdModel {
+    type Response = ();
+    type StreamingResponse = RequestIdResponse;
+    type Client = ();
+
+    fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
+        unreachable!("constructed directly")
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        unreachable!("the owned loop only ever calls stream()")
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let _ = crate::rendered_request::scope::claim_pending();
+        let items = vec![
+            Ok(RawStreamingChoice::Message("answer".into())),
+            Ok(RawStreamingChoice::MessageId("msg_1".into())),
+            Ok(RawStreamingChoice::FinalResponse(RequestIdResponse {
+                request_id: self.request_id.clone(),
+            })),
+        ];
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(items),
+        )))
+    }
+}
+
+#[tokio::test]
+async fn the_accepted_assistant_message_records_the_final_responses_request_id() {
+    with_steering_capture_scope(async {
+        for reported in [Some("req_abc"), None] {
+            let stream = crate::loop_stream::run_loop_stream(
+                RequestIdModel {
+                    request_id: reported.map(str::to_owned),
+                },
+                Some(RecordingHook::default()),
+                TaggedMessage::unassociated(Message::user("hello")),
+                Vec::new(),
+                Arc::new(Vec::new()),
+                steering_loop_config(),
+            );
+            futures::pin_mut!(stream);
+            let mut accepted = Vec::new();
+            while let Some(item) = futures::StreamExt::next(&mut stream).await {
+                match item.expect("scripted loop completes") {
+                    crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. } => {
+                        reply.send(Ok(Vec::new())).unwrap();
+                    }
+                    crate::loop_stream::LoopStreamItem::ProviderTurnReady { message, .. } => {
+                        accepted.push(message);
+                    }
+                    crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                        reply.send(Ok(Vec::new())).unwrap();
+                    }
+                    crate::loop_stream::LoopStreamItem::FinishOrIntake { reply, .. } => {
+                        reply
+                            .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                            .ok();
+                    }
+                    _ => {}
+                }
+            }
+            let [Message::Assistant { id, request_id, .. }] = accepted.as_slice() else {
+                panic!("one assistant turn expected: {accepted:?}");
+            };
+            assert_eq!(id.as_deref(), Some("msg_1"));
+            assert_eq!(request_id.as_deref(), reported);
+        }
+    })
+    .await;
+}
