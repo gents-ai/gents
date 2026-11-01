@@ -116,6 +116,15 @@ const options = (group: string) =>
     .map((o) => o.textContent);
 
 describe("the search palette", () => {
+  it("asks the system not to autocorrect the query, so ↓ reaches the results", () => {
+    open();
+    const field = screen.getByRole("combobox");
+    expect(field).toHaveAttribute("autocorrect", "off");
+    expect(field).toHaveAttribute("autocapitalize", "off");
+    expect(field).toHaveAttribute("writingsuggestions", "false");
+    expect(field).toHaveAttribute("spellcheck", "false");
+  });
+
   it("opens an item on the active node in the mailbox's dialog, over the page", () => {
     const app = testApp({
       deployments: [

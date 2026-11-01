@@ -73,6 +73,7 @@ import { useApp } from "@/app/AppContext";
 import { usePinnedSessions } from "@/preferences";
 import { useFleet } from "../hooks/useFleet";
 import { RenameField } from "./SessionHeader";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 /* a session, and after an open group that leaves some out, the way to all
    of them */
@@ -266,6 +267,7 @@ export function SessionsScreen({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
+                {...SEARCH_FIELD}
                 placeholder={
                   level ? `Search under ${titleOf(level)}` : "Search sessions"
                 }

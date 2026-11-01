@@ -11,6 +11,7 @@ import { TRIAGE, greeting, groupItems, waiting } from "./mailbox-triage";
 import { ItemRow } from "./MailboxItem";
 import { MAILBOX, openHere, useMailboxList } from "./MailboxStack";
 import { useMinute } from "./time";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 type Tab = MailboxTab;
 
@@ -92,6 +93,7 @@ export function MailboxScreen() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
+                  {...SEARCH_FIELD}
                   placeholder="Search titles, summaries, payloads"
                   className="h-9 w-full pr-9"
                   aria-label="Search the mailbox"

@@ -42,6 +42,7 @@ import { useNow } from "@/lib/clock";
 import { openTerminal, type LogTerminal } from "./terminal";
 import { useMinute } from "./time";
 import { StopButton } from "./WorkerActions";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 function ToneIcon({ tone, className }: { tone: Tone; className?: string }) {
   return (
@@ -458,6 +459,7 @@ function Output({
         <span className="flex-1" />
         {term && (
           <Input
+            {...SEARCH_FIELD}
             type="search"
             value={query}
             aria-label="Find in output"

@@ -46,6 +46,7 @@ import { NodeAgentStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
 import { agentName } from "./behavior";
 import { Hint } from "./Hint";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 /** The palette's shortcut, as shown and as `aria-keyshortcuts` names it. */
@@ -296,6 +297,7 @@ function PaletteBody({
           ref={searchInput}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          {...SEARCH_FIELD}
           placeholder="Search sessions, agents and settings"
           role="combobox"
           aria-expanded
