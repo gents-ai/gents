@@ -322,7 +322,7 @@ export function AllProviderLimits({
   return (
     <section
       aria-label="Usage limits"
-      className="mb-6 grid gap-3 rounded-2xl border border-border/60 bg-raised px-4 pt-2.5 pb-3.5"
+      className="mb-6 grid gap-3 rounded-2xl bg-raised/50 px-4 pt-2.5 pb-3.5"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
