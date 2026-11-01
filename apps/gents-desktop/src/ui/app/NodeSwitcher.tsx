@@ -1,4 +1,5 @@
-import { ChevronsUpDown } from "lucide-react";
+import { Fragment } from "react";
+import { ChevronsUpDown, Waypoints } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -44,6 +45,11 @@ export function NodeSwitcher({
   const { actions } = useApp();
   const homeDid = useHomeDid();
   const nodes = useFleet(useShallow(fleetNodes));
+  /* as the Nodes page has them: this machine's first, then the remote ones */
+  const groups = [
+    { label: "Local", nodes: nodes.filter((n) => isLocalNode(n, homeDid)) },
+    { label: "Remote", nodes: nodes.filter((n) => !isLocalNode(n, homeDid)) },
+  ].filter((group) => group.nodes.length > 0);
   const choose = (nodeDid: string) => {
     if (nodeDid === current) return;
     actions.selectNode(nodeDid);
@@ -69,35 +75,45 @@ export function NodeSwitcher({
           value={current}
           onValueChange={(v) => choose(String(v))}
         >
-          <DropdownMenuLabel>Nodes</DropdownMenuLabel>
-          {nodes.map((node) => {
-            const name = node.node.displayName ?? node.label;
-            return (
-              <DropdownMenuRadioItem key={node.nodeDid} value={node.nodeDid}>
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="relative shrink-0">
-                    <NodeAvatar name={name} className="size-5" />
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-popover",
-                        node.dialSucceeded ? "bg-brand" : "bg-border",
+          {groups.map((group, i) => (
+            <Fragment key={group.label}>
+              {i > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
+              {group.nodes.map((node) => {
+                const name = node.node.displayName ?? node.label;
+                return (
+                  <DropdownMenuRadioItem
+                    key={node.nodeDid}
+                    value={node.nodeDid}
+                    closeOnClick
+                  >
+                    <span className="flex min-w-0 flex-1 items-center gap-2.5">
+                      <span className="relative shrink-0">
+                        <NodeAvatar name={name} className="size-6" />
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-popover",
+                            node.dialSucceeded ? "bg-brand" : "bg-border",
+                          )}
+                        />
+                      </span>
+                      <span className="min-w-0 truncate">{name}</span>
+                      {!node.dialSucceeded && (
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          Offline
+                        </span>
                       )}
-                    />
-                  </span>
-                  <span className="min-w-0 truncate">{name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {isLocalNode(node, homeDid) ? "Local" : "Remote"}
-                    {node.dialSucceeded ? "" : " · offline"}
-                  </span>
-                </span>
-              </DropdownMenuRadioItem>
-            );
-          })}
+                    </span>
+                  </DropdownMenuRadioItem>
+                );
+              })}
+            </Fragment>
+          ))}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => navigate({ name: "nodes" })}>
-          All nodes
+          <Waypoints /> All nodes
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

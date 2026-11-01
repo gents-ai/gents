@@ -31,6 +31,7 @@ describe("switching node", () => {
         node({
           nodeDid: "did:key:z6MkJuno",
           label: "Juno",
+          source: "enrollment",
           node: { ...deployment.node, nodeDid: "did:key:z6MkJuno", displayName: null },
         }),
       ],
@@ -45,10 +46,15 @@ describe("switching node", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(screen.getByRole("button", { name: "Switch node" }));
     const juno = await screen.findByRole("menuitemradio", { name: /Juno/ });
+    /* this machine's node first, then the remote ones, each under a heading */
+    expect(screen.getByText("Local")).toBeVisible();
+    expect(screen.getByText("Remote")).toBeVisible();
     expect(juno).toHaveAttribute("aria-checked", "false");
     await user.click(juno);
     await waitFor(() =>
       expect(app.stores.selection.getState().nodeDid).toBe("did:key:z6MkJuno"),
     );
+    /* choosing closes the menu */
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 });
