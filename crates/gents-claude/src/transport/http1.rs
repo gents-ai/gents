@@ -182,11 +182,11 @@ impl Client {
             tls: target.tls,
         };
         let close = request_wants_close(head);
-        let conn = match self.inner.idle.take(&key) {
-            Some(conn) => conn,
-            None => self.connect(target).await?,
+        let (conn, reused) = match self.inner.idle.take(&key) {
+            Some(conn) => (conn, true),
+            None => (self.connect(target).await?, false),
         };
-        self.exchange(conn, &key, head, body, close).await
+        self.exchange(conn, &key, head, body, close, reused).await
     }
 
     async fn exchange(
@@ -196,6 +196,7 @@ impl Client {
         head: &[u8],
         body: &[u8],
         close: bool,
+        reused: bool,
     ) -> Result<Response, TransportError> {
         // A server may answer and close before reading a large body; the
         // write then fails, but a complete head already received is the reply.
@@ -208,7 +209,7 @@ impl Client {
                         write_err.unwrap_or_else(|| std::io::ErrorKind::BrokenPipe.into()),
                     ));
                 }
-                Err(e) => return Err(classify(e, conn.buf.is_empty())),
+                Err(e) => return Err(classify(e, reused && conn.buf.is_empty())),
             };
             // Interim responses precede the real one; 101 is final here.
             if !(100..200).contains(&h.status) || h.status == 101 {
@@ -289,7 +290,11 @@ impl Client {
 }
 
 /// Maps a head-read error; a dead pooled socket with nothing read is a close.
-fn classify(e: TransportError, nothing_read: bool) -> TransportError {
+///
+/// `nothing_read` is `reused && conn.buf.is_empty()`: only a connection taken
+/// from the pool can be a socket the server closed while idle. A reset on a
+/// fresh connection keeps its `Io` error, as it did before the replay fix.
+pub(super) fn classify(e: TransportError, nothing_read: bool) -> TransportError {
     let dead = match &e {
         TransportError::Closed => true,
         TransportError::Io(io) => is_peer_gone(io),
