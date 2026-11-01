@@ -1,5 +1,5 @@
 use super::*;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use std::collections::VecDeque;
 
 /// Bounds application request preparation across peers; native P2P owns transport concurrency.
@@ -268,20 +268,16 @@ mod tests {
             .unwrap();
         assert_eq!(started_rx.try_recv().unwrap(), MAX_ACTIVE_PEERS);
         assert!(work.queued.is_empty());
-        assert!(
-            attempts
-                .iter()
-                .all(|count| count.load(Ordering::SeqCst) == 1)
-        );
+        assert!(attempts
+            .iter()
+            .all(|count| count.load(Ordering::SeqCst) == 1));
         assert!(
             work.next().now_or_never().is_none(),
             "failed peers must not busy-retry"
         );
-        assert!(
-            attempts
-                .iter()
-                .all(|count| count.load(Ordering::SeqCst) == 1)
-        );
+        assert!(attempts
+            .iter()
+            .all(|count| count.load(Ordering::SeqCst) == 1));
         for release in releases.iter_mut().take(MAX_ACTIVE_PEERS).skip(1) {
             release.take().unwrap().send(()).unwrap();
         }
@@ -294,11 +290,9 @@ mod tests {
             work.is_empty(),
             "all failed batches finish without retrying"
         );
-        assert!(
-            attempts
-                .iter()
-                .all(|count| count.load(Ordering::SeqCst) == 1)
-        );
+        assert!(attempts
+            .iter()
+            .all(|count| count.load(Ordering::SeqCst) == 1));
     }
 
     #[tokio::test]
@@ -665,6 +659,45 @@ mod tests {
             .to_owned()
     }
 
+    /// Read-only precondition: the seeded request is admitted by the real store
+    /// before the scheduler observes it, so a deferral case cannot pass on a
+    /// request the store would have rejected. It writes nothing.
+    async fn assert_initial_admission(store: &GraphqlHydrationStore) {
+        let (request, admission) = tokio::time::timeout(STEP_TIMEOUT, async {
+            let rows = store
+                .load_pending_requests()
+                .await
+                .expect("fixture pending requests");
+            assert_eq!(rows.len(), 1, "one pending request before discovery");
+            let row = rows.into_iter().next().expect("length checked");
+            let request = HydrationRequest::from_row(
+                row.request_key.clone(),
+                row.requester_did.clone(),
+                row.node_did.clone(),
+                row.session_id.clone(),
+            )
+            .expect("fixture request key names its peer and session");
+            let admission = store
+                .load_admission(&request)
+                .await
+                .expect("fixture admission query");
+            (request, admission)
+        })
+        .await
+        .expect("fixture admission within the bound");
+        assert!(
+            matches!(
+                decide_hydration(&request, &admission.catalog),
+                HydrationVerdict::Admit(_)
+            ),
+            "the seeded request must be admitted before the scheduler observes it"
+        );
+        assert!(
+            admission.authorization.is_some(),
+            "the seeded request must carry a current enrollment authorization"
+        );
+    }
+
     /// A confirmed attempt for A, then a distinct request B for the same peer
     /// committed while A is still active. The discovery during A's attempt
     /// defers B; completing A does not serve B; an explicit discovery does.
@@ -681,6 +714,7 @@ mod tests {
                 let mut work = PeerWork::default();
 
                 seed_pending_request(&fixture, "session-a").await;
+                assert_initial_admission(&store).await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
                 drive_until_started(&mut work, &delivery).await;
                 assert_eq!(work.active, BTreeSet::from([fixture.peer.clone()]));
@@ -765,6 +799,7 @@ mod tests {
 
                 seed_pending_request(&fixture, "session-a").await;
                 drain_batch(&mut changes, "A's insert").await;
+                assert_initial_admission(&store).await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
                 drive_until_started(&mut work, &delivery).await;
                 assert_eq!(
