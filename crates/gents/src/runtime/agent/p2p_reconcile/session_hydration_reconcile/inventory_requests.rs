@@ -56,7 +56,10 @@ async fn refuse(
 /// invalid row or a demand mismatch, so those stay `Err` here rather than
 /// becoming `Ok(false)`. A same-key replacement with a new `_docID` is not the
 /// cached row and must not be served as it.
-async fn still_pending(store: &GraphqlHydrationStore, row: &InventoryRequestRow) -> Result<bool> {
+pub(super) async fn still_pending(
+    store: &GraphqlHydrationStore,
+    row: &InventoryRequestRow,
+) -> Result<bool> {
     let demand = &row.demand;
     let current = ConfigAccess::transact_local_readonly(
         &store.node,

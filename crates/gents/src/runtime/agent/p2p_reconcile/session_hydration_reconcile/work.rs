@@ -120,6 +120,25 @@ pub(super) struct PeerWork {
     /// At most one deferred batch per peer.
     queued: VecDeque<PeerBatch>,
     last_started: Option<String>,
+    /// Test-only: the release half of each `start_test_batch` future. Holding it
+    /// here keeps the future pending until the test releases that peer. Shared so
+    /// a test can release a peer while `discover` borrows `work`.
+    #[cfg(test)]
+    test_releases: Arc<std::sync::Mutex<BTreeMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    /// Test-only: peers whose completion the production select arm consumed, in
+    /// order, plus a signal. Shared so a test can observe consumption while
+    /// `discover` still borrows `work`, without polling or sleeping.
+    #[cfg(test)]
+    consumed: Arc<std::sync::Mutex<Vec<String>>>,
+    #[cfg(test)]
+    consumed_signal: Option<Arc<tokio::sync::Notify>>,
+    /// Test-only: parks the discovery loads so a completion can arrive while
+    /// `discover` is inside its select loop. `discovery_reached` fires when the
+    /// loads are about to park.
+    #[cfg(test)]
+    discovery_gate: Option<tokio::sync::oneshot::Receiver<()>>,
+    #[cfg(test)]
+    discovery_reached: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl PeerWork {
@@ -140,25 +159,30 @@ impl PeerWork {
             BatchWork::Future(_) => BTreeSet::new(),
         };
         let work: BoxFuture<'static, ()> = match work {
-            BatchWork::Requests(requests) => {
-                let store = self
-                    .store
-                    .clone()
-                    .expect("deferred batch requires the reconciler's store");
-                let delivery = self
-                    .delivery
-                    .clone()
-                    .expect("deferred batch requires the reconciler's delivery");
-                let log_peer = peer.clone();
-                async move {
-                    for request in requests.into_requests() {
-                        if let Err(error) = request.serve(&store, delivery.as_ref()).await {
-                            tracing::warn!(peer = %log_peer, %error, "hydration request remains pending");
+            BatchWork::Requests(requests) => match (self.store.clone(), self.delivery.clone()) {
+                (Some(store), Some(delivery)) => {
+                    let log_peer = peer.clone();
+                    async move {
+                        for request in requests.into_requests() {
+                            if let Err(error) = request.serve(&store, delivery.as_ref()).await {
+                                tracing::warn!(peer = %log_peer, %error, "hydration request remains pending");
+                            }
                         }
                     }
+                    .boxed()
                 }
-                .boxed()
-            }
+                // `discover` binds both before anything can be queued, so this
+                // is only reachable from a test that queues a real batch without
+                // a store. It is a no-op there, and a debug-build tripwire in
+                // production.
+                _ => {
+                    debug_assert!(
+                        cfg!(test),
+                        "a deferred batch requires the reconciler's store and delivery"
+                    );
+                    async {}.boxed()
+                }
+            },
             #[cfg(test)]
             BatchWork::Future(work) => work,
         };
@@ -196,6 +220,88 @@ impl PeerWork {
         while let Some(batch) = skipped.pop_back() {
             self.queued.push_front(batch);
         }
+    }
+
+    /// Releases a completed peer's ownership and records its batch keys in the
+    /// caller's discovery-local suppression set. Called synchronously in the
+    /// select arm that observed the completion, before any further await: the
+    /// yielded peer is already gone from `running`, so leaving it in `active`
+    /// would orphan it and `enqueue` would refuse it forever.
+    fn consume_completion(&mut self, peer: &str, completed_suppress: &mut BTreeSet<RequestKey>) {
+        if let Some(keys) = self.active.remove(peer) {
+            completed_suppress.extend(keys);
+        }
+        #[cfg(test)]
+        {
+            self.consumed
+                .lock()
+                .expect("consumed lock")
+                .push(peer.to_owned());
+            if let Some(signal) = &self.consumed_signal {
+                signal.notify_one();
+            }
+        }
+    }
+
+    /// Applies one observation synchronously, in memory, with no await.
+    ///
+    /// A successful kind replaces its partition, including an empty one; a kind
+    /// that failed to load is absent from `observed` and keeps the rows it
+    /// already had. Every identity already attempted by a running batch, plus
+    /// the ones this observation consumed, is excluded globally across peers.
+    /// Vec order and duplicates are preserved, empty batches are dropped, and
+    /// the queue is rotated after `last_started` when any kind succeeded.
+    fn apply_observation(
+        &mut self,
+        observed: BTreeMap<RequestKind, BTreeMap<String, Vec<Request>>>,
+        completed_suppress: &BTreeSet<RequestKey>,
+    ) {
+        if observed.is_empty() {
+            return;
+        }
+        let excluded: BTreeSet<RequestKey> = completed_suppress
+            .iter()
+            .cloned()
+            .chain(self.active.values().flatten().cloned())
+            .collect();
+        let mut batches: BTreeMap<String, PeerBatch> = self
+            .queued
+            .drain(..)
+            .map(|batch| (batch.peer.clone(), batch))
+            .collect();
+        for (kind, by_peer) in observed {
+            for batch in batches.values_mut() {
+                match &mut batch.work {
+                    BatchWork::Requests(requests) => requests.clear(kind),
+                    #[cfg(test)]
+                    BatchWork::Future(_) => {}
+                }
+            }
+            for (peer, requests) in by_peer {
+                let requests: Vec<Request> = requests
+                    .into_iter()
+                    .filter(|request| !excluded.contains(&request.key()))
+                    .collect();
+                if requests.is_empty() {
+                    continue;
+                }
+                let batch = batches
+                    .entry(peer.clone())
+                    .or_insert_with(|| PeerBatch::empty(peer));
+                match &mut batch.work {
+                    BatchWork::Requests(queued) => queued.set(kind, requests),
+                    #[cfg(test)]
+                    BatchWork::Future(_) => {}
+                }
+            }
+        }
+        batches.retain(|_, batch| !batch.is_empty());
+        let mut ordered: Vec<PeerBatch> = batches.into_values().collect();
+        if let Some(last) = self.last_started.as_deref() {
+            let offset = ordered.partition_point(|batch| batch.peer.as_str() <= last);
+            ordered.rotate_left(offset);
+        }
+        self.queued = ordered.into();
     }
 
     pub(super) async fn next(&mut self) {
@@ -238,11 +344,88 @@ impl PeerWork {
         self.active.keys().cloned().collect()
     }
 
+    #[cfg(test)]
+    fn queued_is_empty(&self) -> bool {
+        self.queued.is_empty()
+    }
+
     /// Peers whose deferred batch is waiting in the queue, in queue order.
     #[cfg(test)]
     fn queued_peers(&self) -> Vec<String> {
         self.queued.iter().map(|batch| batch.peer.clone()).collect()
     }
+
+    /// The keys deferred for one peer, in serve order, for identity assertions.
+    #[cfg(test)]
+    fn queued_keys(&self, peer: &str) -> Vec<RequestKey> {
+        self.queued
+            .iter()
+            .find(|batch| batch.peer == peer)
+            .map(|batch| match &batch.work {
+                BatchWork::Requests(requests) => requests
+                    .transcripts
+                    .iter()
+                    .chain(&requests.inventory)
+                    .chain(&requests.images)
+                    .map(Request::key)
+                    .collect(),
+                BatchWork::Future(_) => Vec::new(),
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    fn last_started(&self) -> Option<&str> {
+        self.last_started.as_deref()
+    }
+
+    /// Starts a batch that owns `keys` without a store behind it, so identity and
+    /// fairness tests can occupy `active` deterministically. The future stays
+    /// pending until `release_test_peer` fires, which is what a real completion
+    /// looks like to `next`.
+    #[cfg(test)]
+    fn start_test_batch(&mut self, peer: String, keys: BTreeSet<RequestKey>) -> bool {
+        if self.active.contains_key(&peer) || self.running.len() >= MAX_ACTIVE_PEERS {
+            return false;
+        }
+        self.last_started = Some(peer.clone());
+        self.active.insert(peer.clone(), keys);
+        let (release, released) = tokio::sync::oneshot::channel();
+        self.test_releases
+            .lock()
+            .expect("test releases lock")
+            .insert(peer.clone(), release);
+        let returned = peer;
+        self.running.push(
+            async move {
+                let _ = released.await;
+                returned
+            }
+            .boxed(),
+        );
+        true
+    }
+
+    /// Completes one test batch, so `next` can drain it exactly as it drains a
+    /// real completion.
+    #[cfg(test)]
+    fn release_test_peer(&mut self, peer: &str) -> bool {
+        release_test_peer(&self.test_releases, peer)
+    }
+}
+
+/// Releases one test batch through a shared handle, so a test can complete a
+/// peer while `discover` still borrows `PeerWork`.
+#[cfg(test)]
+fn release_test_peer(
+    releases: &Arc<std::sync::Mutex<BTreeMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    peer: &str,
+) -> bool {
+    releases
+        .lock()
+        .expect("test releases lock")
+        .remove(peer)
+        .is_some_and(|release| release.send(()).is_ok())
 }
 
 enum Request {
@@ -317,7 +500,20 @@ pub(super) async fn discover(
     // reconciler's store and delivery are bound here, once per observation.
     work.store = Some(store.clone());
     work.delivery = Some(delivery.clone());
+    // Test-only: park the loads so a completion can arrive while this
+    // observation is inside its select loop. Production never sets these.
+    #[cfg(test)]
+    let (gate, reached) = (work.discovery_gate.take(), work.discovery_reached.clone());
     let discovery = async {
+        #[cfg(test)]
+        {
+            if let Some(reached) = reached {
+                reached.notify_one();
+            }
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+        }
         tokio::join!(
             store.load_pending_requests(),
             inventory_requests::pending_requests(store),
@@ -337,13 +533,8 @@ pub(super) async fn discover(
             result = &mut discovery => break result,
             peer = work.running.next(), if !work.running.is_empty() => peer,
         };
-        // Release the completed peer's ownership synchronously, before the next
-        // poll: the yielded peer is already gone from `running`, so leaving it in
-        // `active` would orphan it and `enqueue` would refuse it forever.
         if let Some(peer) = completed {
-            if let Some(keys) = work.active.remove(&peer) {
-                completed_suppress.extend(keys);
-            }
+            work.consume_completion(&peer, &mut completed_suppress);
         }
     };
     // A successful kind replaces its partition, including an empty one; a failed
@@ -382,53 +573,7 @@ pub(super) async fn discover(
         ),
         Err(error) => tracing::warn!(%error, "load pending image requests"),
     }
-    if !observed.is_empty() {
-        // Exclude every identity already attempted by a running batch, plus the
-        // ones this observation just consumed. Global across peers.
-        let excluded: BTreeSet<RequestKey> = completed_suppress
-            .iter()
-            .cloned()
-            .chain(work.active.values().flatten().cloned())
-            .collect();
-        let mut batches: BTreeMap<String, PeerBatch> = work
-            .queued
-            .drain(..)
-            .map(|batch| (batch.peer.clone(), batch))
-            .collect();
-        for (kind, by_peer) in observed {
-            for batch in batches.values_mut() {
-                match &mut batch.work {
-                    BatchWork::Requests(requests) => requests.clear(kind),
-                    #[cfg(test)]
-                    BatchWork::Future(_) => {}
-                }
-            }
-            for (peer, requests) in by_peer {
-                let requests: Vec<Request> = requests
-                    .into_iter()
-                    .filter(|request| !excluded.contains(&request.key()))
-                    .collect();
-                if requests.is_empty() {
-                    continue;
-                }
-                let batch = batches
-                    .entry(peer.clone())
-                    .or_insert_with(|| PeerBatch::empty(peer));
-                match &mut batch.work {
-                    BatchWork::Requests(queued) => queued.set(kind, requests),
-                    #[cfg(test)]
-                    BatchWork::Future(_) => {}
-                }
-            }
-        }
-        batches.retain(|_, batch| !batch.is_empty());
-        let mut ordered: Vec<PeerBatch> = batches.into_values().collect();
-        if let Some(last) = work.last_started.as_deref() {
-            let offset = ordered.partition_point(|batch| batch.peer.as_str() <= last);
-            ordered.rotate_left(offset);
-        }
-        work.queued = ordered.into();
-    }
+    work.apply_observation(observed, &completed_suppress);
     // Suppression covers this observation only; a later discovery may retry an
     // unchanged failed request as today.
     drop(completed_suppress);
@@ -438,6 +583,8 @@ pub(super) async fn discover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::agent::p2p_reconcile::file_image_hydration::FileImageDemand;
+    use gents_protocol::file_image_hydration::FileImageInventoryReference;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     struct Dropped(Arc<AtomicBool>);
@@ -1236,5 +1383,487 @@ mod tests {
             },
         )
         .await;
+    }
+
+    // --- Scheduler identity, per-kind replacement and fairness ----------------
+    //
+    // These drive `PeerWork` directly through the seams `discover` uses, so the
+    // bookkeeping is asserted without a store round trip. They are not a claim
+    // about the original 819 failure.
+
+    fn transcript_key(request_key: &str, session_id: &str) -> RequestKey {
+        RequestKey::Transcript {
+            request_key: request_key.to_owned(),
+            requester_did: "did:key:requester-1".into(),
+            node_did: "did:key:agent-1".into(),
+            session_id: session_id.to_owned(),
+        }
+    }
+
+    fn transcript_request(request_key: &str, session_id: &str) -> Request {
+        Request::Transcript(Box::new(HydrationRequestRow {
+            request_key: request_key.to_owned(),
+            requester_did: "did:key:requester-1".into(),
+            node_did: "did:key:agent-1".into(),
+            session_id: session_id.to_owned(),
+        }))
+    }
+
+    fn inventory_request(document_id: &str, request_key: &str) -> Request {
+        Request::Inventory(Box::new(
+            crate::file_inventory::requests::InventoryRequestRow {
+                document_id: document_id.to_owned(),
+                request_key: request_key.to_owned(),
+                peer_id: "peer-1".into(),
+                requester_did: "did:key:requester-1".into(),
+                node_did: "did:key:agent-1".into(),
+                session_id: "session-1".into(),
+                demand: inventory_demand(),
+                status: "pending".into(),
+                response: None,
+            },
+        ))
+    }
+
+    fn inventory_demand() -> gents_protocol::file_inventory::FileInventoryPageDemand {
+        gents_protocol::file_inventory::FileInventoryPageDemand {
+            admission: gents_protocol::file_inventory::FileInventoryAdmission {
+                request: HydrationRequest {
+                    request_key: "inventory-request".into(),
+                    peer_id: "peer-1".into(),
+                    requester_did: "did:key:requester-1".into(),
+                    node_did: "did:key:agent-1".into(),
+                    session_id: "session-1".into(),
+                },
+                session_doc_id: "session-doc".into(),
+            },
+            attempt_id: "attempt-1".into(),
+            cursor: None,
+        }
+    }
+
+    fn image_request(document_id: &str, bound: bool) -> Request {
+        let mut demand = FileImageDemand {
+            inventory_reference: None,
+            admission: HydrationRequest {
+                request_key: "image-request".into(),
+                peer_id: "peer-1".into(),
+                requester_did: "did:key:requester-1".into(),
+                node_did: "did:key:agent-1".into(),
+                session_id: "session-1".into(),
+            },
+            request_doc_id: "request-doc".into(),
+            tool_call_doc_id: "tool-call-doc".into(),
+        };
+        if bound {
+            demand.inventory_reference = Some(FileImageInventoryReference {
+                page: inventory_demand(),
+                snapshot_digest: "snapshot".into(),
+                entry_index: 0,
+            });
+        }
+        Request::Image(Box::new(file_images::ImageDemandRow::from_parts(
+            document_id.to_owned(),
+            demand,
+        )))
+    }
+
+    fn observation(
+        entries: Vec<(RequestKind, &str, Vec<Request>)>,
+    ) -> BTreeMap<RequestKind, BTreeMap<String, Vec<Request>>> {
+        let mut observed: BTreeMap<RequestKind, BTreeMap<String, Vec<Request>>> = BTreeMap::new();
+        for (kind, peer, requests) in entries {
+            observed
+                .entry(kind)
+                .or_default()
+                .entry(peer.to_owned())
+                .or_default()
+                .extend(requests);
+        }
+        observed
+    }
+
+    /// Identical strings in different kinds are different identities: a
+    /// transcript key never suppresses an inventory or image row that happens to
+    /// carry the same text.
+    #[test]
+    fn identical_strings_in_different_kinds_do_not_collide() {
+        let shared = "peer-1:session-1";
+        let transcript = transcript_key(shared, "session-1");
+        let inventory = RequestKey::Inventory {
+            document_id: shared.into(),
+            request_key: shared.into(),
+        };
+        let image = RequestKey::Image {
+            collection_name: gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+            document_id: shared.into(),
+        };
+        assert_ne!(transcript, inventory);
+        assert_ne!(transcript, image);
+        assert_ne!(inventory, image);
+
+        // An active transcript batch suppresses only the transcript identity.
+        let mut work = PeerWork::default();
+        assert!(work.start_test_batch("peer-1".into(), BTreeSet::from([transcript.clone()])));
+        work.apply_observation(
+            observation(vec![
+                (
+                    RequestKind::Transcript,
+                    "peer-1",
+                    vec![transcript_request(shared, "session-1")],
+                ),
+                (
+                    RequestKind::Inventory,
+                    "peer-1",
+                    vec![inventory_request(shared, shared)],
+                ),
+                (
+                    RequestKind::Image,
+                    "peer-1",
+                    vec![image_request(shared, false)],
+                ),
+            ]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(
+            work.queued_keys("peer-1"),
+            vec![inventory, image],
+            "only the transcript identity was suppressed by the active batch"
+        );
+    }
+
+    /// A batch's full admitted identity set is active, so a later member that has
+    /// not started yet is not re-served merely because it is still pending.
+    #[test]
+    fn an_active_batch_excludes_its_not_yet_served_members() {
+        let mut work = PeerWork::default();
+        assert!(work.start_test_batch(
+            "peer-1".into(),
+            BTreeSet::from([
+                transcript_key("peer-1:session-a", "session-a"),
+                transcript_key("peer-1:session-b", "session-b"),
+            ])
+        ));
+        work.apply_observation(
+            observation(vec![(
+                RequestKind::Transcript,
+                "peer-1",
+                vec![
+                    transcript_request("peer-1:session-a", "session-a"),
+                    transcript_request("peer-1:session-b", "session-b"),
+                ],
+            )]),
+            &BTreeSet::new(),
+        );
+        assert!(
+            work.queued_is_empty(),
+            "both members of the running batch are excluded, not just the served one"
+        );
+    }
+
+    /// A successful kind replaces its partition, including an empty result, so a
+    /// staged row that the store no longer reports is dropped rather than kept.
+    #[test]
+    fn a_successful_empty_partition_removes_staged_work() {
+        let mut work = PeerWork::default();
+        work.apply_observation(
+            observation(vec![(
+                RequestKind::Transcript,
+                "peer-1",
+                vec![transcript_request("peer-1:session-a", "session-a")],
+            )]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(work.queued_peers(), vec!["peer-1".to_string()]);
+
+        // The next successful transcript observation reports nothing for peer-1.
+        work.apply_observation(
+            observation(vec![(RequestKind::Transcript, "peer-1", Vec::new())]),
+            &BTreeSet::new(),
+        );
+        assert!(
+            work.queued_is_empty(),
+            "a successful empty transcript partition drops the staged row"
+        );
+    }
+
+    /// A failed kind retains its partition while a successful kind replaces its
+    /// own, so a partial observation never masquerades as an empty one.
+    #[test]
+    fn a_failed_kind_retains_its_partition_while_a_successful_kind_replaces() {
+        let mut work = PeerWork::default();
+        work.apply_observation(
+            observation(vec![
+                (
+                    RequestKind::Transcript,
+                    "peer-1",
+                    vec![transcript_request("peer-1:session-a", "session-a")],
+                ),
+                (
+                    RequestKind::Inventory,
+                    "peer-1",
+                    vec![inventory_request("inventory-doc", "inventory-key")],
+                ),
+            ]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(work.queued_keys("peer-1").len(), 2);
+
+        // Only the inventory load succeeded, and it reports nothing.
+        work.apply_observation(
+            observation(vec![(RequestKind::Inventory, "peer-1", Vec::new())]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(
+            work.queued_keys("peer-1"),
+            vec![transcript_key("peer-1:session-a", "session-a")],
+            "the failed transcript kind kept its row; the successful inventory kind replaced its own"
+        );
+    }
+
+    /// Unit transformation, not cancellation coverage: `consume_completion` plus
+    /// `apply_observation` suppress a consumed batch's own identities for that
+    /// observation only, so a failed attempt is not retried by its own completion.
+    #[test]
+    fn a_consumed_completion_suppresses_its_own_batch_without_a_retry() {
+        let key = transcript_key("peer-1:session-a", "session-a");
+        let mut work = PeerWork::default();
+        assert!(work.start_test_batch("peer-1".into(), BTreeSet::from([key.clone()])));
+        let mut suppress = BTreeSet::new();
+        work.consume_completion("peer-1", &mut suppress);
+        assert_eq!(suppress, BTreeSet::from([key.clone()]));
+        assert!(
+            work.active_peers().is_empty(),
+            "the completed peer is released"
+        );
+
+        work.apply_observation(
+            observation(vec![(
+                RequestKind::Transcript,
+                "peer-1",
+                vec![transcript_request("peer-1:session-a", "session-a")],
+            )]),
+            &suppress,
+        );
+        assert!(
+            work.queued_is_empty(),
+            "the still-pending row is not requeued by its own completion"
+        );
+
+        // A later observation with no suppression may retry it, as today.
+        work.apply_observation(
+            observation(vec![(
+                RequestKind::Transcript,
+                "peer-1",
+                vec![transcript_request("peer-1:session-a", "session-a")],
+            )]),
+            &BTreeSet::new(),
+        );
+        assert_eq!(work.queued_keys("peer-1"), vec![key]);
+    }
+
+    /// Unit transformation: releasing one peer's ownership leaves another peer's
+    /// ownership intact. The real cancel/drop path is covered by
+    /// `cancelling_a_discovery_after_a_completion_leaves_no_orphan`.
+    #[test]
+    fn releasing_one_peer_keeps_another_peers_ownership() {
+        let first = transcript_key("peer-1:session-a", "session-a");
+        let second = transcript_key("peer-2:session-b", "session-b");
+        let mut work = PeerWork::default();
+        assert!(work.start_test_batch("peer-1".into(), BTreeSet::from([first])));
+        assert!(work.start_test_batch("peer-2".into(), BTreeSet::from([second.clone()])));
+        let mut suppress = BTreeSet::new();
+        work.consume_completion("peer-1", &mut suppress);
+        assert_eq!(
+            work.active_peers(),
+            BTreeSet::from(["peer-2".to_string()]),
+            "the unpolled peer keeps its ownership"
+        );
+        assert_eq!(work.active.get("peer-2"), Some(&BTreeSet::from([second])));
+    }
+
+    /// Capacity 8 and fairness: active peers are skipped without spinning or
+    /// loss, the skipped peers keep their original order at the front, and only a
+    /// successful start updates `last_started`.
+    #[test]
+    fn fill_slots_skips_active_peers_without_loss_and_keeps_order() {
+        let mut work = PeerWork::default();
+        // peer-a is active, so its queued batch must be skipped, not dropped.
+        assert!(work.start_test_batch("peer-a".into(), BTreeSet::new()));
+        work.apply_observation(
+            observation(vec![
+                (
+                    RequestKind::Transcript,
+                    "peer-a",
+                    vec![transcript_request("peer-a:session-1", "session-1")],
+                ),
+                (
+                    RequestKind::Transcript,
+                    "peer-b",
+                    vec![transcript_request("peer-b:session-1", "session-1")],
+                ),
+                (
+                    RequestKind::Transcript,
+                    "peer-c",
+                    vec![transcript_request("peer-c:session-1", "session-1")],
+                ),
+            ]),
+            &BTreeSet::new(),
+        );
+        // The queue is rotated after `last_started` (peer-a), as today.
+        assert_eq!(
+            work.queued_peers(),
+            vec!["peer-b".to_string(), "peer-c".into(), "peer-a".into()]
+        );
+        work.fill_slots();
+        assert_eq!(
+            work.queued_peers(),
+            vec!["peer-a".to_string()],
+            "the active peer is restored at the front; the others started"
+        );
+        assert_eq!(work.last_started(), Some("peer-c"));
+        assert_eq!(work.running.len(), 3);
+    }
+
+    /// The cap holds: with 8 peers running, a ninth queued peer waits and starts
+    /// only after a completion, without a new observation.
+    #[tokio::test]
+    async fn the_cap_holds_and_a_queued_peer_starts_after_a_completion() {
+        let mut work = PeerWork::default();
+        for index in 0..MAX_ACTIVE_PEERS {
+            assert!(work.start_test_batch(format!("peer-{index}"), BTreeSet::new()));
+        }
+        work.apply_observation(
+            observation(vec![(
+                RequestKind::Transcript,
+                "peer-9",
+                vec![transcript_request("peer-9:session-1", "session-1")],
+            )]),
+            &BTreeSet::new(),
+        );
+        work.fill_slots();
+        assert_eq!(work.running.len(), MAX_ACTIVE_PEERS);
+        assert_eq!(work.queued_peers(), vec!["peer-9".to_string()]);
+        assert_eq!(
+            work.last_started(),
+            Some("peer-7"),
+            "a skipped start does not update last_started"
+        );
+
+        assert!(work.release_test_peer("peer-0"));
+        tokio::time::timeout(std::time::Duration::from_secs(1), work.next())
+            .await
+            .expect("the released peer completes");
+        assert_eq!(work.running.len(), MAX_ACTIVE_PEERS);
+        assert!(work.queued_is_empty(), "the ninth peer started");
+        assert_eq!(work.last_started(), Some("peer-9"));
+    }
+
+    /// Real cancellation coverage, driving the production `discover` loop.
+    ///
+    /// Two peers are running. The observation's loads are parked, so the select
+    /// loop is genuinely inside its `select!`. Peer-a's completion is then
+    /// released and consumed by the production arm, and the discovery future is
+    /// cancelled before its loads return. Afterwards: peer-a is out of `active`
+    /// (no orphan, so a later observation can start it again), peer-b is still
+    /// running and still owns its keys, and a later observation makes progress.
+    #[tokio::test]
+    async fn cancelling_a_discovery_after_a_completion_leaves_no_orphan() {
+        let fixture = scheduler_fixture().await;
+        let store = fixture.store.clone();
+        let delivery: Arc<dyn HydrationDelivery> = Arc::new(GatedDelivery::new(false));
+        let mut work = PeerWork::default();
+
+        let peer_a = transcript_key("peer-a:session-a", "session-a");
+        let peer_b = transcript_key("peer-b:session-b", "session-b");
+        assert!(work.start_test_batch("peer-a".into(), BTreeSet::from([peer_a.clone()])));
+        assert!(work.start_test_batch("peer-b".into(), BTreeSet::from([peer_b.clone()])));
+
+        // Park the loads so the completion arrives while `discover` is selecting.
+        let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let consumed = work.consumed.clone();
+        let releases = work.test_releases.clone();
+        let consumed_signal = Arc::new(tokio::sync::Notify::new());
+        work.discovery_gate = Some(gate_rx);
+        work.discovery_reached = Some(reached.clone());
+        work.consumed_signal = Some(consumed_signal.clone());
+
+        let cancel = CancellationToken::new();
+        let discovery = discover(&store, &delivery, &mut work, &cancel);
+        tokio::pin!(discovery);
+        tokio::select! {
+            _ = &mut discovery => panic!("discovery returned before its loads parked"),
+            _ = reached.notified() => {}
+        }
+
+        // The production select arm consumes peer-a's real completion. The
+        // barrier is the consumption signal, never a sleep.
+        assert!(release_test_peer(&releases, "peer-a"));
+        tokio::select! {
+            _ = &mut discovery => panic!("discovery returned before it was cancelled"),
+            _ = consumed_signal.notified() => {}
+        }
+        assert_eq!(
+            *consumed.lock().expect("consumed lock"),
+            vec!["peer-a".to_string()],
+            "the production select arm consumed the completion"
+        );
+
+        // Cancel the real discovery future while its loads are still parked.
+        // `discover` still borrows `work`, so the bookkeeping is asserted after
+        // it returns.
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut discovery)
+            .await
+            .expect("the cancelled discovery returns");
+        drop(gate_tx);
+
+        assert_eq!(
+            work.active_peers(),
+            BTreeSet::from(["peer-b".to_string()]),
+            "the consumed peer is released, the still-running peer keeps ownership,              and cancellation left no orphan"
+        );
+        assert_eq!(
+            work.active.get("peer-b"),
+            Some(&BTreeSet::from([peer_b.clone()])),
+            "the still-running peer kept its full key set"
+        );
+        assert!(
+            work.queued_is_empty(),
+            "a cancelled observation applies nothing"
+        );
+
+        // A later observation makes progress: peer-a can be started again.
+        assert!(
+            work.start_test_batch("peer-a".into(), BTreeSet::from([peer_a])),
+            "the released peer is startable by a later observation"
+        );
+        assert_eq!(work.running.len(), 3);
+
+        fixture.node.shutdown().await;
+    }
+
+    /// A peer never runs twice at once: a queued batch for an active peer is
+    /// skipped, and the same peer is not started twice in one pass.
+    #[test]
+    fn a_peer_never_runs_twice_at_once() {
+        let mut work = PeerWork::default();
+        assert!(work.start_test_batch("peer-1".into(), BTreeSet::new()));
+        work.apply_observation(
+            observation(vec![(
+                RequestKind::Transcript,
+                "peer-1",
+                vec![transcript_request("peer-1:session-1", "session-1")],
+            )]),
+            &BTreeSet::new(),
+        );
+        work.fill_slots();
+        assert_eq!(
+            work.running.len(),
+            1,
+            "the active peer was not started again"
+        );
+        assert_eq!(work.queued_peers(), vec!["peer-1".to_string()]);
     }
 }
