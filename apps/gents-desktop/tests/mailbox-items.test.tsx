@@ -286,6 +286,47 @@ describe("an opened item", () => {
     expect(within(dialog()).getByRole("heading", { name: "First" })).toBeVisible();
   });
 
+  it("goes through every item away from the Mailbox, whatever its tab, and links to it", () => {
+    listViews.setMailboxTab("done");
+    const app = mailboxWith([
+      item({
+        itemId: "a",
+        title: "Flagged",
+        kind: "flag",
+        createdAt: new Date().toISOString(),
+      }),
+      item({ itemId: "b", title: "Landed", kind: "finished" }),
+    ]);
+    renderMailbox(app, { name: "session", sessionId: "session-1" });
+    fireEvent.keyDown(window, {
+      key: "M",
+      code: "KeyM",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(within(dialog()).getByText("1 of 2")).toBeVisible();
+    expect(within(dialog()).getByRole("heading", { name: "Flagged" })).toBeVisible();
+    expect(within(dialog()).getByRole("link", { name: "Mailbox" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/mailbox$/),
+    );
+    listViews.setMailboxTab("all");
+  });
+
+  it("keeps to the Mailbox's tab on the Mailbox, with no link to itself", () => {
+    listViews.setMailboxTab("done");
+    renderMailbox(
+      mailboxWith([
+        item({ itemId: "a", title: "Flagged", kind: "flag" }),
+        item({ itemId: "b", title: "Landed", kind: "finished" }),
+      ]),
+    );
+    open("Landed");
+    expect(within(dialog()).queryByText(/of 2/)).toBeNull();
+    expect(within(dialog()).queryByRole("link", { name: "Mailbox" })).toBeNull();
+    listViews.setMailboxTab("all");
+  });
+
   it("stays with the node it was opened on", () => {
     const nodeWith = (suffix: string) =>
       node({

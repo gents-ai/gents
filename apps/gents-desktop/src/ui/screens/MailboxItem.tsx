@@ -1,4 +1,5 @@
 import {
+  ArrowUpRight,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -239,6 +240,7 @@ export function ItemDialog({
   now,
   onOpen,
   onClose,
+  toMailbox = false,
 }: {
   items: readonly MailboxItemView[];
   openId: string | null;
@@ -247,6 +249,8 @@ export function ItemDialog({
   now: number;
   onOpen: (itemId: string, at: number) => void;
   onClose: () => void;
+  /** a link to the whole Mailbox, from a page other than it */
+  toMailbox?: boolean;
 }) {
   const at = openId === null ? -1 : items.findIndex((m) => m.itemId === openId);
   /* the open item left the list, answered or dismissed here or elsewhere:
@@ -294,6 +298,15 @@ export function ItemDialog({
           }}
         >
           <div className="flex items-center justify-end gap-0.5 text-xs text-muted-foreground tabular-nums">
+            {toMailbox && (
+              <a
+                href={href({ name: "mailbox" })}
+                onClick={onClose}
+                className="mr-auto inline-flex items-center gap-1 rounded-sm px-1 underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
+              >
+                Mailbox <ArrowUpRight className="size-3" />
+              </a>
+            )}
             {items.length > 1 && (
               <>
                 <Button
