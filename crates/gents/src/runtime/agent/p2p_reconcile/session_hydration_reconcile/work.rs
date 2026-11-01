@@ -882,10 +882,11 @@ mod tests {
     /// failed attempt must run once A's attempt completes, with no further
     /// discovery, store write, retry or other traffic. On the unchanged
     /// scheduler this is expected to fail: `discover` skips a peer that is
-    /// active (`work.rs:173-176`) and clears the queue on a complete snapshot
-    /// (`work.rs:138-140`), so B is dropped and completion alone never starts
-    /// it. The internal queue is deliberately not asserted, so a fix may hold B
-    /// anywhere as long as it runs.
+    /// already active, and a complete snapshot clears the queue, so B is
+    /// dropped and completion alone never starts it. Neither the internal queue
+    /// nor the active set is asserted, so a fix may hold B anywhere — including
+    /// scheduling it from `next` before its future is polled — as long as it
+    /// runs.
     #[tokio::test]
     async fn a_new_request_observed_during_a_failed_attempt_runs_after_completion_without_rediscovery(
     ) {
@@ -926,7 +927,6 @@ mod tests {
                 // A finishes with no terminal write and no new store write.
                 delivery.release_next();
                 next_within(&mut work, "A completes").await;
-                assert!(work.active.is_empty());
                 assert_eq!(
                     delivery.pushed_sessions(&fixture.peer),
                     vec!["session-a".to_string()],
