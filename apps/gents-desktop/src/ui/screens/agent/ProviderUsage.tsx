@@ -270,23 +270,33 @@ export function UsageRows({ view }: { view?: AccountUsageView }) {
   );
 }
 
-/* an account's place while the first read is out, in the shape most accounts
-   take, so the panel doesn't jump when it lands */
+/* the kit's skeleton is the page's own surface, which a raised panel all but
+   hides; a wash of the text colour shows on any surface, in either theme */
+const bone = "bg-foreground/10";
+
+/** An account's meters while the first read is out, in the shape most
+    accounts take, so nothing jumps when it lands. */
+export function UsageSkeleton() {
+  return (
+    <div aria-hidden className="grid gap-x-8 gap-y-3 @xs:grid-cols-2">
+      {[0, 1].map((n) => (
+        <div key={n} className="grid gap-1.5">
+          <Skeleton className={cn("h-1.5 w-full rounded-full", bone)} />
+          <Skeleton className={cn("h-3 w-24", bone)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AccountSkeleton() {
   return (
     <div aria-hidden className="grid gap-2">
       <div className="flex items-center gap-1.5">
-        <Skeleton className="size-3.5 rounded-full" />
-        <Skeleton className="h-3 w-28" />
+        <Skeleton className={cn("size-3.5 rounded-full", bone)} />
+        <Skeleton className={cn("h-3 w-28", bone)} />
       </div>
-      <div className="grid gap-x-8 gap-y-3 @xs:grid-cols-2">
-        {[0, 1].map((n) => (
-          <div key={n} className="grid gap-1.5">
-            <Skeleton className="h-1.5 w-full rounded-full" />
-            <Skeleton className="h-3 w-24" />
-          </div>
-        ))}
-      </div>
+      <UsageSkeleton />
     </div>
   );
 }
