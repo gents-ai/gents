@@ -27,7 +27,6 @@ import { AccessSentence, AgentInitials } from "../parts";
 import {
   AreaRow,
   ChipsRow,
-  ChoiceRow,
   DraftActions,
   FactRow,
   RefRow,
@@ -37,6 +36,7 @@ import {
 import { ProfileSheet } from "./ProfileSheet";
 import { profileLabel, toolsInWords } from "./automation";
 import { ToolsSheet } from "./ToolsSheet";
+import { CompactionSheet, compactionInWords } from "./CompactionEditor";
 import { NewSkillSheet } from "./NewSkillSheet";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
@@ -98,6 +98,10 @@ export function AgentEditor({
     null,
   );
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
+  const [newCompaction, setNewCompaction] = useState<
+    ((id: string | null) => void) | null
+  >(null);
+  const [openCompaction, setOpenCompaction] = useState<string | null>(null);
   const [newSkill, setNewSkill] = useState<((id: string | null) => void) | null>(null);
   const [configure, setConfigure] = useState<{
     kind: "tools" | "profile";
@@ -546,10 +550,15 @@ export function AgentEditor({
                   })
                 }
               />
-              <ChoiceRow
+              <RefRow
                 id={id("compact")}
                 label="Compaction"
-                description="How a long session is summarized."
+                description={compactionInWords(
+                  deployment,
+                  deployment.compactions.find(
+                    (c) => c.compaction_id === d.draft.compactionId,
+                  ),
+                )}
                 value={d.draft.compactionId}
                 onChange={(v) => d.set("compactionId", v)}
                 none="Runtime default"
@@ -558,6 +567,13 @@ export function AgentEditor({
                   value: c.compaction_id,
                   label: c.display_name ?? c.compaction_id,
                 }))}
+                createLabel="New compaction…"
+                onCreate={() =>
+                  new Promise<string | null>((resolve) => {
+                    setNewCompaction(() => resolve);
+                  })
+                }
+                onOpen={(compactionId) => setOpenCompaction(compactionId)}
               />
             </Group>
           </div>
@@ -592,6 +608,16 @@ export function AgentEditor({
         onClose={(profileId) => {
           newProfile?.(profileId);
           setNewProfile(null);
+        }}
+      />
+      <CompactionSheet
+        deployment={deployment}
+        creating={newCompaction !== null}
+        editing={openCompaction}
+        onClose={(created) => {
+          newCompaction?.(created);
+          setNewCompaction(null);
+          setOpenCompaction(null);
         }}
       />
       <ToolsSheet
