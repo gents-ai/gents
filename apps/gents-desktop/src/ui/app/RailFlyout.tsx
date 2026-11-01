@@ -52,6 +52,10 @@ function Item({
       className={cn(
         "mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pr-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
         active && "border-border/60 bg-background text-ink shadow-xs",
+        /* on the window's ground the page colour wouldn't show; the rail's
+           fill alone marks the page there */
+        active &&
+          "in-data-[ground=window]:border-transparent in-data-[ground=window]:bg-raised in-data-[ground=window]:shadow-none",
       )}
     >
       <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
@@ -330,6 +334,7 @@ export function RailFlyout({
 
         <div
           aria-hidden={!shown}
+          data-ground={hover ? "raised" : "window"}
           className={cn(
             "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden pb-2",
             "left-1.5 pt-3.5",
