@@ -846,18 +846,119 @@ async fn assert_local_pagination(
     session: &str,
     agent: &str,
 ) -> Result<()> {
-    timeout(TURN_BUDGET, async {
+    // TEST-ONLY diagnostic: bounded scalar observation of the hydration wait. The state
+    // lives outside the timed future so a cancelled future still leaves the last observed
+    // values readable; no spawn, no task, no Arc, no extra query.
+    #[derive(Default)]
+    struct HydrationObservation {
+        calls_started: usize,
+        calls_completed: usize,
+        last_phase: Option<&'static str>,
+        merged_count: Option<usize>,
+        covered_count: Option<usize>,
+        served_count: Option<usize>,
+        last_call_elapsed_ms: Option<u128>,
+        last_call_failed: bool,
+        in_flight_since_ms: Option<u128>,
+        total_elapsed_ms: u128,
+        emitted: usize,
+        last_emitted: Option<(&'static str, usize, usize, Option<usize>)>,
+    }
+
+    impl HydrationObservation {
+        const MAX_EMISSIONS: usize = 16;
+
+        /// Neutral observation state: what the loop last did, not what it means.
+        fn state(&self) -> &'static str {
+            if self.calls_started == 0 {
+                "not_started"
+            } else if self.in_flight_since_ms.is_some() {
+                "awaiting_progress"
+            } else if self.last_call_failed {
+                "call_error"
+            } else {
+                "progress_returned"
+            }
+        }
+
+        fn emit(&self, label: &str) {
+            let in_flight_elapsed_ms = self
+                .in_flight_since_ms
+                .map(|start| self.total_elapsed_ms.saturating_sub(start));
+            eprintln!(
+                "hydration-diagnostic {label} state={} calls_started={} calls_completed={} \
+                 phase={} merged_count={:?} covered_count={:?} served_count={:?} \
+                 last_call_elapsed_ms={:?} in_flight={} in_flight_started_ms={:?} \
+                 in_flight_elapsed_ms={:?} total_elapsed_ms={}",
+                self.state(),
+                self.calls_started,
+                self.calls_completed,
+                self.last_phase.unwrap_or("none"),
+                self.merged_count,
+                self.covered_count,
+                self.served_count,
+                self.last_call_elapsed_ms,
+                self.in_flight_since_ms.is_some(),
+                self.in_flight_since_ms,
+                in_flight_elapsed_ms,
+                self.total_elapsed_ms,
+            );
+        }
+
+        fn observe(&mut self) {
+            let tuple = (
+                self.last_phase.unwrap_or("none"),
+                self.merged_count.unwrap_or(0),
+                self.covered_count.unwrap_or(0),
+                self.served_count,
+            );
+            if self.last_emitted == Some(tuple) || self.emitted >= Self::MAX_EMISSIONS {
+                return;
+            }
+            self.last_emitted = Some(tuple);
+            self.emitted += 1;
+            self.emit("progress");
+        }
+    }
+
+    let mut observation = HydrationObservation::default();
+    let hydration_started = Instant::now();
+    let hydration = timeout(TURN_BUDGET, async {
         use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
         loop {
-            match core.session_hydration_progress(session, agent).await?.phase {
+            observation.calls_started += 1;
+            observation.in_flight_since_ms = Some(hydration_started.elapsed().as_millis());
+            let call_started = Instant::now();
+            let progress = core.session_hydration_progress(session, agent).await;
+            observation.calls_completed += 1;
+            observation.in_flight_since_ms = None;
+            observation.last_call_elapsed_ms = Some(call_started.elapsed().as_millis());
+            observation.last_call_failed = progress.is_err();
+            let progress = progress?;
+            observation.last_phase = Some(progress.phase.as_str());
+            observation.merged_count = Some(progress.merged_count);
+            observation.covered_count = Some(progress.covered_count);
+            observation.served_count = progress.served_count;
+            observation.total_elapsed_ms = hydration_started.elapsed().as_millis();
+            observation.observe();
+            match progress.phase {
                 ClientHydrationPhase::Complete => return Ok::<_, anyhow::Error>(()),
                 ClientHydrationPhase::Failed => bail!("session hydration failed before pagination"),
                 _ => sleep(Duration::from_millis(100)).await,
             }
         }
     })
-    .await
-    .context("session hydration did not settle before pagination")??;
+    .await;
+    let terminal = match &hydration {
+        Err(_) => Some("timeout"),
+        Ok(Err(_)) => Some("error"),
+        Ok(Ok(())) => None,
+    };
+    if let Some(label) = terminal {
+        observation.total_elapsed_ms = hydration_started.elapsed().as_millis();
+        observation.emit(label);
+    }
+    hydration.context("session hydration did not settle before pagination")??;
     let expected =
         runtime_transcript_keys(graphql, session, agent, core.node_identity().did()).await?;
     timeout(TURN_BUDGET, async {
