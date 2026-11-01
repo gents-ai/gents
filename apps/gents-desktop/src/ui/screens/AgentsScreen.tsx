@@ -42,7 +42,12 @@ import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
-import { useBootstrap, useEnrollmentRequests, useHomeDid } from "@/hooks/useClient";
+import {
+  useBootstrap,
+  useEnrollmentRequests,
+  useHomeDid,
+  useSelectedNode,
+} from "@/hooks/useClient";
 import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 import { SetupScreen } from "./setup/SetupScreen";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
@@ -408,6 +413,8 @@ const AgentRow = memo(function AgentRow({
   );
   const name = d.node.displayName ?? d.label;
   const online = d.dialSucceeded;
+  /* the node the app is working with, ringed as the rail's avatar is */
+  const active = useSelectedNode()?.nodeDid === d.nodeDid;
   const config = href({
     name: "agent",
     nodeDid: d.nodeDid,
@@ -432,10 +439,16 @@ const AgentRow = memo(function AgentRow({
         href={href({ name: "sessions", nodeDid: d.nodeDid })}
 
         aria-label={`${name} sessions`}
+        aria-current={active ? "true" : undefined}
         className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
       >
         <NodeHoverCard deployment={d}>
-          <span className="block shrink-0">
+          <span
+            className={cn(
+              "block shrink-0 rounded-full",
+              active && "ring-2 ring-ink ring-offset-2 ring-offset-raised",
+            )}
+          >
             <NodeAvatar name={name} className="size-8" />
           </span>
         </NodeHoverCard>
