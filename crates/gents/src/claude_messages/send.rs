@@ -10,19 +10,23 @@ use rig::completion::{CompletionError, CompletionRequest};
 use rig::http_client::{self, HeaderValue, HttpClientExt, Request};
 use rig::streaming::RawStreamingChoice;
 
+use super::aws::sign_request;
+use super::bedrock;
 use super::error::{body_prefix, non_success_error, read_body_prefix};
 use super::route::{ClaudeRoute, Credential};
-use super::sse::{stream_sse_body_observed, MessagesSseState};
-use super::transport::{capturing, ClaudeHttpClient};
+use super::sse::{self, stream_sse_body_observed, MessagesSseState};
+use super::transport::{capturing, url_parts, ClaudeHttpClient};
 use super::MESSAGES_URI;
 use crate::claude_subscription::ClaudeStreamResponse;
 use crate::oauth_credential::BearerSource;
 
+use gents_claude::bedrock as bedrock_rules;
 use gents_claude::headers::{self, AgentHeaders, Auth, HeaderContext};
 use gents_claude::profile;
 use gents_claude::retry::{
     backoff_ms, BASE_DELAY_MS, DEFAULT_MAX_RETRIES, MAX_DELAY_MS, OAUTH_REFRESH_ATTEMPTS,
 };
+use gents_claude::vertex as vertex_rules;
 use gents_claude::wire;
 use gents_loop::claude_messages_body::{
     plan_claude_request_for, ClaudeAccountContext, ClaudeRequestPlan,
@@ -124,13 +128,16 @@ fn invalid_input(message: String) -> CompletionError {
     )))
 }
 
-/// The request for one send: the planned headers rendered for `token` with a fresh
-/// `x-client-request-id`, over the same body bytes every send.
+/// The request for one send to `uri`: the planned headers rendered for `token`
+/// with a fresh `x-client-request-id`, over the same body bytes every send. A
+/// signing route signs everything but `x-client-request-id`, which Claude Code's
+/// fetch wrapper adds after the SDK signed.
 fn render_request(
     route: &ClaudeRoute,
     plan: &ClaudeRequestPlan,
     account: &ClaudeAccountContext,
     token: &str,
+    uri: &str,
     body: &Bytes,
 ) -> Result<Request<Bytes>, CompletionError> {
     let (platform, arch) = headers::host_platform();
@@ -146,6 +153,7 @@ fn render_request(
         os: &os,
         arch: &arch,
         auth: match route.credential {
+            _ if route.signing.is_some() => Auth::None,
             Credential::Account if account.api_key => Auth::ApiKey(token),
             Credential::Account | Credential::Bearer => Auth::Bearer(token),
             Credential::ApiKey => Auth::ApiKey(token),
@@ -166,8 +174,37 @@ fn render_request(
         retry_count: 0,
         timeout_ms: profile::REQUEST_TIMEOUT_MS,
     };
-    let mut builder = Request::builder().method("POST").uri(&route.uri);
-    for (name, header) in headers::request_headers(&header_context) {
+    let mut rendered = headers::request_headers(&header_context);
+    // Claude Code's fetch wrapper adds this after the SDK middleware signed.
+    let unsigned = rendered
+        .iter()
+        .position(|(name, _)| name.eq_ignore_ascii_case("x-client-request-id"))
+        .map(|at| rendered.remove(at));
+    if let Some(signing) = &route.signing {
+        let target = url_parts(uri).map_err(|error| {
+            CompletionError::ProviderError(format!("Claude Messages request URL: {error}"))
+        })?;
+        let plain: Vec<(&str, &str)> = rendered
+            .iter()
+            .map(|(name, header)| (*name, header.value.as_str()))
+            .collect();
+        let added = sign_request(signing, "POST", &target, &plain, body).map_err(|error| {
+            CompletionError::ProviderError(format!("Claude Messages request signing: {error}"))
+        })?;
+        rendered.extend(added);
+    }
+    if let Some(project) = &route.quota_project {
+        rendered.push((
+            "x-goog-user-project",
+            headers::HeaderValue {
+                value: project.clone(),
+                sensitive: false,
+            },
+        ));
+    }
+    rendered.extend(unsigned);
+    let mut builder = Request::builder().method("POST").uri(uri);
+    for (name, header) in rendered {
         let mut value = HeaderValue::from_str(&header.value).map_err(|error| {
             CompletionError::ProviderError(format!("Claude Messages header {name}: {error}"))
         })?;
@@ -235,12 +272,45 @@ pub(crate) async fn open_messages_at<S>(
 where
     S: BearerSource,
 {
+    // Boxed: the open path (planning, signing, profile listing, the transport and its
+    // replays) is a large state machine that would otherwise sit inline in every
+    // caller's future, the agent loop's included.
+    Box::pin(open_messages(
+        route, model, request, account, surface, bearer, usage,
+    ))
+    .await
+}
+
+async fn open_messages<S>(
+    route: &ClaudeRoute,
+    model: &str,
+    request: &CompletionRequest,
+    account: &ClaudeAccountContext,
+    surface: RapidHashSet<String>,
+    bearer: &S,
+    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+) -> Result<
+    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    MessagesOpenError,
+>
+where
+    S: BearerSource,
+{
     let plan = plan_claude_request_for(model, request, account, route.target)
         .map_err(|error| invalid_input(format!("Claude Messages body: {error:#}")))?;
-    let body = Bytes::from(
-        wire::to_bytes(&plan.body)
-            .map_err(|error| invalid_input(format!("encode Claude Messages body: {error}")))?,
-    );
+    let planned = wire::to_bytes(&plan.body)
+        .map_err(|error| invalid_input(format!("encode Claude Messages body: {error}")))?;
+    let encode = |error: &dyn std::fmt::Display| {
+        invalid_input(format!("encode Claude Messages body: {error}"))
+    };
+    let body = Bytes::from(if route.bedrock.is_some() {
+        bedrock_rules::transform_body(&planned, &plan.body_betas, &plan.betas)
+            .map_err(|error| encode(&error))?
+    } else if route.vertex.is_some() {
+        vertex_rules::transform_body(&planned).map_err(|error| encode(&error))?
+    } else {
+        planned
+    });
     // Only a request that would be sent consumes a fixture: a test whose body
     // fails to build must not take a body queued by a concurrent test.
     #[cfg(test)]
@@ -256,6 +326,25 @@ where
     } else {
         String::new()
     };
+    let uri = match &route.bedrock {
+        Some(runtime) => {
+            // Boxed: the listing holds a second transport future, which inlined
+            // here would double the send state machine.
+            let id = Box::pin(bedrock::resolve_model(
+                runtime,
+                route.signing.as_ref(),
+                &plan,
+                &token,
+                fixture.is_none(),
+            ))
+            .await;
+            bedrock::invoke_uri(&route.uri, &id)
+                .map_err(|error| CompletionError::ProviderError(error.to_string()))?
+        }
+        None => route
+            .vertex_uri(&plan.body.model)
+            .unwrap_or_else(|| route.uri.clone()),
+    };
     if fixture.is_none() {
         tracing::info!(
             model = %model,
@@ -266,7 +355,7 @@ where
     let replayable = !account.api_key && bearer.is_oauth();
     let mut replay = Replay::default();
     let response = loop {
-        let http_request = render_request(route, &plan, account, &token, &body)?;
+        let http_request = render_request(route, &plan, account, &token, &uri, &body)?;
         let client = capturing(fixture.clone(), ClaudeHttpClient::new(usage.clone()));
         replay.sent();
         let failure = match client.send_streaming(http_request).await {
@@ -300,9 +389,15 @@ where
         token = fresh;
     };
     let status = response.status();
+    let response = if route.bedrock.is_some() && status.is_success() {
+        sse::bedrock_response(response)?
+    } else {
+        response
+    };
     let request_id = response
         .headers()
         .get("request-id")
+        .or_else(|| response.headers().get("x-amzn-requestid"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
     if !status.is_success() {

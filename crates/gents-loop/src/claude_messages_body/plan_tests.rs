@@ -827,3 +827,72 @@ fn a_platform_never_sends_disabled_thinking_or_first_party_diagnostics() {
         assert!(plan.body.diagnostics.is_none(), "{provider:?}");
     }
 }
+
+#[test]
+fn bedrock_tools_stream_eagerly_for_flagged_models_on_the_default_endpoint_only() {
+    let own = ClaudeTarget::platform(betas::Provider::Bedrock, None);
+    let mut with_tool = request_of(vec![Message::user("hello")]);
+    with_tool.tools = vec![rig::completion::ToolDefinition {
+        name: "echo".into(),
+        description: "echo".into(),
+        parameters: serde_json::json!({"type": "object"}),
+    }];
+    let plan_for = |model: &str, target: ClaudeTarget| {
+        plan_claude_request_for(model, &with_tool, &platform_account(), target).unwrap()
+    };
+    let eager = |plan: &ClaudeRequestPlan| {
+        plan.body
+            .tools
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|tool| tool.eager_input_streaming)
+            .collect::<Vec<_>>()
+    };
+    // opus-5 is flagged for Bedrock in the catalog, sonnet-4-5 is not.
+    assert_eq!(eager(&plan_for("claude-opus-5", own)), [true]);
+    assert_eq!(eager(&plan_for("claude-sonnet-4-5", own)), [false]);
+    assert_eq!(
+        eager(&plan_for("claude-opus-5", own.at_default_endpoint(false))),
+        [false]
+    );
+    // Platforms that do not read the flag never stream eagerly.
+    for provider in [
+        betas::Provider::Mantle,
+        betas::Provider::AnthropicAws,
+        betas::Provider::Gateway,
+    ] {
+        let target = ClaudeTarget::platform(provider, None);
+        assert_eq!(
+            eager(&plan_for("claude-opus-5", target)),
+            [false],
+            "{provider:?}"
+        );
+    }
+    assert_eq!(
+        eager(&plan_for("claude-opus-5", ClaudeTarget::FIRST_PARTY)),
+        [false]
+    );
+}
+
+#[test]
+fn a_bedrock_plan_carries_the_body_betas_and_the_catalog_model_it_translated() {
+    let own = ClaudeTarget::platform(betas::Provider::Bedrock, None);
+    let plan = platform_plan("claude-opus-5", own);
+    assert_eq!(plan.translated_from, Some("claude-opus-5"));
+    assert_eq!(plan.body.model, "us.anthropic.claude-opus-5");
+    assert!(plan.body_betas.contains(&betas::INTERLEAVED_THINKING));
+    assert!(!plan.betas.contains(&betas::INTERLEAVED_THINKING));
+    // A model the caller named is sent as given and has no catalog model behind it.
+    let arn = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc";
+    let named = platform_plan(arn, own);
+    assert_eq!(named.translated_from, None);
+    assert_eq!(named.body.model, arn);
+    // The other platforms and the first party keep every beta in the header.
+    for target in [
+        ClaudeTarget::FIRST_PARTY,
+        ClaudeTarget::platform(betas::Provider::Mantle, None),
+    ] {
+        assert!(platform_plan("claude-opus-5", target).body_betas.is_empty());
+    }
+}

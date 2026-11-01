@@ -19,13 +19,13 @@ use super::wire_tests::{reply, Server, Wire};
 use crate::claude_subscription::{AccountIdentity, ApiKeyBearer};
 
 const SECRET: &str = "platform-secret-credential";
-const MODEL: &str = "claude-sonnet-5";
+pub(super) const MODEL: &str = "claude-sonnet-5";
 
-fn sse_body() -> &'static str {
+pub(super) fn sse_body() -> &'static str {
     Box::leak(crate::claude_messages::sse_fixture_final_text("platform hello").into_boxed_str())
 }
 
-fn settings(build: impl FnOnce(&mut ClaudePlatform)) -> ClaudePlatform {
+pub(super) fn settings(build: impl FnOnce(&mut ClaudePlatform)) -> ClaudePlatform {
     let mut settings = ClaudePlatform::default();
     build(&mut settings);
     settings
@@ -83,7 +83,7 @@ fn masked(wire: &Wire, name: &str) -> Option<String> {
 
 /// The header names in the order the transport writes them: sorted by code point,
 /// then Bun's appended defaults.
-fn expected_names(extra: &[&str]) -> Vec<String> {
+pub(super) fn expected_names(extra: &[&str]) -> Vec<String> {
     let mut names: Vec<String> = [
         "Accept",
         "Content-Type",
@@ -119,12 +119,12 @@ fn expected_names(extra: &[&str]) -> Vec<String> {
     names
 }
 
-fn names(wire: &Wire) -> Vec<String> {
+pub(super) fn names(wire: &Wire) -> Vec<String> {
     wire.headers.iter().map(|(name, _)| name.clone()).collect()
 }
 
 /// The body bytes the planner types for `route`'s platform.
-fn expected_body(route: &ClaudeRoute) -> Vec<u8> {
+pub(super) fn expected_body(route: &ClaudeRoute) -> Vec<u8> {
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let plan = plan_claude_request_for(MODEL, &echo_request(), &account, route.target).unwrap();
     wire::to_bytes(&plan.body).unwrap()
@@ -344,12 +344,8 @@ async fn a_rejected_credential_is_reported_without_a_second_send() {
 }
 
 #[test]
-fn the_platforms_without_a_send_path_say_so() {
+fn every_platform_kind_routes_and_its_settings_are_checked() {
     for (kind, settings) in [
-        (
-            BackendProviderKind::ClaudeBedrock,
-            self::settings(|s| s.region = Some("us-east-1".into())),
-        ),
         (
             BackendProviderKind::ClaudeVertex,
             self::settings(|s| s.project = Some("proj".into())),
@@ -362,12 +358,8 @@ fn the_platforms_without_a_send_path_say_so() {
             }),
         ),
     ] {
-        let error = ClaudeRoute::platform(kind, "https://example.test", Some(&settings), SECRET)
-            .expect_err("not built");
-        assert!(
-            matches!(error, ClaudeRouteError::Unavailable { .. }),
-            "{kind}"
-        );
+        ClaudeRoute::platform(kind, "https://example.test", Some(&settings), SECRET)
+            .unwrap_or_else(|error| panic!("{kind}: {error}"));
     }
     assert!(matches!(
         ClaudeRoute::platform(

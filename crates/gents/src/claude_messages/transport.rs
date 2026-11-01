@@ -64,6 +64,10 @@ pub(crate) enum ClaudeTransportError {
     ResponseHeader(String),
     #[error("Claude Messages does not send multipart requests")]
     Multipart,
+    #[error("the request was refused: {0}")]
+    Refused(String),
+    #[error("the answer is larger than {0} bytes")]
+    AnswerTooLarge(usize),
 }
 
 impl From<ClaudeTransportError> for http_client::Error {
@@ -112,6 +116,35 @@ async fn shared() -> Result<&'static Shared, ClaudeTransportError> {
         .await
 }
 
+/// The `Host` header value the transport writes for `uri`: the authority without
+/// userinfo. The AWS signature covers this exact value.
+fn host_header(uri: &Uri) -> Option<String> {
+    let host = uri.host().filter(|host| !host.is_empty())?;
+    Some(match uri.port_u16() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
+}
+
+/// The parts of a URL the AWS signature covers, as the transport will write them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UrlParts {
+    /// The `Host` header value.
+    pub(crate) host: String,
+    pub(crate) path: String,
+    pub(crate) query: String,
+}
+
+/// The signed parts of `url`, split the way the transport writes the request line and `Host`.
+pub(crate) fn url_parts(url: &str) -> Result<UrlParts, ClaudeTransportError> {
+    let uri: Uri = url.parse().map_err(|_| ClaudeTransportError::BadUri)?;
+    Ok(UrlParts {
+        host: host_header(&uri).ok_or(ClaudeTransportError::BadUri)?,
+        path: uri.path().to_owned(),
+        query: uri.query().unwrap_or("").to_owned(),
+    })
+}
+
 /// A request as the transport needs it: where it goes and the headers to render.
 struct Outgoing {
     method: String,
@@ -135,10 +168,7 @@ impl Outgoing {
             .filter(|host| !host.is_empty())
             .ok_or(ClaudeTransportError::BadUri)?;
         let port = uri.port_u16().unwrap_or(if tls { 443 } else { 80 });
-        let host_header = match uri.port_u16() {
-            Some(port) => format!("{}:{port}", uri.host().unwrap_or(host)),
-            None => uri.host().unwrap_or(host).to_owned(),
-        };
+        let host_header = host_header(uri).ok_or(ClaudeTransportError::BadUri)?;
         let path = uri
             .path_and_query()
             .map_or("/", |path| path.as_str())
@@ -263,6 +293,39 @@ impl ClaudeHttpClient {
             .send(&target, &head.encode(wire.len()), &wire)
             .await?;
         Ok((response, gzipped))
+    }
+
+    /// GETs `url` with `headers` (name, value, sensitive) and reads at most
+    /// `max_bytes` of a successful answer; a non-success status is `Refused`.
+    pub(crate) async fn get_limited(
+        &self,
+        url: &str,
+        headers: &[(String, String, bool)],
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, ClaudeTransportError> {
+        let uri: Uri = url.parse().map_err(|_| ClaudeTransportError::BadUri)?;
+        let mut map = HeaderMap::with_capacity(headers.len());
+        for (name, value, sensitive) in headers {
+            let invalid = || ClaudeTransportError::RequestHeader(name.clone());
+            let mut value = HeaderValue::from_str(value).map_err(|_| invalid())?;
+            value.set_sensitive(*sensitive);
+            map.append(
+                HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid())?,
+                value,
+            );
+        }
+        let Exchange { mut body, .. } = self
+            .execute("GET".to_owned(), uri, map, Bytes::new())
+            .await
+            .map_err(|error| ClaudeTransportError::Refused(error.to_string()))?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = body.chunk().await? {
+            if bytes.len() + chunk.len() > max_bytes {
+                return Err(ClaudeTransportError::AnswerTooLarge(max_bytes));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     /// Sends the request, resending it plain once when the API rejects the gzip body, and

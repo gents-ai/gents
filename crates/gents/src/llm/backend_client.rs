@@ -80,7 +80,10 @@ impl BackendClient {
             Self::XaiGrokResponses(client) => client.post("/responses")?,
             Self::ClaudeSubscription(_) => return claude_subscription_replay_issuer(),
             Self::AnthropicApiKey(client) => {
-                return messages_replay_issuer(self.provider_family(), client.route.uri.parse()?)
+                return messages_replay_issuer(
+                    self.provider_family(),
+                    client.route.issuer_uri()?.parse()?,
+                )
             }
         }
         .body(())?;
@@ -348,23 +351,64 @@ pub(crate) async fn build_backend_client(
         | BackendProviderKind::ClaudeBedrock
         | BackendProviderKind::ClaudeVertex
         | BackendProviderKind::ClaudeGoogleCloud => {
-            let route = crate::claude_messages::ClaudeRoute::platform(
-                agent.backend_provider_kind,
-                &agent.backend_endpoint,
-                agent.claude_platform.as_ref(),
-                api_key,
-            )
-            .with_context(|| {
-                format!(
-                    "building the {} completion client for agent {}",
-                    agent.backend_provider_kind, agent.agent_id
-                )
-            })?;
+            use crate::claude_messages::{ClaudeRoute, GoogleCredentials, GoogleTokenSource};
+            use crate::claude_subscription::ApiKeyBearer;
+            let kind = agent.backend_provider_kind;
+            let endpoint = agent.backend_endpoint.as_str();
+            let settings = agent.claude_platform.as_ref();
+            let built = match &agent.backend_auth {
+                crate::document_config::BackendAuth::AwsCredentials {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => {
+                    let credentials = gents_claude::sigv4::Credentials::new(
+                        access_key_id,
+                        secret_access_key,
+                        session_token.as_deref(),
+                    )?;
+                    ClaudeRoute::platform_signed(
+                        kind,
+                        endpoint,
+                        settings,
+                        Arc::new(gents_claude::sigv4::Signer::new(credentials)),
+                    )
+                    .map(|route| (route, ApiKeyBearer::new(String::new())))
+                    .map_err(anyhow::Error::from)
+                }
+                crate::document_config::BackendAuth::GoogleCredentials { credentials_json } => {
+                    let credentials = Arc::new(GoogleCredentials::parse(credentials_json)?);
+                    ClaudeRoute::platform(kind, endpoint, settings, "")
+                        .map(|route| {
+                            (
+                                route.with_quota_project(credentials.quota_project()),
+                                ApiKeyBearer::google(GoogleTokenSource::new(credentials)),
+                            )
+                        })
+                        .map_err(anyhow::Error::from)
+                }
+                _ => ClaudeRoute::platform(kind, endpoint, settings, api_key)
+                    .map(|route| (route, ApiKeyBearer::new(api_key)))
+                    .map_err(anyhow::Error::from),
+            };
+            let (route, bearer) = built
+                .map(|(route, bearer)| {
+                    (
+                        route.with_backend_id(agent.backend_id.as_deref().unwrap_or("")),
+                        bearer,
+                    )
+                })
+                .with_context(|| {
+                    format!(
+                        "building the {kind} completion client for agent {}",
+                        agent.agent_id
+                    )
+                })?;
             Ok(BackendClient::AnthropicApiKey(
                 crate::claude_subscription::ClaudeSubscriptionClient::with_platform(
                     agent.node_did(),
                     agent.backend_id.as_deref().unwrap_or(""),
-                    api_key.to_owned(),
+                    bearer,
                     route,
                 ),
             ))
@@ -537,6 +581,11 @@ mod tests {
                 "https://bedrock-mantle.us-west-2.api.aws/anthropic",
                 Some(("region", "us-west-2")),
             ),
+            (
+                BackendProviderKind::ClaudeBedrock,
+                "https://bedrock-runtime.us-west-2.amazonaws.com",
+                Some(("region", "us-west-2")),
+            ),
         ] {
             let mut agent = test_agent(kind, crate::OpenAiWireApi::ChatCompletions);
             agent.backend_endpoint = endpoint.to_owned();
@@ -571,32 +620,121 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_platform_without_a_send_path_or_with_cloud_credentials_fails_to_build_with_the_reason(
-    ) {
+    async fn google_credentials_build_a_vertex_client_and_a_bad_key_file_fails_with_the_reason() {
         let node = test_node().await;
-        let mut bedrock = test_agent(
-            BackendProviderKind::ClaudeBedrock,
+        let mut vertex = test_agent(
+            BackendProviderKind::ClaudeVertex,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        bedrock.backend_endpoint = "https://bedrock-runtime.us-west-2.amazonaws.com".into();
-        bedrock.claude_platform =
-            Some(serde_json::from_value(serde_json::json!({"region": "us-west-2"})).unwrap());
+        vertex.backend_endpoint = "https://us-east5-aiplatform.googleapis.com/v1".into();
+        vertex.claude_platform =
+            Some(serde_json::from_value(serde_json::json!({"project": "p"})).unwrap());
+        vertex.backend_auth = crate::document_config::BackendAuth::GoogleCredentials {
+            credentials_json: serde_json::json!({
+                "type": "authorized_user",
+                "client_id": "c",
+                "client_secret": "secret-never-printed",
+                "refresh_token": "r",
+                "quota_project_id": "billing",
+            })
+            .to_string(),
+        };
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &vertex,
+            "no-key",
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error:#}"));
+        let BackendClient::AnthropicApiKey(client) = &client else {
+            panic!("not a Messages client");
+        };
+        assert_eq!(client.route.quota_project.as_deref(), Some("billing"));
+        assert!(client.route.vertex.is_some());
+        assert!(!format!("{:?}", client.route).contains("secret-never-printed"));
+
+        vertex.backend_auth = crate::document_config::BackendAuth::GoogleCredentials {
+            credentials_json: r#"{"type":"external_account"}"#.into(),
+        };
         let error = build_backend_client(
             std::sync::Arc::default(),
             node,
-            &bedrock,
-            "placeholder-key",
+            &vertex,
+            "no-key",
             Duration::from_secs(1),
         )
         .await
         .err()
-        .expect("bedrock has no send path yet");
+        .expect("an external account file");
         let text = format!("{error:#}");
         assert!(
-            text.contains("Amazon Bedrock backends are not available yet"),
+            text.contains("external_account credentials are not supported"),
             "{text}"
         );
-        assert!(!text.contains("placeholder-key"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn aws_credentials_build_a_signing_route_for_each_aws_platform_and_no_other() {
+        let node = test_node().await;
+        for (kind, endpoint) in [
+            (
+                BackendProviderKind::ClaudeBedrock,
+                "https://bedrock-runtime.us-west-2.amazonaws.com",
+            ),
+            (
+                BackendProviderKind::ClaudeMantle,
+                "https://bedrock-mantle.us-west-2.api.aws/anthropic",
+            ),
+        ] {
+            let mut agent = test_agent(kind, crate::OpenAiWireApi::ChatCompletions);
+            agent.backend_endpoint = endpoint.to_owned();
+            agent.backend_auth = crate::document_config::BackendAuth::AwsCredentials {
+                access_key_id: "AKIDEXAMPLE".into(),
+                secret_access_key: "secret-never-printed".into(),
+                session_token: None,
+            };
+            agent.claude_platform =
+                Some(serde_json::from_value(serde_json::json!({"region": "us-west-2"})).unwrap());
+            let client = build_backend_client(
+                std::sync::Arc::default(),
+                node.clone(),
+                &agent,
+                "no-key",
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{kind}: {error:#}"));
+            let BackendClient::AnthropicApiKey(client) = &client else {
+                panic!("{kind}: not a Messages client");
+            };
+            assert!(client.route.signing.is_some(), "{kind}");
+            assert!(!format!("{:?}", client.route).contains("secret-never-printed"));
+        }
+        let mut blank = test_agent(
+            BackendProviderKind::ClaudeBedrock,
+            crate::OpenAiWireApi::ChatCompletions,
+        );
+        blank.backend_endpoint = "https://bedrock-runtime.us-west-2.amazonaws.com".into();
+        blank.backend_auth = crate::document_config::BackendAuth::AwsCredentials {
+            access_key_id: " ".into(),
+            secret_access_key: "s".into(),
+            session_token: None,
+        };
+        blank.claude_platform =
+            Some(serde_json::from_value(serde_json::json!({"region": "us-west-2"})).unwrap());
+        let error = build_backend_client(
+            std::sync::Arc::default(),
+            node,
+            &blank,
+            "no-key",
+            Duration::from_secs(1),
+        )
+        .await
+        .err()
+        .expect("blank access key");
+        assert!(format!("{error:#}").contains("access key id"), "{error:#}");
     }
 
     async fn seed_oauth_credential(

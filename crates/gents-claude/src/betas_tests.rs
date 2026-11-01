@@ -466,3 +466,61 @@ fn the_effort_gate_agrees_with_the_body_for_every_provider() {
         );
     }
 }
+
+#[test]
+fn bedrock_keeps_its_body_betas_and_copies_the_thinking_betas_after_them() {
+    let request = Request {
+        provider: Provider::Bedrock,
+        subscriber: false,
+        cache_one_hour: false,
+        ..MAIN_THREAD
+    };
+    let split = select_split(&OPUS_5_5, &request);
+    assert_eq!(split.header, select(&OPUS_5_5, &request));
+    assert_eq!(
+        split.body,
+        [
+            INTERLEAVED_THINKING,
+            THINKING_TOKEN_COUNT,
+            THINKING_DISPLAY_UPDATES
+        ]
+    );
+    // A `[1m]` request adds the long-context beta to the body, in push order.
+    let long = select_split(
+        &ModelTraits {
+            native_1m: false,
+            ..OPUS_5_5
+        },
+        &Request {
+            long_context_suffix: true,
+            ..request
+        },
+    );
+    assert_eq!(long.body[..2], [CONTEXT_1M, INTERLEAVED_THINKING]);
+    assert!(!long.header.contains(&CONTEXT_1M));
+    // Every other provider keeps all betas in the header.
+    for provider in PROVIDERS.into_iter().filter(|p| *p != Provider::Bedrock) {
+        let split = select_split(
+            &OPUS_5_5,
+            &Request {
+                provider,
+                ..request
+            },
+        );
+        assert!(split.body.is_empty(), "{provider:?}");
+    }
+}
+
+#[test]
+fn bedrock_without_a_body_beta_has_no_body_array() {
+    // Haiku 4.5 takes no interleaved thinking on Bedrock, so nothing moves to the body.
+    let split = select_split(
+        &HAIKU_4_5,
+        &Request {
+            provider: Provider::Bedrock,
+            subscriber: false,
+            ..MAIN_THREAD
+        },
+    );
+    assert!(split.body.is_empty(), "{split:?}");
+}

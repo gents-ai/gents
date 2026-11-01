@@ -335,3 +335,17 @@ fn prompt_ids_must_be_uuids() {
         assert!(!is_uuid(bad), "{bad}");
     }
 }
+
+#[test]
+fn a_signed_request_has_no_credential_header() {
+    let names: Vec<&str> = request_headers(&HeaderContext {
+        auth: Auth::None,
+        ..base()
+    })
+    .iter()
+    .map(|(name, _)| *name)
+    .collect();
+    assert!(!names.contains(&"Authorization") && !names.contains(&"X-Api-Key"));
+    assert!(names.contains(&"anthropic-version") && names.contains(&"x-app"));
+    assert_eq!(format!("{:?}", Auth::None), "Auth::None");
+}

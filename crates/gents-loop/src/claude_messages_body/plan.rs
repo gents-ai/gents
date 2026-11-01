@@ -160,6 +160,9 @@ pub struct ClaudeTarget {
     pub provider: Provider,
     /// The attribution `cc_gateway` value (`attribution::gateway_mark`); only a gateway has one.
     pub gateway_mark: Option<&'static str>,
+    /// The request goes to the provider's own endpoint, not a custom base URL
+    /// (the premise of eager tool input streaming, `k5t`).
+    pub default_endpoint: bool,
 }
 
 impl ClaudeTarget {
@@ -167,14 +170,23 @@ impl ClaudeTarget {
     pub const FIRST_PARTY: Self = Self {
         provider: Provider::FirstParty,
         gateway_mark: None,
+        default_endpoint: true,
     };
 
-    /// A platform other than the first-party API.
+    /// A platform other than the first-party API, at its own endpoint.
     pub const fn platform(provider: Provider, gateway_mark: Option<&'static str>) -> Self {
         Self {
             provider,
             gateway_mark,
+            default_endpoint: true,
         }
+    }
+
+    /// The same target at a custom base URL (or not).
+    #[must_use]
+    pub const fn at_default_endpoint(mut self, default_endpoint: bool) -> Self {
+        self.default_endpoint = default_endpoint;
+        self
     }
 
     fn first_party(self) -> bool {
@@ -189,6 +201,11 @@ pub struct ClaudeRequestPlan {
     pub body: MessagesRequest,
     /// The `anthropic-beta` names in Claude Code's order.
     pub betas: Vec<&'static str>,
+    /// The betas Bedrock takes in the body's `anthropic_beta` array; empty elsewhere.
+    pub body_betas: Vec<&'static str>,
+    /// The first-party id of the catalog model the body's model id was
+    /// translated from, when it was; the key of Bedrock's profile lookup.
+    pub translated_from: Option<&'static str>,
     /// The wire mode of the request's origin.
     pub mode: WireMode,
     /// The Claude session UUID.
@@ -294,7 +311,10 @@ fn plan_for_target(
         output_format: request.output_schema.is_some(),
         experimental_betas_disabled: false,
     };
-    let selected = betas::select(&traits, &beta_request);
+    let betas::Selection {
+        header: selected,
+        body: body_betas,
+    } = betas::select_split(&traits, &beta_request);
     fields.display_updates = betas::display_updates(&traits, &beta_request);
     fields.context_management_beta = selected.contains(&betas::CONTEXT_MANAGEMENT);
     fields.per_turn_control_beta = selected.contains(&betas::PER_TURN_CONTROL);
@@ -349,6 +369,10 @@ fn plan_for_target(
         caching.then(|| marker.clone()),
     );
 
+    let eager_tools = resolved.eager_streaming.enabled(
+        catalog::CatalogProvider::from(target.provider),
+        target.default_endpoint,
+    );
     let tools = request
         .tools
         .iter()
@@ -357,7 +381,7 @@ fn plan_for_target(
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: to_raw_value(&tool.parameters)?,
-                eager_input_streaming: false,
+                eager_input_streaming: eager_tools,
             })
         })
         .collect::<Result<Vec<_>, serde_json::Error>>()?;
@@ -398,6 +422,8 @@ fn plan_for_target(
             stream: true,
         },
         betas: selected,
+        body_betas,
+        translated_from: resolved.translated_from,
         mode,
         session_id: ids.session.clone(),
         prompt_id: ids.prompt.clone(),
@@ -413,6 +439,8 @@ struct ResolvedModel {
     canonical: String,
     capabilities: &'static [&'static str],
     native_1m: bool,
+    eager_streaming: catalog::EagerStreaming,
+    translated_from: Option<&'static str>,
 }
 
 impl ResolvedModel {
@@ -446,6 +474,8 @@ impl ResolvedModel {
                     canonical: model.id.to_owned(),
                     capabilities: model.capabilities,
                     native_1m: model.context.is_some_and(|context| context.native_1m),
+                    eager_streaming: model.eager_input_streaming,
+                    translated_from: translate.then_some(model.provider_ids.first_party),
                 }
             }
             None => Self {
@@ -455,6 +485,11 @@ impl ResolvedModel {
                 canonical: base.to_owned(),
                 capabilities: &[],
                 native_1m: false,
+                eager_streaming: catalog::EagerStreaming {
+                    bedrock: false,
+                    vertex: false,
+                },
+                translated_from: None,
             },
         }
     }

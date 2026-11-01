@@ -267,17 +267,17 @@ impl ClaudeSubscriptionClient<ApiKeyBearer> {
         }
     }
 
-    /// A Claude platform backend sending its static `key` along `route`.
+    /// A Claude platform backend sending `bearer`'s credential along `route`.
     pub(crate) fn with_platform(
         node_did: &str,
         backend_id: &str,
-        key: String,
+        bearer: ApiKeyBearer,
         route: ClaudeRoute,
     ) -> Self {
         Self {
             accounts: Arc::from([ClaudeAccount {
                 credential_id: String::new(),
-                bearer: Arc::new(ApiKeyBearer::new(key)),
+                bearer: Arc::new(bearer),
                 usage: None,
                 identity: AccountIdentity::of_platform(node_did, backend_id),
             }]),
@@ -587,22 +587,44 @@ where
     }
 }
 
-/// An Anthropic API key as the bearer. No `Debug`, so the key cannot reach logs.
-pub struct ApiKeyBearer(String);
+/// A static credential as the bearer: an Anthropic API key or a platform's
+/// key or token, or the access tokens Google credentials mint. No `Debug`, so
+/// the key cannot reach logs.
+pub struct ApiKeyBearer(StaticCredential);
+
+enum StaticCredential {
+    Key(String),
+    Google(crate::claude_messages::GoogleTokenSource),
+}
 
 impl ApiKeyBearer {
     pub fn new(key: impl Into<String>) -> Self {
-        Self(key.into())
+        Self(StaticCredential::Key(key.into()))
+    }
+
+    /// The access tokens of Google credentials, refreshed and replayed on a 401.
+    pub(crate) fn google(source: crate::claude_messages::GoogleTokenSource) -> Self {
+        Self(StaticCredential::Google(source))
     }
 }
 
 impl BearerSource for ApiKeyBearer {
     async fn current_bearer(&self) -> Result<String> {
-        Ok(self.0.clone())
+        match &self.0 {
+            StaticCredential::Key(key) => Ok(key.clone()),
+            // Boxed so a static key's bearer future stays small.
+            StaticCredential::Google(source) => Box::pin(source.current_bearer()).await,
+        }
+    }
+
+    async fn invalidate(&self) {
+        if let StaticCredential::Google(source) = &self.0 {
+            source.invalidate();
+        }
     }
 
     fn is_oauth(&self) -> bool {
-        false
+        matches!(self.0, StaticCredential::Google(_))
     }
 }
 

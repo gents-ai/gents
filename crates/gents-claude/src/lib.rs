@@ -14,10 +14,12 @@
 //! `wasm32-wasip1`; the `transport` feature adds the native HTTP/1.1 client.
 
 pub mod attribution;
+pub mod bedrock;
 pub mod betas;
 pub mod body;
 pub mod cache;
 pub mod catalog;
+pub mod eventstream;
 pub mod headers;
 pub mod metadata;
 pub mod oauth;
@@ -28,8 +30,10 @@ pub mod ratelimit;
 pub mod request;
 pub mod retry;
 pub mod rotation;
+pub mod sigv4;
 pub mod sse;
 pub mod system;
 #[cfg(feature = "transport")]
 pub mod transport;
+pub mod vertex;
 pub mod wire;

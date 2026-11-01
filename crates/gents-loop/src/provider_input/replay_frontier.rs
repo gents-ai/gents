@@ -339,6 +339,45 @@ mod tests {
     }
 
     #[test]
+    fn a_bedrock_body_keeps_one_prefix_across_turns() {
+        // Bedrock drops `model` and `stream` and appends the constant version and
+        // the model's beta array: all request constants, so consecutive turns of
+        // one backend flatten to the same context item and the replay frontier holds.
+        let turn = |messages: Value| {
+            json!({
+                "messages": messages,
+                "system": [{"type": "text", "text": "identity"}],
+                "tools": [],
+                "metadata": {"user_id": "u"},
+                "max_tokens": 64000,
+                "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+                "anthropic_version": "bedrock-2023-05-31"
+            })
+        };
+        let first = flatten(
+            &turn(json!([{"role": "user", "content": "one"}])),
+            ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        let later = flatten(
+            &turn(json!([
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+                {"role": "user", "content": "two"}
+            ])),
+            ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        assert_eq!(first[..2], later[..2]);
+        let FlatItem::Ordinary(context) = &first[0] else {
+            panic!("context first")
+        };
+        let context: Value = serde_json::from_slice(context).unwrap();
+        assert_eq!(context["anthropic_version"], "bedrock-2023-05-31");
+        assert!(context.get("model").is_none() && context.get("stream").is_none());
+    }
+
+    #[test]
     fn responses_flattening_keeps_argument_strings_and_unknown_context() {
         let arguments = "{\"cache_control\": \"retain spacing\"}";
         let call = json!({"type": "function_call", "call_id": "call", "name": "inspect",

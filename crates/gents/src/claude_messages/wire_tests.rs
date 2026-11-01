@@ -27,8 +27,11 @@ const SSE_DONE: &str = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n
 
 pub(super) struct Reply {
     pub(super) status: &'static str,
+    /// Extra response headers; a `content-type` here replaces the JSON default.
     pub(super) headers: &'static [(&'static str, &'static str)],
     pub(super) body: &'static str,
+    /// Binary body bytes, sent instead of `body` when not empty.
+    pub(super) raw: &'static [u8],
 }
 
 pub(super) const fn reply(status: &'static str, body: &'static str) -> Reply {
@@ -36,6 +39,20 @@ pub(super) const fn reply(status: &'static str, body: &'static str) -> Reply {
         status,
         headers: &[],
         body,
+        raw: &[],
+    }
+}
+
+/// A 200 with binary `raw` bytes under `content_type`.
+pub(super) const fn raw_reply(
+    content_type: &'static [(&'static str, &'static str)],
+    raw: &'static [u8],
+) -> Reply {
+    Reply {
+        status: "200 OK",
+        headers: content_type,
+        body: "",
+        raw,
     }
 }
 
@@ -66,13 +83,28 @@ impl Server {
                     .iter()
                     .map(|(name, value)| format!("{name}: {value}\r\n"))
                     .collect();
-                let text = format!(
-                    "HTTP/1.1 {}\r\ncontent-type: application/json\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{}",
+                let default_type = if reply
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                {
+                    ""
+                } else {
+                    "content-type: application/json\r\n"
+                };
+                let body = if reply.raw.is_empty() {
+                    reply.body.as_bytes()
+                } else {
+                    reply.raw
+                };
+                let mut bytes = format!(
+                    "HTTP/1.1 {}\r\n{default_type}{extra}content-length: {}\r\nconnection: close\r\n\r\n",
                     reply.status,
-                    reply.body.len(),
-                    reply.body
-                );
-                socket.write_all(text.as_bytes()).await.expect("write");
+                    body.len(),
+                )
+                .into_bytes();
+                bytes.extend_from_slice(body);
+                socket.write_all(&bytes).await.expect("write");
                 socket.shutdown().await.ok();
             }
         });
@@ -381,6 +413,7 @@ async fn a_gzip_rejection_latches_gzip_off_and_resends_plain_once() {
             status: "400 Bad Request",
             headers: &[("request-id", "req_011")],
             body: r#"{"type":"error","error":{"type":"invalid_request_error","message":"The request body is not valid JSON"}}"#,
+            raw: &[],
         },
         reply("200 OK", SSE_DONE),
         reply("200 OK", SSE_DONE),
@@ -528,6 +561,7 @@ async fn usage_headers_are_observed_on_success_and_on_error() {
                 ("anthropic-ratelimit-unified-5h-reset", "1790354400"),
             ],
             body: "{}",
+            raw: &[],
         }])
         .await;
         let reporter = UsageReporter::new(cache.clone(), node.clone(), account.clone());

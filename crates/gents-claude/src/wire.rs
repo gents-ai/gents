@@ -290,6 +290,35 @@ impl RawObject {
         serde_json::from_str(self.get("type")?.get()).ok()
     }
 
+    /// Whether the object has `key`.
+    pub fn contains(&self, key: &str) -> bool {
+        self.0.iter().any(|(k, _)| k == key)
+    }
+
+    /// Removes `key`, keeping the order of the rest.
+    pub fn remove(&mut self, key: &str) -> Option<Box<RawValue>> {
+        let at = self.0.iter().position(|(k, _)| k == key)?;
+        Some(self.0.remove(at).1)
+    }
+
+    /// Appends `key` as the last entry, replacing an existing one's value in place.
+    pub fn push(&mut self, key: &str, value: Box<RawValue>) {
+        match self.0.iter_mut().find(|(k, _)| k == key) {
+            Some(slot) => slot.1 = value,
+            None => self.0.push((key.to_owned(), value)),
+        }
+    }
+
+    /// Inserts `key` before the first entry named in `before`, else appends it.
+    pub fn insert_before(&mut self, before: &[&str], key: &str, value: Box<RawValue>) {
+        let at = self
+            .0
+            .iter()
+            .position(|(k, _)| before.contains(&k.as_str()))
+            .unwrap_or(self.0.len());
+        self.0.insert(at, (key.to_owned(), value));
+    }
+
     fn set_cache_control(&mut self, cc: &CacheControl) {
         // JS `{...block, cache_control}` places the key last.
         self.0.retain(|(k, _)| k != "cache_control");

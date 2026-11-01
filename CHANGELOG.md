@@ -14,10 +14,18 @@ source consistency checks, not a separate runtime compatibility version.
   which each platform's default base URL derives. `ClaudeGateway`,
   `ClaudeFoundry`, `ClaudeAnthropicAws` and `ClaudeMantle` send with a static
   key or token (`api_key` or `environment` auth), the body, betas, model ids
-  and headers Claude Code sends on that platform. `ClaudeBedrock`,
-  `ClaudeVertex` and `ClaudeGoogleCloud` are configurable but have no send path
-  yet. Backend auth gains `aws_credentials` and `google_credentials`, stored
-  secrets an agent can keep but never set, for the platforms that sign.
+  and headers Claude Code sends on that platform. `ClaudeBedrock` sends the
+  Bedrock runtime request (the model in the path, the rewritten body, the
+  region-prefix and inference-profile model id, the event-stream answer) with a
+  bearer token or AWS credentials, and `ClaudeMantle` and `ClaudeAnthropicAws`
+  also sign with AWS credentials. `ClaudeVertex` sends the `streamRawPredict`
+  request (the model in the path, the rewritten body, the key file's quota
+  project) and `ClaudeGoogleCloud` the Messages request under its workspace,
+  both with access tokens minted from `google_credentials`. Backend auth gains
+  `aws_credentials` (static keys, signed with AWS Signature Version 4) and
+  `google_credentials` (a service account key or an authorized user file),
+  stored secrets an agent can keep but never set. AWS profiles, SSO and
+  instance credentials, and other Google credential types, are not read.
 - `gents config backend pool <backend-id>` and the desktop backend editor
   switch a Claude subscription backend between one account and an account pool,
   and set whether the pool may use paid extra usage. Both call one operator

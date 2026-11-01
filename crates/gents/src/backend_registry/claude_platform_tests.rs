@@ -254,8 +254,9 @@ fn cloud_credentials_decode_and_never_print_their_secrets() {
         }
         assert!(auth.is_stored_secret());
         assert_eq!(auth.probe_key().unwrap(), None);
-        let error = auth.resolve_api_key().unwrap_err().to_string();
-        assert!(!error.contains("secret"), "{error}");
+        // AWS credentials sign each request and Google credentials mint
+        // tokens: neither is a key to send.
+        assert_eq!(auth.resolve_api_key().unwrap(), None);
     }
     let no_token: BackendAuth = serde_json::from_value(json!({
         "kind": "aws_credentials", "access_key_id": "AKID", "secret_access_key": "s"

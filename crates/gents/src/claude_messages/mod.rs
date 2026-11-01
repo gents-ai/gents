@@ -1,7 +1,9 @@
 //! The Claude Messages client: the SSE parser ([`sse`]), the open and 401 replay
-//! path ([`send`]), the Bun-exact transport ([`transport`]) and the error text
-//! of a rejected response ([`error`]). Public paths are those of the former
-//! single module.
+//! path ([`send`]), the Bun-exact transport ([`transport`]), the error text
+//! of a rejected response ([`error`]), AWS request signing ([`aws`]), the
+//! Amazon Bedrock model id, profile list and event-stream answer ([`bedrock`])
+//! and the Google access tokens of Vertex AI and Google Cloud ([`google`]).
+//! Public paths are those of the former single module.
 
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -13,7 +15,10 @@ use thiserror::Error;
 
 use gents_claude::profile;
 
+mod aws;
+mod bedrock;
 mod error;
+mod google;
 mod route;
 mod send;
 mod sse;
@@ -26,6 +31,7 @@ pub(crate) use error::non_success_message;
 pub(crate) use error::{body_prefix, non_success_error, NON_SUCCESS_BODY_PREFIX_BYTES};
 #[cfg(test)]
 use gents_loop::claude_messages_body::ClaudeAccountContext;
+pub(crate) use google::{GoogleCredentials, GoogleTokenSource};
 pub(crate) use route::ClaudeRoute;
 pub(crate) use send::open_messages_at;
 pub use send::stream_messages;
@@ -186,6 +192,12 @@ pub(crate) fn sse_fixture_final_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bedrock_wire_tests;
+
+#[cfg(test)]
+mod google_wire_tests;
 
 #[cfg(test)]
 mod platform_wire_tests;

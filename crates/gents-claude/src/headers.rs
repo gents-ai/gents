@@ -51,6 +51,9 @@ pub enum Auth<'a> {
     Bearer(&'a str),
     /// API key, sent as `X-Api-Key`.
     ApiKey(&'a str),
+    /// No credential header: the request is signed afterwards (AWS Signature
+    /// Version 4), which supplies its own `authorization`.
+    None,
 }
 
 impl fmt::Debug for Auth<'_> {
@@ -58,6 +61,7 @@ impl fmt::Debug for Auth<'_> {
         f.write_str(match self {
             Auth::Bearer(_) => "Auth::Bearer(<redacted>)",
             Auth::ApiKey(_) => "Auth::ApiKey(<redacted>)",
+            Auth::None => "Auth::None",
         })
     }
 }
@@ -271,17 +275,20 @@ pub fn request_headers(ctx: &HeaderContext<'_>) -> Vec<(&'static str, HeaderValu
     push(BROWSER_ACCESS, "true".into());
     push("anthropic-version", profile::ANTHROPIC_VERSION.into());
 
-    let (name, value) = match ctx.auth {
-        Auth::Bearer(token) => ("Authorization", format!("Bearer {token}")),
-        Auth::ApiKey(key) => ("X-Api-Key", key.to_owned()),
+    let credential = match ctx.auth {
+        Auth::Bearer(token) => Some(("Authorization", format!("Bearer {token}"))),
+        Auth::ApiKey(key) => Some(("X-Api-Key", key.to_owned())),
+        Auth::None => None,
     };
-    headers.push((
-        name,
-        HeaderValue {
-            value,
-            sensitive: true,
-        },
-    ));
+    if let Some((name, value)) = credential {
+        headers.push((
+            name,
+            HeaderValue {
+                value,
+                sensitive: true,
+            },
+        ));
+    }
     let mut push = |name: &'static str, value: String| {
         headers.push((
             name,

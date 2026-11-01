@@ -165,6 +165,22 @@ pub struct Request {
 /// The betas of one request attempt in Claude Code's push order. O(1): the
 /// list has a fixed bound of 17 entries.
 pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
+    select_split(model, request).header
+}
+
+/// The betas of one attempt split by where they travel: the `anthropic-beta`
+/// header, and the body's `anthropic_beta` array that only Bedrock takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    /// The `anthropic-beta` header betas, in push order.
+    pub header: Vec<&'static str>,
+    /// Bedrock's body betas (`cXo`, then the thinking betas `Tve` appends once
+    /// the array exists); empty for every other provider.
+    pub body: Vec<&'static str>,
+}
+
+/// [`select`] with Bedrock's body betas kept rather than dropped.
+pub fn select_split(model: &ModelTraits<'_>, request: &Request) -> Selection {
     let mut betas: Vec<&'static str> = Vec::with_capacity(16);
     let first_party_only =
         request.provider.first_party_like() && !request.experimental_betas_disabled;
@@ -265,16 +281,34 @@ pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
         CACHE_DIAGNOSIS,
         first_party_only && first_party_default_url,
     );
-    // `ree` moves these to Bedrock's request body (`anthropic_beta`), which the
-    // Bedrock transport writes.
-    if request.provider == Provider::Bedrock {
-        betas.retain(|beta| !BEDROCK_BODY_BETAS.contains(beta));
-    }
     // `oar`: a provider that is not first-party-like only receives this subset.
     if !request.provider.first_party_like() {
         betas.retain(|beta| THIRD_PARTY_BETAS.contains(beta));
     }
-    betas
+    // `ree` moves the `FEn` betas out of the header into Bedrock's request body
+    // (`anthropic_beta`); `Tve` then copies the thinking betas there, but only
+    // once that array exists.
+    let mut body = Vec::new();
+    if request.provider == Provider::Bedrock {
+        body.extend(
+            betas
+                .iter()
+                .copied()
+                .filter(|beta| BEDROCK_BODY_BETAS.contains(beta)),
+        );
+        betas.retain(|beta| !BEDROCK_BODY_BETAS.contains(beta));
+        if !body.is_empty() {
+            body.extend(
+                BEDROCK_BODY_COPIED_BETAS
+                    .into_iter()
+                    .filter(|beta| betas.contains(beta)),
+            );
+        }
+    }
+    Selection {
+        header: betas,
+        body,
+    }
 }
 
 /// Whether the request takes `thinking-display-updates` and sends
@@ -288,6 +322,13 @@ pub fn display_updates(model: &ModelTraits<'_>, request: &Request) -> bool {
 
 /// Betas Bedrock takes in the request body rather than the header (`FEn`).
 pub const BEDROCK_BODY_BETAS: [&str; 2] = [INTERLEAVED_THINKING, CONTEXT_1M];
+
+/// Header betas `Tve` also copies into Bedrock's body array, in its call order.
+const BEDROCK_BODY_COPIED_BETAS: [&str; 3] = [
+    THINKING_TOKEN_COUNT,
+    THINKING_BINDING_CONTROLS,
+    THINKING_DISPLAY_UPDATES,
+];
 
 /// The betas sent to a provider that is not first-party-like (`sw`), limited to
 /// the ones this selection can produce.
