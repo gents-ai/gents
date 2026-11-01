@@ -30,7 +30,9 @@ import { EditorSheet } from "./EditorSheet";
 import { TriggerEditor } from "./TriggersPanel";
 import { sourceInWords, triggerReadiness } from "./automation";
 import { Switch } from "@gents/ui/components/switch";
-import { ExternalLink, Pencil, Plus } from "lucide-react";
+import { ExternalLink, Pencil, Play, Plus } from "lucide-react";
+import { Hint } from "../Hint";
+import { href } from "@/lib/router";
 import { toastFailure } from "@/lib/failure";
 import { agentOf } from "@/lib/agents";
 import { Badge } from "@gents/ui/components/badge";
@@ -128,7 +130,8 @@ export function TaskEditor({
     deployment.triggers.find((x) => x.config.trigger_id === besideTrigger) ?? null;
   const [adding, setAdding] = useState<"schedule" | "event" | null>(null);
   const [args, setArgs] = useState("{}");
-  const [lastRun, setLastRun] = useState<string | null>(null);
+  /* the session the page's last Run started, for the Last run card */
+  const [started, setStarted] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const id = (f: string) => `${task.taskId}-${f}`;
   const agents = deployment.agents.map((b) => ({
@@ -156,8 +159,7 @@ export function TaskEditor({
     try {
       const r = await pending;
       if (!acceptsComposeIntent(intentGeneration)) return;
-      setLastRun(r.requestId);
-      toast(`Task started · ${r.requestId}`);
+      setStarted(r.sessionId);
     } catch (error) {
       if (!acceptsComposeIntent(intentGeneration)) return;
       toastFailure("start the task", error);
@@ -165,6 +167,22 @@ export function TaskEditor({
       setRunning(false);
     }
   };
+  /* a template that names {{placeholders}} needs its args filled first */
+  const takesArgs = /\{\{\s*[\w.]+\s*\}\}/.test(
+    `${d.draft.promptTemplate}\n${d.draft.goalObjectiveTemplate}`,
+  );
+  const startRun = () => {
+    if (takesArgs && args.replace(/\s/g, "") === "{}") {
+      focusField(id("args"));
+      return;
+    }
+    void run();
+  };
+  const runBlocked = !d.draft.enabled
+    ? "Enable the task to run it"
+    : d.dirty
+      ? "Save your changes first"
+      : null;
   return (
     <>
       {!embedded && (
@@ -178,6 +196,12 @@ export function TaskEditor({
               tags: d.draft.tags,
               enabled: d.draft.enabled,
               onEnabled: (v) => d.set("enabled", v),
+            }}
+            run={{
+              onRun: startRun,
+              running,
+              blocked: runBlocked,
+              started,
             }}
             edit={{
               open: editing,
@@ -464,9 +488,11 @@ export function TaskEditor({
       <Group
         title="Manual run"
         action={
-          <Button size="sm" variant="brand" disabled={running} onClick={run}>
-            {running ? "Starting…" : "Run task"}
-          </Button>
+          embedded ? (
+            <Button size="sm" variant="brand" disabled={running} onClick={run}>
+              {running ? "Starting…" : "Run task"}
+            </Button>
+          ) : undefined
         }
       >
         <Row label="Args" description="Must be a JSON object." htmlFor={id("args")}>
@@ -478,9 +504,14 @@ export function TaskEditor({
             className="max-h-48 w-96 max-md:w-full font-mono text-xs"
           />
         </Row>
-        {lastRun && (
-          <FactRow label="Started" mono>
-            {lastRun}
+        {embedded && started && (
+          <FactRow label="Started">
+            <a
+              href={href({ name: "session", sessionId: started })}
+              className="underline-offset-2 hover:underline"
+            >
+              Open session
+            </a>
           </FactRow>
         )}
       </Group>
@@ -508,6 +539,7 @@ function TaskSummary({
   task,
   draft,
   edit,
+  run,
 }: {
   deployment: NodeView;
   task: TaskView;
@@ -520,6 +552,14 @@ function TaskSummary({
     onEnabled: (enabled: boolean) => void;
   };
   edit: { open: boolean; onToggle: () => void; onTags: () => void; controls: string };
+  run: {
+    onRun: () => void;
+    running: boolean;
+    /** why Run can't start now, if it can't */
+    blocked: string | null;
+    /** the session the last Run started from this page */
+    started: string | null;
+  };
 }) {
   const agent = agentOf(deployment, task.agentId);
   const runs = whenItRuns(deployment, task);
@@ -585,15 +625,30 @@ function TaskSummary({
             </ul>
           )}
         </div>
-        {/* switched here, saved with the rest of the form */}
-        <label className="flex shrink-0 items-center gap-2.5 text-sm">
-          {draft.enabled ? "Enabled" : "Disabled"}
-          <Switch
-            aria-label="Enabled"
-            checked={draft.enabled}
-            onCheckedChange={draft.onEnabled}
-          />
-        </label>
+        <div className="flex shrink-0 items-center gap-3">
+          {/* switched here, saved with the rest of the form */}
+          <label className="flex items-center gap-2.5 text-sm">
+            {draft.enabled ? "Enabled" : "Disabled"}
+            <Switch
+              aria-label="Enabled"
+              checked={draft.enabled}
+              onCheckedChange={draft.onEnabled}
+            />
+          </label>
+          <Hint label={run.blocked ?? "Run the task now"}>
+            {/* a disabled button takes no pointer, so its hint hangs on a wrapper */}
+            <span className="inline-flex" tabIndex={run.blocked ? 0 : undefined}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={Boolean(run.blocked) || run.running}
+                onClick={run.onRun}
+              >
+                <Play /> {run.running ? "Starting…" : "Run"}
+              </Button>
+            </span>
+          </Hint>
+        </div>
       </div>
       <div className="grid gap-2 @xl:grid-cols-3">
         <Summary
@@ -611,10 +666,19 @@ function TaskSummary({
         <Summary
           label="Last run"
           to={
-            last?.sessionId ? { name: "session", sessionId: last.sessionId } : undefined
+            run.started
+              ? { name: "session", sessionId: run.started }
+              : last?.sessionId
+                ? { name: "session", sessionId: last.sessionId }
+                : undefined
           }
         >
-          {task.recentRuns.lastAttemptAt ? (
+          {run.started ? (
+            <>
+              <StateDot tone="busy" />
+              <span className="truncate">Running…</span>
+            </>
+          ) : task.recentRuns.lastAttemptAt ? (
             <>
               <StateDot tone={failed ? "bad" : "idle"} />
               <span className="truncate">

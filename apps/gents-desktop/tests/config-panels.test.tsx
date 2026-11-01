@@ -2331,7 +2331,7 @@ describe("configuration panels", () => {
     renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
 
     await act(async () => {
-      screen.getByRole("button", { name: "Run task" }).click();
+      screen.getByRole("button", { name: "Run" }).click();
       await Promise.resolve();
     });
     expect(api.runTask).toHaveBeenCalledWith({
@@ -2345,8 +2345,39 @@ describe("configuration panels", () => {
       await pending;
     });
 
-    expect(screen.queryByText("stale-request")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Run task" })).toBeEnabled();
+    expect(screen.queryByText("Running…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  });
+
+  it("runs a task from its header, or asks for args its template names first", async () => {
+    const { api, app } = harness();
+    api.runTask.mockResolvedValue({ requestId: "run-1", sessionId: "session-run" });
+    const withArgs = {
+      ...deployment,
+      tasks: deployment.tasks.map((t) =>
+        t.taskId === "task-a" ? { ...t, promptTemplate: "Check {{host}}" } : t,
+      ),
+    };
+    const view = renderIn(app, <TasksPanel deployment={withArgs} item="task-a" />);
+    await act(async () => {
+      screen.getByRole("button", { name: "Run" }).click();
+      await new Promise((r) => requestAnimationFrame(r));
+    });
+    expect(api.runTask).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Args")).toHaveFocus();
+
+    view.unmount();
+    renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
+    await act(async () => {
+      screen.getByRole("button", { name: "Run" }).click();
+      await Promise.resolve();
+    });
+    expect(api.runTask).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Running…")).toBeVisible();
+    expect(screen.getByText("Running…").closest("a")).toHaveAttribute(
+      "href",
+      expect.stringContaining("session-run"),
+    );
   });
 
   it("preserves interval cadence and rejects non-positive intervals", async () => {
