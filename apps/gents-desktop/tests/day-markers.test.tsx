@@ -10,6 +10,7 @@ import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { dayLabel, dayOf, dayOpenings } from "../src/ui/screens/TranscriptMarker";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { NO_WORKERS } from "../src/ui/screens/workers";
+import userEvent from "@testing-library/user-event";
 import { renderIn, testApp } from "./app-fixture";
 import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixture";
 
@@ -118,7 +119,7 @@ describe("day markers in the transcript", () => {
 });
 
 describe("when each message was sent", () => {
-  it("sits in its actions: the time today, the date with it before", () => {
+  it("sits in its actions: the time today, the date with it before", async () => {
     const sent = at(1, 16);
     const replied = at(0, 9);
     const session = sessionSnapshot({
@@ -150,6 +151,13 @@ describe("when each message was sent", () => {
     expect(sentTime.textContent).toMatch(/\d/);
     expect(sentTime.textContent).not.toBe(replyTime.textContent!.trim());
     expect(replyTime.closest('[data-slot="message-actions"]')).not.toBeNull();
-    expect(replyTime.title).toBe(new Date(replied).toLocaleString());
+    await userEvent.hover(replyTime);
+    expect(
+      await screen.findByText(
+        new Date(replied).toLocaleString(),
+        {},
+        { timeout: 2000 },
+      ),
+    ).toBeInTheDocument();
   });
 });

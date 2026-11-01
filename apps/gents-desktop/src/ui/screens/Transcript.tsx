@@ -58,11 +58,14 @@ import {
 import { type ParentWork } from "./parentWork";
 import { useEditInBranch } from "./session/editInBranch";
 import { DayMarker, dayOpenings } from "./TranscriptMarker";
+import { Hint } from "./Hint";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
+import { duration } from "@/lib/duration";
+import { LONG_TURN_MS, turnsWorked } from "@/lib/turnWorked";
 import { TurnChanges } from "./TurnChanges";
 import { toastFailure } from "@/lib/failure";
 import { sessionViews } from "@/app/sessionViews";
@@ -104,14 +107,21 @@ function copyActions(text: string | null | undefined) {
 const ParentContext = createContext<ParentWork | null>(null);
 
 /* when a message was sent, beside its actions: the time, with the date
-   when it isn't today, and the full date and time on hover */
-function sentAt(at: string | null | undefined) {
+   when it isn't today, and the full date and time on hover, with how long
+   its turn worked; a long turn says that beside the time too */
+function sentAt(at: string | null | undefined, worked?: number) {
   const label = formatMessageTime(at);
-  return label ? (
-    <time dateTime={at!} title={new Date(at!).toLocaleString()}>
-      {label}
-    </time>
-  ) : undefined;
+  if (!label) return undefined;
+  const full = new Date(at!).toLocaleString();
+  const took = worked === undefined ? null : `Worked for ${duration(worked)}`;
+  return (
+    <>
+      <Hint label={took ? `${full} · ${took}` : full}>
+        <time dateTime={at!}>{label}</time>
+      </Hint>
+      {took && worked! > LONG_TURN_MS && <span> · {took}</span>}
+    </>
+  );
 }
 
 function OwnInput({
@@ -199,8 +209,11 @@ function SessionCompaction({
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
+  worked,
 }: {
   item: RenderedTimelineItem;
+  /** how long the turn this item ends worked, in milliseconds */
+  worked?: number;
 }) {
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
@@ -264,7 +277,7 @@ const TranscriptItem = memo(function TranscriptItem({
     }
     case "assistantMessage":
     case "liveAssistant":
-      return <Reply item={item} />;
+      return <Reply item={item} worked={worked} />;
     case "toolGroup":
       return null;
     case "requestContextReductionSummary":
@@ -334,8 +347,10 @@ function StoppedNotice({
 
 function Reply({
   item,
+  worked,
 }: {
   item: Extract<RenderedTimelineItem, { kind: "assistantMessage" | "liveAssistant" }>;
+  worked?: number;
 }) {
   const live = item.kind === "liveAssistant";
   return (
@@ -343,7 +358,7 @@ function Reply({
       <AssistantMessage
         className={item.content ? "py-4" : undefined}
         actions={!live && item.content ? copyActions(item.content) : false}
-        meta={!live && item.content ? sentAt(item.timestamp) : undefined}
+        meta={!live && item.content ? sentAt(item.timestamp, worked) : undefined}
       >
         {readableReasoning(item.reasoning) ? (
           <Reasoning
@@ -373,6 +388,7 @@ const ItemRow = memo(function ItemRow({
   rowKey,
   item,
   changes,
+  worked,
   day,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
@@ -380,6 +396,8 @@ const ItemRow = memo(function ItemRow({
   item: RenderedTimelineItem;
   /** the files the turn this row ends changed, in its session */
   changes?: ItemChanges;
+  /** how long the turn this row ends worked, in milliseconds */
+  worked?: number;
   /** the day this row opens, when it is the first of its day */
   day: number | null;
 }) {
@@ -396,7 +414,7 @@ const ItemRow = memo(function ItemRow({
           <DayMarker day={day} />
         </div>
       )}
-      <TranscriptItem item={item} />
+      <TranscriptItem item={item} worked={worked} />
       {changes && (
         <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
       )}
@@ -619,6 +637,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     keptChanges.current = next;
     return next;
   }, [entries, finalKeys, nodeDid, sessionKey]);
+  const worked = useMemo(() => turnsWorked(entries, finalKeys), [entries, finalKeys]);
   const groupState = useGroupState(sessionKey);
   const dayOpens = useMemo(
     () =>
@@ -815,6 +834,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
                         changes={changes.get(entry.key)}
+                        worked={worked.get(entry.key)}
                         day={dayOpens.get(entry.key) ?? null}
                       />
                     ) : (

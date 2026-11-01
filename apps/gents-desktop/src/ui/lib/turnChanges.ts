@@ -1,4 +1,7 @@
-import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  RenderedTimelineItem,
+  RenderedToolCallView,
+} from "@source-inc/gents-desktop-client";
 import type { TranscriptEntry } from "@/screens/transcript-groups";
 
 /** One applied edit by a native file tool: where its recorded before and
@@ -72,21 +75,21 @@ export function changedFiles(edits: readonly FileEdit[]): ChangedFile[] {
   return [...files.values()];
 }
 
-/** For each turn's final reply, by its entry key, the files the turn's
-    edits changed. A turn runs from a person's message to its final reply;
-    a turn still running has no final reply yet, so no entry. */
-export function turnChanges(
+type TurnTools = { reply: RenderedTimelineItem; tools: RenderedToolCallView[] };
+
+/** For each turn's final reply, by its entry key, the reply and the tool
+    calls the turn made. A turn runs from a person's message to its final
+    reply; a turn still running has no final reply yet, so no entry. */
+export function turnTools(
   entries: readonly TranscriptEntry[],
   finalKeys: ReadonlySet<string>,
-): Map<string, ChangedFile[]> {
-  const byFinal = new Map<string, ChangedFile[]>();
-  let edits: FileEdit[] = [];
+): Map<string, TurnTools> {
+  const byFinal = new Map<string, TurnTools>();
+  let tools: RenderedToolCallView[] = [];
   for (const entry of entries) {
     if (entry.kind === "group") {
-      for (const member of entry.members) {
-        const edit = member.kind === "tool" ? fileEditOf(member.tool) : null;
-        if (edit) edits.push(edit);
-      }
+      for (const member of entry.members)
+        if (member.kind === "tool") tools.push(member.tool);
       continue;
     }
     const kind = entry.item.kind;
@@ -95,11 +98,25 @@ export function turnChanges(
       kind === "pendingUserTurn" ||
       kind === "automatedInput"
     ) {
-      edits = [];
+      tools = [];
     } else if (finalKeys.has(entry.key)) {
-      if (edits.length) byFinal.set(entry.key, changedFiles(edits));
-      edits = [];
+      byFinal.set(entry.key, { reply: entry.item, tools });
+      tools = [];
     }
+  }
+  return byFinal;
+}
+
+/** For each turn's final reply, by its entry key, the files the turn's
+    edits changed, for the turns that changed any. */
+export function turnChanges(
+  entries: readonly TranscriptEntry[],
+  finalKeys: ReadonlySet<string>,
+): Map<string, ChangedFile[]> {
+  const byFinal = new Map<string, ChangedFile[]>();
+  for (const [key, { tools }] of turnTools(entries, finalKeys)) {
+    const edits = tools.flatMap((tool) => fileEditOf(tool) ?? []);
+    if (edits.length) byFinal.set(key, changedFiles(edits));
   }
   return byFinal;
 }
