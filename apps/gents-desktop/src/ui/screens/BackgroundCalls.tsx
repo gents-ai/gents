@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { SurfaceContext } from "@/app/surfaces";
-import { ArrowLeft, Ban, CircleCheck, CircleX, TriangleAlert } from "lucide-react";
+import {
+  ArrowLeft,
+  Ban,
+  CircleCheck,
+  CircleX,
+  Terminal,
+  TriangleAlert,
+} from "lucide-react";
+import { PanelEmpty } from "./PanelEmpty";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -397,14 +405,15 @@ export function BackgroundSurface({ sessionId }: SurfaceContext) {
   );
   if (log)
     return <BackgroundLog call={log} sessionId={sessionId} onBack={() => show(null)} />;
+  if (calls.length === 0)
+    return (
+      <PanelEmpty icon={Terminal} title="Nothing running">
+        Commands and jobs the agent leaves running show here.
+      </PanelEmpty>
+    );
   return (
     <ScrollArea className="h-full">
       <div className="px-3 py-2">
-        {calls.length === 0 && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Nothing is running in the background.
-          </p>
-        )}
         <BackgroundGroup calls={calls} sessionId={sessionId} onOpen={show} />
       </div>
     </ScrollArea>

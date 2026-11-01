@@ -314,7 +314,7 @@ describe("the running in background group", () => {
       wrapper: withApp(app),
     });
     expect(screen.queryByRole("region", { name: /background/ })).toBeNull();
-    expect(screen.getByText("Nothing is running in the background.")).toBeVisible();
+    expect(screen.getByText("Nothing running")).toBeVisible();
     expect(fetchOperationsSnapshot).not.toHaveBeenCalled();
   });
 
@@ -353,7 +353,7 @@ describe("the running in background group", () => {
       "title",
       "npm run build\nStopped responding 3 min ago",
     );
-    expect(screen.queryByText("Nothing is running in the background.")).toBeNull();
+    expect(screen.queryByText("Nothing running")).toBeNull();
   });
 
   it("opens a command's output from its row in the transcript", async () => {
