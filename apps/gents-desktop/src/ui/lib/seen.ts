@@ -24,22 +24,32 @@ export const seenMarkOf = (s: Seeable): SeenMark => ({
 
     It follows the latest request, not the activity time: a rename, a
     generated title or closing a session moves that time without new work.
-    A session another session started has no mark of its own; its starter's
-    covers it. One never seen here counts only work after `since`. */
-export function isNew(
+    One never seen here counts only work after `since`. */
+export function finishedSince(
   s: Seeable,
   seen: SeenMark | null,
   since: string | null,
 ): boolean {
-  if (s.startedBy || !s.latestRequestId || !ended(s)) return false;
+  if (!s.latestRequestId || !ended(s)) return false;
   if (seen) return seen.request !== s.latestRequestId || !seen.done;
   const at = Date.parse(s.updatedAt ?? "");
   return since !== null && at > Date.parse(since);
 }
 
-/** `isNew` for one session, following its mark and the device's start. */
-export function useIsNew(s: Seeable & IdentifiedSession): boolean {
+/** `finishedSince` for a session in a list of sessions. A session another
+    session started has no mark of its own there; its starter's covers it. */
+export const isNew = (s: Seeable, seen: SeenMark | null, since: string | null) =>
+  !s.startedBy && finishedSince(s, seen, since);
+
+/** `finishedSince` for one session, following its mark and the device's start. */
+export function useFinishedSince(s: Seeable & IdentifiedSession): boolean {
   const seen = useSeenMark(sessionKeyOf(s));
   const since = useSeenSince();
-  return isNew(s, seen, since);
+  return finishedSince(s, seen, since);
+}
+
+/** `isNew` for one session, following its mark and the device's start. */
+export function useIsNew(s: Seeable & IdentifiedSession): boolean {
+  const fresh = useFinishedSince(s);
+  return !s.startedBy && fresh;
 }

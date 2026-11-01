@@ -1,14 +1,16 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { DockTabs } from "@/app/Dock";
 import { getSurface } from "@/app/surfaces";
 import { workspace } from "@/app/workspace";
 import { startedUnder, startedUnderId } from "@/hooks/useFleet";
+import { resetSessionViews, seenMarks } from "../src/ui/app/sessionViews";
+import { sessionKeyOf } from "../src/hooks/fleetStore";
 import { StartedSessionsButton } from "../src/ui/screens/StartedSessionsButton";
 import { WorkersSurface } from "../src/ui/screens/WorkersSurface";
 import "../src/ui/screens/surfaces";
-import { node, testApp, withApp } from "./app-fixture";
+import { node, publish, testApp, withApp } from "./app-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   sessionId: "parent",
@@ -222,5 +224,81 @@ describe("what the started sessions dock counts", () => {
     ).toBeVisible();
     expect(screen.getByTestId("tab-badge-mark")).toHaveClass("bg-brand");
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  });
+});
+
+const later = () => new Date(Date.now() + 60_000).toISOString();
+
+describe("what each started session shows", () => {
+  beforeEach(() => {
+    workspace.reset();
+    resetSessionViews();
+  });
+
+  const row = (name: string) =>
+    screen.getByRole("link", { name }).closest("li") as HTMLElement;
+
+  it("shows a worker's last reply once it has stopped working", () => {
+    const reply = "fast done, with the release notes drafted";
+    render(<WorkersSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(
+        appWith([
+          session({}),
+          worker("done", { replyPreview: reply }),
+          worker("broke", { turnState: "failed", replyPreview: "could not reach it" }),
+          worker("going", { turnState: "running", replyPreview: "half a thou" }),
+          worker("quiet", { replyPreview: "  " }),
+        ]),
+      ),
+    });
+    expect(within(row("done")).getByText(reply)).toHaveClass("truncate");
+    expect(screen.getByRole("link", { name: "done" })).toHaveAttribute("title", reply);
+    expect(within(row("broke")).getByText("could not reach it")).toBeInTheDocument();
+    expect(within(row("going")).queryByText("half a thou")).toBeNull();
+    expect(screen.getByRole("link", { name: "going" })).not.toHaveAttribute("title");
+    expect(screen.getByRole("link", { name: "quiet" })).not.toHaveAttribute("title");
+    expect(row("quiet").querySelectorAll("p")).toHaveLength(0);
+  });
+
+  it("marks a worker that finished since you last looked at it", () => {
+    const sessions = [
+      session({}),
+      worker("unseen", { updatedAt: later() }),
+      worker("failed", { turnState: "failed", updatedAt: later() }),
+      worker("seen", { updatedAt: later() }),
+      worker("going", { turnState: "running", updatedAt: later() }),
+    ];
+    const app = appWith(sessions);
+    seenMarks.set(sessionKeyOf(sessions[3]!), { request: "logical-seen", done: true });
+    render(<WorkersSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    expect(
+      within(row("unseen")).getByRole("img", {
+        name: "Finished · new since you looked",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(row("failed")).getByRole("img", { name: "Failed · new since you looked" }),
+    ).toBeInTheDocument();
+    expect(
+      within(row("seen")).getByRole("img", { name: "Finished" }),
+    ).toBeInTheDocument();
+    expect(
+      within(row("going")).queryByRole("img", { name: /new since you looked/ }),
+    ).toBeNull();
+  });
+
+  it("says nothing was handed out only once the session itself is listed", () => {
+    const app = appWith([]);
+    render(<WorkersSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const empty = "This session has not handed out any work.";
+    expect(screen.queryByText(empty)).toBeNull();
+    act(() =>
+      publish(app, [node({ nodeDid: "did:key:node", sessions: [session({})] })]),
+    );
+    expect(screen.getByText(empty)).toBeInTheDocument();
   });
 });
