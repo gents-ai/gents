@@ -2,20 +2,21 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import type { SkillView } from "@source-inc/gents-desktop-client";
 import { navigate } from "@/lib/router";
-import {
-  AreaRow,
-  DraftActions,
-  FactRow,
-  SwitchRow,
-  TextRow,
-  TagsRow,
-  PathRow,
-} from "./editors";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { AreaRow, DraftActions, FactRow, TextRow, TagsRow, PathRow } from "./editors";
+import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { newId, problemOf, useDraft } from "./draft";
-import { Group } from "./rows";
+import { focusField, Group, Unfold } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { usersOf } from "./behaviorDraft";
 import { useApp } from "@/app/AppContext";
+import { href } from "@/lib/router";
+import { cn } from "@gents/ui/lib/utils";
+import { Badge } from "@gents/ui/components/badge";
+import { Button } from "@gents/ui/components/button";
+import { Switch } from "@gents/ui/components/switch";
+import { Pencil } from "lucide-react";
+import { Fragment, useState } from "react";
+import { Markdown } from "../Markdown";
 
 function SkillEditor({
   deployment,
@@ -71,54 +72,166 @@ function SkillEditor({
     },
   );
   const id = (f: string) => `${skill.skillId}-${f}`;
+  const [editing, setEditing] = useState(false);
+  const [writing, setWriting] = useState(false);
+  const users = skillUsers(deployment, skill.skillId);
+  const pack = packOrigin(skill.tags);
+  const title = d.draft.displayName.trim() || d.draft.name.trim() || skill.skillId;
   return (
     <>
-      <Group title={skill.displayName ?? skill.name ?? skill.skillId}>
+      <div className="mb-8 grid gap-1">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2
+                className={cn(
+                  "truncate font-heading text-lg font-medium",
+                  d.draft.enabled ? "text-heading" : "text-muted-foreground",
+                )}
+              >
+                {title}
+              </h2>
+              {!d.draft.enabled && <Badge variant="outline">Disabled</Badge>}
+              <Button
+                size="xs"
+                variant="quiet"
+                aria-expanded={editing}
+                aria-controls={id("about")}
+                onClick={() => setEditing((open) => !open)}
+              >
+                {editing ? (
+                  "Done"
+                ) : (
+                  <>
+                    <Pencil /> Edit
+                  </>
+                )}
+              </Button>
+            </div>
+            {d.draft.description.trim() && (
+              <p className="mt-0.5 text-sm text-foreground/80">{d.draft.description}</p>
+            )}
+            <p className="mt-2 text-sm text-muted-foreground">
+              Used by{" "}
+              {users.length ? (
+                users.map((agent, i) => (
+                  <Fragment key={agent.agentId}>
+                    {i > 0 && ", "}
+                    <a
+                      href={href({
+                        name: "agent",
+                        nodeDid: deployment.nodeDid,
+                        section: "agents",
+                        item: agent.agentId,
+                      })}
+                      className="text-foreground underline-offset-2 hover:underline"
+                    >
+                      {agent.displayName}
+                    </a>
+                  </Fragment>
+                ))
+              ) : (
+                <span className="text-foreground">no agent yet</span>
+              )}
+              {" · From "}
+              <span className="text-foreground">{pack ?? "Your own"}</span>
+            </p>
+          </div>
+          {/* switched here, saved with the rest of the form */}
+          <label className="flex shrink-0 items-center gap-2.5 text-sm">
+            {d.draft.enabled ? "Enabled" : "Disabled"}
+            <Switch
+              aria-label="Enabled"
+              checked={d.draft.enabled}
+              onCheckedChange={(v) => d.set("enabled", v)}
+            />
+          </label>
+        </div>
+      </div>
+      <Unfold open={editing} id={id("about")}>
+        <Group title="About">
+          <TextRow
+            id={id("name")}
+            label="Name"
+            value={d.draft.name}
+            onChange={(v) => d.set("name", v)}
+            error={d.problems.name}
+          />
+          <TextRow
+            id={id("display")}
+            label="Display name"
+            value={d.draft.displayName}
+            onChange={(v) => d.set("displayName", v)}
+          />
+          <AreaRow
+            id={id("description")}
+            label="Description"
+            description="Shown in the skills catalog."
+            value={d.draft.description}
+            onChange={(v) => d.set("description", v)}
+            rows={2}
+          />
+        </Group>
+      </Unfold>
+      <section aria-labelledby={id("instructions-title")} className="mb-8">
+        <div className="mb-2 flex items-center gap-2">
+          <h3
+            id={id("instructions-title")}
+            className="text-sm font-medium text-heading"
+          >
+            Instructions
+          </h3>
+          <Button
+            size="xs"
+            variant="quiet"
+            aria-label={writing ? "Done editing instructions" : "Edit instructions"}
+            aria-expanded={writing}
+            onClick={() => {
+              setWriting((open) => !open);
+              if (!writing) focusField(id("instructions"));
+            }}
+          >
+            {writing ? (
+              "Done"
+            ) : (
+              <>
+                <Pencil /> Edit
+              </>
+            )}
+          </Button>
+        </div>
+        {writing ? (
+          <Group>
+            <AreaRow
+              id={id("instructions")}
+              label="Instructions"
+              description="Loaded on demand via load_skill."
+              value={d.draft.instructions}
+              onChange={(v) => d.set("instructions", v)}
+              rows={12}
+              stacked
+            />
+          </Group>
+        ) : d.draft.instructions.trim() ? (
+          <div className="prose-app min-w-0 break-words">
+            <Markdown>{d.draft.instructions}</Markdown>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No instructions yet. They're what an agent reads when it loads the skill.
+          </p>
+        )}
+      </section>
+      <Group title="Details">
         <FactRow label="Skill ID" description="Cannot be renamed after creation." mono>
           {skill.skillId}
         </FactRow>
-        <TextRow
-          id={id("name")}
-          label="Name"
-          value={d.draft.name}
-          onChange={(v) => d.set("name", v)}
-          error={d.problems.name}
-        />
         <PathRow
           id={id("sourceDirectory")}
           label="Source directory"
           description="Where the skill's files live."
           value={d.draft.sourceDirectory}
           onChange={(v) => d.set("sourceDirectory", v)}
-        />
-        <TextRow
-          id={id("display")}
-          label="Display name"
-          value={d.draft.displayName}
-          onChange={(v) => d.set("displayName", v)}
-        />
-        <SwitchRow
-          id={id("enabled")}
-          label="Enabled"
-          checked={d.draft.enabled}
-          onChange={(v) => d.set("enabled", v)}
-        />
-        <AreaRow
-          id={id("description")}
-          label="Description"
-          description="Shown in the skills catalog."
-          value={d.draft.description}
-          onChange={(v) => d.set("description", v)}
-          rows={2}
-        />
-        <AreaRow
-          id={id("instructions")}
-          label="Instructions"
-          description="Loaded on demand via load_skill."
-          value={d.draft.instructions}
-          onChange={(v) => d.set("instructions", v)}
-          rows={6}
-          stacked
         />
         <TagsRow
           id={id("tools")}
@@ -163,6 +276,13 @@ function SkillEditor({
       />
     </>
   );
+}
+
+/** agents whose instructions list the skill */
+function skillUsers(deployment: NodeView, skillId: string) {
+  return deployment.contexts
+    .filter((c) => c.skill_ids?.includes(skillId))
+    .flatMap((c) => usersOf(deployment, c.context_id));
 }
 
 function skillDocument(deployment: NodeView, s: SkillView) {
