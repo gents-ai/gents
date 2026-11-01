@@ -100,36 +100,15 @@ pub fn desktop_bin() -> Result<PathBuf> {
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| anyhow!("unable to resolve workspace root from CARGO_MANIFEST_DIR"))?;
-    let output = Command::new("cargo")
-        .current_dir(workspace_root)
-        .args(build.cargo_args())
+    let output = build
+        .cargo_command(workspace_root)
         .stderr(Stdio::inherit())
         .output()
         .context("building gents-desktop binary for e2e")?;
-    let mut executable = None;
-    for line in std::str::from_utf8(&output.stdout)
-        .context("Cargo artifact messages are not UTF-8")?
-        .lines()
-    {
-        let message: Value =
-            serde_json::from_str(line).context("decoding Cargo artifact message")?;
-        if let Some(rendered) = message.pointer("/message/rendered").and_then(Value::as_str) {
-            std::io::stderr().write_all(rendered.as_bytes())?;
-        }
-        if message["reason"] == "compiler-artifact"
-            && message["target"]["name"] == "gents-desktop"
-            && message["target"]["kind"]
-                .as_array()
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
-        {
-            if let Some(path) = message["executable"].as_str() {
-                anyhow::ensure!(
-                    executable.is_none(),
-                    "Cargo reported multiple gents-desktop executables"
-                );
-                executable = Some(PathBuf::from(path));
-            }
-        }
+    let messages = desktop_binary::parse_artifact_messages(&output.stdout)
+        .context("decoding Cargo artifact messages")?;
+    for rendered in &messages.rendered {
+        std::io::stderr().write_all(rendered.as_bytes())?;
     }
     anyhow::ensure!(
         output.status.success(),
@@ -137,7 +116,7 @@ pub fn desktop_bin() -> Result<PathBuf> {
         output.status
     );
     build
-        .reported_binary(executable.as_deref())
+        .reported_binary(messages.executable.as_deref())
         .with_context(|| {
             format!(
                 "checking Cargo's desktop artifact against {}",
