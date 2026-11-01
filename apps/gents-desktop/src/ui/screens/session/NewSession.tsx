@@ -1,6 +1,7 @@
 import { cn } from "@gents/ui/lib/utils";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
 import { useMemo, useRef } from "react";
+import { ComposerReasonBox, composerReason } from "./ComposerReason";
 import { RichComposer } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
 import {
@@ -105,6 +106,15 @@ function NewSessionComposer() {
     textarea,
   );
   const agent = agentOf(deployment, choice.agentId);
+  /* what nothing typed could get past stands in the input's place */
+  const reason = composerReason(deployment, choice.agentId, sendStatus);
+  const picker = (
+    <AgentPicker
+      deployment={deployment}
+      agentId={choice.agentId}
+      onChange={choice.setPicked}
+    />
+  );
   const goalMode = useGoalMode({ draft, setDraft, onSet: setGoal });
   const slash = useSlashMenu(
     deployment?.skills ?? [],
@@ -129,74 +139,81 @@ function NewSessionComposer() {
         className="hidden"
         aria-label="Choose attachments"
       />
-      <RichComposer
-        key={draftKey}
-        editorState={field}
-        onEditorStateChange={setField}
-        className="text-foreground"
-        value={draft}
-        onChange={setDraft}
-        onSend={
-          goalMode.mode
-            ? (text) => void goalMode.submit(text)
-            : (text) => send(text, undefined, undefined, slash.prepare(text))
-        }
-        models={[]}
-        fieldRef={textarea}
-        commands={slash.names}
-        composerRef={slash.field}
-        commandsAt="word"
-        chipKinds={chipKinds}
-        triggers={goalMode.mode ? undefined : [slash.trigger, mention.trigger]}
-        onAttach={attachments.pick}
-        hasAttachments={attachments.hasAttachments}
-        submitDisabled={attachments.pending}
-        onPaste={attachments.onPaste}
-        disabled={sendStatus.kind === "disabled"}
-        above={
-          goalMode.mode ? (
-            <GoalChip editing={false} onCancel={goalMode.leave} />
-          ) : (
-            <>
-              <ReplyingTo />
-              {attachments.over && (
-                <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">
-                  Drop files to attach
-                </p>
-              )}
-              <AttachmentTray
-                items={attachments.items}
-                remove={attachments.remove}
-                error={attachments.error}
-              />
-            </>
-          )
-        }
-        onKeyDown={(event) => {
-          goalMode.onKeyDown(event);
-        }}
-        submitLabel={goalMode.mode ? "Set goal" : "Send"}
-        leading={
-          <AgentPicker
-            deployment={deployment}
-            agentId={choice.agentId}
-            onChange={choice.setPicked}
-          />
-        }
-        sending={sending}
-        placeholder={
-          goalMode.mode
-            ? "Describe the goal"
-            : placeholderFor(
-                presentedComposerSendStatus(
-                  draft,
-                  sendStatus,
-                  attachments.hasAttachments,
-                ),
-                "Ask anything",
+      <div className="grid">
+        <div
+          inert={reason ? true : undefined}
+          className={cn("[grid-area:1/1]", reason && "invisible")}
+        >
+          <RichComposer
+            key={draftKey}
+            editorState={field}
+            onEditorStateChange={setField}
+            className="text-foreground"
+            value={draft}
+            onChange={setDraft}
+            onSend={
+              goalMode.mode
+                ? (text) => void goalMode.submit(text)
+                : (text) => send(text, undefined, undefined, slash.prepare(text))
+            }
+            models={[]}
+            fieldRef={textarea}
+            commands={slash.names}
+            composerRef={slash.field}
+            commandsAt="word"
+            chipKinds={chipKinds}
+            triggers={goalMode.mode ? undefined : [slash.trigger, mention.trigger]}
+            onAttach={attachments.pick}
+            hasAttachments={attachments.hasAttachments}
+            submitDisabled={attachments.pending}
+            onPaste={attachments.onPaste}
+            disabled={sendStatus.kind === "disabled"}
+            above={
+              goalMode.mode ? (
+                <GoalChip editing={false} onCancel={goalMode.leave} />
+              ) : (
+                <>
+                  <ReplyingTo />
+                  {attachments.over && (
+                    <p
+                      role="status"
+                      className="px-3 pt-2 text-xs text-muted-foreground"
+                    >
+                      Drop files to attach
+                    </p>
+                  )}
+                  <AttachmentTray
+                    items={attachments.items}
+                    remove={attachments.remove}
+                    error={attachments.error}
+                  />
+                </>
               )
-        }
-      />
+            }
+            onKeyDown={(event) => {
+              goalMode.onKeyDown(event);
+            }}
+            submitLabel={goalMode.mode ? "Set goal" : "Send"}
+            leading={reason ? null : picker}
+            sending={sending}
+            placeholder={
+              goalMode.mode
+                ? "Describe the goal"
+                : placeholderFor(
+                    presentedComposerSendStatus(
+                      draft,
+                      sendStatus,
+                      attachments.hasAttachments,
+                    ),
+                    "Ask anything",
+                  )
+            }
+          />
+        </div>
+        {reason && (
+          <ComposerReasonBox reason={reason} deployment={deployment} leading={picker} />
+        )}
+      </div>
       <GoalDeliveryFeedback />
       <ChatDeliveryFeedback />
       {sendError && (
@@ -206,7 +223,9 @@ function NewSessionComposer() {
       )}
       <ComposerFooter
         folder={<SelectedChatFolder />}
-        status={<SessionSubmissionStatus activityStatus={activityStatus} />}
+        status={
+          reason ? null : <SessionSubmissionStatus activityStatus={activityStatus} />
+        }
       />
     </div>
   );
