@@ -9,6 +9,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use super::http1::classify;
 use super::{Body, Client, ClientOptions, Target, TransportError};
 
 pub(super) fn client() -> Client {
@@ -606,6 +607,43 @@ async fn early_response_to_a_large_upload_is_returned() {
     let mut r = client().send(&t, &head(body.len()), &body).await.unwrap();
     assert_eq!(r.status, 413);
     assert_eq!(collect(&mut r.body).await, b"big");
+}
+
+#[tokio::test]
+async fn fresh_connection_reset_keeps_its_io_error() {
+    // A reset on a fresh connection is not a stale pooled socket: it must keep
+    // its `Io` error, exactly as before the replay fix. Only a pooled socket
+    // with nothing read is normalized to `Closed`.
+    let (l, t) = listener().await;
+    tokio::spawn(async move {
+        let (s, _) = l.accept().await.unwrap();
+        // Read the request, then reset rather than close cleanly.
+        let mut s = s;
+        let _ = read_request(&mut s).await;
+        s.set_linger(Some(std::time::Duration::ZERO)).unwrap();
+        drop(s);
+    });
+    let err = client().send(&t, &head(0), b"").await.err().unwrap();
+    assert!(matches!(err, TransportError::Io(_)), "{err:?}");
+}
+
+#[test]
+fn classify_normalizes_only_a_dead_pooled_socket() {
+    // Pure classification: the `reused` flag is the only thing that decides
+    // whether a peer-gone error becomes `Closed`.
+    let reset = || TransportError::Io(std::io::ErrorKind::ConnectionReset.into());
+    // Pooled socket, nothing read: the server closed it while idle.
+    assert!(matches!(classify(reset(), true), TransportError::Closed));
+    // Fresh connection, nothing read: keep the original error.
+    assert!(matches!(classify(reset(), false), TransportError::Io(_)));
+    // Pooled socket with bytes already read: keep the original error.
+    assert!(matches!(classify(reset(), false), TransportError::Io(_)));
+    // A non-peer-gone error is never normalized.
+    let malformed = TransportError::MalformedHead;
+    assert!(matches!(
+        classify(malformed, true),
+        TransportError::MalformedHead
+    ));
 }
 
 #[tokio::test]
