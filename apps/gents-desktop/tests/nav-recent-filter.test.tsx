@@ -5,7 +5,12 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 
 import { NavPanel } from "@/app/RailFlyout";
-import { listViews, restoreListViews } from "@/app/listViews";
+import {
+  listViews,
+  migrateListViews,
+  recentDefault,
+  restoreListViews,
+} from "@/app/listViews";
 import { isShown, toggleShown } from "@/lib/session-filter";
 import { preferences } from "@/preferences";
 import { sessionKeyOf } from "../src/hooks/fleetStore";
@@ -48,6 +53,17 @@ const sessions = [
     turnState: "running",
     updatedAt: "2026-10-26T11:00:00Z",
   }),
+  summary({
+    sessionId: "worker",
+    title: "Worker",
+    startedBy: {
+      nodeDid: deployment.nodeDid,
+      sessionId: "busy",
+      requesterDid: null,
+      causeRequestDocId: "request-busy",
+    },
+    updatedAt: "2026-10-26T12:00:00Z",
+  }),
 ];
 
 function showNav() {
@@ -66,14 +82,15 @@ const recentTitles = () =>
     .getAllByRole("link")
     /* a running session's status draws a spinner glyph before its title */
     .map((a) => (a.textContent ?? "").replace(/^[^A-Za-z]+/, ""))
-    .filter((t) => t === "Done" || t === "Busy");
+    .filter((t) => t === "Done" || t === "Busy" || t === "Worker");
 
 describe("the side nav's recent sessions filter", () => {
   it("keeps the owning node in pinned and recent session links", () => {
     preferences.setPinned(sessionKeyOf(sessions[0]!), true);
     showNav();
 
-    for (const session of sessions) {
+    /* the worker is left out of the recent list */
+    for (const session of sessions.filter((s) => !s.startedBy)) {
       expect(screen.getByText(session.title!).closest("a")).toHaveAttribute(
         "href",
         `/nodes/${encodeURIComponent(session.nodeDid)}/sessions/${session.sessionId}`,
@@ -81,7 +98,27 @@ describe("the side nav's recent sessions filter", () => {
     }
   });
 
-  it("starts with every choice checked, and hides a state when it is unchecked", async () => {
+  it("leaves out sessions another session started until that choice is checked", async () => {
+    const { u } = showNav();
+    expect(recentTitles()).toEqual(["Busy", "Done"]);
+    const filter = screen.getByRole("button", { name: "Filter recent sessions" });
+    expect(filter).not.toHaveClass("text-foreground");
+
+    await u.click(filter);
+    (await screen.findByRole("menuitem", { name: /Started by/ })).focus();
+    await u.keyboard("{ArrowRight}");
+    await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(1));
+    const sources = within(screen.getAllByRole("menu").at(-1)!);
+    expect(
+      sources.getByRole("menuitemcheckbox", { name: /Another session/ }),
+    ).toHaveAttribute("aria-checked", "false");
+    await u.click(sources.getByRole("menuitemcheckbox", { name: /Another session/ }));
+
+    await waitFor(() => expect(recentTitles()).toEqual(["Worker", "Busy", "Done"]));
+    expect(filter).toHaveClass("text-foreground");
+  });
+
+  it("starts with every state checked, and hides a state when it is unchecked", async () => {
     const { u } = showNav();
     expect(recentTitles()).toEqual(["Busy", "Done"]);
 
@@ -100,14 +137,29 @@ describe("the side nav's recent sessions filter", () => {
     await waitFor(() => expect(recentTitles()).toEqual(["Busy"]));
   });
 
-  it("says when nothing matches and clears the filter", async () => {
+  it("says when nothing matches and resets the filter to leaving out workers", async () => {
     listViews.setRecentFilter({ states: ["failed"], sources: [], agents: [] });
     const { u } = showNav();
     expect(recentTitles()).toEqual([]);
     expect(screen.getByText(/No sessions match/)).toBeInTheDocument();
 
-    await u.click(screen.getByRole("button", { name: "Clear filters" }));
+    await u.click(screen.getByRole("button", { name: "Reset filters" }));
     await waitFor(() => expect(recentTitles()).toEqual(["Busy", "Done"]));
+  });
+
+  it("gives an earlier saved filter the new default only where it chose no starter", () => {
+    expect(
+      migrateListViews(
+        { recentFilter: { states: ["working"], sources: [], agents: [] } },
+        1,
+      ),
+    ).toMatchObject({
+      recentFilter: { states: ["working"], sources: ["person", "task"], agents: [] },
+    });
+    const chose = { recentFilter: { states: [], sources: ["session"], agents: [] } };
+    expect(migrateListViews(chose, 1)).toBe(chose);
+    const current = { recentFilter: { states: [], sources: [], agents: [] } };
+    expect(migrateListViews(current, 2)).toBe(current);
   });
 
   it("restores the nav's filter on its own", () => {
@@ -116,7 +168,7 @@ describe("the side nav's recent sessions filter", () => {
         recentFilter: { states: ["working"], sources: [], agents: [] },
       }).recentFilter.states,
     ).toEqual(["working"]);
-    expect(restoreListViews({}).recentFilter.states).toEqual([]);
+    expect(restoreListViews({}).recentFilter).toEqual(recentDefault);
   });
 
   it("keeps the rest when one is unchecked, and clears when all are checked again", () => {

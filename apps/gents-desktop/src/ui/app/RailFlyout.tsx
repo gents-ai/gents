@@ -12,8 +12,8 @@ import { NodeAvatar } from "@/screens/AgentAvatar";
 import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
 import { RecentFilter } from "./RecentFilter";
-import { listViews, useListViews } from "./listViews";
-import { emptyFilter, hasFilter } from "@/lib/session-filter";
+import { listViews, recentDefault, useListViews } from "./listViews";
+import { sameFilter } from "@/lib/session-filter";
 import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
@@ -83,7 +83,9 @@ export function NavPanel({
   const pinned = usePinnedSessionList();
   const recent = useRecentSessions(RECENT);
   const recentCandidates = useRecentCandidates();
-  const recentFiltered = useListViews((views) => hasFilter(views.recentFilter));
+  const recentFiltered = useListViews(
+    (views) => !sameFilter(views.recentFilter, recentDefault),
+  );
   const homeDid = useHomeDid();
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
@@ -238,9 +240,9 @@ export function NavPanel({
                 <button
                   type="button"
                   className="cursor-pointer underline hover:text-foreground"
-                  onClick={() => listViews.setRecentFilter(emptyFilter)}
+                  onClick={() => listViews.setRecentFilter(recentDefault)}
                 >
-                  Clear filters
+                  Reset filters
                 </button>
               </p>
             )}
