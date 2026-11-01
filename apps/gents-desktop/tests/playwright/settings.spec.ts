@@ -46,3 +46,23 @@ test.describe("the app's settings screen", () => {
     await expect(page.getByRole("combobox", { name: "Theme" })).toBeVisible();
   });
 });
+
+test("an agent's access sentence opens the setting each part describes", async ({
+  page,
+}) => {
+  await gotoHarness(page, "mobile-performance");
+  await page.getByRole("link", { name: "Active node" }).click();
+  await page
+    .getByRole("link", { name: /^Agents/ })
+    .first()
+    .click();
+  await page.getByText("Default", { exact: true }).first().click();
+  await page
+    .getByTestId("agent-summary")
+    .getByRole("button", { name: /commands$/ })
+    .click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator(":focus")).toBeInViewport();
+  await expect(sheet.locator(":focus")).toHaveAttribute("id", /-bash$/);
+});

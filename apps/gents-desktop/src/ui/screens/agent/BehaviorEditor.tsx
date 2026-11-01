@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowLeftRight, ArrowUpRight, Copy, MoreHorizontal, Plus } from "lucide-react";
 import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 import {
@@ -23,7 +23,7 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { href } from "@/lib/router";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { AccessSentence, AgentInitials } from "../parts";
+import { AccessSentence, AgentInitials, type AccessPart } from "../parts";
 import {
   AreaRow,
   ChipsRow,
@@ -103,7 +103,30 @@ export function AgentEditor({
   const [configure, setConfigure] = useState<{
     kind: "tools" | "profile";
     id: string;
+    /** the control to bring into view once the sheet shows it */
+    focus?: string;
   } | null>(null);
+  /* the sheet slides in, so its control may not exist yet on the first frame */
+  useEffect(() => {
+    const target = configure?.focus;
+    if (!target) return;
+    let frame = 0;
+    let tries = 0;
+    const find = () => {
+      const el = document.getElementById(target);
+      if (!el && tries++ < 30) {
+        frame = requestAnimationFrame(find);
+        return;
+      }
+      el?.scrollIntoView({ block: "center" });
+      const control = el?.matches("button, input, select, [tabindex]")
+        ? el
+        : el?.querySelector<HTMLElement>("button, input, select, [tabindex]");
+      control?.focus({ preventScroll: true });
+    };
+    frame = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(frame);
+  }, [configure]);
   const pendingContextId = useRef<string | null>(null);
   const d = useDraft(
     saved,
@@ -290,6 +313,20 @@ export function AgentEditor({
       ? context
       : null;
   const readiness = agentReadiness(deployment, agent.agentId);
+  /* the sentence's parts are set in the agent's Tools; with none chosen, the
+     Tools row is where to choose or make one */
+  const openAccess = (part: AccessPart) => {
+    const toolsId = d.draft.toolsId;
+    if (toolsId && deployment.tools.some((t) => t.tools_id === toolsId)) {
+      setConfigure({
+        kind: "tools",
+        id: toolsId,
+        focus: part === "network" ? "tools-bash-network" : `${toolsId}-${part}`,
+      });
+      return;
+    }
+    document.getElementById(id("tools"))?.scrollIntoView({ block: "center" });
+  };
   const env = deployment.agentEnvironments.find((e) => e.agentId === agent.agentId);
   const attention =
     agent.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
@@ -321,7 +358,11 @@ export function AgentEditor({
                   data-testid="agent-summary"
                   className="mt-0.5 text-sm text-muted-foreground"
                 >
-                  <AccessSentence name={agent.displayName} env={env} />
+                  <AccessSentence
+                    name={agent.displayName}
+                    env={env}
+                    onOpen={openAccess}
+                  />
                 </p>
                 {attention && (
                   <p
