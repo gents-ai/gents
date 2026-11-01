@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { DockTabs } from "@/app/Dock";
 import { getSurface } from "@/app/surfaces";
@@ -60,6 +60,30 @@ const worker = (sessionId: string, overrides: Partial<SessionSummary>) =>
 describe("the started sessions dock", () => {
   beforeEach(() => workspace.reset());
 
+  it("says how long each worked, to the second", () => {
+    const sessions = [
+      session({}),
+      worker("quick", {
+        createdAt: "2026-10-20T10:00:00Z",
+        updatedAt: "2026-10-20T10:00:05Z",
+        turnState: "completed",
+      }),
+      worker("slow", {
+        createdAt: "2026-10-20T09:00:00Z",
+        updatedAt: "2026-10-20T09:01:11Z",
+        turnState: "completed",
+      }),
+    ];
+    render(<WorkersSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(
+        testApp({ deployments: [node({ nodeDid: "did:key:node", sessions })] }),
+      ),
+    });
+    const [quick, slow] = screen.getAllByRole("listitem");
+    expect(within(quick!).getByTestId("worker-took")).toHaveTextContent("5s");
+    expect(within(slow!).getByTestId("worker-took")).toHaveTextContent("1m 11s");
+  });
+
   it("lists started sessions newest first, and shows what one started in place", () => {
     const sessions = [
       session({}),
@@ -81,8 +105,10 @@ describe("the started sessions dock", () => {
       ["newer", "older", "busy"],
     );
     expect(within(rows[0]!).getByRole("img", { name: "Failed" })).toBeInTheDocument();
-    expect(rows[1]).toHaveTextContent("2m");
-    expect(rows[2]).toHaveTextContent(/\d+[mhd]/);
+    expect(within(rows[1]!).getAllByTestId("worker-took")[0]).toHaveTextContent(/^2m$/);
+    expect(within(rows[2]!).getAllByTestId("worker-took")[0]).toHaveTextContent(
+      /^\d+[smhd]/,
+    );
     expect(screen.queryByRole("link", { name: "grandchild" })).toBeNull();
     fireEvent.click(
       within(rows[1]!).getByRole("button", {
@@ -252,12 +278,28 @@ describe("what each started session shows", () => {
       ),
     });
     expect(within(row("done")).getByText(reply)).toHaveClass("truncate");
-    expect(screen.getByRole("link", { name: "done" })).toHaveAttribute("title", reply);
+    expect(within(row("done")).getByTestId("worker-reply")).toHaveTextContent(
+      `⎿${reply}`,
+    );
+    /* the full reply is offered only where the line cuts it off */
+    expect(screen.getByRole("link", { name: "done" })).not.toHaveAttribute("title");
     expect(within(row("broke")).getByText("could not reach it")).toBeInTheDocument();
     expect(within(row("going")).queryByText("half a thou")).toBeNull();
     expect(screen.getByRole("link", { name: "going" })).not.toHaveAttribute("title");
     expect(screen.getByRole("link", { name: "quiet" })).not.toHaveAttribute("title");
     expect(row("quiet").querySelectorAll("p")).toHaveLength(0);
+  });
+
+  it("offers a cut-off reply in full on hover", () => {
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockReturnValue(500);
+    const reply = "a reply long enough that one line cuts it off";
+    render(<WorkersSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(appWith([session({}), worker("long", { replyPreview: reply })])),
+    });
+    expect(screen.getByRole("link", { name: "long" })).toHaveAttribute("title", reply);
+    width.mockRestore();
   });
 
   it("marks a worker that finished since you last looked at it", () => {
@@ -318,7 +360,8 @@ describe("how a started session's changes ease in", () => {
     render(<WorkersSurface placement="dock" sessionId="parent" />, {
       wrapper: withApp(app),
     });
-    const line = (text: string) => screen.getByText(text).parentElement!;
+    const line = (text: string) =>
+      screen.getByText(text).closest("[data-testid=worker-reply]")!.parentElement!;
     const mark = (name: string) =>
       within(screen.getByRole("link", { name }).closest("li") as HTMLElement).getByRole(
         "img",
