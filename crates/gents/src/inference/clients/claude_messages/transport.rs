@@ -14,8 +14,8 @@ use std::sync::{Arc, LazyLock};
 use bytes::Bytes;
 use gents_claude::request::{self, RequestHead};
 use gents_claude::transport::{
-    gzip, proxy_from_env, Body, Client, ClientOptions, CompressError, ProxyError, Response, Target,
-    TransportError,
+    gzip, proxy_from_env, Body, Client, ClientOptions, CompressError, Proxy, ProxyError, Response,
+    Target, TransportError,
 };
 use gents_loop::account_usage::UsageSource;
 use rand::Rng;
@@ -34,7 +34,7 @@ use crate::inference::clients::provider_http::{observe, rejected_response_error}
 use crate::inference::rendered_request::RenderedRequestCapturingHttpClient;
 use crate::inference::usage_observation::UsageReporter;
 
-/// The first-party host the proxy decision is made for; the client proxies every TLS target alike.
+/// The first-party host the gzip decision is made for; the proxy decision is per target.
 const FIRST_PARTY_HOST: &str = "api.anthropic.com";
 /// Longest non-success body read, enough for any API error and bounded for a hostile peer.
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
@@ -72,10 +72,14 @@ impl From<ClaudeTransportError> for http_client::Error {
     }
 }
 
-/// The process-wide client: one keep-alive pool and one proxy decision.
+/// The process-wide clients: one keep-alive pool per proxy decision, chosen per target.
 struct Shared {
-    client: Client,
-    proxied: bool,
+    /// Connects directly; used for targets `NO_PROXY` bypasses and for plain text.
+    direct: Client,
+    /// Tunnels through `HTTPS_PROXY`; `None` when no proxy is configured.
+    proxied: Option<Client>,
+    /// The environment the two clients were built from, so each target is decided consistently.
+    env: ProxyEnv,
 }
 
 static SHARED: OnceCell<Shared> = OnceCell::const_new();
@@ -85,20 +89,87 @@ fn env_pair(upper: &str, lower: &str) -> Option<String> {
     std::env::var(upper).or_else(|_| std::env::var(lower)).ok()
 }
 
+/// The proxy setting as read from the environment, kept so each target can be decided on its own.
+struct ProxyEnv {
+    https_proxy: Option<String>,
+    no_proxy: Option<String>,
+}
+
+impl ProxyEnv {
+    fn from_env() -> Self {
+        Self {
+            https_proxy: env_pair("HTTPS_PROXY", "https_proxy"),
+            no_proxy: env_pair("NO_PROXY", "no_proxy"),
+        }
+    }
+
+    /// The proxy for this exact target, or `None` to connect directly.
+    fn proxy_for(&self, host: &str, port: u16) -> Result<Option<Proxy>, ProxyError> {
+        proxy_from_env(
+            host,
+            port,
+            self.https_proxy.as_deref(),
+            self.no_proxy.as_deref(),
+        )
+    }
+}
+
 fn build_shared() -> Result<Shared, ClaudeTransportError> {
-    let proxy = proxy_from_env(
-        FIRST_PARTY_HOST,
-        443,
-        env_pair("HTTPS_PROXY", "https_proxy").as_deref(),
-        env_pair("NO_PROXY", "no_proxy").as_deref(),
-    )?;
-    let proxied = proxy.is_some();
-    let client = Client::new(ClientOptions {
-        proxy,
-        ..ClientOptions::default()
+    let env = ProxyEnv::from_env();
+    let direct =
+        Client::new(ClientOptions::default()).map_err(ClaudeTransportError::ClientBuild)?;
+    // One proxied pool, built from the same environment the per-target decision reads.
+    let proxied = match env.proxy_for(FIRST_PARTY_HOST, 443)? {
+        Some(proxy) => Some(
+            Client::new(ClientOptions {
+                proxy: Some(proxy),
+                ..ClientOptions::default()
+            })
+            .map_err(ClaudeTransportError::ClientBuild)?,
+        ),
+        None => None,
+    };
+    Ok(Shared {
+        direct,
+        proxied,
+        env,
     })
-    .map_err(ClaudeTransportError::ClientBuild)?;
-    Ok(Shared { client, proxied })
+}
+
+impl Shared {
+    /// The client for one target: proxied only when the target is TLS and `NO_PROXY` misses it.
+    fn client_for(&self, target: &Target) -> Result<(&Client, bool), ClaudeTransportError> {
+        match route_for(&self.env, target)? {
+            Route::Proxied => match &self.proxied {
+                Some(client) => Ok((client, true)),
+                None => Ok((&self.direct, false)),
+            },
+            Route::Direct => Ok((&self.direct, false)),
+        }
+    }
+}
+
+/// Which pool one target uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Route {
+    /// Straight to the target: plain text, no proxy configured, or `NO_PROXY` matches it.
+    Direct,
+    /// Through `HTTPS_PROXY`.
+    Proxied,
+}
+
+/// The route for one target, decided from the environment values alone.
+///
+/// The decision is per target host and port, so an internal gateway that `NO_PROXY` names
+/// connects directly while the first-party API still goes through the proxy.
+fn route_for(env: &ProxyEnv, target: &Target) -> Result<Route, ProxyError> {
+    if !target.tls {
+        return Ok(Route::Direct);
+    }
+    Ok(match env.proxy_for(&target.host, target.port)? {
+        Some(_) => Route::Proxied,
+        None => Route::Direct,
+    })
 }
 
 /// `Client::new` loads the platform trust roots, which blocks, so it runs off the runtime workers.
@@ -219,7 +290,7 @@ impl ClaudeHttpClient {
         body: &Bytes,
     ) -> Result<(Response, bool), ClaudeTransportError> {
         let text = std::str::from_utf8(body).map_err(|_| ClaudeTransportError::BodyNotUtf8)?;
-        let proxied = shared.proxied && outgoing.target.tls;
+        let (client, proxied) = shared.client_for(&outgoing.target)?;
         let gzipped = request::gzip_body(
             &outgoing.target.host,
             request::utf16_len(text),
@@ -258,8 +329,7 @@ impl ClaudeHttpClient {
             target.host.clone_from(host);
             target.port = *port;
         }
-        let response = shared
-            .client
+        let response = client
             .send(&target, &head.encode(wire.len()), &wire)
             .await?;
         Ok((response, gzipped))
@@ -517,3 +587,7 @@ impl fmt::Debug for MessagesTransport {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;
