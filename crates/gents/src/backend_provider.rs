@@ -17,6 +17,7 @@ impl BackendProviderOauthExt for BackendProviderKind {
             Self::ChatGptCodex => Some(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER),
             Self::XaiGrokOAuth => Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER),
             Self::ClaudeCliSubscription => Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            Self::ClaudeGateway => Some(crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER),
             _ => None,
         }
     }

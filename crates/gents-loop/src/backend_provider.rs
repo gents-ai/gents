@@ -107,6 +107,13 @@ impl BackendProviderKind {
         )
     }
 
+    /// Whether a backend of this kind may sign in with the node's OAuth
+    /// credentials: every node-scoped kind, and a Claude gateway, which also
+    /// takes a static token (Claude Code's `CLAUDE_CODE_USE_GATEWAY` mode).
+    pub fn accepts_node_oauth(self) -> bool {
+        self.is_node_scoped_oauth() || self == Self::ClaudeGateway
+    }
+
     pub fn uses_messages_wire(self) -> bool {
         self.claude_provider().is_some()
     }

@@ -20,6 +20,7 @@ pub mod body;
 pub mod cache;
 pub mod catalog;
 pub mod eventstream;
+pub mod gateway;
 pub mod headers;
 pub mod metadata;
 pub mod oauth;

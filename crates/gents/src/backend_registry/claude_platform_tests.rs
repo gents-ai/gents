@@ -154,6 +154,9 @@ fn a_platform_credential_must_suit_the_platform() {
         ("ClaudeGateway", aws()),
         ("ClaudeGateway", google()),
         ("ClaudeFoundry", json!({"kind": "node_oauth"})),
+        ("ClaudeBedrock", json!({"kind": "node_oauth"})),
+        // A gateway signs in with one account; pools rotate Claude subscriptions only.
+        ("ClaudeGateway", json!({"kind": "node_oauth_pool"})),
         ("ClaudeMantle", google()),
         ("ClaudeAnthropicAws", google()),
         ("ClaudeVertex", aws()),
@@ -174,9 +177,42 @@ fn a_platform_credential_must_suit_the_platform() {
         } else {
             "https://example.test/v1"
         };
-        let violations = backend(kind, endpoint, auth, settings).validation_violations();
-        assert_eq!(violations, vec![mismatch], "{kind}");
+        let violations = backend(kind, endpoint, auth.clone(), settings).validation_violations();
+        if auth["kind"] == "node_oauth_pool" {
+            assert!(
+                violations.iter().any(|v| v.contains("pool")),
+                "{violations:?}"
+            );
+        } else {
+            assert_eq!(violations, vec![mismatch], "{kind}");
+        }
     }
+    // A gateway takes a signed-in account (`claude-gateway-login`) or a static token.
+    for auth in [
+        json!({"kind": "node_oauth"}),
+        json!({"kind": "node_oauth", "account_ref": "a1"}),
+        key(),
+    ] {
+        let violations = backend(
+            "ClaudeGateway",
+            "https://gw.example",
+            auth.clone(),
+            Value::Null,
+        )
+        .validation_violations();
+        assert!(violations.is_empty(), "{auth}: {violations:?}");
+    }
+    // A subscription still needs its sign-in.
+    assert_eq!(
+        backend(
+            "ClaudeCliSubscription",
+            crate::claude_subscription::ANTHROPIC_API_ENDPOINT,
+            key(),
+            Value::Null
+        )
+        .validation_violations(),
+        vec![mismatch]
+    );
     for (kind, auth) in [
         ("ClaudeBedrock", aws()),
         ("ClaudeMantle", aws()),

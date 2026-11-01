@@ -26,6 +26,15 @@ source consistency checks, not a separate runtime compatibility version.
   `google_credentials` (a service account key or an authorized user file),
   stored secrets an agent can keep but never set. AWS profiles, SSO and
   instance credentials, and other Google credential types, are not read.
+- `gents claude-gateway-login <url>` signs in to a Claude Code cloud gateway
+  with its device authorization flow (the gateway's advertised same-origin
+  endpoints, else `/oauth/device_authorization` and `/oauth/token`) and stores
+  the account as a node OAuth credential of provider `claude-gateway`. A
+  `ClaudeGateway` backend with `node_oauth` auth sends that account's JWT,
+  refreshed with the gateway's refresh token five minutes before it expires,
+  and marks its attribution from the JWT it sends; the static-token gateway
+  backend is unchanged. Gateway certificate pinning and sign-out revocation
+  are not done.
 - `gents config backend pool <backend-id>` and the desktop backend editor
   switch a Claude subscription backend between one account and an account pool,
   and set whether the pool may use paid extra usage. Both call one operator

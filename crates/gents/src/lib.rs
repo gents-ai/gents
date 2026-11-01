@@ -19,6 +19,7 @@ pub mod blocked_turn;
 pub(crate) mod callback;
 pub mod chatgpt_codex;
 pub mod chatgpt_oauth_refresh;
+pub mod claude_gateway_login;
 pub mod claude_messages;
 pub mod claude_oauth;
 pub mod claude_oauth_refresh;

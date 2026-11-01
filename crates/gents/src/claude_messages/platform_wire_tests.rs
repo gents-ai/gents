@@ -173,6 +173,45 @@ async fn a_gateway_sends_a_bearer_jwt_without_a_client_request_id() {
 }
 
 #[tokio::test]
+async fn a_signed_in_gateway_marks_its_attribution_from_the_jwt_it_sends() {
+    let _guard = lock_fixtures_for_test().await;
+    let server = Server::start(vec![reply("200 OK", sse_body())]).await;
+    let route = ClaudeRoute::platform(
+        BackendProviderKind::ClaudeGateway,
+        &format!("http://127.0.0.1:{}", server.port),
+        None,
+        "",
+    )
+    .unwrap()
+    .with_signed_in_gateway();
+    // The route was built before any token: the mark comes from this one.
+    let jwt = crate::oauth_credential::test_support::unsigned_jwt(
+        serde_json::json!({"aud": ["claude-gateway"], "sub": "dev"}),
+    );
+    let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
+    let stream = stream_messages_routed(
+        &route,
+        MODEL,
+        &echo_request(),
+        &account,
+        RapidHashSet::new(),
+        &ApiKeyBearer::new(jwt.clone()),
+        None,
+    )
+    .await
+    .expect("200");
+    futures::pin_mut!(stream);
+    while stream.next().await.is_some() {}
+    let wire = server.requests().remove(0);
+    assert_eq!(
+        wire.header("authorization"),
+        Some(format!("Bearer {jwt}").as_str())
+    );
+    let body = String::from_utf8_lossy(&wire.body);
+    assert!(body.contains("cc_gateway=1;"), "{body}");
+}
+
+#[tokio::test]
 async fn foundry_sends_an_api_key_under_its_anthropic_base() {
     let _guard = lock_fixtures_for_test().await;
     let foundry = settings(|s| s.resource = Some("my-resource".into()));

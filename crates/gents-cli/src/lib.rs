@@ -463,6 +463,9 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::GrokLogin(args) => commands::grok_login::grok_login(args).await,
         Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
         Command::ClaudeLogin(args) => commands::claude_login::claude_login(args).await,
+        Command::ClaudeGatewayLogin(args) => {
+            commands::claude_gateway_login::claude_gateway_login(args).await
+        }
         Command::Cloud { command } => commands::cloud::dispatch(command).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Schema { command } => commands::schema::dispatch(command).await,

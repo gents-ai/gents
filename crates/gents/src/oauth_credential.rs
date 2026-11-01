@@ -65,6 +65,8 @@ pub enum OAuthRefreshKind {
     ChatGpt,
     Claude,
     Xai,
+    /// A Claude Code cloud gateway sign-in; the credential's `account_id` names the gateway.
+    Gateway,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1473,6 +1475,7 @@ fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) ->
         ),
         OAuthRefreshKind::Xai => crate::xai_oauth_login::xai_account_key(&credential.access_token),
         OAuthRefreshKind::Claude => None,
+        OAuthRefreshKind::Gateway => credential.provider_account_key.clone(),
     }
 }
 
@@ -1814,8 +1817,9 @@ impl DbCredentialBearer {
 
     async fn refresh_tokens(
         &self,
-        refresh_token: &str,
+        credential: &OAuthCredential,
     ) -> Result<RefreshedTokens, OAuthAuthProblem> {
+        let refresh_token = credential.refresh_token.as_str();
         match self.refresh_kind {
             OAuthRefreshKind::ChatGpt => {
                 crate::chatgpt_oauth_refresh::refresh_chatgpt_token(refresh_token, &self.http).await
@@ -1825,6 +1829,14 @@ impl DbCredentialBearer {
             }
             OAuthRefreshKind::Xai => {
                 crate::xai_oauth_refresh::refresh_xai_token(refresh_token, &self.http).await
+            }
+            OAuthRefreshKind::Gateway => {
+                crate::claude_gateway_login::refresh_gateway_token(
+                    credential.account_id.as_deref(),
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
         }
     }
@@ -1891,7 +1903,7 @@ impl DbCredentialBearer {
             }
         }
 
-        let refreshed = match self.refresh_tokens(&credential.refresh_token).await {
+        let refreshed = match self.refresh_tokens(&credential).await {
             Ok(refreshed) => refreshed,
             Err(problem) => {
                 let error = self.auth_error(&credential, &problem);

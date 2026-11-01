@@ -109,7 +109,9 @@ impl InferenceBackend {
             }
             _ => {}
         }
-        if self.auth.uses_node_oauth() != self.provider_kind.is_node_scoped_oauth()
+        let node_oauth = self.auth.uses_node_oauth();
+        if (node_oauth && !self.provider_kind.accepts_node_oauth())
+            || (!node_oauth && self.provider_kind.is_node_scoped_oauth())
             || !self.auth.suits_provider(self.provider_kind)
         {
             violations

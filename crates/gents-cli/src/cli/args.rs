@@ -104,6 +104,11 @@ pub(crate) enum Command {
     )]
     GrokAuthProbe(GrokAuthProbeArgs),
     #[command(
+        name = "claude-gateway-login",
+        about = "Sign in to a Claude Code cloud gateway and store the account in DefraDB"
+    )]
+    ClaudeGatewayLogin(ClaudeGatewayLoginArgs),
+    #[command(
         name = "claude-login",
         about = "Sign in with the Claude subscription (OAuth) and store credentials in DefraDB",
         after_help = "Default: opens the browser and listens on a localhost callback. Use --manual on hosts without a browser: open the printed URL anywhere, then paste the code shown on Anthropic's page."
@@ -1450,6 +1455,20 @@ pub(crate) struct GrokLoginArgs {
     pub(crate) node_did: Option<String>,
     #[arg(long, default_value = "xai-oauth", value_parser = ["xai-oauth"], help = "OAuth provider key (only xai-oauth)")]
     pub(crate) provider: String,
+    #[arg(long, help = LOGIN_LABEL_HELP)]
+    pub(crate) label: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ClaudeGatewayLoginArgs {
+    /// The gateway URL, such as https://claude-gateway.example.com.
+    pub(crate) url: String,
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, help = LOGIN_LABEL_HELP)]
     pub(crate) label: Option<String>,
 }

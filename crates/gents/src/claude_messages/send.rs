@@ -296,7 +296,20 @@ async fn open_messages<S>(
 where
     S: BearerSource,
 {
-    let plan = plan_claude_request_for(model, request, account, route.target)
+    let bearer_error = |error: anyhow::Error| {
+        CompletionError::ProviderError(format!("Claude Messages bearer: {error}"))
+    };
+    // A signed-in gateway's attribution mark comes from the token it sends (`J6o`).
+    let early_token = if route.gateway_mark_from_token {
+        Some(bearer.current_bearer().await.map_err(bearer_error)?)
+    } else {
+        None
+    };
+    let mut target = route.target;
+    if let Some(token) = &early_token {
+        target.gateway_mark = Some(gents_claude::attribution::gateway_mark(token));
+    }
+    let plan = plan_claude_request_for(model, request, account, target)
         .map_err(|error| invalid_input(format!("Claude Messages body: {error:#}")))?;
     let planned = wire::to_bytes(&plan.body)
         .map_err(|error| invalid_input(format!("encode Claude Messages body: {error}")))?;
@@ -318,10 +331,9 @@ where
     #[cfg(not(test))]
     let fixture: Option<String> = None;
 
-    let bearer_error = |error: anyhow::Error| {
-        CompletionError::ProviderError(format!("Claude Messages bearer: {error}"))
-    };
-    let mut token = if fixture.is_none() {
+    let mut token = if let Some(token) = early_token {
+        token
+    } else if fixture.is_none() {
         bearer.current_bearer().await.map_err(bearer_error)?
     } else {
         String::new()

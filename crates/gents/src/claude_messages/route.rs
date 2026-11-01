@@ -92,6 +92,9 @@ pub(crate) struct ClaudeRoute {
     pub(crate) vertex: Option<VertexRoute>,
     /// `x-goog-user-project`, the quota project of a Vertex route's Google credentials.
     pub(crate) quota_project: Option<String>,
+    /// A signed-in gateway: its `cc_gateway` mark follows the current JWT, so the
+    /// token is read before the request is planned.
+    pub(crate) gateway_mark_from_token: bool,
 }
 
 impl ClaudeRoute {
@@ -109,6 +112,7 @@ impl ClaudeRoute {
             bedrock: None,
             vertex: None,
             quota_project: None,
+            gateway_mark_from_token: false,
         }
     }
 
@@ -138,6 +142,15 @@ impl ClaudeRoute {
                 vertex_rules::stream_path(&vertex.project, &vertex.region, model)
             )
         })
+    }
+
+    /// The same gateway route signed in with a node OAuth account, whose mark is
+    /// read from each request's token.
+    #[must_use]
+    pub(crate) fn with_signed_in_gateway(mut self) -> Self {
+        self.gateway_mark_from_token =
+            self.platform_kind == Some(BackendProviderKind::ClaudeGateway);
+        self
     }
 
     /// The same route sending `quota_project` as `x-goog-user-project` (Vertex only).
@@ -224,6 +237,7 @@ impl ClaudeRoute {
             bedrock: None,
             vertex: None,
             quota_project: None,
+            gateway_mark_from_token: false,
         };
         if signer.is_some()
             && !matches!(

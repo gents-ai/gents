@@ -387,6 +387,26 @@ pub(crate) async fn build_backend_client(
                         })
                         .map_err(anyhow::Error::from)
                 }
+                crate::document_config::BackendAuth::NodeOAuth { account_ref } => {
+                    // A gateway signed in with `gents claude-gateway-login`.
+                    let (bearer, _) = crate::oauth_http::bootstrap_oauth_client(
+                        node.clone(),
+                        agent.node_did(),
+                        crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER,
+                        crate::oauth_credential::OAuthRefreshKind::Gateway,
+                        crate::claude_gateway_login::CLAUDE_GATEWAY_PRODUCT,
+                        crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
+                    )
+                    .await?;
+                    ClaudeRoute::platform(kind, endpoint, settings, "")
+                        .map(|route| {
+                            (
+                                route.with_signed_in_gateway(),
+                                ApiKeyBearer::account(bearer),
+                            )
+                        })
+                        .map_err(anyhow::Error::from)
+                }
                 _ => ClaudeRoute::platform(kind, endpoint, settings, api_key)
                     .map(|route| (route, ApiKeyBearer::new(api_key)))
                     .map_err(anyhow::Error::from),
@@ -735,6 +755,54 @@ mod tests {
         .err()
         .expect("blank access key");
         assert!(format!("{error:#}").contains("access key id"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn a_signed_in_gateway_builds_from_its_stored_account() {
+        let node = test_node().await;
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        let mut gateway = test_agent(
+            BackendProviderKind::ClaudeGateway,
+            crate::OpenAiWireApi::ChatCompletions,
+        );
+        gateway.backend_endpoint = "https://gw.example".into();
+        gateway.backend_auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
+        let missing = build_backend_client(
+            std::sync::Arc::default(),
+            node.clone(),
+            &gateway,
+            "no-key",
+            Duration::from_secs(5),
+        )
+        .await
+        .err()
+        .expect("no gateway account yet");
+        assert!(
+            format!("{missing:#}").contains("claude-gateway-login"),
+            "{missing:#}"
+        );
+        seed_oauth_credential(
+            &node,
+            &gateway,
+            crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER,
+        )
+        .await;
+        let client = build_backend_client(
+            std::sync::Arc::default(),
+            node,
+            &gateway,
+            "no-key",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error:#}"));
+        assert_eq!(client.provider_family(), "ClaudeGateway");
+        let BackendClient::AnthropicApiKey(client) = &client else {
+            panic!("not a Messages client");
+        };
+        assert!(client.route.gateway_mark_from_token);
     }
 
     async fn seed_oauth_credential(
