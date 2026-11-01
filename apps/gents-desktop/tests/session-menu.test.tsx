@@ -195,12 +195,26 @@ describe("a session's menu in the sessions list", () => {
     await u.click(within(menu).getByRole("menuitem", { name: "Pin" }));
     expect(rowTitles()).toEqual(["Second", "First"]);
     const pinnedRow = screen.getByTestId("session-second").closest("li")!;
-    expect(within(pinnedRow).getByRole("img", { name: "Pinned" })).toBeInTheDocument();
+    expect(
+      within(pinnedRow).getByRole("button", { name: "Unpin" }),
+    ).toBeInTheDocument();
 
     const again = await openRowMenu("Second");
     await again.u.click(within(again.menu).getByRole("menuitem", { name: "Unpin" }));
     expect(rowTitles()).toEqual(["First", "Second"]);
-    expect(screen.queryByRole("img", { name: "Pinned" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unpin" })).toBeNull();
+  });
+
+  it("unpins from the row's pin, with Undo", async () => {
+    showList([first, second]);
+    const { u, menu } = await openRowMenu("Second");
+    await u.click(within(menu).getByRole("menuitem", { name: "Pin" }));
+    expect(rowTitles()).toEqual(["Second", "First"]);
+    const row = screen.getByTestId("session-second").closest("li")!;
+    await u.click(within(row).getByRole("button", { name: "Unpin" }));
+    expect(rowTitles()).toEqual(["First", "Second"]);
+    expect(toast).toHaveBeenLastCalledWith("Unpinned", expect.anything());
+    expect(screen.queryByRole("button", { name: "Unpin" })).toBeNull();
   });
 
   it("says when it pins or unpins, and Undo puts a pin back where it was", async () => {
@@ -221,7 +235,7 @@ describe("a session's menu in the sessions list", () => {
     expect(rowTitles()).toEqual(["Second", "First"]);
     undo();
     expect(rowTitles()).toEqual(["First", "Second"]);
-    expect(screen.getAllByRole("img", { name: "Pinned" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Unpin" })).toHaveLength(2);
   });
 
   it("marks a session with new work as read, and Undo makes it new again", async () => {
