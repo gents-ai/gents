@@ -24,7 +24,10 @@ import { Button } from "@gents/ui/components/button";
 import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
-import { navigate, type Route } from "@/lib/router";
+import { currentRoute, navigate, type Route } from "@/lib/router";
+import { isLocalNode } from "@/lib/firstRun";
+import { switchedRoute } from "@/app/NodeSwitcher";
+import { NodeAvatar } from "./AgentAvatar";
 import {
   searchEntries,
   searchGroups,
@@ -32,9 +35,9 @@ import {
   type SearchFilter,
 } from "@/lib/search";
 import { useApp } from "@/app/AppContext";
-import { useSelectedNodeDid } from "@/hooks/useClient";
+import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { useFleet } from "../hooks/useFleet";
+import { activityOf, activityText, useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
 import { SETTINGS_SECTIONS } from "./settings/sections";
 import { KIND, openItem } from "./MailboxItem";
@@ -149,12 +152,14 @@ export function SearchPalette() {
 }
 
 function useEntries(): SearchEntry[] {
+  const homeDid = useHomeDid();
   const selected = useSelectedNodeDid();
   const sections = useAgentSections();
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
       sessions: s.sessions,
+      sessionsOf: s.sessionsOf,
       mailboxOf: s.mailboxOf,
       nodeKeys: s.nodeKeys,
     })),
@@ -181,6 +186,12 @@ function useEntries(): SearchEntry[] {
           node: nodeName(n.nodeDid),
         })),
       ),
+      nodes: nodes.map((n) => ({
+        nodeDid: n.nodeDid,
+        name: nodeName(n.nodeDid),
+        place: isLocalNode(n, homeDid) ? "Local" : "Remote",
+        doing: n.dialSucceeded ? activityText(activityOf(fleet, n.nodeDid)) : "Offline",
+      })),
       agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),
       nodeName,
       places: [
@@ -203,7 +214,7 @@ function useEntries(): SearchEntry[] {
       ],
       actions: ACTIONS,
     });
-  }, [fleet, selected, sections]);
+  }, [fleet, selected, sections, homeDid]);
 }
 
 function PaletteBody({
@@ -239,7 +250,13 @@ function PaletteBody({
     /* an item on the active node opens in the mailbox's dialog over this
        page; one on another node is reached through its session, which
        carries the switch to that node */
-    if (e.kind === "attention") {
+    if (e.kind === "node") {
+      /* as the nav's node switcher does */
+      actions.selectNode(e.nodeDid);
+      const here = currentRoute();
+      const next = here ? switchedRoute(here, e.nodeDid) : null;
+      if (next) navigate(next);
+    } else if (e.kind === "attention") {
       if (e.item.nodeDid === selected) openInStack(e.item);
       else void openItem(e.item, actions.openMailboxItem);
     } else if (e.kind === "session")
@@ -404,6 +421,8 @@ function EntryIcon({ entry: e }: { entry: SearchEntry }) {
     );
   }
   if (e.kind === "agent") return <Workflow className={box} />;
+  if (e.kind === "node")
+    return <NodeAvatar name={e.name} className="size-4 shrink-0" />;
   const Icon = e.icon;
   return <Icon className={box} />;
 }

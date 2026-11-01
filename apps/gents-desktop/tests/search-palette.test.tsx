@@ -204,6 +204,36 @@ describe("the search palette", () => {
     expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
   });
 
+  it("finds a node by its name and switches to it", async () => {
+    const app = testApp({
+      deployments: [
+        node(),
+        node({
+          nodeDid: "did:key:juno",
+          label: "Juno",
+          source: "enrollment",
+          node: { ...node().node, nodeDid: "did:key:juno", displayName: null },
+        }),
+      ],
+      selection: { nodeDid: NODE },
+    });
+    renderIn(app, <SearchPalette />);
+    act(() => openSearch());
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "juno" },
+    });
+    expect(groupNames()[0]).toBe("Nodes");
+    const juno = options("Nodes")[0];
+    expect(juno).toContain("Juno");
+    expect(juno).toContain("Remote");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search" }), {
+      key: "Enter",
+    });
+    await waitFor(() =>
+      expect(app.stores.selection.getState().nodeDid).toBe("did:key:juno"),
+    );
+  });
+
   it("opens from the title bar's Search button", async () => {
     renderIn(
       testApp({ deployments: [node()] }),

@@ -55,7 +55,10 @@ export const stoppedUnder = (state: FleetState, session: SessionSummary) =>
 
 /** What a node has going on: its running sessions and its open mailbox
     items, as the Nodes page, the node switcher and the nav count them. */
-export function activityOf(state: FleetState, nodeDid: string) {
+export function activityOf(
+  state: Pick<FleetState, "sessionsOf" | "mailboxOf">,
+  nodeDid: string,
+) {
   const key = nodeKeyOf({ nodeDid });
   return {
     running: (state.sessionsOf[key] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
