@@ -39,6 +39,20 @@ test("works through the mailbox in its dialog, and keeps the place across a sess
   await expect(dialog).toHaveCount(0);
 });
 
+test("moves with the arrow keys from a question onto an item without one", async ({
+  page,
+}) => {
+  await gotoHarness(page, "mailbox-many");
+  await openMailbox(page);
+  const dialog = page.getByTestId("mailbox-dialog");
+  await rowButton(page, "Choose a workspace").click();
+  await expect(dialog).toContainText("Where should this run?");
+  await page.keyboard.press("ArrowRight");
+  await expect(dialog).toContainText("Nightly build failed");
+  await page.keyboard.press("ArrowRight");
+  await expect(dialog).toContainText("Disk is nearly full");
+});
+
 test("opens the mailbox's dialog over another page with its shortcut", async ({
   page,
 }) => {

@@ -259,6 +259,14 @@ export function ItemDialog({
     else onClose();
   }, [openId, at, lastAt, items, onOpen, onClose]);
   const item = at >= 0 ? items[at]! : null;
+  const content = useRef<HTMLDivElement>(null);
+  /* focus left with the card that held it, and keys pressed outside the
+     dialog never reach its ← and →; a card that takes focus itself has done
+     so already, its effects running before this one */
+  useEffect(() => {
+    const el = content.current;
+    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+  }, [item?.itemId]);
   const go = (index: number) => {
     const next = items[index];
     if (next) morph(() => onOpen(next.itemId, index));
@@ -268,6 +276,7 @@ export function ItemDialog({
     <Dialog open={openId !== null} onOpenChange={(open) => !open && onClose()}>
       {item && (
         <DialogContent
+          ref={content}
           showCloseButton={false}
           className="grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-visible bg-transparent p-0 shadow-none ring-0 sm:max-w-xl dark:ring-0"
           /* the list stays readable behind, with the open row marked */
