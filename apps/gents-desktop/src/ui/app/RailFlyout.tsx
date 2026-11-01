@@ -40,7 +40,7 @@ export function KeyHint({ keys }: { keys?: string }) {
   return (
     <span
       aria-hidden
-      className="shrink-0 font-mono text-[10px] text-muted-foreground/60 opacity-0 transition-opacity delay-0 group-hover/item:opacity-100 group-hover/item:delay-500 group-focus-visible/item:opacity-100"
+      className="shrink-0 font-mono text-[11px] text-muted-foreground opacity-0 transition-opacity delay-0 group-hover/item:opacity-100 group-hover/item:delay-500 group-focus-visible/item:opacity-100"
     >
       {keys}
     </span>
