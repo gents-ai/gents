@@ -5,11 +5,120 @@ use std::collections::VecDeque;
 /// Bounds application request preparation across peers; native P2P owns transport concurrency.
 const MAX_ACTIVE_PEERS: usize = 8;
 
+/// The three deferred partitions, in serve order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RequestKind {
+    Transcript,
+    Inventory,
+    Image,
+}
+
+/// Typed identity of one deferred request. Each kind keeps its own canonical
+/// identity, so identical strings in different kinds never collide.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum RequestKey {
+    Transcript {
+        request_key: String,
+        requester_did: String,
+        node_did: String,
+        session_id: String,
+    },
+    Inventory {
+        document_id: String,
+        request_key: String,
+    },
+    Image {
+        collection_name: &'static str,
+        document_id: String,
+    },
+}
+
+/// One peer's deferred work. The batch's full admitted identity set is recorded
+/// on `PeerWork::active` when it starts, including members not yet served.
+struct PeerBatch {
+    peer: String,
+    work: BatchWork,
+}
+
+enum BatchWork {
+    Requests(PeerRequests),
+    #[cfg(test)]
+    Future(BoxFuture<'static, ()>),
+}
+
+/// Deferred rows per kind, in serve order: transcripts, then inventory, then
+/// images, and store order within each kind.
+#[derive(Default)]
+struct PeerRequests {
+    transcripts: Vec<Request>,
+    inventory: Vec<Request>,
+    images: Vec<Request>,
+}
+
+impl PeerRequests {
+    fn is_empty(&self) -> bool {
+        self.transcripts.is_empty() && self.inventory.is_empty() && self.images.is_empty()
+    }
+
+    fn keys(&self) -> BTreeSet<RequestKey> {
+        self.transcripts
+            .iter()
+            .chain(&self.inventory)
+            .chain(&self.images)
+            .map(Request::key)
+            .collect()
+    }
+
+    fn clear(&mut self, kind: RequestKind) {
+        match kind {
+            RequestKind::Transcript => self.transcripts.clear(),
+            RequestKind::Inventory => self.inventory.clear(),
+            RequestKind::Image => self.images.clear(),
+        }
+    }
+
+    fn set(&mut self, kind: RequestKind, requests: Vec<Request>) {
+        match kind {
+            RequestKind::Transcript => self.transcripts = requests,
+            RequestKind::Inventory => self.inventory = requests,
+            RequestKind::Image => self.images = requests,
+        }
+    }
+
+    fn into_requests(self) -> impl Iterator<Item = Request> {
+        self.transcripts
+            .into_iter()
+            .chain(self.inventory)
+            .chain(self.images)
+    }
+}
+
+impl PeerBatch {
+    fn empty(peer: String) -> Self {
+        Self {
+            peer,
+            work: BatchWork::Requests(PeerRequests::default()),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match &self.work {
+            BatchWork::Requests(requests) => requests.is_empty(),
+            #[cfg(test)]
+            BatchWork::Future(_) => false,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct PeerWork {
-    active: BTreeSet<String>,
+    store: Option<Arc<GraphqlHydrationStore>>,
+    delivery: Option<Arc<dyn HydrationDelivery>>,
+    /// Peer -> every key in its started batch, including not-yet-served members.
+    active: BTreeMap<String, BTreeSet<RequestKey>>,
     running: FuturesUnordered<BoxFuture<'static, String>>,
-    queued: VecDeque<(String, BoxFuture<'static, ()>)>,
+    /// At most one deferred batch per peer.
+    queued: VecDeque<PeerBatch>,
     last_started: Option<String>,
 }
 
@@ -18,16 +127,43 @@ impl PeerWork {
         self.running.is_empty() && self.queued.is_empty()
     }
 
-    fn start(
-        &mut self,
-        peer: String,
-        work: impl std::future::Future<Output = ()> + Send + 'static,
-    ) -> bool {
-        if self.active.contains(&peer) || self.running.len() >= MAX_ACTIVE_PEERS {
-            return false;
+    /// Starts one batch. The future is built here, never while the batch waits.
+    /// Returns the batch back when the peer is already active or the cap is full.
+    fn start(&mut self, batch: PeerBatch) -> std::result::Result<(), PeerBatch> {
+        if self.active.contains_key(&batch.peer) || self.running.len() >= MAX_ACTIVE_PEERS {
+            return Err(batch);
         }
+        let PeerBatch { peer, work } = batch;
+        let keys = match &work {
+            BatchWork::Requests(requests) => requests.keys(),
+            #[cfg(test)]
+            BatchWork::Future(_) => BTreeSet::new(),
+        };
+        let work: BoxFuture<'static, ()> = match work {
+            BatchWork::Requests(requests) => {
+                let store = self
+                    .store
+                    .clone()
+                    .expect("deferred batch requires the reconciler's store");
+                let delivery = self
+                    .delivery
+                    .clone()
+                    .expect("deferred batch requires the reconciler's delivery");
+                let log_peer = peer.clone();
+                async move {
+                    for request in requests.into_requests() {
+                        if let Err(error) = request.serve(&store, delivery.as_ref()).await {
+                            tracing::warn!(peer = %log_peer, %error, "hydration request remains pending");
+                        }
+                    }
+                }
+                .boxed()
+            }
+            #[cfg(test)]
+            BatchWork::Future(work) => work,
+        };
         self.last_started = Some(peer.clone());
-        self.active.insert(peer.clone());
+        self.active.insert(peer.clone(), keys);
         self.running.push(
             async move {
                 work.await;
@@ -35,28 +171,30 @@ impl PeerWork {
             }
             .boxed(),
         );
-        true
+        Ok(())
     }
 
-    fn enqueue<F>(&mut self, peer: String, work: F) -> bool
-    where
-        F: std::future::Future<Output = ()> + Send + 'static,
-    {
-        if self.active.contains(&peer) || self.queued.iter().any(|(queued, _)| queued == &peer) {
-            return false;
-        }
-        self.queued.push_back((peer, work.boxed()));
-        true
-    }
-
+    /// One queue-length-bounded pass. A peer that is already active is skipped
+    /// and restored at the front in its original order, so a full batch never
+    /// loses or reorders the work behind it. A failed start restores that batch
+    /// at the front and stops the pass.
     fn fill_slots(&mut self) {
-        // Consume each discovered batch once. Completion cannot requeue a failed attempt.
-        while self.running.len() < MAX_ACTIVE_PEERS {
-            let Some((peer, work)) = self.queued.pop_front() else {
+        let mut skipped: VecDeque<PeerBatch> = VecDeque::new();
+        for _ in 0..self.queued.len() {
+            let Some(batch) = self.queued.pop_front() else {
                 break;
             };
-            let started = self.start(peer, work);
-            debug_assert!(started, "queued peer must not already be running");
+            if self.active.contains_key(&batch.peer) || self.running.len() >= MAX_ACTIVE_PEERS {
+                skipped.push_back(batch);
+                continue;
+            }
+            if let Err(batch) = self.start(batch) {
+                self.queued.push_front(batch);
+                break;
+            }
+        }
+        while let Some(batch) = skipped.pop_back() {
+            self.queued.push_front(batch);
         }
     }
 
@@ -66,6 +204,44 @@ impl PeerWork {
             self.active.remove(&peer);
             self.fill_slots();
         }
+    }
+
+    #[cfg(test)]
+    fn start_test_future<F>(&mut self, peer: String, work: F) -> bool
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.start(PeerBatch {
+            peer,
+            work: BatchWork::Future(work.boxed()),
+        })
+        .is_ok()
+    }
+
+    #[cfg(test)]
+    fn enqueue_test_future<F>(&mut self, peer: String, work: F) -> bool
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        if self.active.contains_key(&peer) || self.queued.iter().any(|queued| queued.peer == peer) {
+            return false;
+        }
+        self.queued.push_back(PeerBatch {
+            peer,
+            work: BatchWork::Future(work.boxed()),
+        });
+        true
+    }
+
+    #[cfg(test)]
+    fn active_peers(&self) -> BTreeSet<String> {
+        self.active.keys().cloned().collect()
+    }
+
+    /// Peers whose deferred batch is waiting in the queue, in queue order.
+    #[cfg(test)]
+    fn queued_peers(&self) -> Vec<String> {
+        self.queued.iter().map(|batch| batch.peer.clone()).collect()
     }
 }
 
@@ -84,6 +260,29 @@ impl Request {
                 .map_or_else(|| row.request_key.clone(), |(peer, _)| peer.to_string()),
             Self::Inventory(row) => row.peer_id.clone(),
             Self::Image(row) => row.demand.admission.peer_id.clone(),
+        }
+    }
+
+    /// The kind-tagged canonical identity of this request. Transcript identity is
+    /// the full four-field tuple the terminal compare-and-set uses; inventory is
+    /// its physical document plus immutable request key; image is its collection
+    /// plus physical document.
+    fn key(&self) -> RequestKey {
+        match self {
+            Self::Transcript(row) => RequestKey::Transcript {
+                request_key: row.request_key.clone(),
+                requester_did: row.requester_did.clone(),
+                node_did: row.node_did.clone(),
+                session_id: row.session_id.clone(),
+            },
+            Self::Inventory(row) => RequestKey::Inventory {
+                document_id: row.document_id.clone(),
+                request_key: row.request_key.clone(),
+            },
+            Self::Image(row) => RequestKey::Image {
+                collection_name: row.demand.collection_name(),
+                document_id: row.document_id().to_owned(),
+            },
         }
     }
 
@@ -114,7 +313,10 @@ pub(super) async fn discover(
     work: &mut PeerWork,
     cancel: &CancellationToken,
 ) {
-    let mut pending: BTreeMap<String, Vec<Request>> = BTreeMap::new();
+    // Deferred batches build their future only when they start, so the
+    // reconciler's store and delivery are bound here, once per observation.
+    work.store = Some(store.clone());
+    work.delivery = Some(delivery.clone());
     let discovery = async {
         tokio::join!(
             store.load_pending_requests(),
@@ -123,28 +325,39 @@ pub(super) async fn discover(
         )
     };
     tokio::pin!(discovery);
-    let mut completed = Vec::new();
+    // Keys of batches whose completion this observation consumed. Local to this
+    // invocation: a cancel or drop discards it, and every consumed peer is
+    // already out of `active`, so no peer is orphaned. Not-yet-polled peers stay
+    // paired in `running` and `active`.
+    let mut completed_suppress: BTreeSet<RequestKey> = BTreeSet::new();
     let (transcripts, inventory, images) = loop {
-        tokio::select! {
+        let completed = tokio::select! {
             biased;
             _ = cancel.cancelled() => return,
             result = &mut discovery => break result,
-            peer = work.running.next(), if !work.running.is_empty() => {
-                if let Some(peer) = peer { completed.push(peer); }
+            peer = work.running.next(), if !work.running.is_empty() => peer,
+        };
+        // Release the completed peer's ownership synchronously, before the next
+        // poll: the yielded peer is already gone from `running`, so leaving it in
+        // `active` would orphan it and `enqueue` would refuse it forever.
+        if let Some(peer) = completed {
+            if let Some(keys) = work.active.remove(&peer) {
+                completed_suppress.extend(keys);
             }
         }
     };
-    let complete_snapshot = transcripts.is_ok() && inventory.is_ok() && images.is_ok();
-    if complete_snapshot {
-        work.queued.clear();
-    }
-    let mut collect = |requests: Vec<Request>| {
+    // A successful kind replaces its partition, including an empty one; a failed
+    // kind keeps the rows it already had. The three loads are not one snapshot.
+    let mut observed: BTreeMap<RequestKind, BTreeMap<String, Vec<Request>>> = BTreeMap::new();
+    let mut collect = |kind: RequestKind, requests: Vec<Request>| {
+        let by_peer = observed.entry(kind).or_default();
         for request in requests {
-            pending.entry(request.peer()).or_default().push(request);
+            by_peer.entry(request.peer()).or_default().push(request);
         }
     };
     match transcripts {
         Ok(rows) => collect(
+            RequestKind::Transcript,
             rows.into_iter()
                 .map(Box::new)
                 .map(Request::Transcript)
@@ -154,6 +367,7 @@ pub(super) async fn discover(
     }
     match inventory {
         Ok(rows) => collect(
+            RequestKind::Inventory,
             rows.into_iter()
                 .map(Box::new)
                 .map(Request::Inventory)
@@ -162,32 +376,62 @@ pub(super) async fn discover(
         Err(error) => tracing::warn!(%error, "load pending inventory requests"),
     }
     match images {
-        Ok(rows) => collect(rows.into_iter().map(Box::new).map(Request::Image).collect()),
+        Ok(rows) => collect(
+            RequestKind::Image,
+            rows.into_iter().map(Box::new).map(Request::Image).collect(),
+        ),
         Err(error) => tracing::warn!(%error, "load pending image requests"),
     }
-    let mut pending = pending.into_iter().collect::<Vec<_>>();
-    if let Some(last) = work.last_started.as_deref() {
-        let offset = pending.partition_point(|(peer, _)| peer.as_str() <= last);
-        pending.rotate_left(offset);
-    }
-    for (peer, requests) in pending {
-        if work.active.contains(&peer) {
-            continue;
-        }
-        let store = store.clone();
-        let delivery = delivery.clone();
-        let log_peer = peer.clone();
-        work.enqueue(peer, async move {
-            for request in requests {
-                if let Err(error) = request.serve(&store, delivery.as_ref()).await {
-                    tracing::warn!(peer = %log_peer, %error, "hydration request remains pending");
+    if !observed.is_empty() {
+        // Exclude every identity already attempted by a running batch, plus the
+        // ones this observation just consumed. Global across peers.
+        let excluded: BTreeSet<RequestKey> = completed_suppress
+            .iter()
+            .cloned()
+            .chain(work.active.values().flatten().cloned())
+            .collect();
+        let mut batches: BTreeMap<String, PeerBatch> = work
+            .queued
+            .drain(..)
+            .map(|batch| (batch.peer.clone(), batch))
+            .collect();
+        for (kind, by_peer) in observed {
+            for batch in batches.values_mut() {
+                match &mut batch.work {
+                    BatchWork::Requests(requests) => requests.clear(kind),
+                    #[cfg(test)]
+                    BatchWork::Future(_) => {}
                 }
             }
-        });
+            for (peer, requests) in by_peer {
+                let requests: Vec<Request> = requests
+                    .into_iter()
+                    .filter(|request| !excluded.contains(&request.key()))
+                    .collect();
+                if requests.is_empty() {
+                    continue;
+                }
+                let batch = batches
+                    .entry(peer.clone())
+                    .or_insert_with(|| PeerBatch::empty(peer));
+                match &mut batch.work {
+                    BatchWork::Requests(queued) => queued.set(kind, requests),
+                    #[cfg(test)]
+                    BatchWork::Future(_) => {}
+                }
+            }
+        }
+        batches.retain(|_, batch| !batch.is_empty());
+        let mut ordered: Vec<PeerBatch> = batches.into_values().collect();
+        if let Some(last) = work.last_started.as_deref() {
+            let offset = ordered.partition_point(|batch| batch.peer.as_str() <= last);
+            ordered.rotate_left(offset);
+        }
+        work.queued = ordered.into();
     }
-    for peer in completed {
-        work.active.remove(&peer);
-    }
+    // Suppression covers this observation only; a later discovery may retry an
+    // unchanged failed request as today.
+    drop(completed_suppress);
     work.fill_slots();
 }
 
@@ -206,12 +450,12 @@ mod tests {
     #[test]
     fn one_job_per_peer_and_total_work_are_bounded() {
         let mut work = PeerWork::default();
-        assert!(work.start("peer-a".into(), std::future::pending()));
-        assert!(!work.start("peer-a".into(), async {}));
+        assert!(work.start_test_future("peer-a".into(), std::future::pending()));
+        assert!(!work.start_test_future("peer-a".into(), async {}));
         for index in 1..MAX_ACTIVE_PEERS {
-            assert!(work.start(format!("peer-{index}"), std::future::pending()));
+            assert!(work.start_test_future(format!("peer-{index}"), std::future::pending()));
         }
-        assert!(!work.start("overflow".into(), async {}));
+        assert!(!work.start_test_future("overflow".into(), async {}));
         assert_eq!(work.running.len(), MAX_ACTIVE_PEERS);
     }
 
@@ -231,15 +475,17 @@ mod tests {
             releases.push(Some(release_tx));
             let attempts = attempts.clone();
             let started_tx = started_tx.clone();
-            assert!(work.enqueue(format!("peer-{index}"), async move {
-                attempts[index].fetch_add(1, Ordering::SeqCst);
-                started_tx.send(index).unwrap();
-                if index < MAX_ACTIVE_PEERS {
-                    let _ = release_rx.await;
-                }
-                let result: Result<()> = Err(anyhow::anyhow!("indeterminate delivery"));
-                assert!(result.is_err());
-            }));
+            assert!(
+                work.enqueue_test_future(format!("peer-{index}"), async move {
+                    attempts[index].fetch_add(1, Ordering::SeqCst);
+                    started_tx.send(index).unwrap();
+                    if index < MAX_ACTIVE_PEERS {
+                        let _ = release_rx.await;
+                    }
+                    let result: Result<()> = Err(anyhow::anyhow!("indeterminate delivery"));
+                    assert!(result.is_err());
+                })
+            );
         }
         work.fill_slots();
         assert_eq!(work.running.len(), MAX_ACTIVE_PEERS);
@@ -302,7 +548,7 @@ mod tests {
         let dropped = Arc::new(AtomicBool::new(false));
         let ready = started.clone();
         let guard = Dropped(dropped.clone());
-        work.start("peer-a".into(), async move {
+        work.start_test_future("peer-a".into(), async move {
             let _guard = guard;
             ready.notify_one();
             std::future::pending::<()>().await;
@@ -311,11 +557,11 @@ mod tests {
             _ = work.next() => panic!("blocked peer completed"),
             _ = started.notified() => {},
         }
-        work.start("peer-b".into(), async {});
+        work.start_test_future("peer-b".into(), async {});
         tokio::time::timeout(std::time::Duration::from_secs(1), work.next())
             .await
             .unwrap();
-        assert_eq!(work.active, BTreeSet::from(["peer-a".to_string()]));
+        assert_eq!(work.active_peers(), BTreeSet::from(["peer-a".to_string()]));
         assert!(!dropped.load(Ordering::SeqCst));
         drop(work);
         assert!(dropped.load(Ordering::SeqCst));
@@ -698,13 +944,22 @@ mod tests {
         );
     }
 
-    /// A confirmed attempt for A, then a distinct request B for the same peer
-    /// committed while A is still active. The discovery during A's attempt
-    /// defers B; completing A does not serve B; an explicit discovery does.
+    /// MIGRATED from `a_new_request_for_an_active_peer_is_deferred_until_the_next_discovery`
+    /// (a442 characterization, kept as a historical receipt). A confirmed attempt
+    /// for A, then a distinct request B for the same peer committed while A is
+    /// still active. The discovery during A's attempt defers B; completing A now
+    /// serves B with no further discovery, and A is not retried.
+    ///
+    /// Assertion changes from the characterization: the post-completion
+    /// `queued.is_empty()` / `active.is_empty()` / "B stays pending" / "an
+    /// explicit discovery is required" block is replaced by "B starts on
+    /// completion" and "B is served". The pre-completion deferral assertions
+    /// (no enqueue while the peer is active, no second concurrent attempt) are
+    /// unchanged.
     #[tokio::test]
-    async fn a_new_request_for_an_active_peer_is_deferred_until_the_next_discovery() {
+    async fn a_new_request_for_an_active_peer_is_served_after_the_active_attempt_completes() {
         bounded(
-            "a_new_request_for_an_active_peer_is_deferred_until_the_next_discovery",
+            "a_new_request_for_an_active_peer_is_served_after_the_active_attempt_completes",
             async {
                 let fixture = scheduler_fixture().await;
                 let store = fixture.store.clone();
@@ -717,7 +972,7 @@ mod tests {
                 assert_initial_admission(&store).await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
                 drive_until_started(&mut work, &delivery).await;
-                assert_eq!(work.active, BTreeSet::from([fixture.peer.clone()]));
+                assert_eq!(work.active_peers(), BTreeSet::from([fixture.peer.clone()]));
                 assert_eq!(delivery.pushes().len(), 1);
                 assert_eq!(
                     delivery.pushed_sessions(&fixture.peer),
@@ -727,11 +982,12 @@ mod tests {
                 // A distinct request for the same peer arrives while A is active.
                 seed_pending_request(&fixture, "session-b").await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
-                assert!(
-                    work.queued.is_empty(),
-                    "the new row is not enqueued while its peer is active"
+                assert_eq!(
+                    work.queued_peers(),
+                    vec![fixture.peer.clone()],
+                    "the new row is deferred, not started, while its peer is active"
                 );
-                assert_eq!(work.active, BTreeSet::from([fixture.peer.clone()]));
+                assert_eq!(work.active_peers(), BTreeSet::from([fixture.peer.clone()]));
                 assert_eq!(
                     delivery.pushes().len(),
                     1,
@@ -741,34 +997,29 @@ mod tests {
                 // Complete A explicitly: the delivery confirms and the terminal write lands.
                 delivery.release_next();
                 next_within(&mut work, "A completes").await;
-                assert!(work.active.is_empty());
-                assert!(work.queued.is_empty());
-                assert_eq!(
-                    delivery.pushes().len(),
-                    1,
-                    "completion alone does not retry the peer"
-                );
                 assert_eq!(request_status(&fixture, "session-a").await, "served");
-                assert_eq!(request_status(&fixture, "session-b").await, "pending");
+                assert_eq!(
+                    request_status(&fixture, "session-b").await,
+                    "pending",
+                    "B is deferred, not served, while A's attempt is in flight"
+                );
 
-                // `work.next()` alone neither serves B nor retries A.
-                next_within(&mut work, "idle next").await;
-                assert_eq!(delivery.pushes().len(), 1);
-                assert_eq!(request_status(&fixture, "session-b").await, "pending");
-
-                // An explicit discovery serves the deferred row.
-                discover(&store, &delivery_trait, &mut work, &cancel).await;
+                // Completion alone starts the deferred B: no discovery, no store
+                // write, no retry of A.
                 drive_until_started(&mut work, &delivery).await;
-                assert_eq!(delivery.pushes().len(), 2);
                 assert_eq!(
                     delivery.pushed_sessions(&fixture.peer),
                     vec!["session-a".to_string(), "session-b".to_string()],
-                    "the second attempt serves B, not a retry of A"
+                    "the deferred attempt serves B, not a retry of A"
                 );
                 delivery.release_next();
                 next_within(&mut work, "B completes").await;
                 assert_eq!(request_status(&fixture, "session-b").await, "served");
                 assert_eq!(delivery.pushes().len(), 2, "A was attempted exactly once");
+
+                // Idle again: nothing left to start.
+                next_within(&mut work, "idle next").await;
+                assert_eq!(delivery.pushes().len(), 2, "no third attempt");
 
                 fixture.node.shutdown().await;
             },
@@ -776,16 +1027,28 @@ mod tests {
         .await;
     }
 
-    /// The same deferral when A's attempt writes no terminal state. A real
-    /// subscription is created before the first discovery, and each insert's
-    /// batch is drained explicitly before the discovery that follows it, so the
-    /// test does not show the discovery consuming a wake. No further wake is
-    /// pending at the observation after A fails. It does not claim the
+    /// MIGRATED from `a_failed_attempt_without_a_terminal_write_still_defers_the_new_request`
+    /// (a442 characterization, kept as a historical receipt). The same deferral
+    /// when A's attempt writes no terminal state, now with the desired outcome:
+    /// completing the failed A serves the deferred B without retrying A. A later
+    /// explicit discovery may still retry the unchanged pending A, as today.
+    ///
+    /// Assertion changes from the characterization: the post-completion block
+    /// that required "B stays pending until an explicit discovery" and "the
+    /// discovery serves B and retries A in one batch" is replaced by "completion
+    /// serves B alone" followed by "a later discovery retries A alone". The
+    /// lifetime multiset is unchanged (A twice, B once) but the order is now
+    /// asserted: A, B, then A again.
+    ///
+    /// A real subscription is created before the first discovery, and each
+    /// insert's batch is drained explicitly before the discovery that follows
+    /// it, so the test does not show the discovery consuming a wake. No further
+    /// wake is pending at the observation after A fails. It does not claim the
     /// subscription is lossless.
     #[tokio::test]
-    async fn a_failed_attempt_without_a_terminal_write_still_defers_the_new_request() {
+    async fn a_failed_attempt_without_a_terminal_write_serves_the_new_request_after_completion() {
         bounded(
-            "a_failed_attempt_without_a_terminal_write_still_defers_the_new_request",
+            "a_failed_attempt_without_a_terminal_write_serves_the_new_request_after_completion",
             async {
                 let fixture = scheduler_fixture().await;
                 let store = fixture.store.clone();
@@ -811,17 +1074,16 @@ mod tests {
                 seed_pending_request(&fixture, "session-b").await;
                 drain_batch(&mut changes, "B's insert").await;
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
-                assert!(
-                    work.queued.is_empty(),
-                    "the new row is not enqueued while its peer is active"
+                assert_eq!(
+                    work.queued_peers(),
+                    vec![fixture.peer.clone()],
+                    "the new row is deferred, not started, while its peer is active"
                 );
                 assert_eq!(delivery.pushes().len(), 1);
 
                 // A finishes with no terminal write and no new store write.
                 delivery.release_next();
                 next_within(&mut work, "A completes").await;
-                assert!(work.active.is_empty());
-                assert_eq!(delivery.pushes().len(), 1);
                 assert_eq!(
                     request_status(&fixture, "session-a").await,
                     "pending",
@@ -830,46 +1092,45 @@ mod tests {
                 assert_eq!(request_status(&fixture, "session-b").await, "pending");
                 assert_no_pending_wake(&mut changes, "A's failed attempt");
 
-                // Idle: no completion-driven retry and no service of B.
+                // Completion alone serves the deferred B and does not retry A.
+                drive_until_started(&mut work, &delivery).await;
+                assert_eq!(
+                    delivery.pushed_sessions(&fixture.peer),
+                    vec!["session-a".to_string(), "session-b".to_string()],
+                    "completion serves B, not a retry of A"
+                );
+                delivery.release_next();
+                next_within(&mut work, "B completes").await;
+                assert_eq!(request_status(&fixture, "session-b").await, "served");
+                assert_eq!(
+                    request_status(&fixture, "session-a").await,
+                    "pending",
+                    "B's success does not serve A"
+                );
+
+                // Idle: no completion-driven retry of the still-pending A.
                 next_within(&mut work, "idle next").await;
                 assert_eq!(
                     delivery.pushes().len(),
-                    1,
-                    "B is not attempted without a discovery"
+                    2,
+                    "A is not retried without a discovery"
                 );
 
-                // An explicit discovery serves B and legitimately retries pending A.
-                // The assertions below require exactly two A attempts and one B attempt.
+                // A later explicit discovery legitimately retries the unchanged
+                // pending A. The lifetime multiset stays A twice and B once.
                 discover(&store, &delivery_trait, &mut work, &cancel).await;
                 drive_until_started(&mut work, &delivery).await;
                 delivery.release_next();
-                drive_until_started(&mut work, &delivery).await;
-                delivery.release_next();
-                next_within(&mut work, "the deferred batch completes").await;
-                assert_eq!(request_status(&fixture, "session-b").await, "served");
+                next_within(&mut work, "the retried A completes").await;
                 assert_eq!(request_status(&fixture, "session-a").await, "served");
-                // A is reattempted because its row is still pending, so the
-                // lifetime multiset is A twice and B once. The order within the
-                // second batch is not asserted.
-                let mut served = delivery.pushed_sessions(&fixture.peer);
-                assert_eq!(served.len(), 3, "three attempts in total");
                 assert_eq!(
-                    served
-                        .iter()
-                        .filter(|session| *session == "session-b")
-                        .count(),
-                    1,
-                    "B is served exactly once"
-                );
-                served.sort();
-                assert_eq!(
-                    served,
+                    delivery.pushed_sessions(&fixture.peer),
                     vec![
                         "session-a".to_string(),
-                        "session-a".to_string(),
-                        "session-b".to_string()
+                        "session-b".to_string(),
+                        "session-a".to_string()
                     ],
-                    "A twice (initial attempt plus reattempt), B once"
+                    "A twice (initial attempt plus discovery retry), B once"
                 );
 
                 fixture.node.shutdown().await;

@@ -21,9 +21,21 @@ pub(super) struct ImageDemandRow {
     pub(super) demand: FileImageDemand,
 }
 
+impl ImageDemandRow {
+    /// The physical document this cached demand was read from. Narrow on
+    /// purpose: the reconciler needs the identity, not the row's internals.
+    pub(super) fn document_id(&self) -> &str {
+        &self.document_id
+    }
+}
+
 #[async_trait]
 pub(super) trait ImageRequestStore: Send + Sync {
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>>;
+    /// Whether the cached row's physical document is still `pending` with the
+    /// same full demand at read time. `Ok(false)` means gone, terminal or
+    /// replaced; a query or decode failure is `Err`, never `Ok(false)`.
+    async fn still_pending(&self, row: &ImageDemandRow) -> Result<bool>;
     async fn prior(&self, row: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>>;
     async fn admission(&self, demand: &FileImageDemand) -> Result<LoadedHydrationAdmission>;
     /// The selection and the file documents its observation references.
@@ -73,6 +85,13 @@ pub(super) async fn serve_image(
     row: &ImageDemandRow,
 ) -> Result<()> {
     let demand = &row.demand;
+    // A cached row may have been served, rejected or replaced since discovery.
+    // Revalidate its pending identity before the prior-receipt replay, admission,
+    // delivery and commit below. This is identity at read time, not an atomic
+    // cancellation barrier: status may still change after this read.
+    if !store.still_pending(row).await? {
+        return Ok(());
+    }
     let prior = store.prior(row).await?;
     if let Some(receipt) = &prior {
         return store.commit(row, &receipt.selection, &receipt.detail).await;
@@ -169,8 +188,77 @@ struct PendingImageRow {
     inventory_reference: Option<serde_json::Value>,
 }
 
+/// Rebuilds the demand a physical row carries, using the same field
+/// normalization as `pending_images`. `request_key` is copied, never rederived.
+fn demand_from_pending_row(row: PendingImageRow, collection: &str) -> Result<FileImageDemand> {
+    let reference = row
+        .inventory_reference
+        .map(serde_json::from_value::<FileImageInventoryReference>)
+        .transpose()?;
+    let demand = FileImageDemand {
+        inventory_reference: reference,
+        admission: HydrationRequest {
+            request_key: row.request_key.unwrap_or_default(),
+            peer_id: row.peer_id.unwrap_or_default(),
+            requester_did: row.requester_did.unwrap_or_default(),
+            node_did: row.node_did,
+            session_id: row.session_id.unwrap_or_default(),
+        },
+        request_doc_id: row.request_doc_id.unwrap_or_default(),
+        tool_call_doc_id: row.tool_call_doc_id.unwrap_or_default(),
+    };
+    anyhow::ensure!(
+        demand.collection_name() == collection,
+        "file image demand omitted its purpose binding"
+    );
+    Ok(demand)
+}
+
 #[async_trait]
 impl ImageRequestStore for GraphqlHydrationStore {
+    async fn still_pending(&self, row: &ImageDemandRow) -> Result<bool> {
+        let demand = &row.demand;
+        let collection = demand.collection_name();
+        let reference_field = if collection == FILE_INVENTORY_IMAGE_REQUEST_NAME {
+            "inventory_reference"
+        } else {
+            ""
+        };
+        let query = format!(
+            r#"{{ FileImageHydrationRequest: {collection}(filter: {{
+                _docID: {{ _eq: "{}" }}, status: {{ _eq: "pending" }}
+            }}, limit: 2) {{ _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id {reference_field} }} }}"#,
+            escape_graphql_string(row.document_id()),
+        );
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query pending file-image hydration demand identity",
+        )
+        .await?;
+        let mut rows = rows::<PendingImageRow>(&response, FILE_IMAGE_HYDRATION_REQUEST_NAME)?;
+        anyhow::ensure!(
+            rows.len() <= 1,
+            "pending file-image demand identity is ambiguous"
+        );
+        let Some(pending) = rows.pop() else {
+            return Ok(false);
+        };
+        anyhow::ensure!(
+            !pending.document_id.is_empty(),
+            "file-image demand omitted physical identity"
+        );
+        // The query filters on the cached `_docID`, so a returned row is the
+        // cached physical document; assert it rather than assume it, then require
+        // the full reconstructed demand to match, inventory reference included.
+        anyhow::ensure!(
+            pending.document_id == *row.document_id(),
+            "pending file-image demand identity changed its physical document"
+        );
+        let observed = demand_from_pending_row(pending, collection)?;
+        Ok(observed == *demand && observed.collection_name() == collection)
+    }
+
     async fn prior(&self, row: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>> {
         let response = ConfigAccess::local(self.node.clone())
             .execute(&recorded_image_query(row))
@@ -206,37 +294,17 @@ impl ImageRequestStore for GraphqlHydrationStore {
                     !row.document_id.is_empty(),
                     "file-image demand omitted physical identity"
                 );
-                let reference = match row
-                    .inventory_reference
-                    .map(serde_json::from_value::<FileImageInventoryReference>)
-                    .transpose()
-                {
-                    Ok(reference) => reference,
+                let document_id = row.document_id.clone();
+                let demand = match demand_from_pending_row(row, collection) {
+                    Ok(demand) => demand,
                     Err(error) => {
-                        tracing::warn!(document = %row.document_id, collection, %error,
-                            "file image demand has an invalid inventory reference");
+                        tracing::warn!(document = %document_id, collection, %error,
+                            "file image demand has an invalid inventory reference or purpose binding");
                         continue;
                     }
                 };
-                let demand = FileImageDemand {
-                    inventory_reference: reference,
-                    admission: HydrationRequest {
-                        request_key: row.request_key.unwrap_or_default(),
-                        peer_id: row.peer_id.unwrap_or_default(),
-                        requester_did: row.requester_did.unwrap_or_default(),
-                        node_did: row.node_did,
-                        session_id: row.session_id.unwrap_or_default(),
-                    },
-                    request_doc_id: row.request_doc_id.unwrap_or_default(),
-                    tool_call_doc_id: row.tool_call_doc_id.unwrap_or_default(),
-                };
-                if demand.collection_name() != collection {
-                    tracing::warn!(document = %row.document_id, collection,
-                        "file image demand omitted its purpose binding");
-                    continue;
-                }
                 pending.push(ImageDemandRow {
-                    document_id: row.document_id,
+                    document_id,
                     demand,
                 });
             }
