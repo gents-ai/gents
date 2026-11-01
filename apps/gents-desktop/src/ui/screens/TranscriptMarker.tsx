@@ -141,7 +141,7 @@ export function DayMarker({ day }: { day: number }) {
    day, or the first dated row drawn unless it is from today, which a
    session begun today needn't be told */
 export function dayOpenings<T>(
-  rows: T[],
+  rows: readonly T[],
   keyOf: (row: T) => string,
   timestampOf: (row: T) => string | null | undefined,
   today = dayStart(new Date()),
