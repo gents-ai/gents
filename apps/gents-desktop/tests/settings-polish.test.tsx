@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ChipsRow, TagsRow } from "../src/ui/screens/agent/editors";
 import { AgentHoverCard } from "../src/ui/screens/HoverCards";
 import { deployment } from "./config-panel-wiring/fixtures";
+import { testApp, withApp } from "./app-fixture";
 
 describe("settings polish", () => {
   it("shows canonical skill picks as removable chips", () => {
@@ -67,6 +68,7 @@ describe("settings polish", () => {
       <AgentHoverCard deployment={deployment} agentId="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
+      { wrapper: withApp(testApp()) },
     );
     const user = userEvent.setup();
 
@@ -92,6 +94,7 @@ describe("settings polish", () => {
       <AgentHoverCard deployment={onClaude} agentId="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
+      { wrapper: withApp(testApp()) },
     );
     await userEvent
       .setup()
@@ -105,6 +108,7 @@ describe("settings polish", () => {
       <AgentHoverCard deployment={deployment} agentId="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
+      { wrapper: withApp(testApp()) },
     );
     await userEvent
       .setup()

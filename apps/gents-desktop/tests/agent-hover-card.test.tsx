@@ -1,11 +1,11 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { fleetNodes } from "../src/ui/lib/scope";
-import { NodeHoverCard } from "../src/ui/screens/HoverCards";
+import { AgentHoverCard, NodeHoverCard } from "../src/ui/screens/HoverCards";
 import { deployment } from "./config-panel-wiring/fixtures";
-import { node, renderIn, testApp } from "./app-fixture";
+import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 
 function cardFor(nodeDid: string, more: Record<string, unknown> = {}) {
   const app = testApp({
@@ -71,5 +71,42 @@ describe("a node's hover card", () => {
     cardFor("did:key:remote", { inferenceBackends: [] });
     await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
     expect(await screen.findByText("None", {}, { timeout: 2000 })).toBeVisible();
+  });
+
+  it("leads from its lines to the node's sections, and copies its id", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    cardFor("did:key:remote");
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByText("Agents", {}, { timeout: 2000 });
+    const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
+    for (const section of ["agents", "folders", "tasks", "inference"])
+      expect(links.some((h) => h?.endsWith(`/${section}`))).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Copy node id" }));
+    expect(writeText).toHaveBeenCalledWith("did:key:remote");
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("an agent's hover card", () => {
+  it("starts a new session with the agent on its node", async () => {
+    const app = testApp({ deployments: [node()] });
+    const [shown] = fleetNodes(app.stores.fleet.getState());
+    const view = renderRouted(app, { name: "sessions" }, () => (
+      <AgentHoverCard deployment={shown!} agentId="default">
+        <button type="button">agent</button>
+      </AgentHoverCard>
+    ));
+    await userEvent.hover(screen.getByRole("button", { name: "agent" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "New session" }, { timeout: 2000 }),
+    );
+    await waitFor(() =>
+      expect(view.nav().route).toMatchObject({ name: "session", sessionId: null }),
+    );
+    expect(app.stores.selection.getState()).toMatchObject({
+      nodeDid: shown!.nodeDid,
+      agentId: "default",
+    });
   });
 });
