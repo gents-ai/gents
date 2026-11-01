@@ -168,6 +168,35 @@ for (const rest of ["remembered", "widest"] as const) {
   });
 }
 
+test("Show panel with nothing open shows the panels to open, and opens the one picked", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Show panel" }).click();
+
+  const dock = page.getByTestId("dock");
+  await expect(dock).toHaveAccessibleName("Panels");
+  await expect(dock.getByRole("button")).toHaveText([
+    "Started sessions",
+    "Background",
+    "Changes",
+  ]);
+  await dock.getByRole("button", { name: "Changes" }).click();
+  await expect(
+    page.getByRole("tablist", { name: "Panels" }).getByRole("tab", { name: "Changes" }),
+  ).toHaveAttribute("aria-selected", "true");
+
+  /* the last tab closed closes the dock, and the menu offers it again */
+  await page.getByRole("tab", { name: "Changes" }).press("Delete");
+  await expect(dock).toHaveCount(0);
+  await page.getByRole("button", { name: "More" }).first().click();
+  await expect(page.getByRole("menuitem", { name: "Show panel" })).toBeVisible();
+});
+
 test("the dock's + opens a panel that isn't open yet, and stays in view when tabs overflow", async ({
   page,
 }) => {
