@@ -171,6 +171,7 @@ export type {
 export type {
   FoundPack,
   InstalledPack,
+  PackInfo,
   PackEditedChoice,
   PackInstallRequest,
   PackPluginSlot,

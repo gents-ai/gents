@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,7 @@ const pack = (name: string) => ({
 function show(
   searchPacks: (query: string, page: number) => Promise<unknown>,
   installed = ["demo/skills"],
+  packInfo: (pack: string) => Promise<unknown> = async () => ({ versions: [] }),
 ) {
   return renderIn(
     testApp({
@@ -36,6 +37,7 @@ function show(
         },
         listPackPluginSlots: async () => ({ plugins: [], profiles: [] }),
         searchPacks,
+        packInfo,
       },
     }),
     <PacksPanel deployment={deployment} />,
@@ -43,6 +45,57 @@ function show(
 }
 
 describe("PacksPanel registry", () => {
+  it("shows a pack's downloads and keywords, and opens its page under its line", async () => {
+    const searchPacks = vi.fn(async () => ({
+      packs: [{ ...pack("mailbox"), downloads: 1278, keywords: ["example", "mail"] }],
+      has_more: false,
+    }));
+    const packInfo = vi.fn(async () => ({
+      namespace: "demo",
+      name: "mailbox",
+      latest: "1.1.0",
+      owner: "admin",
+      homepage: "https://example.com/mailbox",
+      plugins: ["triage"],
+      versions: [
+        { version: "1.0.0", published_at: "2026-09-01T10:00:00Z", size_bytes: 900 },
+        { version: "1.0.1", yanked: true },
+        { version: "1.1.0", published_at: "2026-09-30T15:06:03Z", size_bytes: 1647 },
+      ],
+    }));
+    show(searchPacks, [], packInfo);
+    const user = userEvent.setup();
+    const line = await screen.findByRole("button", { name: /demo\/mailbox/ });
+    expect(screen.getByText("1.3K")).toBeVisible();
+    expect(line).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(line);
+    expect(packInfo).toHaveBeenCalledWith("demo/mailbox");
+    const facts = await screen.findByText(/by admin/);
+    expect(facts).toHaveTextContent(
+      /by admin · 1\.1\.0, published .+ · 1\.6 KB · 1 plugin: triage · 1 older version · Homepage/,
+    );
+    expect(within(facts).getByRole("link", { name: "Homepage" })).toHaveAttribute(
+      "href",
+      "https://example.com/mailbox",
+    );
+  });
+
+  it("searches a keyword chosen from a pack", async () => {
+    const searchPacks = vi.fn(async () => ({
+      packs: [{ ...pack("mailbox"), keywords: ["example"] }],
+      has_more: false,
+    }));
+    show(searchPacks, []);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /demo\/mailbox/ }));
+    await user.click(screen.getAllByRole("button", { name: "example" })[0]!);
+    expect(screen.getByRole("searchbox", { name: "Search the registry" })).toHaveValue(
+      "example",
+    );
+    await waitFor(() => expect(searchPacks).toHaveBeenCalledWith("example", 1));
+  });
+
   it("lists the registry's packs on opening, marking the ones installed", async () => {
     const searchPacks = vi.fn(async () => ({
       packs: [pack("skills"), pack("research")],
