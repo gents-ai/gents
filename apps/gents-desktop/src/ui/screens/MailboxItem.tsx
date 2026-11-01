@@ -55,6 +55,9 @@ export const KIND: Record<
 
 /** One item of the mailbox: who sent it, its title, what kind it is and
     where it came from, and when it came or falls due. The whole row opens it. */
+const PILL =
+  "inline-flex items-center rounded-full bg-popover/90 text-foreground/85 shadow-sm ring-1 ring-border/50 supports-backdrop-filter:backdrop-blur-sm";
+
 export function ItemRow({
   item: m,
   now,
@@ -297,47 +300,54 @@ export function ItemDialog({
             }
           }}
         >
-          <div className="flex items-center justify-end gap-0.5 text-xs text-muted-foreground tabular-nums">
+          {/* over whatever the backdrop shows: each side on a pill of the
+              card's own surface, so it reads on any page */}
+          <div className="flex items-center justify-end gap-2 text-xs tabular-nums">
             {toMailbox && (
               <a
                 href={href({ name: "mailbox" })}
                 onClick={onClose}
-                className="mr-auto inline-flex items-center gap-1 rounded-sm px-1 underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
+                className={cn(
+                  PILL,
+                  "mr-auto h-7 gap-1 px-2.5 underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline",
+                )}
               >
                 Mailbox <ArrowUpRight className="size-3" />
               </a>
             )}
-            {items.length > 1 && (
-              <>
-                <Button
-                  variant="quiet"
-                  size="icon-xs"
-                  aria-label="Previous item"
-                  disabled={at === 0}
-                  onClick={() => go(at - 1)}
-                >
-                  <ChevronLeft />
-                </Button>
-                {at + 1} of {items.length}
-                <Button
-                  variant="quiet"
-                  size="icon-xs"
-                  aria-label="Next item"
-                  disabled={at === items.length - 1}
-                  onClick={() => go(at + 1)}
-                >
-                  <ChevronRight />
-                </Button>
-              </>
-            )}
-            <Button
-              variant="quiet"
-              size="icon-sm"
-              aria-label="Close mailbox"
-              onClick={onClose}
-            >
-              <X />
-            </Button>
+            <div className={cn(PILL, "gap-0.5 pr-0.5", "pl-0.5")}>
+              {items.length > 1 && (
+                <>
+                  <Button
+                    variant="quiet"
+                    size="icon-xs"
+                    aria-label="Previous item"
+                    disabled={at === 0}
+                    onClick={() => go(at - 1)}
+                  >
+                    <ChevronLeft />
+                  </Button>
+                  {at + 1} of {items.length}
+                  <Button
+                    variant="quiet"
+                    size="icon-xs"
+                    aria-label="Next item"
+                    disabled={at === items.length - 1}
+                    onClick={() => go(at + 1)}
+                  >
+                    <ChevronRight />
+                  </Button>
+                </>
+              )}
+              <Button
+                variant="quiet"
+                size="icon-sm"
+                aria-label="Close mailbox"
+                onClick={onClose}
+              >
+                <X />
+              </Button>
+            </div>
           </div>
           <MorphProvider value={card}>
             <Opened
@@ -601,7 +611,7 @@ function Footer({
               Open session
             </Button>
           )
-        : openable(m) && <Primary item={m} />}
+        : openable(m) && <Primary item={m} variant="raised" />}
     </div>
   );
 }
@@ -666,14 +676,21 @@ export const KEY =
 const CONTROLS =
   'button, a, input, textarea, pre, [role="checkbox"], [role="button"], [role="link"]';
 
-export function Primary({ item }: { item: MailboxItemView }) {
+export function Primary({
+  item,
+  variant = "outline",
+}: {
+  item: MailboxItemView;
+  /** over the dialog's backdrop it wants a fill of its own, as Dismiss has */
+  variant?: "outline" | "raised";
+}) {
   const { openMailboxItem } = useApp().actions;
   const extras = extrasOf(item);
   return (
     <ButtonGroup>
       <Button
         size="sm"
-        variant="outline"
+        variant={variant}
         data-testid="mailbox-selection-open"
         onClick={() => void openItem(item, openMailboxItem)}
       >
@@ -685,7 +702,7 @@ export function Primary({ item }: { item: MailboxItemView }) {
             render={
               <Button
                 size="icon-sm"
-                variant="outline"
+                variant={variant}
                 className="h-7 w-7"
                 aria-label="More actions"
                 data-testid="mailbox-selection-more"
