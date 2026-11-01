@@ -136,7 +136,7 @@ async fn process_command_with_clock(
                     } else {
                         current_admission(txn, store, AuthorScope { requester_did: &command.requester_did,
                             requester_peer_id: command.requester_peer_id.as_deref(), node_did: &command.node_did },
-                            "AgentSessionGoalControl").await?
+                            "AgentSessionGoalControl", now).await?
                     };
                     match authority {
                         Err(reason) => GoalControlOutcome::Rejected { reason },
