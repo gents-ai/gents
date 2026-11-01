@@ -225,6 +225,7 @@ function Editor({
           onChange={(v) => d.set("skillIds", v)}
           items={deployment.skills.map((sk) => ({
             value: sk.skillId,
+            pack: packOrigin(sk.tags),
             label: sk.displayName ?? sk.name ?? sk.skillId,
           }))}
           placeholder="Add a skill"

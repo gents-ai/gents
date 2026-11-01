@@ -711,18 +711,47 @@ export function ChipsRow({
   const name = (v: string) =>
     items.find((i) => i.value === v)?.label ?? `${v} (unavailable)`;
   const all = items.map((i) => i.value);
+  const packOf = (v: string) => items.find((i) => i.value === v)?.pack ?? "";
+  const packs = [
+    ...new Set(items.map((i) => i.pack).filter(Boolean)),
+  ].sort() as string[];
+  const [query, setQuery] = useState("");
+  const packGroups = usePackGroups(`chips:${String(label)}`);
+  /* folded as in a reference field; a search, or a pick from the pack,
+     holds it open */
+  const held = (pack: string) =>
+    query.trim() !== "" || value.some((v) => packOf(v) === pack);
+  const isOpen = (pack: string) => held(pack) || packGroups.isOpen(pack, false);
+  const groups = packs.length
+    ? [
+        { value: "", items: items.filter((i) => !i.pack).map((i) => i.value) },
+        ...packs.map((pack) => ({
+          value: pack,
+          items: items.filter((i) => i.pack === pack).map((i) => i.value),
+        })),
+      ].filter((g) => g.items.length)
+    : null;
+  const option = (v: string) => (
+    <ComboboxItem key={v} value={v}>
+      {name(v)}
+    </ComboboxItem>
+  );
   return (
     <Row label={label} description={description} htmlFor={id} error={error}>
       <span className="flex w-96 items-center gap-1 max-md:w-full">
         <Combobox
           multiple
           disabled={disabled}
-          items={all}
+          items={groups ?? all}
           itemToStringLabel={name}
           value={value}
           filter={(v: string, query: string) =>
-            name(v).toLowerCase().includes(query.trim().toLowerCase())
+            `${name(v)} ${packOf(v)}`.toLowerCase().includes(query.trim().toLowerCase())
           }
+          onInputValueChange={(next) => setQuery(String(next))}
+          onOpenChange={(next) => {
+            if (!next) setQuery("");
+          }}
           onValueChange={(v) => onChange(v ?? [])}
         >
           <ComboboxChips className="max-h-24 min-w-0 flex-1 overflow-y-auto">
@@ -757,11 +786,31 @@ export function ChipsRow({
           <ComboboxContent aria-label={`Choose ${String(label).toLowerCase()}`}>
             <ComboboxEmpty>{empty}</ComboboxEmpty>
             <ComboboxList>
-              {(v: string) => (
-                <ComboboxItem key={v} value={v}>
-                  {name(v)}
-                </ComboboxItem>
-              )}
+              {groups
+                ? (group: { value: string; items: string[] }) => (
+                    <ComboboxGroup
+                      key={group.value || "own"}
+                      items={group.items}
+                      aria-label={group.value || undefined}
+                    >
+                      {group.value && (
+                        <PackHeading
+                          pack={group.value}
+                          count={group.items.length}
+                          open={isOpen(group.value)}
+                          onToggle={
+                            held(group.value)
+                              ? undefined
+                              : () => packGroups.toggle(group.value, false)
+                          }
+                        />
+                      )}
+                      {(!group.value || isOpen(group.value)) && (
+                        <ComboboxCollection>{option}</ComboboxCollection>
+                      )}
+                    </ComboboxGroup>
+                  )
+                : option}
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
