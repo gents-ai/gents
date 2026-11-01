@@ -106,8 +106,8 @@ jobs:
 
       - name: Check compiler-tool download recovery
         run: |
-          bash -n .github/scripts/setup-afterburner-toolchains.sh
-          shellcheck .github/scripts/setup-afterburner-toolchains.sh
+          bash -n .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh
           python3 .github/scripts/test-afterburner-downloads.py
 
   publish-control-tests:
@@ -184,6 +184,9 @@ jobs:
 
       - name: Install protobuf compiler
         run: .github/scripts/setup-protoc.sh
+
+      - name: Install CMake for native dependencies
+        run: bash .github/scripts/setup-cmake.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
