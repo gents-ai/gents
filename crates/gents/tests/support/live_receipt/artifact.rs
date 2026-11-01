@@ -13,7 +13,7 @@ pub(super) fn validate_directory(dir: &Path) -> Result<()> {
     ensure!(metadata.is_dir(), "receipt destination is not a directory");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         ensure!(
             metadata.permissions().mode() & 0o077 == 0,
             "receipt directory permits group/other access"
@@ -40,7 +40,7 @@ pub(super) fn validate_directory(dir: &Path) -> Result<()> {
 
 /// The private artifact directory must belong to the user running the export.
 #[cfg(unix)]
-fn owner_is_effective_user(uid: u32) -> bool {
+pub(super) fn owner_is_effective_user(uid: u32) -> bool {
     uid == unsafe { libc::geteuid() }
 }
 
