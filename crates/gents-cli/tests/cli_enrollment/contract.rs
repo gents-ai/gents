@@ -20,6 +20,71 @@ const OFFLINE_PROMPT: &str = "Reply while the app is closed";
 mod streaming;
 const FOLLOWUP_PROMPT: &str = "Continue our existing conversation";
 
+/// Fixed stage labels for one awaited phase. The stage is recorded before the
+/// await and kept outside the timeout, so a cancelled future still reports the
+/// stage that was in flight. Concurrent branches each hold their own entry, so
+/// a `try_join!` failure names every stage that was still running. Only fixed
+/// labels and elapsed milliseconds are kept: no prompts, replies, peer ids,
+/// environment or provider payloads.
+struct StageTrace {
+    started: Instant,
+    in_flight: std::sync::Mutex<Vec<&'static str>>,
+    completed: std::sync::Mutex<Vec<(&'static str, u128)>>,
+}
+
+impl StageTrace {
+    fn new(started: Instant, first: &'static str) -> Self {
+        Self {
+            started,
+            in_flight: std::sync::Mutex::new(vec![first]),
+            completed: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn enter(&self, stage: &'static str) {
+        let mut in_flight = self.in_flight.lock().expect("stage trace");
+        if !in_flight.contains(&stage) {
+            in_flight.push(stage);
+        }
+    }
+
+    fn complete(&self, stage: &'static str) {
+        self.in_flight
+            .lock()
+            .expect("stage trace")
+            .retain(|running| *running != stage);
+        self.completed
+            .lock()
+            .expect("stage trace")
+            .push((stage, self.started.elapsed().as_millis()));
+    }
+
+    fn in_flight(&self) -> Vec<&'static str> {
+        self.in_flight.lock().expect("stage trace").clone()
+    }
+
+    fn completed(&self) -> Vec<(&'static str, u128)> {
+        self.completed.lock().expect("stage trace").clone()
+    }
+}
+
+/// Which turn of the contract a failure came from, as a fixed label rather
+/// than the prompt text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TurnOrdinal {
+    Initial,
+    Followup,
+}
+
+impl TurnOrdinal {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Initial => "initial",
+            Self::Followup => "followup",
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn app_enrollment_conversation_survives_reopen_with_bounded_latency() -> Result<()> {
     run_contract(0).await
@@ -170,13 +235,7 @@ async fn run_contract_with_streaming_cadence(
         };
         let probe = ReadinessProbe::of(&core, &graphql, &node_did);
         let enrollment_started = Instant::now();
-        let phases = std::sync::Mutex::new(Vec::<(&'static str, u128)>::new());
-        let reached = |phase: &'static str| {
-            phases
-                .lock()
-                .expect("enrollment phase log")
-                .push((phase, enrollment_started.elapsed().as_millis()));
-        };
+        let enrollment_stages = StageTrace::new(enrollment_started, "enrollment_token");
         let sampler = tokio::spawn({
             let probe = probe.clone();
             async move {
@@ -193,22 +252,29 @@ async fn run_contract_with_streaming_cadence(
             }
         });
         let enrollment = timeout(enroll_budget, async {
+            enrollment_stages.enter("enrollment_token");
             let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
-            reached("enrollment_token");
+            enrollment_stages.complete("enrollment_token");
+            enrollment_stages.enter("enrollment_offered");
             let pending = core.request_status_enrollment_with_label(&status, Some("Contract")).await?;
             anyhow::ensure!(pending.state == "pending_approval", "unexpected initial enrollment: {pending:?}");
-            reached("enrollment_offered");
+            enrollment_stages.complete("enrollment_offered");
+            enrollment_stages.enter("runtime_saw_request");
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
-            reached("runtime_saw_request");
+            enrollment_stages.complete("runtime_saw_request");
+            enrollment_stages.enter("operator_approved");
             run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
-            reached("operator_approved");
+            enrollment_stages.complete("operator_approved");
+            enrollment_stages.enter("chat_ready_route");
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
-            reached("chat_ready_route");
+            enrollment_stages.complete("chat_ready_route");
+            enrollment_stages.enter("client_readiness_row");
             wait_for_client_node_readiness(&core, &node_did).await?;
-            reached("client_readiness_row");
+            enrollment_stages.complete("client_readiness_row");
             if let Some(expected) = readiness_timestamp.as_deref() {
+                enrollment_stages.enter("client_readiness_revision");
                 wait_for_readiness_revision(&core, &node_did, expected).await?;
-                reached("client_readiness_revision");
+                enrollment_stages.complete("client_readiness_revision");
             }
             anyhow::ensure!(query_collection_dids(core.node(), "Node").await?.is_empty(), "runtime principal replicated to app");
             Ok::<_, anyhow::Error>(())
@@ -220,8 +286,9 @@ async fn run_contract_with_streaming_cadence(
             let diagnostics = pairing_diagnostics(&core, &graphql).await;
             core.shutdown().await?;
             bail!(
-                "enroll/approve/readiness exceeded {enroll_budget:?} or failed: {enrollment:?}; phases_ms={:?}; {progress}; {diagnostics}",
-                phases.lock().expect("enrollment phase log"),
+                "enroll/approve/readiness exceeded {enroll_budget:?} or failed: {enrollment:?}; pending_stages={:?}; phases_ms={:?}; {progress}; {diagnostics}",
+                enrollment_stages.in_flight(),
+                enrollment_stages.completed(),
             );
         }
         drop(probe);
@@ -241,6 +308,7 @@ async fn run_contract_with_streaming_cadence(
             &agent,
             &session,
             "First conversation turn",
+            TurnOrdinal::Initial,
             stream_gate.as_deref(),
             stream_emission.clone(),
             stream_visibility_budget,
@@ -263,12 +331,19 @@ async fn run_contract_with_streaming_cadence(
         ).await?);
         let client_core_ready = reconnect_started.elapsed();
         core.set_selected_node_did(Some(node_did.clone()));
+        let reopen_stages = StageTrace::new(reconnect_started, "reopen_chat_ready_route");
         let recovered = timeout(RECONNECT_BUDGET.saturating_sub(reconnect_started.elapsed()), async {
+            reopen_stages.enter("reopen_chat_ready_route");
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
+            reopen_stages.complete("reopen_chat_ready_route");
             let route_ready = reconnect_started.elapsed();
+            reopen_stages.enter("reopen_client_readiness_row");
             wait_for_client_node_readiness(&core, &node_did).await?;
+            reopen_stages.complete("reopen_client_readiness_row");
             let agent_ready = reconnect_started.elapsed();
+            reopen_stages.enter("reopen_replicated_reply");
             wait_for_replicated_reply(&core, &session, &node_did, &request, OFFLINE_REPLY).await?;
+            reopen_stages.complete("reopen_replicated_reply");
             Ok::<_, anyhow::Error>((route_ready, agent_ready, reconnect_started.elapsed()))
         }).await;
         let (route_ready, agent_ready, reply_ready) = match recovered {
@@ -276,7 +351,11 @@ async fn run_contract_with_streaming_cadence(
             failed => {
                 let diagnostics = pairing_diagnostics(&core, &graphql).await;
                 core.shutdown().await?;
-                bail!("app reopen did not recover completed reply within 20s: {failed:?}; {diagnostics}");
+                bail!(
+                    "app reopen did not recover completed reply within 20s: {failed:?}; reopen_pending_stages={:?}; reopen_phases_ms={:?}; {diagnostics}",
+                    reopen_stages.in_flight(),
+                    reopen_stages.completed(),
+                );
             }
         };
         let reopened = core.peer_records().await;
@@ -296,6 +375,7 @@ async fn run_contract_with_streaming_cadence(
             &agent,
             &session,
             FOLLOWUP_PROMPT,
+            TurnOrdinal::Followup,
             followup_stream_gate.as_deref(),
             followup_emission.clone(),
             stream_visibility_budget,
@@ -334,30 +414,48 @@ async fn visible_turn(
     agent_id: &str,
     session: &str,
     prompt: &str,
+    turn: TurnOrdinal,
     stream_gate: Option<&tokio::sync::Semaphore>,
     stream_emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
     stream_visibility_budget: Duration,
 ) -> Result<()> {
     let started = Instant::now();
+    let stages = StageTrace::new(started, "turn_submit");
     let result = timeout(TURN_BUDGET, async {
+        stages.enter("turn_submit");
         core.submit_request(session, node_did, prompt, Some(agent_id))
-            .await?;
+            .await
+            .context("turn stage: submit")?;
+        stages.complete("turn_submit");
         let local_submit_completed = started.elapsed();
+        stages.enter("turn_runtime_admission");
         let (request, _, _) =
-            wait_for_runtime_agent_request(graphql, core.node(), node_did, prompt).await?;
+            wait_for_runtime_agent_request(graphql, core.node(), node_did, prompt)
+                .await
+                .context("turn stage: runtime_admission")?;
+        stages.complete("turn_runtime_admission");
         let request_arrived = started.elapsed();
         let (selection_admitted, runtime_completed, client_visible) = tokio::try_join!(
             async {
-                select_session(core, session, node_did).await?;
+                stages.enter("turn_session_selection");
+                select_session(core, session, node_did)
+                    .await
+                    .context("turn stage: session_selection")?;
+                stages.complete("turn_session_selection");
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
-                wait_for_complete_agent_response(graphql, &request, session, TURN_BUDGET).await?;
+                stages.enter("turn_runtime_completion");
+                wait_for_complete_agent_response(graphql, &request, session, TURN_BUDGET)
+                    .await
+                    .context("turn stage: runtime_completion")?;
+                stages.complete("turn_runtime_completion");
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
                 let expected = if prompt == FOLLOWUP_PROMPT { FOLLOWUP_REPLY } else { REPLY };
                 if let Some(gate) = stream_gate {
+                    stages.enter("turn_first_delta_visibility");
                     let visibility = streaming::wait_for_visible_content(
                         core,
                         &request,
@@ -365,7 +463,8 @@ async fn visible_turn(
                         stream_emission.clone(),
                         stream_visibility_budget,
                     )
-                    .await;
+                    .await
+                    .context("turn stage: first_delta_visibility");
                     if let Err(error) = &visibility {
                         let query = format!(
                             r#"{{ AgentOutputSegment(filter: {{session_id: {{_eq: "{}"}}}}) {{ _docID request_doc_id ordinal created_at }} }}"#,
@@ -385,8 +484,13 @@ async fn visible_turn(
                     }
                     gate.add_permits(1);
                     visibility?;
+                    stages.complete("turn_first_delta_visibility");
                 }
-                wait_for_replicated_reply(core, session, node_did, &request, expected).await?;
+                stages.enter("turn_replicated_reply");
+                wait_for_replicated_reply(core, session, node_did, &request, expected)
+                    .await
+                    .context("turn stage: replicated_reply")?;
+                stages.complete("turn_replicated_reply");
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
         )?;
@@ -426,7 +530,12 @@ async fn visible_turn(
     if !matches!(result, Ok(Ok(()))) {
         let diagnostics = pairing_diagnostics(core, graphql).await;
         core.shutdown().await?;
-        bail!("client-visible turn exceeded 20s or failed: {result:?}; {diagnostics}");
+        bail!(
+            "client-visible turn exceeded 20s or failed: turn={}; pending_stages={:?}; phases_ms={:?}; {result:?}; {diagnostics}",
+            turn.label(),
+            stages.in_flight(),
+            stages.completed(),
+        );
     }
     tracing::info!(
         elapsed_ms = started.elapsed().as_millis(),

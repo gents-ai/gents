@@ -23,7 +23,10 @@ async fn emission_deadline(
     mut emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
     budget: Duration,
 ) -> Result<(std::time::Instant, tokio::time::Instant)> {
-    let emitted = *emission.wait_for(|timestamp| timestamp.is_some()).await?;
+    let emitted = *emission
+        .wait_for(|timestamp| timestamp.is_some())
+        .await
+        .context("stream stage: first_frame_emission")?;
     let emitted = emitted.context("provider first-frame timestamp missing")?;
     let deadline = tokio::time::Instant::from_std(emitted + budget);
     anyhow::ensure!(
@@ -106,7 +109,9 @@ pub(super) async fn wait_for_visible_content(
     );
     tokio::time::timeout_at(deadline, async {
         loop {
-            let content = canonical_live_content(core, request).await?;
+            let content = canonical_live_content(core, request)
+                .await
+                .context("stream stage: first_delta_projection_read")?;
             anyhow::ensure!(
                 tokio::time::Instant::now() < deadline,
                 "provider content visibility deadline elapsed during observation"
@@ -123,6 +128,7 @@ pub(super) async fn wait_for_visible_content(
         }
     })
     .await
+    .context("stream stage: first_delta_visibility_timeout")
     .context("streaming content did not reach client projection before provider completion")??;
     Ok(())
 }
