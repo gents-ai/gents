@@ -24,7 +24,7 @@ import { Button } from "@gents/ui/components/button";
 import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
-import { currentRoute, navigate, type Route } from "@/lib/router";
+import { currentRoute, navigate, reviewNavigation, type Route } from "@/lib/router";
 import { isLocalNode } from "@/lib/firstRun";
 import { switchedRoute } from "@/app/NodeSwitcher";
 import { NodeAvatar } from "./AgentAvatar";
@@ -251,11 +251,15 @@ function PaletteBody({
        page; one on another node is reached through its session, which
        carries the switch to that node */
     if (e.kind === "node") {
-      /* as the nav's node switcher does */
-      actions.selectNode(e.nodeDid);
+      /* as the nav's node switcher does, asked first since a draft stays
+         with the node it was written for */
       const here = currentRoute();
       const next = here ? switchedRoute(here, e.nodeDid) : null;
-      if (next) navigate(next);
+      if (e.nodeDid !== selected)
+        reviewNavigation({ name: "sessions", nodeDid: e.nodeDid }, () => {
+          actions.selectNode(e.nodeDid);
+          if (next) navigate(next);
+        });
     } else if (e.kind === "attention") {
       if (e.item.nodeDid === selected) openInStack(e.item);
       else void openItem(e.item, actions.openMailboxItem);
