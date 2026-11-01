@@ -132,7 +132,7 @@ export function NavPanel({
         >
           <span
             className={cn(
-              "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-raised transition-shadow group-hover:ring-muted-foreground",
+              "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
               selectedCurrent && "ring-2 ring-ink",
             )}
           >
@@ -142,7 +142,7 @@ export function NavPanel({
             />
             <span
               className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-raised",
+                "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
                 online ? "bg-brand" : "bg-border",
               )}
               aria-hidden="true"
@@ -331,12 +331,13 @@ export function RailFlyout({
         <div
           aria-hidden={!shown}
           className={cn(
-            "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
+            "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden pb-2",
             "left-1.5 pt-3.5",
-            "rounded-2xl border border-border/60",
+            /* floating over the page it is a surface of its own; always there,
+               it is part of the window, on the window's ground */
             hover
-              ? "z-30 shadow-lg transition-opacity duration-200 ease-out"
-              : "shadow-xs",
+              ? "z-30 rounded-2xl border border-border/60 bg-raised shadow-lg transition-opacity duration-200 ease-out [--nav-ground:var(--color-raised)]"
+              : "[--nav-ground:var(--color-background)]",
             hover &&
               /* a fade, not a slide: its icons sit over the rail's and must
                  not move while it opens or closes */
