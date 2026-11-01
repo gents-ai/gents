@@ -34,8 +34,6 @@ use crate::inference::clients::provider_http::{observe, rejected_response_error}
 use crate::inference::rendered_request::RenderedRequestCapturingHttpClient;
 use crate::inference::usage_observation::UsageReporter;
 
-/// The first-party host the gzip decision is made for; the proxy decision is per target.
-const FIRST_PARTY_HOST: &str = "api.anthropic.com";
 /// Longest non-success body read, enough for any API error and bounded for a hostile peer.
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
@@ -54,6 +52,8 @@ pub(crate) enum ClaudeTransportError {
     ClientTask(#[source] tokio::task::JoinError),
     #[error("the proxy setting is not usable: {0}")]
     Proxy(#[from] ProxyError),
+    #[error("a target routed through the proxy has no proxied client")]
+    ProxyPoolMissing,
     #[error("the request body could not be compressed: {0}")]
     Compress(#[from] CompressError),
     #[error("the compression task failed")]
@@ -112,37 +112,54 @@ impl ProxyEnv {
             self.no_proxy.as_deref(),
         )
     }
+
+    /// The proxy `HTTPS_PROXY` configures, with no `NO_PROXY` filter applied.
+    ///
+    /// The proxied pool is built once, so it must not depend on whether `NO_PROXY` happens to
+    /// name the first-party host: which targets use the pool is [`route_for`]'s decision, per
+    /// target. Filtering here would leave the pool unbuilt whenever the API is bypassed and
+    /// silently send every other target direct.
+    fn configured_proxy(&self) -> Result<Option<Proxy>, ProxyError> {
+        proxy_from_env("", 0, self.https_proxy.as_deref(), None)
+    }
 }
 
 fn build_shared() -> Result<Shared, ClaudeTransportError> {
-    let env = ProxyEnv::from_env();
-    let direct =
-        Client::new(ClientOptions::default()).map_err(ClaudeTransportError::ClientBuild)?;
-    // One proxied pool, built from the same environment the per-target decision reads.
-    let proxied = match env.proxy_for(FIRST_PARTY_HOST, 443)? {
-        Some(proxy) => Some(
-            Client::new(ClientOptions {
-                proxy: Some(proxy),
-                ..ClientOptions::default()
-            })
-            .map_err(ClaudeTransportError::ClientBuild)?,
-        ),
-        None => None,
-    };
-    Ok(Shared {
-        direct,
-        proxied,
-        env,
-    })
+    Shared::from_env(ProxyEnv::from_env())
 }
 
 impl Shared {
+    /// Builds both pools from one environment: the direct pool always, the proxied pool from
+    /// `HTTPS_PROXY` alone, so `NO_PROXY` decides which targets use it, not whether it exists.
+    fn from_env(env: ProxyEnv) -> Result<Self, ClaudeTransportError> {
+        let direct =
+            Client::new(ClientOptions::default()).map_err(ClaudeTransportError::ClientBuild)?;
+        let proxied = match env.configured_proxy()? {
+            Some(proxy) => Some(
+                Client::new(ClientOptions {
+                    proxy: Some(proxy),
+                    ..ClientOptions::default()
+                })
+                .map_err(ClaudeTransportError::ClientBuild)?,
+            ),
+            None => None,
+        };
+        Ok(Self {
+            direct,
+            proxied,
+            env,
+        })
+    }
+
     /// The client for one target: proxied only when the target is TLS and `NO_PROXY` misses it.
+    ///
+    /// A proxied route with no pool is an error, never a silent direct connection: the pool is
+    /// built from `HTTPS_PROXY` alone, so this can only mean the two disagree.
     fn client_for(&self, target: &Target) -> Result<(&Client, bool), ClaudeTransportError> {
         match route_for(&self.env, target)? {
             Route::Proxied => match &self.proxied {
                 Some(client) => Ok((client, true)),
-                None => Ok((&self.direct, false)),
+                None => Err(ClaudeTransportError::ProxyPoolMissing),
             },
             Route::Direct => Ok((&self.direct, false)),
         }

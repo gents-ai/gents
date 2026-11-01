@@ -162,3 +162,104 @@ fn a_gateway_target_never_gzips() {
         false
     ));
 }
+
+/// The reported blocker, end to end through the real pools: with `NO_PROXY=api.anthropic.com`
+/// the API bypasses the proxy, and the gateway must still be sent through the proxied pool.
+///
+/// This is the coupling the earlier `route_for`-only tests missed: the pool used to be built
+/// with the same `NO_PROXY` filter, so it was `None` here and `client_for` fell back to direct.
+#[test]
+fn a_bypassed_api_still_leaves_the_gateway_on_the_proxied_pool() {
+    let shared = Shared::from_env(proxy_env(
+        Some("http://proxy.corp:3128"),
+        Some("api.anthropic.com"),
+    ))
+    .unwrap();
+    let proxied = shared.proxied.as_ref().expect(
+        "HTTPS_PROXY is set, so the proxied pool must exist even though NO_PROXY names the API",
+    );
+
+    let (gateway_client, gateway_proxied) = shared
+        .client_for(&target("gateway.internal", 8443, true))
+        .unwrap();
+    assert!(gateway_proxied, "the gateway is outside NO_PROXY");
+    assert!(
+        std::ptr::eq(gateway_client, proxied),
+        "the gateway must use the proxied pool, not the direct one"
+    );
+
+    let (api_client, api_proxied) = shared
+        .client_for(&target("api.anthropic.com", 443, true))
+        .unwrap();
+    assert!(!api_proxied, "the API is named in NO_PROXY");
+    assert!(
+        std::ptr::eq(api_client, &shared.direct),
+        "the bypassed API must use the direct pool"
+    );
+}
+
+/// The compression flag follows the pool actually selected, not a route computed beside it.
+#[test]
+fn the_gzip_flag_follows_the_selected_pool() {
+    let body_len = request::GZIP_MIN_UTF16_UNITS;
+    let api = target("api.anthropic.com", 443, true);
+
+    let bypassed = Shared::from_env(proxy_env(
+        Some("http://proxy.corp:3128"),
+        Some("api.anthropic.com"),
+    ))
+    .unwrap();
+    let (_, proxied) = bypassed.client_for(&api).unwrap();
+    assert!(!proxied);
+    assert!(
+        request::gzip_body(&api.host, body_len, proxied, false),
+        "a bypassed first-party target gzips"
+    );
+
+    let through = Shared::from_env(proxy_env(Some("http://proxy.corp:3128"), None)).unwrap();
+    let (_, proxied) = through.client_for(&api).unwrap();
+    assert!(proxied);
+    assert!(
+        !request::gzip_body(&api.host, body_len, proxied, false),
+        "a proxied first-party target does not gzip"
+    );
+}
+
+/// A proxied route with no pool is an error, never a silent direct connection.
+#[test]
+fn a_proxied_route_without_a_pool_is_an_error() {
+    let shared = Shared {
+        direct: Client::new(ClientOptions::default()).unwrap(),
+        proxied: None,
+        env: proxy_env(Some("http://proxy.corp:3128"), None),
+    };
+    assert!(matches!(
+        shared.client_for(&target("gateway.internal", 8443, true)),
+        Err(ClaudeTransportError::ProxyPoolMissing)
+    ));
+}
+
+/// No `HTTPS_PROXY` means no proxied pool and every target direct, as before.
+#[test]
+fn no_proxy_configured_builds_no_proxied_pool() {
+    let shared = Shared::from_env(proxy_env(None, None)).unwrap();
+    assert!(shared.proxied.is_none());
+    let (client, proxied) = shared
+        .client_for(&target("api.anthropic.com", 443, true))
+        .unwrap();
+    assert!(!proxied);
+    assert!(std::ptr::eq(client, &shared.direct));
+}
+
+/// An unusable `HTTPS_PROXY` fails the build, so no request is ever sent silently direct.
+#[test]
+fn an_unusable_proxy_value_fails_the_pool_build() {
+    assert!(matches!(
+        Shared::from_env(proxy_env(Some("socks5://proxy.corp:1080"), None)),
+        Err(ClaudeTransportError::Proxy(ProxyError::UnsupportedScheme))
+    ));
+    assert!(matches!(
+        Shared::from_env(proxy_env(Some("not a url"), None)),
+        Err(ClaudeTransportError::Proxy(ProxyError::Invalid))
+    ));
+}
