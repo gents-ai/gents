@@ -16,21 +16,9 @@ pub(super) struct AuthorScope<'a> {
 /// A remote command is authorized only while the exact signed enrollment
 /// generation it names is still inside its authorization lease.
 ///
-/// The projection already drops a decision whose canonical expiry has passed
-/// at projection-load time (`VerifiedDecision::pure` sets `fresh`, and
-/// `current_approval` requires it before an `ActiveEnrollment` is pushed), so
-/// a canonically expired lease normally yields no fence at all. This check is
-/// not redundant for two real holes:
-///
-/// - the projection judges freshness at its own load instant, while a command
-///   carries its own observation time (goal control's injected `clock()`, or a
-///   clock step during the await), so a lease can lapse between the two;
-/// - `pure` parses with the lenient RFC3339 parser, which accepts spellings
-///   such as a `+00:00` offset or fractional seconds that the canonical helper
-///   rejects, so a non-canonical expiry can look fresh to the projection.
-///
-/// Invalid or non-canonical expiries fail closed, matching the
-/// observation-time lease interpretation used by route materialization.
+/// The enrollment projection evaluates freshness at its own observation time.
+/// Recheck the exact lease at the command observation time using canonical
+/// timestamp parsing; invalid or non-canonical expiries fail closed.
 pub(super) fn enrollment_authorization_is_current(expires_at: &str, now: DateTime<Utc>) -> bool {
     gents_protocol::enrollment::authorization_lease_is_fresh_at(expires_at, now)
 }
