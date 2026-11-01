@@ -122,7 +122,11 @@ struct AdmittedHydration {
     admission: LoadedHydrationAdmission,
 }
 
+// `PartialOrd, Ord` are test-only: the in-file tests key a `BTreeSet` by the
+// full four-field identity. Field order is already that identity, and no field
+// changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(PartialOrd, Ord))]
 struct HydrationRequestRow {
     pub request_key: String,
     pub requester_did: String,
