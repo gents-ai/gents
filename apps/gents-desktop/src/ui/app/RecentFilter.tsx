@@ -74,20 +74,6 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
         <MoreHorizontal />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuCheckboxItem
-          checked={isShown(value.sources, "session")}
-          onCheckedChange={() =>
-            toggle(
-              "sources",
-              SOURCES.map((s) => s.value),
-              "session",
-            )
-          }
-          closeOnClick={false}
-        >
-          Show sub-sessions
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
         <DropdownMenuGroup>
           <DropdownMenuLabel>Filters</DropdownMenuLabel>
           {agents.length > 1 && (
@@ -134,13 +120,24 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
             }))}
           />
         </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          checked={isShown(value.sources, "session")}
+          onCheckedChange={() =>
+            toggle(
+              "sources",
+              SOURCES.map((s) => s.value),
+              "session",
+            )
+          }
+          closeOnClick={false}
+        >
+          Show sub-sessions
+        </DropdownMenuCheckboxItem>
         {active && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => listViews.setRecentFilter(recentDefault)}>
-              Reset filters
-            </DropdownMenuItem>
-          </>
+          <DropdownMenuItem onClick={() => listViews.setRecentFilter(recentDefault)}>
+            Reset filters
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
