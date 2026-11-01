@@ -10,6 +10,7 @@ import type {
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { duration } from "@/lib/duration";
 import { dockScopeOf, workspace } from "@/app/workspace";
 import { usePageShown } from "@/lib/visibility";
 import {
@@ -179,39 +180,51 @@ function lasted(ms: number): string {
 
 const ago = (ms: number) => (ms < 60_000 ? "just now" : `${lasted(ms)} ago`);
 
-/** A state short enough to sit at the end of a one-line row; the row's
-    title and the log carry the whole of it. */
-export function briefStateOf(call: BackgroundCall, now: number): string {
-  const { tone } = stateOf(call, now);
-  const { tool, view } = call;
-  if (tone === "stuck") return "stuck";
-  if (tone === "overdue") return "overdue";
+/** A row's second line: where the call stands, then how long it ran and
+    when it ended; the row's title and the log carry the whole state. */
+export function rowStateOf(
+  call: BackgroundCall,
+  now: number,
+): { state: string; more: string | null } {
+  const { tone, text } = stateOf(call, now);
+  const lower = text.charAt(0).toLowerCase() + text.slice(1);
+  if (tone === "stuck") return { state: "Stuck", more: lower };
+  if (tone === "overdue") return { state: "Overdue", more: lower };
   if (tone === "running") {
-    if (view?.waitStatus?.lifecycle === "pending") return "waiting";
+    if (call.view?.waitStatus?.lifecycle === "pending")
+      return { state: "Waiting to start", more: null };
     const started = at(startedAtOf(call));
-    return started ? brief(now - started) : "running";
+    return { state: "Running", more: started ? duration(now - started) : null };
   }
-  const p = tool?.presentation;
-  const command = p?.kind === "command" ? p : null;
-  if (tone === "failed") {
-    if (command?.timedOut) return "timed out";
-    return command?.exitCode != null ? `exit ${command.exitCode}` : "failed";
-  }
-  if (tone === "stopped") return "stopped";
-  const started = at(tool?.startedAt);
+  const { tool } = call;
+  const command = tool?.presentation.kind === "command" ? tool.presentation : null;
+  const state =
+    tone === "failed"
+      ? command?.timedOut
+        ? "Timed out"
+        : command?.exitCode != null
+          ? `Exit ${command.exitCode}`
+          : "Failed"
+      : tone === "done"
+        ? "Done"
+        : text;
+  const took = tookOf(call);
   const ended = at(tool?.completedAt);
-  const took =
-    command?.durationMs ??
-    (started && ended && ended > started ? ended - started : null);
-  return took != null ? brief(took) : "done";
+  const more = [took != null && `ran ${duration(took)}`, ended && ago(now - ended)]
+    .filter(Boolean)
+    .join(" · ");
+  return { state, more: more || null };
 }
 
-function brief(ms: number): string {
-  const mins = Math.floor(Math.max(0, ms) / 60_000);
-  if (mins < 1) return "<1 min";
-  if (mins < 60) return `${mins} min`;
-  const hours = Math.floor(mins / 60);
-  return hours < 24 ? `${hours} h` : `${Math.floor(hours / 24)} d`;
+/* how long a call that has ended ran */
+function tookOf({ tool }: BackgroundCall): number | null {
+  const p = tool?.presentation;
+  const started = at(tool?.startedAt);
+  const ended = at(tool?.completedAt);
+  return (
+    (p?.kind === "command" ? p.durationMs : null) ??
+    (started && ended && ended > started ? ended - started : null)
+  );
 }
 
 const at = (iso: string | null | undefined) => (iso ? Date.parse(iso) || null : null);
@@ -242,11 +255,7 @@ export function stateOf(
   }
   const p = tool?.presentation;
   const command = p?.kind === "command" ? p : null;
-  const started = at(tool?.startedAt);
-  const ended = at(tool?.completedAt);
-  const took =
-    command?.durationMs ??
-    (started && ended && ended > started ? ended - started : null);
+  const took = tookOf(call);
   const exit = command?.exitCode != null ? ` · exit code ${command.exitCode}` : "";
   switch (tool?.statusKind) {
     case "success":

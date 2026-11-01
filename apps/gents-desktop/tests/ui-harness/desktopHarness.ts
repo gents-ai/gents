@@ -49,6 +49,7 @@ import type { SessionContextView } from "@source-inc/gents-desktop-client/genera
 import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
+import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
 
 const NODE_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_AGENT_ID = "default";
@@ -387,6 +388,118 @@ function automatedInputItems(): RenderedTimelineItem[] {
   ];
 }
 
+/* commands left running in the background, and ones that have ended each way */
+function backgroundItems(): RenderedTimelineItem[] {
+  const ago = (secs: number) => new Date(Date.now() - secs * 1000).toISOString();
+  const run = (
+    id: string,
+    command: string,
+    statusKind: string,
+    times: { started: number; ended?: number },
+    result: Partial<
+      Extract<RenderedToolCallView["presentation"], { kind: "command" }>
+    > = {},
+    tail: string | null = null,
+  ): RenderedToolCallView => ({
+    itemKey: `background-${id}`,
+    toolName: "bash",
+    statusKind,
+    requestId: "request-background",
+    toolCallId: `call-background-${id}`,
+    toolCallDocId: `doc-background-${id}`,
+    awaitMode: "background",
+    startedAt: ago(times.started),
+    completedAt: times.ended === undefined ? null : ago(times.ended),
+    partialOutputTail: tail,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command",
+      command,
+      exitCode: null,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: "~/src/gents",
+      executionMode: null,
+      networkMode: null,
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+      ...result,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "background-user",
+      requestId: "request-background",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Start the dev server and run the checks in the background.",
+      timestamp: ago(4_000),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "background-tools",
+      messageSequence: 3,
+      tools: [
+        run(
+          "build",
+          "cargo build --release",
+          "success",
+          { started: 4_000, ended: 3_748 },
+          { durationMs: 252_000, exitCode: 0, stdout: "Finished release" },
+        ),
+        run(
+          "e2e",
+          "npm run e2e",
+          "failed",
+          { started: 4_000, ended: 3_700 },
+          { durationMs: 300_000, timedOut: true },
+        ),
+        run(
+          "lint",
+          "pnpm lint --max-warnings 0",
+          "failed",
+          { started: 330, ended: 300 },
+          { durationMs: 30_000, failed: true },
+        ),
+        run(
+          "test",
+          "cargo test -p gents --lib",
+          "error",
+          { started: 158, ended: 120 },
+          {
+            durationMs: 38_000,
+            exitCode: 1,
+            failed: true,
+            stdout: "running 412 tests\ntest lifecycle::claims ... ok",
+            stderr: "test lifecycle::persistence ... FAILED",
+          },
+        ),
+        run("tail", "tail -f logs/dev.log", "cancelled", { started: 32, ended: 20 }),
+        run(
+          "watch",
+          "cargo watch -x check",
+          "running",
+          { started: 372 },
+          {},
+          "[Running 'cargo check']\n    Checking gents v0.7.0\n    Finished dev",
+        ),
+        run(
+          "dev",
+          "npm run dev -- --host 127.0.0.1 --port 5173",
+          "running",
+          { started: 42 },
+          {},
+          "VITE ready in 412 ms\n\n  ➜  Local:   http://127.0.0.1:5173/",
+        ),
+      ],
+    },
+  ];
+}
+
 function harnessAssistantItem(
   item: Omit<
     Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
@@ -421,7 +534,8 @@ export type DesktopUiHarnessScenario =
   | "storage-recovery"
   | "sync-failed"
   | "days"
-  | "automated-inputs";
+  | "automated-inputs"
+  | "background";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -964,6 +1078,7 @@ export function createDesktopUiHarness(
         : []),
       ...(scenario === "days" ? dayItems() : []),
       ...(scenario === "automated-inputs" ? automatedInputItems() : []),
+      ...(scenario === "background" ? backgroundItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -4469,6 +4584,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "sync-failed":
     case "days":
     case "automated-inputs":
+    case "background":
       return value;
     default:
       return "default";
