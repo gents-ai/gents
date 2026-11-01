@@ -56,7 +56,7 @@ export const KIND: Record<
 /** One item of the mailbox: who sent it, its title, what kind it is and
     where it came from, and when it came or falls due. The whole row opens it. */
 const PILL =
-  "inline-flex items-center rounded-full bg-popover/90 text-foreground/85 shadow-sm ring-1 ring-border/50 supports-backdrop-filter:backdrop-blur-sm";
+  "inline-flex items-center rounded-full bg-background/90 text-foreground/85 shadow-sm ring-1 ring-border/50 supports-backdrop-filter:backdrop-blur-sm";
 
 export function ItemRow({
   item: m,
