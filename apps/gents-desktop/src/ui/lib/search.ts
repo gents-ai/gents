@@ -148,6 +148,8 @@ export type SearchGroup = {
   kind: SearchKind | "recent";
   label: string;
   entries: SearchEntry[];
+  /** how many more there are past the ones listed, until the group is expanded */
+  more: number;
 };
 
 const LABEL: Record<SearchKind, string> = {
@@ -158,20 +160,46 @@ const LABEL: Record<SearchKind, string> = {
   action: "Actions",
 };
 const ORDER: SearchKind[] = ["attention", "session", "agent", "setting", "action"];
-const RECENT = 6;
+/* before anything is typed, a few of each, so the palette opens short */
+const OPENING: Record<"attention" | "recent" | "action", number> = {
+  attention: 3,
+  recent: 5,
+  action: 3,
+};
 const PER_GROUP = 5;
 const FILTERED = 50;
+
+/* the first `cap`, and how many are left past them; an expanded group
+   lists up to the cap one kind gets on its own */
+function capped(
+  kind: SearchGroup["kind"],
+  label: string,
+  all: SearchEntry[],
+  cap: number,
+  expanded: ReadonlySet<string>,
+): SearchGroup {
+  const limit = expanded.has(kind) ? FILTERED : cap;
+  return {
+    kind,
+    label,
+    entries: all.slice(0, limit),
+    more: Math.max(0, Math.min(all.length, FILTERED) - limit),
+  };
+}
 
 const newest = (a: SearchEntry, b: SearchEntry) =>
   (b.at ?? "").localeCompare(a.at ?? "");
 
 /** What the palette lists: with no query, what needs attention, recent
-    sessions and actions; with one, the best matches of each kind, a few per
-    kind under All and more under one kind. */
+    sessions and actions, a few of each; with one, the best matches of each
+    kind, a few per kind under All and more under one kind. A group listing
+    fewer than it has says how many more, and lists them once `expanded`
+    names its kind. */
 export function searchGroups(
   entries: readonly SearchEntry[],
   query: string,
   filter: SearchFilter,
+  expanded: ReadonlySet<string> = new Set(),
 ): SearchGroup[] {
   const words = queryWords(query);
   const shown = (kind: SearchKind) => filter === "all" || filter === kind;
@@ -183,34 +211,39 @@ export function searchGroups(
           kind: filter,
           label: LABEL[filter],
           entries: of(filter).sort(newest).slice(0, FILTERED),
+          more: 0,
         },
       ];
     const recent = of("session")
       .filter((e) => e.kind === "session" && !e.session.startedBy)
-      .sort(newest)
-      .slice(0, RECENT);
+      .sort(newest);
     return [
-      {
-        kind: "attention" as const,
-        label: LABEL.attention,
-        entries: of("attention").sort(newest),
-      },
-      { kind: "recent" as const, label: "Recent sessions", entries: recent },
-      { kind: "action" as const, label: LABEL.action, entries: of("action") },
+      capped(
+        "attention",
+        LABEL.attention,
+        of("attention").sort(newest),
+        OPENING.attention,
+        expanded,
+      ),
+      capped("recent", "Recent sessions", recent, OPENING.recent, expanded),
+      capped("action", LABEL.action, of("action"), OPENING.action, expanded),
     ].filter((g) => g.entries.length > 0);
   }
   const cap = filter === "all" ? PER_GROUP : FILTERED;
   return ORDER.filter(shown)
-    .map((kind) => ({
-      kind,
-      label: LABEL[kind],
-      entries: entries
-        .filter((e) => e.kind === kind)
-        .map((e) => ({ e, score: entryScore(words, e) }))
-        .filter((r) => r.score > 0)
-        .sort((a, b) => b.score - a.score || newest(a.e, b.e))
-        .slice(0, cap)
-        .map((r) => r.e),
-    }))
+    .map((kind) =>
+      capped(
+        kind,
+        LABEL[kind],
+        entries
+          .filter((e) => e.kind === kind)
+          .map((e) => ({ e, score: entryScore(words, e) }))
+          .filter((r) => r.score > 0)
+          .sort((a, b) => b.score - a.score || newest(a.e, b.e))
+          .map((r) => r.e),
+        cap,
+        expanded,
+      ),
+    )
     .filter((g) => g.entries.length > 0);
 }
