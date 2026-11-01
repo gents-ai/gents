@@ -82,6 +82,17 @@ describe("a node's hover card", () => {
     const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
     for (const section of ["agents", "folders", "tasks", "inference"])
       expect(links.some((h) => h?.endsWith(`/${section}`))).toBe(true);
+    /* a line is one link over its label and value */
+    expect(screen.getByRole("link", { name: /^Tasks/ })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/tasks$/),
+    );
+    /* the same last line as an agent's card */
+    expect(screen.getByRole("button", { name: "New session" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/agent$/),
+    );
     await userEvent.click(screen.getByRole("button", { name: "Copy node id" }));
     expect(writeText).toHaveBeenCalledWith("did:key:remote");
     vi.unstubAllGlobals();
