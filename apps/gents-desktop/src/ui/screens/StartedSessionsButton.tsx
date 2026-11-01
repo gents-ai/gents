@@ -3,9 +3,8 @@ import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { dockScopeOf, useDockFor } from "@/app/workspace";
-import { isLive } from "@/lib/live";
 import { Hint } from "@/screens/Hint";
-import { failedUnder, stoppedUnder, useFleet, workersOfId } from "../hooks/useFleet";
+import { startedUnderId, useFleet, workersOfId } from "../hooks/useFleet";
 import { startedCount } from "./StartedCount";
 import { useWorkerAgents, WorkerAgents } from "./WorkerAgents";
 
@@ -18,23 +17,13 @@ export function StartedSessionsButton({
   sessionId: string;
   className?: string;
 }) {
-  const { started, running, failed, stopped } = useFleet(
-    useShallow((state) => {
-      const workers = workersOfId(state, sessionId);
-      const session = state.bySessionId[sessionId];
-      return {
-        started: workers.length,
-        running: workers.filter((w) => isLive(w.turnState)).length,
-        failed: session ? failedUnder(state, session) : 0,
-        stopped: session ? stoppedUnder(state, session) : 0,
-      };
-    }),
-  );
+  const counts = useFleet(useShallow((state) => startedUnderId(state, sessionId)));
+  const { started, running, failed } = counts;
   const agents = useWorkerAgents((state) => workersOfId(state, sessionId));
   const { dock, openSurface, closeTab } = useDockFor(dockScopeOf("session", sessionId));
   if (started === 0) return null;
   const showing = dock.open && dock.active === SURFACE;
-  const label = startedCount({ started, running, failed, stopped });
+  const label = startedCount(counts);
   return (
     <Hint label={label}>
       <Button

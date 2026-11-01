@@ -1,8 +1,9 @@
 import { FileDiff, SquareStack, Terminal } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
-import { workersOfId } from "@/hooks/useFleet";
+import { startedUnderId } from "@/hooks/useFleet";
 import { BackgroundSurface } from "./BackgroundCalls";
 import { ChangesSurface } from "./ChangesSurface";
+import { startedCount } from "./StartedCount";
 import { WorkersSurface } from "./WorkersSurface";
 
 registerSurface({
@@ -12,7 +13,16 @@ registerSurface({
   placements: ["dock", "sheet"],
   routes: ["session"],
   render: WorkersSurface,
-  badge: (fleet, sessionId) => workersOfId(fleet, sessionId).length || null,
+  badge: (fleet, sessionId) => {
+    const counts = startedUnderId(fleet, sessionId);
+    return counts.started === 0
+      ? null
+      : {
+          count: counts.started,
+          label: startedCount(counts),
+          mark: counts.failed > 0 ? "alert" : counts.running > 0 ? "active" : null,
+        };
+  },
 });
 
 registerSurface({

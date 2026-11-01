@@ -2,9 +2,8 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 import { isLive, stateOf, turnLabel } from "./live";
 
-export type SessionRow = {
-  session: SessionSummary;
-  /** the sessions it started that the list holds */
+export type StartedCounts = {
+  /** the sessions it started */
   started: number;
   /** of those, the ones still working, or with work running under them */
   running: number;
@@ -12,6 +11,57 @@ export type SessionRow = {
   failed: number;
   /** of those, the ones stopped, or with a stopped session under them */
   stopped: number;
+};
+
+type Lifted = Exclude<keyof StartedCounts, "started">;
+const HOLDS: Record<Lifted, (session: SessionSummary) => boolean> = {
+  running: (session) => isLive(session.turnState),
+  failed: (session) => stateOf(session.turnState) === "failed",
+  /* stopped by someone, not replaced by an edit */
+  stopped: (session) => turnLabel(session.turnState) === "Stopped",
+};
+const LIFTED = Object.keys(HOLDS) as Lifted[];
+
+/**
+ * The states each session shows for itself or for any session under it
+ * (`childrenOf`), and the `counts` of what a session started that show them.
+ * Each session is walked once, so a loop in who started whom ends.
+ */
+export function liftedStates(
+  childrenOf: (session: SessionSummary) => readonly SessionSummary[],
+) {
+  const known = new Map<string, Record<Lifted, boolean>>();
+  const shows = (session: SessionSummary): Record<Lifted, boolean> => {
+    const key = sessionKeyOf(session);
+    const was = known.get(key);
+    if (was) return was;
+    const shown = {
+      running: HOLDS.running(session),
+      failed: HOLDS.failed(session),
+      stopped: HOLDS.stopped(session),
+    };
+    known.set(key, shown);
+    for (const child of childrenOf(session)) {
+      const under = shows(child);
+      for (const state of LIFTED) shown[state] ||= under[state];
+    }
+    return shown;
+  };
+  const counts = (session: SessionSummary): StartedCounts => {
+    const kin = childrenOf(session);
+    const of = (state: Lifted) => kin.filter((s) => shows(s)[state]).length;
+    return {
+      started: kin.length,
+      running: of("running"),
+      failed: of("failed"),
+      stopped: of("stopped"),
+    };
+  };
+  return { shows, counts };
+}
+
+export type SessionRow = StartedCounts & {
+  session: SessionSummary;
   /** while narrowed: the sessions between the level shown and this one */
   path: readonly SessionSummary[] | null;
   /** how far it is opened out under a row of the level */
@@ -107,24 +157,8 @@ export function sessionRows({
   const level = under && listed.has(under) ? under : null;
   const trail = level ? lineOf(level).map((key) => listed.get(key)!) : [];
 
-  /* a state a session shows for itself or for any session under it */
-  const lifted = (holds: (session: SessionSummary) => boolean) => {
-    const known = new Map<string, boolean>();
-    const under = (session: SessionSummary): boolean => {
-      const key = sessionKeyOf(session);
-      let result = known.get(key);
-      if (result === undefined) {
-        result = holds(session) || childrenOf(key).some(under);
-        known.set(key, result);
-      }
-      return result;
-    };
-    return under;
-  };
-  const working = lifted((session) => isLive(session.turnState));
-  const failing = lifted((session) => stateOf(session.turnState) === "failed");
-  /* stopped by someone, not replaced by an edit */
-  const stopping = lifted((session) => turnLabel(session.turnState) === "Stopped");
+  const lifted = liftedStates((session) => childrenOf(sessionKeyOf(session)));
+  const working = (session: SessionSummary) => lifted.shows(session).running;
   const row = (
     session: SessionSummary,
     path: readonly SessionSummary[] | null,
@@ -134,11 +168,8 @@ export function sessionRows({
     const kin = childrenOf(key);
     const starter = starterOf.get(key);
     return {
+      ...lifted.counts(session),
       session,
-      started: kin.length,
-      running: kin.filter(working).length,
-      failed: kin.filter(failing).length,
-      stopped: kin.filter(stopping).length,
       path,
       depth,
       open: !path && kin.length > 0 && isOpen(key),
