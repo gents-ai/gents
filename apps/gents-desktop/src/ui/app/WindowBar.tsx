@@ -118,6 +118,7 @@ export function WindowBar({
   const drag = headerIsWindowBar() ? "" : undefined;
   const windows = isWindowsTauriShell();
   const { paneHidden, toEnd } = divider;
+  const onNodes = route.name === "agents" || route.name === "nodes";
   return (
     <header
       className="app-titlebar relative col-span-full row-start-1 grid h-12 min-w-0"
@@ -131,7 +132,7 @@ export function WindowBar({
             className="flex w-14 shrink-0 justify-center"
             data-tauri-drag-region={drag}
           >
-            <MarkLink />
+            <MarkLink current={onNodes} />
           </div>
         </div>
       )}
@@ -146,7 +147,7 @@ export function WindowBar({
         data-tauri-drag-region={drag}
       >
         <NavSheet route={route} settings={settings} />
-        <MarkLink className="md:hidden" />
+        <MarkLink className="md:hidden" current={onNodes} />
         {history && <HistoryNav history={history} />}
         <ActiveNodeLabel />
         <div
