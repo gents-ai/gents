@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { TaskView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
 import { Textarea } from "@gents/ui/components/textarea";
 import {
   AreaRow,
@@ -21,7 +22,7 @@ import { optionalInteger, problemOf, str, useDraft } from "./draft";
 import { HooksRows, hooksFromDraft, toHookDraft } from "./HooksRows";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
-import { Group, Row } from "./rows";
+import { focusField, Group, Row, Unfold } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { AgentSheet } from "./BehaviorSheet";
 import { NewAutomationDialog } from "./NewAutomationDialog";
@@ -29,7 +30,7 @@ import { EditorSheet } from "./EditorSheet";
 import { TriggerEditor } from "./TriggersPanel";
 import { sourceInWords, triggerReadiness } from "./automation";
 import { Switch } from "@gents/ui/components/switch";
-import { ExternalLink, Plus } from "lucide-react";
+import { ExternalLink, Pencil, Plus } from "lucide-react";
 import { toastFailure } from "@/lib/failure";
 import { agentOf } from "@/lib/agents";
 import { Badge } from "@gents/ui/components/badge";
@@ -57,6 +58,9 @@ export function TaskEditor({
     nodeDid: deployment.nodeDid,
     section: "tasks",
   };
+  /* name, description and tags show in the header; their fields open
+     under it on Edit */
+  const [editing, setEditing] = useState(false);
   const saved = {
     name: task.name ?? "",
     agentId: task.agentId ?? "",
@@ -162,17 +166,70 @@ export function TaskEditor({
   };
   return (
     <>
-      {!embedded && <TaskSummary deployment={deployment} task={task} />}
+      {!embedded && (
+        <>
+          <TaskSummary
+            deployment={deployment}
+            task={task}
+            draft={{
+              name: d.draft.name,
+              description: d.draft.description,
+              tags: d.draft.tags,
+              enabled: d.draft.enabled,
+              onEnabled: (v) => d.set("enabled", v),
+            }}
+            edit={{
+              open: editing,
+              onToggle: () => setEditing((open) => !open),
+              onTags: () => {
+                setEditing(true);
+                focusField(id("tags"));
+              },
+              controls: id("about"),
+            }}
+          />
+          <Unfold open={editing} id={id("about")}>
+            <Group title="About">
+              <FactRow label="Task ID" mono>
+                {task.taskId}
+              </FactRow>
+              <TextRow
+                id={id("name")}
+                label="Name"
+                value={d.draft.name}
+                onChange={(v) => d.set("name", v)}
+              />
+              <AreaRow
+                id={id("desc")}
+                label="Description"
+                value={d.draft.description}
+                onChange={(v) => d.set("description", v)}
+                rows={2}
+              />
+              <TagsRow
+                id={id("tags")}
+                label="Tags"
+                value={d.draft.tags}
+                onChange={(v) => d.set("tags", v)}
+              />
+            </Group>
+          </Unfold>
+        </>
+      )}
       <Group title={embedded ? undefined : "Details"}>
-        <FactRow label="Task ID" mono>
-          {task.taskId}
-        </FactRow>
-        <TextRow
-          id={id("name")}
-          label="Name"
-          value={d.draft.name}
-          onChange={(v) => d.set("name", v)}
-        />
+        {embedded && (
+          <>
+            <FactRow label="Task ID" mono>
+              {task.taskId}
+            </FactRow>
+            <TextRow
+              id={id("name")}
+              label="Name"
+              value={d.draft.name}
+              onChange={(v) => d.set("name", v)}
+            />
+          </>
+        )}
         <RefRow
           id={id("agent")}
           label="Agent"
@@ -202,19 +259,23 @@ export function TaskEditor({
             setNewAgent(null);
           }}
         />
-        <SwitchRow
-          id={id("enabled")}
-          label="Enabled"
-          checked={d.draft.enabled}
-          onChange={(v) => d.set("enabled", v)}
-        />
-        <AreaRow
-          id={id("desc")}
-          label="Description"
-          value={d.draft.description}
-          onChange={(v) => d.set("description", v)}
-          rows={2}
-        />
+        {embedded && (
+          <>
+            <SwitchRow
+              id={id("enabled")}
+              label="Enabled"
+              checked={d.draft.enabled}
+              onChange={(v) => d.set("enabled", v)}
+            />
+            <AreaRow
+              id={id("desc")}
+              label="Description"
+              value={d.draft.description}
+              onChange={(v) => d.set("description", v)}
+              rows={2}
+            />
+          </>
+        )}
         <AreaRow
           id={id("prompt")}
           label="Prompt template"
@@ -264,12 +325,14 @@ export function TaskEditor({
           error={d.problems.hooks}
           onChange={(v) => d.set("hooks", v)}
         />
-        <TagsRow
-          id={id("tags")}
-          label="Tags"
-          value={d.draft.tags}
-          onChange={(v) => d.set("tags", v)}
-        />
+        {embedded && (
+          <TagsRow
+            id={id("tags")}
+            label="Tags"
+            value={d.draft.tags}
+            onChange={(v) => d.set("tags", v)}
+          />
+        )}
       </Group>
       <DraftActions
         draft={d}
@@ -439,7 +502,24 @@ export function TaskEditor({
 
 /** The task page's header and cards, as the node and agent pages': its name
     and state, then what it runs with, when, and how its last run went. */
-function TaskSummary({ deployment, task }: { deployment: NodeView; task: TaskView }) {
+function TaskSummary({
+  deployment,
+  task,
+  draft,
+  edit,
+}: {
+  deployment: NodeView;
+  task: TaskView;
+  /** what the header shows and switches, as the form has it */
+  draft: {
+    name: string;
+    description: string;
+    tags: string[];
+    enabled: boolean;
+    onEnabled: (enabled: boolean) => void;
+  };
+  edit: { open: boolean; onToggle: () => void; onTags: () => void; controls: string };
+}) {
   const agent = agentOf(deployment, task.agentId);
   const runs = whenItRuns(deployment, task);
   /* green only for a task that runs on its own */
@@ -457,16 +537,62 @@ function TaskSummary({ deployment, task }: { deployment: NodeView; task: TaskVie
   });
   return (
     <div className="@container mb-8 grid gap-4">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="truncate font-heading text-lg font-medium text-heading">
-            {task.name ?? task.taskId}
-          </h2>
-          {task.enabled === false && <Badge variant="outline">Disabled</Badge>}
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2
+              className={cn(
+                "truncate font-heading text-lg font-medium",
+                draft.enabled ? "text-heading" : "text-muted-foreground",
+              )}
+            >
+              {draft.name.trim() || task.taskId}
+            </h2>
+            {!draft.enabled && <Badge variant="outline">Disabled</Badge>}
+            <Button
+              size="xs"
+              variant="quiet"
+              aria-expanded={edit.open}
+              aria-controls={edit.controls}
+              onClick={edit.onToggle}
+            >
+              {edit.open ? (
+                "Done"
+              ) : (
+                <>
+                  <Pencil /> Edit
+                </>
+              )}
+            </Button>
+          </div>
+          {draft.description.trim() && (
+            <p className="mt-0.5 text-sm text-foreground/80">{draft.description}</p>
+          )}
+          {draft.tags.length > 0 && (
+            <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
+              {draft.tags.map((tag) => (
+                <li key={tag}>
+                  <button
+                    type="button"
+                    onClick={edit.onTags}
+                    className="cursor-pointer rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                  >
+                    {tag}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-        {task.description?.trim() && (
-          <p className="mt-0.5 text-sm text-foreground/80">{task.description}</p>
-        )}
+        {/* switched here, saved with the rest of the form */}
+        <label className="flex shrink-0 items-center gap-2.5 text-sm">
+          {draft.enabled ? "Enabled" : "Disabled"}
+          <Switch
+            aria-label="Enabled"
+            checked={draft.enabled}
+            onCheckedChange={draft.onEnabled}
+          />
+        </label>
       </div>
       <div className="grid gap-2 @xl:grid-cols-3">
         <Summary

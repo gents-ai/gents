@@ -1,14 +1,7 @@
 import { useState } from "react";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
-import {
-  DraftActions,
-  NumberRow,
-  RefRow,
-  SwitchRow,
-  TagsRow,
-  TextRow,
-} from "./editors";
+import { DraftActions, NumberRow, RefRow, TagsRow, TextRow } from "./editors";
 import { useDraft } from "./draft";
 import { Fact, focusField, Group, PathFact, Row, Unfold } from "./rows";
 import { LocalServer } from "./LocalServer";
@@ -80,6 +73,8 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
             focusField("agent-tags");
           },
           controls: "node-naming",
+          enabled: d.draft.enabled,
+          onEnabled: (v) => d.set("enabled", v),
           tags: d.draft.tags,
         }}
       />
@@ -118,13 +113,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
             section: "agents",
             item: agentId,
           })}
-        />
-        <SwitchRow
-          id="agent-enabled"
-          label="Enabled"
-          description="A disabled node accepts no requests."
-          checked={d.draft.enabled}
-          onChange={(v) => d.set("enabled", v)}
         />
         <NumberRow
           id="agent-max-request-hop"
