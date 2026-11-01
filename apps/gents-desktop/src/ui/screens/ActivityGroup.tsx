@@ -32,6 +32,10 @@ import {
   type TranscriptEntry,
 } from "./transcript-groups";
 import { useSelectedNode } from "@/hooks/useClient";
+import { useNow } from "@/lib/clock";
+import { duration } from "@/lib/duration";
+import { groupTook, runningSince } from "@/lib/turnWorked";
+import { Hint } from "./Hint";
 
 function Step({
   tool,
@@ -57,6 +61,7 @@ function Step({
       meta={
         <>
           {tally ?? outcome ?? undefined}
+          <Elapsed since={runningSince(tool)} />
           <BackgroundToolButton tool={tool} />
         </>
       }
@@ -188,6 +193,9 @@ export function ActivityGroup({
   const folded = !single && (chosen ?? !(openStep || failed));
 
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
+  const last = entry.members[entry.members.length - 1];
+  const since = live && last?.kind === "tool" ? runningSince(last.tool) : null;
+  const took = live ? null : groupTook(groupTools(entry.members));
   const [animated, setAnimated] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
@@ -228,9 +236,16 @@ export function ActivityGroup({
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
             {live && <Spinner className="size-3.5 shrink-0 motion-reduce:hidden" />}
-            <span className="min-w-0 truncate">
-              {live ?? groupLabel(entry.members)}
-            </span>
+            {took === null ? (
+              <span className="min-w-0 truncate">
+                {live ?? groupLabel(entry.members)}
+              </span>
+            ) : (
+              <Hint label={`Took ${duration(took)}`}>
+                <span className="min-w-0 truncate">{groupLabel(entry.members)}</span>
+              </Hint>
+            )}
+            <Elapsed since={since} />
           </span>
         </button>
       )}
@@ -283,6 +298,17 @@ export function ActivityGroup({
         </div>
       </div>
     </div>
+  );
+}
+
+/* how long a running call has run, counting up each second */
+function Elapsed({ since }: { since: number | null }) {
+  const now = useNow(since !== null);
+  if (since === null || now - since < 1000) return null;
+  return (
+    <span className="shrink-0 text-muted-foreground tabular-nums">
+      {duration(now - since)}
+    </span>
   );
 }
 
