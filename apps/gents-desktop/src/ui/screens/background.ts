@@ -156,6 +156,18 @@ export function backgroundCalls(
   );
 }
 
+/** Where the call started in the transcript: the step that started it (the
+    spawn of a spawned process) and that step's message. */
+export function transcriptPlaceOf(
+  call: BackgroundCall,
+  tools: readonly RenderedToolCallView[],
+  messages: ReadonlyMap<string, number>,
+): { itemKey: string; sequence: number } | null {
+  const step = spawnedFrom(call.toolCallId, tools) ?? call.tool;
+  const sequence = step ? messages.get(step.itemKey) : undefined;
+  return step && sequence !== undefined ? { itemKey: step.itemKey, sequence } : null;
+}
+
 /* the session's row is newer than the snapshot once the call has ended */
 export const isActive = (call: BackgroundCall) =>
   call.tool ? call.tool.statusKind === "running" : call.view !== null;

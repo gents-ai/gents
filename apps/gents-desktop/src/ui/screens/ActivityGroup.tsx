@@ -4,7 +4,8 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { ToolStep, ToolSteps } from "@gents/ui/conversation";
-import { holdRow, useFollowNewest, useScrollEdges } from "@/lib/scroll";
+import { messagePlaces, useOpeningAmong } from "@/app/messagePlaces";
+import { holdRow, scrollViewport, useFollowNewest, useScrollEdges } from "@/lib/scroll";
 import {
   Collapsible,
   CollapsibleContent,
@@ -37,10 +38,13 @@ function Step({
   tool,
   workers,
   note,
+  shown = false,
 }: {
   tool: RenderedToolCallView;
   workers: Workers;
   note?: string | null;
+  /* just opened from elsewhere, such as the Background pane */
+  shown?: boolean;
 }) {
   if (isWorkerStep(tool)) return <WorkerStep tool={tool} workers={workers} />;
   const summary = toolSummary(tool);
@@ -62,6 +66,7 @@ function Step({
       }
       status={status}
       stepKey={tool.itemKey}
+      className={cn(shown && "bg-accent duration-500 data-open:bg-accent")}
     >
       {open || note ? (
         <>
@@ -172,6 +177,8 @@ function placeWorkers(members: GroupMember[]): PlacedMember[] {
   return out;
 }
 
+const SHOWN_MS = 1600;
+
 export function ActivityGroup({
   entry,
   workers,
@@ -194,6 +201,40 @@ export function ActivityGroup({
   const box = useRef<HTMLDivElement>(null);
   const capped = !single;
   const more = useScrollEdges(box);
+
+  /* a step opened from elsewhere opens its group and shows it */
+  const opening = useOpeningAmong(entry.members.map((m) => m.key));
+  const [shown, setShown] = useState<string | null>(null);
+  useEffect(() => {
+    if (!opening) return;
+    state.setFolded(entry.key, false);
+    state.setOpenStep(entry.key, opening);
+    messagePlaces.opened(opening);
+    setShown(opening);
+  }, [opening, state, entry.key]);
+  useEffect(() => {
+    if (!shown) return;
+    const viewport = scrollViewport(box.current);
+    const step = [...(box.current?.querySelectorAll("[data-step-key]") ?? [])].find(
+      (el) => el.getAttribute("data-step-key") === shown,
+    );
+    /* the step's body opens over a few frames; its top is held in view
+       until it has */
+    let frame = 0;
+    const until = performance.now() + 420;
+    const hold = () => {
+      if (!viewport || !step) return;
+      viewport.scrollTop +=
+        step.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+      if (performance.now() < until) frame = requestAnimationFrame(hold);
+    };
+    hold();
+    const done = setTimeout(() => setShown(null), SHOWN_MS);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(done);
+    };
+  }, [shown]);
   useFollowNewest(box, {
     rows: entry.members.length,
     paused: openStep !== null,
@@ -255,7 +296,12 @@ export function ActivityGroup({
             >
               {placeWorkers(entry.members).map((m) =>
                 m.kind === "tool" ? (
-                  <Step key={m.key} tool={m.tool} workers={workers} />
+                  <Step
+                    key={m.key}
+                    tool={m.tool}
+                    workers={workers}
+                    shown={m.key === shown}
+                  />
                 ) : m.kind === "worker" ? (
                   <WorkerRunStep key={m.key} tools={m.tools} workers={workers} />
                 ) : (

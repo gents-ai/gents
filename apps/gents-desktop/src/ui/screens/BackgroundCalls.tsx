@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { SurfaceContext } from "@/app/surfaces";
-import { ArrowLeft, Ban, CircleCheck, CircleX, TriangleAlert } from "lucide-react";
+import {
+  ArrowLeft,
+  Ban,
+  CircleCheck,
+  CircleX,
+  MessageSquareText,
+  TriangleAlert,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -9,6 +16,8 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
+import { openAt } from "@/app/messagePlaces";
+import { useSelectedSessionValue, useSessionFacts } from "@/hooks/useSelectedSession";
 import { toastFailure } from "@/lib/failure";
 import { configIsRead } from "@/lib/firstRun";
 import {
@@ -23,7 +32,9 @@ import {
   backgroundPlace,
   rememberBackgroundPlace,
   rowStateOf,
+  transcriptPlaceOf,
 } from "./background";
+import { Hint } from "./Hint";
 import { useNow } from "@/lib/clock";
 import { openTerminal, type LogTerminal } from "./terminal";
 import { useMinute } from "./time";
@@ -107,6 +118,27 @@ function Stop({ call, sessionId }: { call: BackgroundCall; sessionId: string | n
   return <StopButton name={call.runs} onStop={() => void stop()} />;
 }
 
+const SHOW = "Show in transcript";
+
+/* opens the transcript at the step that started the call, when the
+   session's rows place it */
+function useShowInTranscript(call: BackgroundCall, sessionId: string | null) {
+  const facts = useSessionFacts();
+  const nodeDid = useSelectedSessionValue((s) =>
+    s?.sessionId === sessionId ? (s.nodeDid ?? null) : null,
+  );
+  const place = facts ? transcriptPlaceOf(call, facts.tools, facts.toolMessages) : null;
+  if (!sessionId || !place) return null;
+  return () =>
+    openAt({
+      sessionId,
+      nodeDid,
+      sequence: place.sequence,
+      itemKey: place.itemKey,
+      open: true,
+    });
+}
+
 export function BackgroundGroup({
   calls,
   sessionId,
@@ -165,13 +197,14 @@ function CallRow({
   const now = running && second ? second : minute;
   const state = stateOf(call, now);
   const line = rowStateOf(call, now);
+  const show = useShowInTranscript(call, sessionId);
   return (
     <li>
       <div
         title={`${call.runs}\n${state.text}`}
         data-returned={returned || undefined}
         className={cn(
-          "relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-lg px-2 py-2 text-sm transition-colors duration-500 hover:bg-accent motion-reduce:transition-none",
+          "group/row relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-lg px-2 py-2 text-sm transition-colors duration-500 hover:bg-accent motion-reduce:transition-none",
           returned && "bg-accent",
         )}
       >
@@ -197,7 +230,20 @@ function CallRow({
             {line.more && ` · ${line.more}`}
           </p>
         </div>
-        <span className="relative z-10 self-center">
+        <span className="relative z-10 flex items-center gap-0.5 self-center">
+          {show && (
+            <Hint label={SHOW}>
+              <Button
+                variant="quiet"
+                size="icon-xs"
+                aria-label={SHOW}
+                onClick={show}
+                className="opacity-0 transition-opacity group-hover/row:opacity-100 group-has-focus-visible/row:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100"
+              >
+                <MessageSquareText className="size-3.5" />
+              </Button>
+            </Hint>
+          )}
           <Stop call={call} sessionId={sessionId} />
         </span>
       </div>
@@ -265,6 +311,7 @@ export function BackgroundLog({
   const now = useMinute();
   const state = stateOf(call, now);
   const output = useKeptOutput(call);
+  const show = useShowInTranscript(call, sessionId);
   const p = call.tool?.presentation;
   const cwd = p?.kind === "command" ? p.cwd : null;
   return (
@@ -279,6 +326,12 @@ export function BackgroundLog({
           <ArrowLeft className="size-3.5" />
           Back
         </Button>
+        {show && (
+          <Button variant="ghost" size="sm" className="h-7 gap-1 px-1.5" onClick={show}>
+            <MessageSquareText className="size-3.5" />
+            {SHOW}
+          </Button>
+        )}
         <span className="flex-1" />
         <Stop call={call} sessionId={sessionId} />
       </div>
