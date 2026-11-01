@@ -491,6 +491,28 @@ describe("a question in the mailbox", () => {
     );
   });
 
+  it("moves on with the arrow keys from a text-only question's empty field", () => {
+    renderMailbox(
+      mailboxWith([
+        {
+          ...questionItem({ version: 2, options: [], allow_free_text: true }),
+          questionHash: "text-question",
+          createdAt: new Date().toISOString(),
+        },
+        item({ itemId: "b", title: "Second" }),
+      ]),
+    );
+    open("Backend");
+    const field = within(dialog()).getByRole("textbox", { name: "Your answer" });
+    expect(field).toHaveFocus();
+    fireEvent.change(field, { target: { value: "Ship" } });
+    fireEvent.keyDown(field, { key: "ArrowRight" });
+    expect(within(dialog()).getByText("1 of 2")).toBeVisible();
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.keyDown(field, { key: "ArrowRight" });
+    expect(within(dialog()).getByRole("heading", { name: "Second" })).toBeVisible();
+  });
+
   it("shows a malformed question as its details", () => {
     for (const bad of [
       {

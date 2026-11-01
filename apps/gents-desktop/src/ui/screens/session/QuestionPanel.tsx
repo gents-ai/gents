@@ -186,6 +186,8 @@ function QuestionForm({
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const typing = event.target instanceof HTMLInputElement;
+    /* an empty field has no caret to move; ← and → step through the questions */
+    const caret = event.target instanceof HTMLInputElement && event.target.value !== "";
     if (event.key === "Escape" && onTypeInstead) {
       event.preventDefault();
       onTypeInstead();
@@ -204,8 +206,8 @@ function QuestionForm({
       if (n < question.options.length) choose(question.options[n]!.id);
       else if (n === question.options.length && question.allow_free_text)
         field.current?.focus();
-    } else if (!typing && position && event.key === "ArrowRight") position.step(1);
-    else if (!typing && position && event.key === "ArrowLeft") position.step(-1);
+    } else if (!caret && position && event.key === "ArrowRight") position.step(1);
+    else if (!caret && position && event.key === "ArrowLeft") position.step(-1);
   };
 
   const action =
