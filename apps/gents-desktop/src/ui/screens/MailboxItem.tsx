@@ -337,9 +337,16 @@ const ownsArrows = (target: EventTarget) =>
     ),
   );
 
-const typing = (target: EventTarget) =>
-  target instanceof HTMLElement &&
-  (target.isContentEditable || Boolean(target.closest("input, textarea, select")));
+/* an empty field has no caret to move, so ← and → still move through the
+   items when a question's only field takes focus as it opens */
+const typing = (target: EventTarget) => {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const field = target.closest("input, textarea, select");
+  if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)
+    return field.value !== "";
+  return field !== null;
+};
 
 /** the edges of the next items, behind the card and sized to it */
 function Stack({ behind }: { behind: number }) {
