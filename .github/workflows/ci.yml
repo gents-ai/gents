@@ -106,9 +106,12 @@ jobs:
 
       - name: Check compiler-tool download recovery
         run: |
-          bash -n .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh
-          shellcheck .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh
+          bash -n .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
           python3 .github/scripts/test-afterburner-downloads.py
+
+      - name: Check the macOS toolchain selection
+        run: python3 .github/scripts/test-macos-rust-toolchain.py
 
   publish-control-tests:
     if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
@@ -159,6 +162,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # A Command Line Tools update repointed the default SDK to MacOSX27.2.sdk,
+      # whose libSystem.B.tbd declares arm64e.x1-macos targets that neither
+      # linker on this runner understands. Pin SDKROOT to the SDK of the
+      # developer directory the linker comes from (as release/rc1 does).
+      - name: Select a matching macOS SDK for the linker
+        run: .github/scripts/setup-macos-rust-toolchain.sh
 
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
