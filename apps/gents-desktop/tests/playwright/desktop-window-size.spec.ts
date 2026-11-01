@@ -108,7 +108,7 @@ test.describe("half-screen window", () => {
 
       await page.getByRole("button", { name: "Menu" }).click();
       await page.getByRole("link", { name: "Settings" }).click();
-      await expectInsideViewport(page, page.getByRole("combobox", { name: "Theme" }));
+      await expectInsideViewport(page, page.getByRole("group", { name: "Theme" }));
     });
   }
 
