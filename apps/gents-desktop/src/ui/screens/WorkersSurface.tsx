@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { SurfaceContext } from "@/app/surfaces";
@@ -11,7 +18,8 @@ import { useFinishedSince } from "@/lib/seen";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
 import { StartedCount } from "./StartedCount";
-import { span, useMinute } from "./time";
+import { useNow } from "@/lib/clock";
+import { duration } from "@/lib/duration";
 import { sessionViews } from "@/app/sessionViews";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 import { startedUnder, useFleet, workersOf, workersOfId } from "../hooks/useFleet";
@@ -22,26 +30,57 @@ const ordered = (workers: readonly SessionSummary[]) =>
     (a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? "") || 0,
   );
 
-/* how long it has run, or ran; the icon says which */
-function duration(s: SessionSummary, now: number) {
+/* how long it has worked: counting while it runs, to its last activity once
+   it stops */
+function workedMs(s: SessionSummary, now: number): number | null {
   const started = s.createdAt ? Date.parse(s.createdAt) : null;
   if (!started) return null;
   const state = stateOf(s.turnState);
-  if (state === "working" || state === "waiting") return span(now - started);
+  if (state === "working" || state === "waiting")
+    return now > started ? now - started : null;
   const last = s.updatedAt ? Date.parse(s.updatedAt) : null;
-  return last && last > started ? span(last - started) : null;
+  return last && last > started ? last - started : null;
 }
 
-/* a reply that arrives while its row is up grows in; one there when the
-   row opens is already in place */
-function ReplyLine({ text, enter }: { text: string; enter: boolean }) {
+/* what came back from the session, under its title; a reply that arrives
+   while its row is up grows in, one there when the row opens is in place */
+function ReplyLine({
+  text,
+  enter,
+  onCut,
+}: {
+  text: string;
+  enter: boolean;
+  onCut: (cut: boolean) => void;
+}) {
   const [entering] = useState(enter);
+  const line = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const el = line.current;
+    if (!el) return;
+    const measure = () => onCut(el.scrollWidth > el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, onCut]);
   return (
     <div
       data-entering={entering || undefined}
       className="grid grid-rows-[1fr] motion-safe:data-entering:animate-[worker-reply-enter_200ms_ease-out]"
     >
-      <p className="min-h-0 truncate text-xs text-muted-foreground">{text}</p>
+      <p
+        data-testid="worker-reply"
+        className="flex min-h-0 min-w-0 items-baseline gap-1.5 text-xs text-foreground/75"
+      >
+        <span aria-hidden className="shrink-0 text-muted-foreground">
+          ⎿
+        </span>
+        <span ref={line} className="min-w-0 truncate">
+          {text}
+        </span>
+      </p>
     </div>
   );
 }
@@ -103,7 +142,7 @@ function WorkerRow({
   /* the sessions this row is nested under, so a cycle cannot recurse */
   above: ReadonlySet<string>;
 }) {
-  const now = useMinute();
+  const now = useNow(["working", "waiting"].includes(stateOf(worker.turnState)));
   const key = sessionKeyOf(worker);
   const children = useFleet((s) => workersOf(s, worker));
   const shown = useMemo(
@@ -113,7 +152,8 @@ function WorkerRow({
   const open = opened.has(key) && shown.length > 0;
   const path = useMemo(() => new Set(above).add(key), [above, key]);
   const counts = useFleet(useShallow((s) => startedUnder(s, worker, path)));
-  const took = duration(worker, now);
+  const took = workedMs(worker, now);
+  const [cut, setCut] = useState(false);
   /* only what changes while the row is up eases in */
   const mounted = useRef(false);
   useEffect(() => {
@@ -122,7 +162,7 @@ function WorkerRow({
   /* its own mark, not its starter's: here it is a row of its own */
   const fresh = useFinishedSince(worker);
   /* while it works the reply is partial, or an earlier turn's; the link
-     covers the row, so it carries the reply's full text */
+     covers the row, so it carries the reply's full text when it is cut */
   const state = stateOf(worker.turnState);
   const reply =
     state !== "working" && state !== "waiting"
@@ -133,15 +173,24 @@ function WorkerRow({
       <div className="relative grid grid-cols-[auto_1fr_auto_auto] items-start gap-x-2.5 rounded-lg bg-accent/40 px-3 py-2 text-sm hover:bg-accent">
         <EasedStatus turnState={worker.turnState} fresh={fresh} className="mt-0.5" />
         <div className="min-w-0">
-          <a
-            href={href({ name: "session", sessionId: worker.sessionId })}
-            title={reply || undefined}
-            className="block truncate outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring"
-          >
-            {worker.title ?? "Untitled"}
-          </a>
-          {took && <p className="truncate text-xs text-muted-foreground">{took}</p>}
-          {reply && <ReplyLine text={reply} enter={mounted.current} />}
+          <div className="flex items-baseline gap-2">
+            <a
+              href={href({ name: "session", sessionId: worker.sessionId })}
+              title={reply && cut ? reply : undefined}
+              className="min-w-0 flex-1 truncate outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring"
+            >
+              {worker.title ?? "Untitled"}
+            </a>
+            {took !== null && (
+              <span
+                data-testid="worker-took"
+                className="shrink-0 text-xs text-muted-foreground tabular-nums"
+              >
+                {duration(took)}
+              </span>
+            )}
+          </div>
+          {reply && <ReplyLine text={reply} enter={mounted.current} onCut={setCut} />}
         </div>
         <span className="flex justify-end">
           <StartedCount
