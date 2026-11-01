@@ -14,7 +14,9 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
-import { useFleet } from "@/hooks/useFleet";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
+import { isLive } from "@/lib/live";
+import { nodeKeyOf } from "../../hooks/fleetStore";
 import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { navigate, type Route } from "@/lib/router";
@@ -45,6 +47,28 @@ export function NodeSwitcher({
   const { actions } = useApp();
   const homeDid = useHomeDid();
   const nodes = useFleet(useShallow(fleetNodes));
+  /* what each node has going on, as the Nodes page counts it */
+  const doing = useFleet(
+    useShallow((state) =>
+      Object.fromEntries(
+        fleetNodes(state).map((node) => {
+          const key = nodeKeyOf(node);
+          const running = (state.sessionsOf[key] ?? NO_SESSIONS).filter((c) =>
+            isLive(c.turnState),
+          ).length;
+          const waiting = (state.mailboxOf[key] ?? []).filter(
+            (m) => m.status === "open",
+          ).length;
+          return [
+            node.nodeDid,
+            [running && `${running} running`, waiting && `${waiting} waiting`]
+              .filter(Boolean)
+              .join(" · "),
+          ];
+        }),
+      ),
+    ),
+  );
   /* as the Nodes page has them: this machine's first, then the remote ones */
   const groups = [
     { label: "Local", nodes: nodes.filter((n) => isLocalNode(n, homeDid)) },
@@ -99,11 +123,9 @@ export function NodeSwitcher({
                         />
                       </span>
                       <span className="min-w-0 truncate">{name}</span>
-                      {!node.dialSucceeded && (
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          Offline
-                        </span>
-                      )}
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+                        {node.dialSucceeded ? doing[node.nodeDid] : "Offline"}
+                      </span>
                     </span>
                   </DropdownMenuRadioItem>
                 );
