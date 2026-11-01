@@ -240,6 +240,70 @@ async fn inventory_bound_receipt_roundtrips_and_refuses_a_changed_snapshot() {
     store.node.shutdown().await;
 }
 
+/// The pending-identity preflight reads the cached physical document and
+/// requires the full demand to match, so a terminal row, a replaced row and a
+/// changed inventory reference are all rejected while the exact row is accepted.
+#[tokio::test]
+async fn still_pending_requires_the_exact_physical_row_and_demand() {
+    let (_directory, store, row, _) = fixture().await;
+    assert!(
+        store.still_pending(&row).await.unwrap(),
+        "the freshly admitted row is pending"
+    );
+
+    // A different physical document is not the cached row.
+    let mut other = row.clone();
+    other.document_id.push_str("-other");
+    assert!(!store.still_pending(&other).await.unwrap());
+
+    // The same physical document with a changed request reference is not the
+    // cached demand, even though the document id and status still match.
+    let mut changed = row.clone();
+    changed.demand.tool_call_doc_id.push_str("-other");
+    assert!(
+        !store.still_pending(&changed).await.unwrap(),
+        "a changed reference on the same physical row is not the cached demand"
+    );
+
+    // A terminal row is not pending.
+    store
+        .commit(&row, &FileImageSelection::Missing, "")
+        .await
+        .unwrap();
+    assert!(
+        !store.still_pending(&row).await.unwrap(),
+        "a served row is no longer pending"
+    );
+    store.node.shutdown().await;
+}
+
+/// An inventory-bound demand is only pending while its inventory reference is
+/// unchanged: the preflight compares the reconstructed reference, not just the
+/// document id and status.
+#[tokio::test]
+async fn still_pending_compares_the_inventory_reference() {
+    let (_directory, store, row, _) = fixture_with_reference(true).await;
+    assert!(store.still_pending(&row).await.unwrap());
+
+    let mut changed = row.clone();
+    changed
+        .demand
+        .inventory_reference
+        .as_mut()
+        .unwrap()
+        .snapshot_digest = "other-snapshot".into();
+    assert!(
+        !store.still_pending(&changed).await.unwrap(),
+        "a changed inventory reference is not the cached demand"
+    );
+
+    // The unbound collection is a different purpose binding for the same id.
+    let mut unbound = row.clone();
+    unbound.demand.inventory_reference = None;
+    assert!(!store.still_pending(&unbound).await.unwrap());
+    store.node.shutdown().await;
+}
+
 #[tokio::test]
 async fn malformed_inventory_reference_does_not_block_another_pending_image() {
     let (_directory, store, row, _) = fixture_with_reference(true).await;

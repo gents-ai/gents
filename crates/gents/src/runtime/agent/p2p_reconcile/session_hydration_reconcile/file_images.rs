@@ -27,6 +27,16 @@ impl ImageDemandRow {
     pub(super) fn document_id(&self) -> &str {
         &self.document_id
     }
+
+    /// Test-only constructor: the scheduler's identity tests need a row without
+    /// a store behind it.
+    #[cfg(test)]
+    pub(super) fn from_parts(document_id: String, demand: FileImageDemand) -> Self {
+        Self {
+            document_id,
+            demand,
+        }
+    }
 }
 
 #[async_trait]

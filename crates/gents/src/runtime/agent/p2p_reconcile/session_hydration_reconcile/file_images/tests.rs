@@ -229,6 +229,52 @@ async fn indeterminate_image_transport_leaves_the_receipt_pending() {
     assert!(store.committed.lock().unwrap().is_empty());
 }
 
+/// A cached row that is no longer pending is skipped before the prior-receipt
+/// replay, admission, delivery and commit.
+#[tokio::test]
+async fn a_terminal_cached_image_row_is_not_served() {
+    let (mut store, delivery) = fixture(
+        FileImageSelection::Selected {
+            document: "exact-image".into(),
+        },
+        vec![true, true],
+    );
+    store.pending = Some(Ok(false));
+    reconcile_images(&store, &delivery).await.unwrap();
+    assert_eq!(store.pending_checks.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        store.checks.load(Ordering::SeqCst),
+        0,
+        "a terminal row never reaches authorization"
+    );
+    assert_eq!(delivery.attempts.load(Ordering::SeqCst), 0);
+    assert!(store.committed.lock().unwrap().is_empty());
+}
+
+/// A pending-identity read failure propagates instead of becoming a false or a
+/// success answer, and nothing is delivered or committed.
+#[tokio::test]
+async fn a_pending_identity_read_failure_propagates_for_images() {
+    let (mut store, delivery) = fixture(
+        FileImageSelection::Selected {
+            document: "exact-image".into(),
+        },
+        vec![true, true],
+    );
+    store.pending = Some(Err(anyhow::anyhow!(
+        "injected image pending-identity read failure"
+    )));
+    let error = reconcile_images(&store, &delivery)
+        .await
+        .expect_err("a read failure is not a false answer");
+    assert!(
+        format!("{error:#}").contains("injected image pending-identity read failure"),
+        "the read failure is preserved: {error:#}"
+    );
+    assert_eq!(delivery.attempts.load(Ordering::SeqCst), 0);
+    assert!(store.committed.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn an_unpaired_image_demand_cannot_reach_delivery() {
     let (mut store, delivery) = fixture(

@@ -846,6 +846,197 @@ impl HydrationDelivery for LostAcknowledgment {
     }
 }
 
+/// A source-local fixture: one admitted pending inventory row plus the store
+/// that owns it. The row is written directly so the preflight can be driven
+/// without a live peer.
+async fn pending_inventory_fixture() -> Result<(
+    tempfile::TempDir,
+    GraphqlHydrationStore,
+    InventoryRequestRow,
+)> {
+    use crate::store::identity::KeyIdentity;
+    let directory = tempfile::tempdir()?;
+    let identity: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
+        directory.path().join("source.key"),
+        None,
+    )?);
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(directory.path().join("store"))
+            .with_node_identity_did(identity.did())
+            .build()
+            .await?,
+    );
+    crate::ensure_runtime_schemas(&node).await?;
+    let demand = FileInventoryPageDemand {
+        admission: FileInventoryAdmission {
+            request: HydrationRequest {
+                request_key: "inventory-preflight".into(),
+                peer_id: "peer-1".into(),
+                requester_did: "did:key:requester-1".into(),
+                node_did: identity.did().into(),
+                session_id: "session-1".into(),
+            },
+            session_doc_id: "session-doc".into(),
+        },
+        attempt_id: "inventory-preflight-attempt".into(),
+        cursor: None,
+    };
+    let request_key = demand.derive_request_key()?;
+    let scope = &demand.admission.request;
+    let response = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.inventory.preflight_admit",
+        |txn| {
+            let demand = &demand;
+            let request_key = &request_key;
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: FileInventoryRequestMutationInputArg!) { create_FileInventoryRequest(input: $input) { _docID } }",
+                    &json!({"input": {
+                        "request_key": request_key, "peer_id": scope.peer_id,
+                        "requester_did": scope.requester_did, "node_did": scope.node_did,
+                        "session_id": scope.session_id, "demand": demand, "status": "pending",
+                        "created_at": Utc::now().to_rfc3339(),
+                    }}),
+                )
+                .await
+            })
+        },
+    )
+    .await?;
+    let document_id = crate::store::graphql::created_doc_id(&response, "FileInventoryRequest")?;
+    let store = GraphqlHydrationStore {
+        node: node.clone(),
+        enrollment: crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        identity,
+    };
+    let row = InventoryRequestRow {
+        document_id,
+        request_key,
+        peer_id: scope.peer_id.clone(),
+        requester_did: scope.requester_did.clone(),
+        node_did: scope.node_did.clone(),
+        session_id: scope.session_id.clone(),
+        demand,
+        status: "pending".into(),
+        response: None,
+    };
+    Ok((directory, store, row))
+}
+
+struct CountingDelivery(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl HydrationDelivery for CountingDelivery {
+    async fn push_documents_to_peer(
+        &self,
+        _: &str,
+        _: DeliveryTarget<'_>,
+        _fence: &EnrollmentAuthorizationFence,
+    ) -> Result<()> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// A cached row carrying a mismatched physical `_docID` is not served: the
+/// preflight compares the cached `_docID`, not just the request key.
+///
+/// The store's physical row is unchanged here; only the cached row's id is
+/// wrong. The direct preflight assertions come first, so the end-to-end
+/// no-side-effect claim cannot pass merely because a later admission or CAS
+/// check would have refused the stale id anyway.
+#[tokio::test]
+async fn a_mismatched_cached_inventory_document_id_is_not_served() -> Result<()> {
+    let (_directory, store, row) = pending_inventory_fixture().await?;
+    let mut stale = row.clone();
+    stale.document_id.push_str("-replaced");
+
+    anyhow::ensure!(
+        still_pending(&store, &row).await?,
+        "the real pending row must pass the preflight"
+    );
+    anyhow::ensure!(
+        !still_pending(&store, &stale).await?,
+        "a mismatched cached document id must fail the preflight"
+    );
+
+    let delivery = CountingDelivery(std::sync::atomic::AtomicUsize::new(0));
+    serve_inventory(&store, &delivery, &stale).await?;
+    anyhow::ensure!(
+        delivery.0.load(std::sync::atomic::Ordering::SeqCst) == 0,
+        "a mismatched cached document id was delivered"
+    );
+    anyhow::ensure!(
+        wait_request(&store.node, &row.demand)
+            .await?
+            .response
+            .is_none(),
+        "a mismatched cached document id was committed"
+    );
+    store.node.shutdown().await;
+    Ok(())
+}
+
+/// A cached row that is already terminal is not served again. The row is made
+/// terminal through the real commit path, so its recorded response and status
+/// are the ones the store actually writes.
+#[tokio::test]
+async fn a_terminal_inventory_row_is_not_served() -> Result<()> {
+    let (_directory, store, row) = pending_inventory_fixture().await?;
+    let refusal = refuse(&store, &row.demand, FileInventoryRefusalReason::Rejected).await?;
+    store.commit_inventory(&row, &refusal).await?;
+    let terminal = wait_request(&store.node, &row.demand).await?;
+    anyhow::ensure!(
+        terminal.status == "rejected" && terminal.response.is_some(),
+        "the fixture row did not become terminal: {}",
+        terminal.status
+    );
+
+    let delivery = CountingDelivery(std::sync::atomic::AtomicUsize::new(0));
+    serve_inventory(&store, &delivery, &row).await?;
+    anyhow::ensure!(
+        delivery.0.load(std::sync::atomic::Ordering::SeqCst) == 0,
+        "a terminal row was delivered"
+    );
+    anyhow::ensure!(
+        wait_request(&store.node, &row.demand).await?.response == terminal.response,
+        "a terminal row was recommitted"
+    );
+    store.node.shutdown().await;
+    Ok(())
+}
+
+/// A cached demand that fails the existing loader's validation propagates as an
+/// error instead of becoming a false or a success answer, and nothing is
+/// delivered.
+///
+/// This is the loader's *validation* error path (`EmptyReference`), not a query
+/// or decode failure. A query/decode failure needs a store-level fault seam that
+/// does not exist yet; that coverage is still owed.
+#[tokio::test]
+async fn an_invalid_cached_inventory_demand_propagates() -> Result<()> {
+    let (_directory, store, row) = pending_inventory_fixture().await?;
+    let mut broken = row.clone();
+    broken.demand.attempt_id.clear();
+    let delivery = CountingDelivery(std::sync::atomic::AtomicUsize::new(0));
+    let error = serve_inventory(&store, &delivery, &broken)
+        .await
+        .expect_err("an invalid cached demand is not a false answer");
+    anyhow::ensure!(
+        format!("{error:#}").contains("empty reference"),
+        "the validation failure is preserved: {error:#}"
+    );
+    anyhow::ensure!(
+        delivery.0.load(std::sync::atomic::Ordering::SeqCst) == 0,
+        "a failed preflight delivered"
+    );
+    store.node.shutdown().await;
+    Ok(())
+}
+
 struct NoDelivery(std::sync::atomic::AtomicUsize);
 
 #[async_trait]

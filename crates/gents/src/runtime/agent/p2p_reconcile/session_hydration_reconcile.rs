@@ -1029,10 +1029,10 @@ mod tests {
         selection_loads: std::sync::atomic::AtomicUsize,
         served: std::sync::Mutex<Vec<(String, usize)>>,
         rejected: std::sync::Mutex<Vec<(String, String)>>,
-        /// `None` means every cached row is still pending. `Some(keys)` limits
-        /// that to the listed request keys, modelling a served, rejected or
-        /// replaced row.
-        pending_identity: Option<BTreeSet<String>>,
+        /// `None` means every cached row is still pending. `Some(rows)` limits
+        /// that to the listed full four-field identities, modelling a served,
+        /// rejected or replaced row.
+        pending_identity: Option<BTreeSet<HydrationRequestRow>>,
         /// When set, the pending-identity read fails instead of answering.
         pending_identity_error: Option<String>,
     }
@@ -1160,7 +1160,7 @@ mod tests {
             Ok(self
                 .pending_identity
                 .as_ref()
-                .is_none_or(|pending| pending.contains(&request.request_key)))
+                .is_none_or(|pending| pending.contains(request)))
         }
     }
 
@@ -1295,6 +1295,78 @@ mod tests {
             authorization_sequence: 1,
             authorization_expires_at: "2099-09-29T00:00:00Z".into(),
         }
+    }
+
+    /// A cached row that is no longer pending is not admitted, delivered,
+    /// rejected or committed: the preflight runs before the mutation-capable
+    /// admission path.
+    #[tokio::test]
+    async fn a_terminal_cached_row_is_not_admitted_or_delivered() {
+        let mut store = admitted_store();
+        store.pending_identity = Some(BTreeSet::new());
+        let delivery = RecordingDelivery {
+            pushed: std::sync::Mutex::new(Vec::new()),
+        };
+        let outcome = reconcile_hydration_tick(&store, &delivery)
+            .await
+            .expect("tick");
+        assert!(outcome.served.is_empty());
+        assert!(
+            outcome.rejected.is_empty(),
+            "a terminal row is skipped, not rejected"
+        );
+        assert!(delivery.pushed.lock().expect("pushed lock").is_empty());
+        assert!(store.served.lock().expect("served lock").is_empty());
+        assert!(store.rejected.lock().expect("rejected lock").is_empty());
+        assert_eq!(
+            store
+                .selection_loads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a terminal row never reaches selection"
+        );
+    }
+
+    /// A replaced physical row with the same request key is a different
+    /// identity: the cached row is skipped rather than served as the new one.
+    #[tokio::test]
+    async fn a_replaced_row_with_the_same_request_key_is_not_served() {
+        let mut store = admitted_store();
+        let cached = store.pending[0].clone();
+        let mut replacement = cached.clone();
+        replacement.session_id = "session-1".into();
+        replacement.requester_did = "did:key:requester-2".into();
+        store.pending_identity = Some(BTreeSet::from([replacement]));
+        let delivery = RecordingDelivery {
+            pushed: std::sync::Mutex::new(Vec::new()),
+        };
+        let outcome = reconcile_hydration_tick(&store, &delivery)
+            .await
+            .expect("tick");
+        assert!(outcome.served.is_empty());
+        assert!(delivery.pushed.lock().expect("pushed lock").is_empty());
+        assert!(store.served.lock().expect("served lock").is_empty());
+    }
+
+    /// A pending-identity read failure propagates through the existing batch
+    /// error handling: no delivery, no rejection, no commit, and no retry.
+    #[tokio::test]
+    async fn a_pending_identity_read_failure_propagates_without_side_effects() {
+        let mut store = admitted_store();
+        store.pending_identity_error = Some("injected pending-identity read failure".into());
+        let delivery = RecordingDelivery {
+            pushed: std::sync::Mutex::new(Vec::new()),
+        };
+        let error = reconcile_hydration_tick(&store, &delivery)
+            .await
+            .expect_err("a pending-identity read failure is not a false answer");
+        assert!(
+            format!("{error:#}").contains("injected pending-identity read failure"),
+            "the read failure is preserved: {error:#}"
+        );
+        assert!(delivery.pushed.lock().expect("pushed lock").is_empty());
+        assert!(store.served.lock().expect("served lock").is_empty());
+        assert!(store.rejected.lock().expect("rejected lock").is_empty());
     }
 
     #[tokio::test]
