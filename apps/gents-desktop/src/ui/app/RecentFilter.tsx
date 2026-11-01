@@ -17,25 +17,24 @@ import {
 import { cn } from "@gents/ui/lib/utils";
 import { useFleet } from "@/hooks/useFleet";
 import {
-  emptyFilter,
-  hasFilter,
   isShown,
   matchesSource,
   matchesState,
+  sameFilter,
   toggleShown,
   type SessionFilter,
 } from "@/lib/session-filter";
 import { agentName } from "@/screens/behavior";
 import { SOURCES, STATES, type Option } from "@/screens/SessionFilters";
 import { nodeKeyOf } from "../../hooks/fleetStore";
-import { listViews, useListViews } from "./listViews";
+import { listViews, recentDefault, useListViews } from "./listViews";
 
 /** The side nav's filter on its recent sessions: the sessions list's
     agent, state and started-by choices, kept apart from that list's. */
 export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
   const value = useListViews((views) => views.recentFilter);
   const nodes = useFleet((state) => state.nodes);
-  const active = hasFilter(value);
+  const active = !sameFilter(value, recentDefault);
   const agents = [...new Set(sessions.flatMap((c) => (c.agentId ? [c.agentId] : [])))]
     .map((id) => {
       const holder = sessions.find((c) => c.agentId === id)!;
@@ -117,8 +116,8 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
         {active && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => listViews.setRecentFilter(emptyFilter)}>
-              Clear filters
+            <DropdownMenuItem onClick={() => listViews.setRecentFilter(recentDefault)}>
+              Reset filters
             </DropdownMenuItem>
           </>
         )}

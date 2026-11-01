@@ -27,6 +27,14 @@ export type MailboxOpen = {
   every?: boolean;
 };
 
+/** The side nav's recent sessions leave out sessions another session started:
+    they belong to the work that started them, which shows them, and a few
+    workers would fill the list. */
+export const recentDefault: SessionFilter = {
+  ...emptyFilter,
+  sources: ["person", "task"],
+};
+
 export type ListViews = {
   sessionFilter: SessionFilter;
   /* the side nav's recent sessions narrow on their own */
@@ -43,7 +51,7 @@ export type ListViews = {
 
 const initial = (): ListViews => ({
   sessionFilter: emptyFilter,
-  recentFilter: emptyFilter,
+  recentFilter: recentDefault,
   mailboxTab: "all",
   mailboxOpen: null,
   mailboxQuery: null,
@@ -56,18 +64,34 @@ export function restoreListViews(stored: unknown): ListViews {
   >;
   return {
     sessionFilter: restoreSessionFilter(saved.sessionFilter),
-    recentFilter: restoreSessionFilter(saved.recentFilter),
+    recentFilter:
+      saved.recentFilter === undefined
+        ? recentDefault
+        : restoreSessionFilter(saved.recentFilter),
     mailboxTab: MAILBOX_TABS.find((tab) => tab === saved.mailboxTab) ?? "all",
     mailboxOpen: null,
     mailboxQuery: null,
   };
 }
 
+/** Version 2 leaves workers out of the recent sessions by default; a recent
+    filter saved earlier that chose nothing about who started a session takes
+    that default, and one that did is kept. */
+export function migrateListViews(stored: unknown, version: number): unknown {
+  if (version >= 2 || typeof stored !== "object" || stored === null) return stored;
+  const saved = stored as Record<string, unknown>;
+  const recent = restoreSessionFilter(saved.recentFilter);
+  return recent.sources.length > 0
+    ? saved
+    : { ...saved, recentFilter: { ...recent, sources: recentDefault.sources } };
+}
+
 const store = createStore<ListViews>()(
   persist(initial, {
     name: "gents-list-views",
-    version: 1,
+    version: 2,
     storage: createJSONStorage(() => browserStorage),
+    migrate: migrateListViews,
     merge: (stored) => restoreListViews(stored),
     partialize: ({ mailboxOpen: _open, mailboxQuery: _query, ...kept }) => kept,
   }),

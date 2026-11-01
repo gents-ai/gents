@@ -1,7 +1,7 @@
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { restoreListViews } from "../src/ui/app/listViews";
+import { recentDefault, restoreListViews } from "../src/ui/app/listViews";
 import { emptyFilter } from "../src/ui/lib/session-filter";
 import {
   applyChosenTheme,
@@ -155,7 +155,7 @@ describe("list views read back from storage", () => {
       }),
     ).toEqual({
       sessionFilter: emptyFilter,
-      recentFilter: emptyFilter,
+      recentFilter: recentDefault,
       mailboxTab: "wrong",
       mailboxOpen: null,
       mailboxQuery: null,
