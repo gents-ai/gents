@@ -32,6 +32,9 @@ import { Switch } from "@gents/ui/components/switch";
 import { ExternalLink, Plus } from "lucide-react";
 import { toastFailure } from "@/lib/failure";
 import { agentOf } from "@/lib/agents";
+import { Badge } from "@gents/ui/components/badge";
+import { Summary } from "./AgentCard";
+import { StateDot } from "../NodeFacts";
 import { useApp } from "@/app/AppContext";
 
 const when = (iso: string | null | undefined) =>
@@ -159,7 +162,8 @@ export function TaskEditor({
   };
   return (
     <>
-      <Group title={embedded ? undefined : (task.name ?? task.taskId)}>
+      {!embedded && <TaskSummary deployment={deployment} task={task} />}
+      <Group title={embedded ? undefined : "Details"}>
         <FactRow label="Task ID" mono>
           {task.taskId}
         </FactRow>
@@ -430,6 +434,72 @@ export function TaskEditor({
         />
       )}
     </>
+  );
+}
+
+/** The task page's header and cards, as the node and agent pages': its name
+    and state, then what it runs with, when, and how its last run went. */
+function TaskSummary({ deployment, task }: { deployment: NodeView; task: TaskView }) {
+  const agent = agentOf(deployment, task.agentId);
+  const runs = whenItRuns(deployment, task);
+  /* green only for a task that runs on its own */
+  const automatic =
+    task.enabled !== false &&
+    deployment.triggers.some((x) => x.config.task_id === task.taskId);
+  const last = task.runHistory[0];
+  const status = task.recentRuns.lastStatus;
+  const failed = Boolean(task.recentRuns.lastError) || /fail|error/i.test(status ?? "");
+  const section = (section: string, item?: string) => ({
+    name: "agent" as const,
+    nodeDid: deployment.nodeDid,
+    section,
+    ...(item ? { item } : {}),
+  });
+  return (
+    <div className="@container mb-8 grid gap-4">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="truncate font-heading text-lg font-medium text-heading">
+            {task.name ?? task.taskId}
+          </h2>
+          {task.enabled === false && <Badge variant="outline">Disabled</Badge>}
+        </div>
+        {task.description?.trim() && (
+          <p className="mt-0.5 text-sm text-foreground/80">{task.description}</p>
+        )}
+      </div>
+      <div className="grid gap-2 @xl:grid-cols-3">
+        <Summary
+          label="Runs with"
+          to={agent ? section("agents", agent.agentId) : section("agents")}
+        >
+          <span className="truncate">{agent?.displayName ?? "No agent"}</span>
+        </Summary>
+        <Summary label="When it runs" to={section("triggers")}>
+          <StateDot tone={runs.problem ? "bad" : automatic ? "good" : "idle"} />
+          <span title={runs.problem ?? undefined} className="truncate">
+            {runs.when}
+          </span>
+        </Summary>
+        <Summary
+          label="Last run"
+          to={
+            last?.sessionId ? { name: "session", sessionId: last.sessionId } : undefined
+          }
+        >
+          {task.recentRuns.lastAttemptAt ? (
+            <>
+              <StateDot tone={failed ? "bad" : "idle"} />
+              <span className="truncate">
+                {status ?? "Started"} · {when(task.recentRuns.lastAttemptAt)}
+              </span>
+            </>
+          ) : (
+            <span className="truncate">Never run</span>
+          )}
+        </Summary>
+      </div>
+    </div>
   );
 }
 
