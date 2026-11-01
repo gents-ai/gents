@@ -16,6 +16,7 @@ import {
   Plus,
   XIcon,
 } from "lucide-react";
+import { ToggleGroup, ToggleGroupItem } from "@gents/ui/components/toggle-group";
 import { Markdown } from "../Markdown";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
@@ -333,8 +334,8 @@ export function AreaRow({
   );
 }
 
-/** A stacked field of Markdown, read rendered at a set height until Edit
-    opens it as text in the same place. */
+/** A stacked field of Markdown, read rendered at a set height, or raw, as
+    the text it is edited in. */
 export function MarkdownRow({
   id,
   label,
@@ -348,18 +349,19 @@ export function MarkdownRow({
 }: Common & {
   value: string;
   onChange: (v: string) => void;
-  /** what the panel says while there is no text */
+  /** what the rendered view says while there is no text */
   empty: string;
   rows?: number;
 }) {
   const field = useRef<HTMLTextAreaElement>(null);
   const read = useRef<HTMLDivElement>(null);
-  const [editing, setEditing] = useState(false);
+  const [view, setView] = useState<"rendered" | "raw">("rendered");
   const [expanded, setExpanded] = useState(false);
+  const raw = view === "raw";
   const overflowing = useOverflowing(
-    editing ? field : read,
+    raw ? field : read,
     true,
-    `${editing}${value}`,
+    `${view}${value}`,
     expanded,
   );
   const height = expanded ? undefined : { maxHeight: `calc(${rows}lh + 1rem + 2px)` };
@@ -367,15 +369,41 @@ export function MarkdownRow({
     <StackedRow
       label={label}
       description={description}
-      htmlFor={editing ? id : undefined}
+      htmlFor={raw ? id : undefined}
       error={error}
+      action={
+        <ToggleGroup
+          aria-label={`${String(label)} view`}
+          value={[view]}
+          onValueChange={(next) => {
+            const chosen = next[0] as "rendered" | "raw" | undefined;
+            if (chosen) setView(chosen);
+          }}
+          className="gap-0.5 rounded-xl bg-muted/60 p-0.5"
+        >
+          {(
+            [
+              ["rendered", "Rendered"],
+              ["raw", "Raw"],
+            ] as const
+          ).map(([v, name]) => (
+            <ToggleGroupItem
+              key={v}
+              value={v}
+              className="h-6 rounded-lg px-2 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
+            >
+              {name}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      }
     >
-      {editing ? (
+      {raw ? (
         <Textarea
           ref={field}
           id={id}
-          autoFocus
           aria-invalid={error ? true : undefined}
+          readOnly={disabled}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           rows={rows}
@@ -395,25 +423,8 @@ export function MarkdownRow({
           )}
         </div>
       )}
-      <div className="-mt-1 flex justify-end gap-1">
-        {!disabled && (
-          <Button
-            variant="quiet"
-            size="sm"
-            aria-label={`${editing ? "Done editing" : "Edit"} ${String(label).toLowerCase()}`}
-            aria-expanded={editing}
-            onClick={() => setEditing((open) => !open)}
-          >
-            {editing ? (
-              "Done"
-            ) : (
-              <>
-                <Pencil /> Edit
-              </>
-            )}
-          </Button>
-        )}
-        {(overflowing || expanded) && (
+      {(overflowing || expanded) && (
+        <div className="-mt-1 flex justify-end">
           <Button
             variant="quiet"
             size="sm"
@@ -421,8 +432,8 @@ export function MarkdownRow({
           >
             {expanded ? "Show less" : "Show all"}
           </Button>
-        )}
-      </div>
+        </div>
+      )}
     </StackedRow>
   );
 }
