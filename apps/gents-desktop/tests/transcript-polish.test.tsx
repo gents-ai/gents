@@ -333,6 +333,55 @@ describe("a folded group with a failure in it", () => {
   });
 });
 
+describe("a background step's meta", () => {
+  it("keeps the outcome apart from its In background label", () => {
+    render(
+      panel(
+        session({
+          timelineItems: [
+            {
+              kind: "toolGroup",
+              itemKey: "group",
+              messageSequence: 1,
+              tools: [
+                {
+                  ...tool(
+                    {
+                      kind: "command",
+                      command: "cargo test",
+                      exitCode: 1,
+                      timedOut: false,
+                      failed: true,
+                      durationMs: 10,
+                      cwd: "~",
+                      executionMode: "sandboxed",
+                      networkMode: "disabled",
+                      stdout: "",
+                      stderr: "",
+                      fallbackOutput: null,
+                    },
+                    "error",
+                  ),
+                  awaitMode: "background",
+                },
+              ],
+            },
+          ],
+        }),
+        false,
+      ),
+    );
+    const label = screen.getByText("In background");
+    const meta = label.parentElement!;
+    expect(meta).toHaveClass("inline-flex", "gap-1.5");
+    /* each its own flex item, so the gap falls between them */
+    expect([...meta.childNodes].map((node) => node.textContent)).toEqual([
+      "exit 1",
+      "In background",
+    ]);
+  });
+});
+
 describe("a step asked for from elsewhere", () => {
   it("opens its folded group, opens the step and marks it", async () => {
     const command = (key: string): RenderedToolCallView => ({

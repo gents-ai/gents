@@ -65,11 +65,11 @@ function Step({
       label={`${summary.kind} ${summary.primary}`.trim()}
       icon={<ToolIcon tool={tool} />}
       meta={
-        <>
+        <span className="inline-flex items-center gap-1.5">
           {tally ?? outcome ?? undefined}
           <Elapsed since={runningSince(tool)} />
           <BackgroundToolButton tool={tool} />
-        </>
+        </span>
       }
       status={status}
       stepKey={tool.itemKey}
