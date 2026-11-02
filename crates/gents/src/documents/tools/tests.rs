@@ -603,3 +603,26 @@ mod wire {
         }
     }
 }
+
+#[test]
+fn rc0_eth_tool_ids_are_read_and_dropped_but_other_unknown_keys_still_fail() {
+    for legacy in [json!([]), json!(["eth-mainnet"]), json!(null)] {
+        let stored = json!({
+            "tools_id": "coding", "node_did": "did:key:example",
+            "integrations": {"eth_tool_ids": legacy, "plugins": []}
+        });
+        let tools: Tools = serde_json::from_value(stored).unwrap();
+        let integrations = tools.integrations.as_ref().unwrap();
+        assert_eq!(integrations.plugins.as_deref(), Some(&[][..]));
+        let written = serde_json::to_value(&tools).unwrap();
+        assert!(
+            written["integrations"].get("eth_tool_ids").is_none(),
+            "{written}"
+        );
+    }
+    let unknown = json!({
+        "tools_id": "coding", "node_did": "did:key:example",
+        "integrations": {"not_a_group": true}
+    });
+    assert!(serde_json::from_value::<Tools>(unknown).is_err());
+}
