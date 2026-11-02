@@ -258,12 +258,6 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
   return (
     <ScrollArea className="h-full">
       <div className="px-3 py-2">
-        {/* until the session itself is listed, its work is not yet known */}
-        {lead && shown.length === 0 && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            This session has not handed out any work.
-          </p>
-        )}
         <ul className="space-y-1.5">
           {shown.map((w) => (
             <WorkerRow key={sessionKeyOf(w)} worker={w} opened={opened} above={top} />

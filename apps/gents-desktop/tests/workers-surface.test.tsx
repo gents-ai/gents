@@ -201,7 +201,7 @@ describe("what the started sessions dock counts", () => {
       </>,
       { wrapper: withApp(app) },
     );
-    expect(screen.getByRole("tab", { name: `Started sessions ${LEAD}` })).toBeVisible();
+    expect(screen.getByRole("tab", { name: `Started ${LEAD}` })).toBeVisible();
     expect(screen.getByTestId("tab-badge-mark")).toHaveClass("bg-destructive");
     expect(screen.getByRole("button", { name: LEAD })).toBeInTheDocument();
 
@@ -245,9 +245,7 @@ describe("what the started sessions dock counts", () => {
       { wrapper: withApp(app) },
     );
     const label = "1 started session · 1 running";
-    expect(
-      screen.getByRole("tab", { name: `Started sessions ${label}` }),
-    ).toBeVisible();
+    expect(screen.getByRole("tab", { name: `Started ${label}` })).toBeVisible();
     expect(screen.getByTestId("tab-badge-mark")).toHaveClass("bg-brand");
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   });
@@ -336,12 +334,19 @@ describe("what each started session shows", () => {
     render(<WorkersSurface placement="dock" sessionId="parent" />, {
       wrapper: withApp(app),
     });
-    const empty = "This session has not handed out any work.";
-    expect(screen.queryByText(empty)).toBeNull();
+    /* the panel keeps its empty state while the session itself is missing */
+    expect(screen.getByText("No started sessions")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
     act(() =>
-      publish(app, [node({ nodeDid: "did:key:node", sessions: [session({})] })]),
+      publish(app, [
+        node({
+          nodeDid: "did:key:node",
+          sessions: [session({}), worker("helper", {})],
+        }),
+      ]),
     );
-    expect(screen.getByText(empty)).toBeInTheDocument();
+    expect(screen.queryByText("No started sessions")).toBeNull();
+    expect(screen.getByRole("link", { name: "helper" })).toBeInTheDocument();
   });
 });
 
