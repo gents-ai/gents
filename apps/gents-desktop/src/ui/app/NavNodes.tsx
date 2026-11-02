@@ -4,6 +4,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { isLocalNode } from "@/lib/firstRun";
 import { href, navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
+import { shownNodes, useHidden } from "@/lib/hidden";
 import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { NodeAvatar } from "@/screens/AgentAvatar";
@@ -11,13 +12,14 @@ import { useApp } from "./AppContext";
 import { NodeActivity } from "./NodeActivity";
 import { switchedRoute } from "./NodeSwitcher";
 
-/** The side nav's Nodes section: every node, this machine's first, each with
-    what it has going on, and a click switches to it as the node switcher
-    does. The panel leaves it out while the only node is this machine's. */
+/** The side nav's Nodes section: every node not hidden on this device,
+    this machine's first, each with what it has going on, and a click
+    switches to it as the node switcher does. The panel leaves it out while
+    the only node is this machine's. */
 export function NavNodes({ route, current }: { route: Route; current: string | null }) {
   const { actions } = useApp();
   const homeDid = useHomeDid();
-  const nodes = useFleet(useShallow(fleetNodes));
+  const nodes = shownNodes(useFleet(useShallow(fleetNodes)), useHidden(), current);
   const ordered = [
     ...nodes.filter((n) => isLocalNode(n, homeDid)),
     ...nodes.filter((n) => !isLocalNode(n, homeDid)),

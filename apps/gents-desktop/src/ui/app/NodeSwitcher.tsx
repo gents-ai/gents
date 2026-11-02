@@ -19,6 +19,7 @@ import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
+import { shownNodes, useHidden } from "@/lib/hidden";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeActivity } from "./NodeActivity";
 
@@ -51,7 +52,8 @@ export function NodeSwitcher({
 }) {
   const { actions } = useApp();
   const homeDid = useHomeDid();
-  const nodes = useFleet(useShallow(fleetNodes));
+  const hidden = useHidden();
+  const nodes = shownNodes(useFleet(useShallow(fleetNodes)), hidden, current);
   /* as the Nodes page has them: this machine's first, then the remote ones */
   const groups = [
     { label: "Local", nodes: nodes.filter((n) => isLocalNode(n, homeDid)) },

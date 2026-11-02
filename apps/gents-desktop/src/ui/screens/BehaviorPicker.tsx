@@ -16,6 +16,7 @@ import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { matchesSource } from "@/lib/session-filter";
+import { useHidden } from "@/lib/hidden";
 
 const RECENT = 3;
 
@@ -39,10 +40,15 @@ export function AgentPicker({
   agentId: string | null;
   onChange: (agentId: string) => void;
 }) {
+  const hidden = useHidden();
   if (!deployment) return null;
-  const agents = deployment.agents.filter((b) => b.enabled);
-  const chosen = agents.find((b) => b.agentId === agentId) ?? agents[0];
+  const enabled = deployment.agents.filter((b) => b.enabled);
+  const chosen = enabled.find((b) => b.agentId === agentId) ?? enabled[0];
   if (!chosen) return null;
+  /* hidden on this device, unless it is the one chosen */
+  const agents = enabled.filter(
+    (b) => b === chosen || !hidden.agent(deployment.nodeDid, b.agentId),
+  );
   return (
     <MountedAgentPicker
       deployment={deployment}

@@ -25,6 +25,8 @@ import type { ShellActions } from "@/../hooks/shellActions";
 import { listNames, newAgentView } from "./behaviorDraft";
 import { AgentEditor } from "./BehaviorEditor";
 import { NEW_ITEM } from "./draftItems";
+import { useHidden } from "@/lib/hidden";
+import { preferences } from "@/preferences";
 
 export async function saveDefault(
   changeConfig: ShellActions["changeConfig"],
@@ -50,6 +52,7 @@ function RowControls({
   inEditor?: boolean;
 }) {
   const { changeConfig } = useApp().actions;
+  const hidden = useHidden().agent(deployment.nodeDid, agent.agentId);
   const [busy, setBusy] = useState(false);
   const keptOn = agent.enabled && agent.isDefault;
   const toggle = async (next: boolean) => {
@@ -142,6 +145,14 @@ function RowControls({
                 Edit
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem
+              className="whitespace-nowrap"
+              onClick={() =>
+                preferences.setAgentHidden(deployment.nodeDid, agent.agentId, !hidden)
+              }
+            >
+              {hidden ? "Show in menus" : "Hide from menus"}
+            </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -161,6 +172,7 @@ export function AgentsPanel({
     nodeDid: deployment.nodeDid,
     section: "agents",
   };
+  const hidden = useHidden();
   const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedContexts = deployment.contexts.filter(
     (c) => !inUse.has(c.context_id),
@@ -227,6 +239,8 @@ export function AgentsPanel({
             id: b.agentId,
             title: b.displayName,
             titleNote: b.isDefault ? "Default" : undefined,
+            /* left out of the agent picker and search on this device */
+            badge: hidden.agent(deployment.nodeDid, b.agentId) ? "Hidden" : undefined,
             meta: line(b),
             metaMono: true,
             trailing: <RowControls deployment={deployment} agent={b} />,
