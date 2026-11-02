@@ -40,8 +40,11 @@ export function useShellLayout(route: Route) {
      last layout, which a dragged sidebar may not take */
   const room = useRef(Infinity);
   const navResize = useNavResize(useNavWidth(), room.current);
+  /* while its edge is dragged toward the rail, the sidebar shows as it
+     will be let go: icons only */
+  const drawnNav: NavMode = navResize.collapsing ? "collapsed" : shownNav;
   const rail =
-    !wide || navHidden ? 0 : shownNav === "expanded" ? navResize.width : RAIL_WIDTH;
+    !wide || navHidden ? 0 : drawnNav === "expanded" ? navResize.width : RAIL_WIDTH;
   /* with no column beside it, the page keeps the window's margin itself */
   const paneInset = navHidden ? PANE_INSET + 8 : PANE_INSET;
   const docked = wide && roomy;
@@ -90,6 +93,7 @@ export function useShellLayout(route: Route) {
   return {
     shellRef,
     shownNav,
+    drawnNav,
     navHidden,
     navResize,
     paneInset,

@@ -136,6 +136,7 @@ export function AppShell({
     paneWidth,
     paneInset,
     shownNav,
+    drawnNav,
     navHidden,
   } = layout;
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
@@ -162,7 +163,7 @@ export function AppShell({
           <div className="relative col-start-1 row-start-2 min-h-0">
             <RailFlyout
               route={route}
-              mode={shownNav}
+              mode={drawnNav}
               width={layout.navResize.width}
               settings={settings("row")}
             >

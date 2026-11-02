@@ -135,10 +135,10 @@ export function WindowBar({
   settings: ReactNode;
   onPaneBar: (slot: HTMLElement | null) => void;
 }) {
-  const { columns, wide, docked, dockOpen, divider, shownNav, navHidden } = layout;
+  const { columns, wide, docked, dockOpen, divider, drawnNav, navHidden } = layout;
   /* an expanded nav's column has room for the page's own controls, so they
      sit over it, by the mark, rather than out past its edge */
-  const navHoldsHistory = wide && shownNav === "expanded" && !navHidden;
+  const navHoldsHistory = wide && drawnNav === "expanded" && !navHidden;
   const syncHealth = useSyncHealth();
   const drag = headerIsWindowBar() ? "" : undefined;
   const windows = isWindowsTauriShell();

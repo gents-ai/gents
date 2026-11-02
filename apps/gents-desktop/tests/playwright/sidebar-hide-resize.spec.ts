@@ -49,7 +49,7 @@ test.describe("the sidebar", () => {
     await expect(rail).toBeVisible();
   });
 
-  test("resizes from its edge, keeps the width, and gives way to the rail when dragged narrow", async ({
+  test("resizes from its edge, keeps the width, and shows as icons only when dragged narrow", async ({
     page,
   }) => {
     await withNav(page, { nav: "expanded" });
@@ -72,14 +72,26 @@ test.describe("the sidebar", () => {
     await handle.dblclick();
     await expect.poll(() => paneX(page)).toBeCloseTo(before, -1);
 
-    /* past its minimum, nearer the rail: only the rail stays */
+    /* below its minimum it holds, rather than squeezing its rows */
     const edge = (await handle.boundingBox())!;
-    await page.mouse.move(edge.x + edge.width / 2, y);
+    const ex = edge.x + edge.width / 2;
+    await page.mouse.move(ex, y);
     await page.mouse.down();
-    await page.mouse.move(edge.x - 120, y, { steps: 6 });
-    await page.mouse.move(edge.x - 220, y, { steps: 6 });
+    await page.mouse.move(ex - 120, y, { steps: 6 });
+    await expect.poll(() => paneX(page)).toBeCloseTo(before - 84, -1);
+    /* nearer the rail, it shows as icons only, and comes back when dragged out */
+    await page.mouse.move(ex - 220, y, { steps: 6 });
+    await expect.poll(() => paneX(page)).toBeLessThan(80);
+    await page.mouse.move(ex - 60, y, { steps: 6 });
+    await expect.poll(() => paneX(page)).toBeGreaterThan(200);
+    await page.mouse.move(ex - 220, y, { steps: 6 });
     await page.mouse.up();
     await expect.poll(() => paneX(page)).toBeLessThan(80);
     await expect(handle).toHaveCount(0);
+    /* let go there, it stays icons only, with no panel on hover */
+    const saved = await page.evaluate(
+      () => JSON.parse(localStorage.getItem("gents-preferences")!).state,
+    );
+    expect(saved.nav).toBe("collapsed");
   });
 });
