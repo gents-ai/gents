@@ -6,20 +6,22 @@ use serde::Deserialize;
 pub(super) async fn peer_status(
     record: &crate::client::PeerRecord,
 ) -> Result<Option<serde_json::Value>> {
-    let http =
-        |endpoint: &&str| endpoint.starts_with("http://") || endpoint.starts_with("https://");
+    let Some(url) = peer_status_url(record)? else {
+        return Ok(None);
+    };
+    let client = super::runtime_http_client().await?;
+    http_get_json(client, &url).await.map(Some)
+}
+
+pub(super) fn peer_status_url(record: &crate::client::PeerRecord) -> Result<Option<String>> {
+    let http = |endpoint: &&str| super::has_http_scheme(endpoint);
     let endpoint = record
         .graphql
         .as_deref()
         .map(str::trim)
         .filter(http)
         .or_else(|| Some(record.addr.trim()).filter(http));
-    let Some(endpoint) = endpoint else {
-        return Ok(None);
-    };
-    let url = super::runtime_status_url(endpoint)?;
-    let client = super::runtime_http_client().await?;
-    http_get_json(client, &url).await.map(Some)
+    endpoint.map(super::runtime_status_url).transpose()
 }
 
 pub(super) fn read_json<T>(path: &Path) -> Result<T>
