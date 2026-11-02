@@ -35,7 +35,7 @@ const focusPanel = (surface: string | null) =>
       document.querySelector<HTMLElement>(`[data-testid="dock"] button`),
   );
 
-/** The panels a page can show, numbered as the picker and ⌃1–9 count them:
+/** The panels a page can show, numbered as the picker and the number keys count them:
     its open tabs in the tab bar's order, then the ones it could open. */
 export function panelsOf(route: Route, surfaces: readonly Surface[] = listSurfaces()) {
   const dock = workspace.dock(dockScope(route));
@@ -76,7 +76,10 @@ export function usePanelCommands(route: Route, layout: ShellLayout) {
     id: "panel.toggle",
     title: "Show or hide the panel",
     group: "Panel",
-    keys: { key: "j", mod: true },
+    keys: {
+      mac: { key: "b", code: "KeyB", mod: true, alt: true },
+      other: { key: "b", mod: true, shift: true },
+    },
     desktopOnly: true,
     icon: PanelRight,
     when: () =>
@@ -101,7 +104,10 @@ export function usePanelCommands(route: Route, layout: ShellLayout) {
     id: "panel.picker",
     title: "Choose a panel",
     group: "Panel",
-    keys: { key: "j", mod: true, shift: true },
+    keys: {
+      mac: { key: "p", code: "KeyP", mod: true, alt: true },
+      other: { key: "p", mod: true, shift: true },
+    },
     desktopOnly: true,
     icon: Rows3,
     when: () => panelsOf(route, surfaces).length > 0,

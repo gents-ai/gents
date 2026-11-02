@@ -13,7 +13,7 @@ export type Command = {
   group: CommandGroup;
   /** its key, or a family of keys (each passed to `run` by its index) */
   keys?: KeySpec | readonly KeySpec[];
-  /** how a family of keys is written, e.g. "⌃1–9" */
+  /** how a family of keys is written, e.g. "⌥⌘1–9" */
   keysText?: string;
   /** a browser keeps the key for itself, so it works only in the app */
   desktopOnly?: boolean;

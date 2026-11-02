@@ -37,8 +37,8 @@ describe("the sidebar", () => {
   it("is expanded, and collapsed back to the person's style, by its key", () => {
     const read = state();
     renderIn(testApp(), <Shortcuts />);
-    const press = () =>
-      fireEvent.keyDown(window, { key: "S", ctrlKey: true, shiftKey: true });
+    /* jsdom is not a Mac: Ctrl+B */
+    const press = () => fireEvent.keyDown(window, { key: "b", ctrlKey: true });
     /* from the default, open on hover, it expands and comes back to hover */
     press();
     expect(read().nav).toBe("expanded");
@@ -62,7 +62,28 @@ describe("the sidebar", () => {
     renderIn(testApp(), <Shortcuts />);
     fireEvent.keyDown(window, { key: "/", ctrlKey: true });
     expect(screen.getByText("Expand or collapse the sidebar")).toBeVisible();
-    expect(screen.getByText("Ctrl+Shift+S")).toBeVisible();
+    expect(screen.getByText("Ctrl+B")).toBeVisible();
+  });
+
+  it("leaves its key to a field that takes it", () => {
+    const read = state();
+    renderIn(
+      testApp(),
+      <>
+        <Shortcuts />
+        <input
+          aria-label="Bold field"
+          onKeyDown={(e) => {
+            if (e.key === "b" && e.ctrlKey) e.preventDefault();
+          }}
+        />
+      </>,
+    );
+    const before = read().nav;
+    fireEvent.keyDown(screen.getByLabelText("Bold field"), { key: "b", ctrlKey: true });
+    expect(read().nav).toBe(before);
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(read().nav).not.toBe(before);
   });
 
   it("widens and narrows from its edge's keys, within its range", () => {

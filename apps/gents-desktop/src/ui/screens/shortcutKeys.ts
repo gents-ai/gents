@@ -2,8 +2,6 @@
    commands so a tooltip can use it without loading them */
 export const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 export const MOD = IS_MAC ? "⌘" : "Ctrl+";
-/** shows or hides the rail and sidebar (Shortcuts), as Mac apps' sidebars do */
-export const SIDEBAR_KEYS = IS_MAC ? "⌃⌘S" : "Ctrl+Shift+S";
 export const IN_DESKTOP = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 
 /** Whether the app's command modifier, and not the other one, is held: ⌘

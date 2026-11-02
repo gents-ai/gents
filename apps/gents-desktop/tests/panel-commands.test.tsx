@@ -56,10 +56,19 @@ async function load(route: Route = SESSION, withSearch = false) {
     );
   }
   fixture.renderIn(fixture.testApp(), <Shell />);
-  return { workspace, divider, surfaces, commands, openSearch: search.openSearch };
+  const dispatch = await import("../src/ui/commands/dispatch");
+  return {
+    workspace,
+    divider,
+    surfaces,
+    commands,
+    dispatch,
+    openSearch: search.openSearch,
+  };
 }
 
-/* jsdom is not a Mac: the command key is Ctrl, and Alt goes with a number */
+/* jsdom is not a Mac: the panel is Ctrl+Shift+B, the picker Ctrl+Shift+P,
+   and Alt goes with a number */
 const press = (key: string, mods: KeyboardEventInit = {}) =>
   act(() => {
     fireEvent.keyDown(document.activeElement ?? window, { key, ...mods });
@@ -77,19 +86,19 @@ describe("the panel's commands", () => {
     act(() => workspace.closeDock(SCOPE));
     const composer = screen.getByRole("textbox", { name: "Composer" });
     composer.focus();
-    cmd("j");
+    cmd("B", true);
     expect(workspace.dock(SCOPE)).toMatchObject({ open: true, active: "changes" });
     await waitFor(() =>
       expect(screen.getByRole("tab", { name: /Changes/ })).toHaveFocus(),
     );
-    cmd("j");
+    cmd("B", true);
     expect(workspace.dock(SCOPE).open).toBe(false);
     expect(composer).toHaveFocus();
   }, 20_000);
 
   it("opens the picker, which finds a panel by name and opens it", async () => {
     const { workspace } = await load();
-    cmd("J", true);
+    cmd("P", true);
     const find = await screen.findByRole("combobox", { name: "Find a panel" });
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Started sessions1",
@@ -106,13 +115,13 @@ describe("the panel's commands", () => {
   it("opens a panel by its number in the picker, and closes with Esc", async () => {
     const { workspace } = await load();
     act(() => workspace.openSurface(SCOPE, "changes"));
-    cmd("J", true);
+    cmd("P", true);
     const find = await screen.findByRole("combobox", { name: "Find a panel" });
     /* the open tab comes first, marked open */
     expect(screen.getAllByRole("option")[0]).toHaveTextContent("ChangesOpen1");
     fireEvent.keyDown(find, { key: "3" });
     expect(workspace.dock(SCOPE).active).toBe("background");
-    cmd("J", true);
+    cmd("P", true);
     fireEvent.keyDown(await screen.findByRole("combobox", { name: "Find a panel" }), {
       key: "Escape",
     });
@@ -135,6 +144,27 @@ describe("the panel's commands", () => {
     expect(find).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, { key: "3" });
     expect(workspace.dock(SCOPE).active).toBe("background");
+  }, 20_000);
+
+  it("answers on a Mac to ⌥⌘B, ⌥⌘P and ⌥⌘ with a number, by the keys pressed", async () => {
+    const { workspace, dispatch } = await load();
+    /* ⌥ turns the letters and digits into other characters on a Mac */
+    const mac = (key: string, code: string) =>
+      act(() => {
+        dispatch.dispatchKey(
+          new KeyboardEvent("keydown", { key, code, metaKey: true, altKey: true }),
+          undefined,
+          true,
+        );
+      });
+    mac("∫", "KeyB");
+    expect(workspace.dock(SCOPE).open).toBe(true);
+    mac("∫", "KeyB");
+    expect(workspace.dock(SCOPE).open).toBe(false);
+    mac("£", "Digit3");
+    expect(workspace.dock(SCOPE)).toMatchObject({ open: true, active: "changes" });
+    mac("π", "KeyP");
+    expect(await screen.findByRole("combobox", { name: "Find a panel" })).toBeVisible();
   }, 20_000);
 
   it("goes straight to a panel by its number", async () => {
@@ -177,8 +207,8 @@ describe("the panel's commands", () => {
   it("leaves its keys to a browser", async () => {
     desktop(false);
     const { workspace } = await load();
-    cmd("j");
-    cmd("J", true);
+    cmd("B", true);
+    cmd("P", true);
     press("1", { altKey: true });
     expect(workspace.dock(SCOPE).open).toBe(false);
     expect(screen.queryByTestId("panel-picker")).toBeNull();

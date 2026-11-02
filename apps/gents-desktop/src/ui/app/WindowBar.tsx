@@ -19,7 +19,7 @@ import type { History, Route } from "@/lib/router";
 import { useSyncHealth } from "@/hooks/useClient";
 import { Hint } from "@/screens/Hint";
 import { openSearch, SearchButton } from "@/screens/SearchPalette";
-import { SIDEBAR_KEYS } from "@/screens/shortcutKeys";
+import { useAriaKeys, useKeysHint } from "@/commands/commands";
 import { useSidebarMode } from "@/preferences";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { DockTabs } from "./Dock";
@@ -74,6 +74,8 @@ const HOLD_MS = 450;
 function SidebarToggle() {
   const expanded = useSidebarMode() === "expanded";
   const label = expanded ? "Collapse sidebar" : "Expand sidebar";
+  const keys = useKeysHint("sidebar.toggle");
+  const aria = useAriaKeys("sidebar.toggle");
   const [menu, setMenu] = useState(false);
   const hold = useRef<number | null>(null);
   /* a hold opened the menu, so the click its release makes is not a toggle */
@@ -115,13 +117,14 @@ function SidebarToggle() {
         setMenu(open);
       }}
     >
-      <Hint label={label} keys={SIDEBAR_KEYS}>
+      <Hint label={label} keys={keys}>
         <DropdownMenuTrigger
           render={
             <Button
               variant="ghost"
               size="icon-sm"
               aria-label={label}
+              aria-keyshortcuts={aria}
               aria-pressed={expanded}
               className="shrink-0"
               onPointerDown={startHold}
