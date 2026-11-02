@@ -14,10 +14,10 @@ use gents_loop::claude_messages_body::{
 use gents_loop::loop_stream::LoopConfig;
 use gents_protocol::session::SessionCreationCause;
 
+use crate::inference::resolved::ResolvedAgent;
 use crate::lifecycle::ExecutionOrigin;
 use crate::session::origin::{self, CreationOrigin, SessionScope};
 use crate::store::config_client::ConfigAccess;
-use crate::store::config_client::ResolvedAgent;
 use crate::AgentRequest;
 
 /// Longest starter chain read to find the session a conversation started from.

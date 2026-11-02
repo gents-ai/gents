@@ -253,14 +253,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     .as_ref()
                     .map(|context| context.skill_ids.as_slice())
                     .unwrap_or(&[]);
-                let behavior_skills = crate::documents::skills::effective_skills(
-                    &all_skills,
-                    &agent_config.node_did,
-                    skill_ids,
-                )
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>();
                 let oauth_pool = view.oauth_pool_ids(&inference.backend);
                 let behavior_skills = crate::documents::skills::effective_skills(
                     &all_skills,
