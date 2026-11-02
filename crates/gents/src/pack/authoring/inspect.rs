@@ -1,16 +1,16 @@
 use anyhow::{Context, Result};
 use serde_json::json;
 
+use crate::pack::archive::read_pack;
 use crate::pack::{load_pack_config, PackInstallOptions, PackManifest};
-use crate::pack_archive::read_pack;
 
 pub const PREVIEW_OWNER: &str = "did:key:zPackShowPlaceholder";
 
-pub fn verify_pack_file(path: &std::path::Path) -> Result<crate::pack_archive::PackHeader> {
+pub fn verify_pack_file(path: &std::path::Path) -> Result<crate::pack::archive::PackHeader> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     read_pack(
         std::io::BufReader::new(file),
-        crate::pack_archive::Bounds::default(),
+        crate::pack::archive::Bounds::default(),
         |_, _| Ok(()),
     )
     .with_context(|| format!("{} is not a valid pack", path.display()))

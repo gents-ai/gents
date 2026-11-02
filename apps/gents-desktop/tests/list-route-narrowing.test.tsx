@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
 const router = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock("@/lib/router", () => ({ href: () => "#", navigate: router.navigate }));
+vi.mock("@/lib/router", () => ({
+  href: () => "#",
+  pathFor: () => "#",
+  navigate: router.navigate,
+}));
 
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
@@ -51,13 +55,48 @@ describe("clearing list content filters", () => {
 
   it("keeps the global active node in the mailbox", async () => {
     router.navigate.mockClear();
-    const client = app();
+    const client = testApp({
+      deployments: [
+        node({ nodeDid: "did:key:here" }),
+        node({
+          nodeDid: "did:key:there",
+          mailboxItems: [
+            {
+              itemId: "item",
+              itemKey: "item",
+              requesterDid: "did:key:person",
+              nodeDid: "did:key:there",
+              status: "open",
+              kind: "finished",
+              action: "ack",
+              title: "Done",
+              summary: null,
+              payload: null,
+              sourceKind: "session",
+              sourceId: "b",
+              sessionId: "b",
+              requestId: null,
+              causeDocId: null,
+              targetNodeDid: "did:key:there",
+              targetAgentId: null,
+              expectedCollection: null,
+              parentItemId: null,
+              deadlineAt: null,
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        }),
+      ],
+    });
     client.actions.selectNode("did:key:there");
-    listViews.setMailboxKinds(["failed"]);
+    listViews.setMailboxTab("wrong");
     renderIn(client, <MailboxScreen />);
-    await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await userEvent.click(screen.getByRole("tab", { name: /^All/ }));
+    expect(screen.getByRole("tab", { name: /^All/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(client.stores.selection.getState().nodeDid).toBe("did:key:there");
     expect(router.navigate).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
   });
 });

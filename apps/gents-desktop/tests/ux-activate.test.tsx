@@ -88,6 +88,21 @@ describe("activation and the plugin store", () => {
     expect(registry.getArea(SESSION_HEADER_ACTIONS_AREA)).toHaveLength(1);
   });
 
+  it("sends under the name the inventory shows, or the id when the plugin has none", async () => {
+    const send = vi.spyOn(host.shell, "send");
+    const sender = (id: string, name?: string): GentsUxPlugin => ({
+      id,
+      name,
+      register: (ctx) => ctx.send(`from ${id}`),
+    });
+    await activateUxPlugin(sender("board", "Task Board"), { door: "bundled" });
+    await activateUxPlugin(sender("clock"), { door: "bundled" });
+    expect(send.mock.calls).toEqual([
+      ["from board", { id: "board", name: "Task Board" }],
+      ["from clock", { id: "clock", name: "clock" }],
+    ]);
+  });
+
   it("ships an opt-in plugin off until the user flips it", () => {
     activateUxPlugin(chipPlugin("opt", { defaultEnabled: false }), { door: "bundled" });
     expect(uxPluginRecords().opt?.status).toBe("disabled");

@@ -15,17 +15,17 @@
         "crates/gents-protocol/src/output.rs",
         "crates/gents-protocol/src/transcript.rs",
         "crates/gents/src/session/history.rs",
-        "crates/gents/src/background_tools.rs",
+        "crates/gents/src/tools/background/status.rs",
         "crates/gents-loop/src/stream_processor.rs"
       ],
       "consumer_paths": [
         "crates/gents-protocol/src/transcript.rs",
         "crates/gents-loop/src/stream_processor.rs",
         "crates/gents-lean-contract/tests/support/rendered_reasoning.rs",
-        "crates/gents/src/hook/tests/transcript_native.rs",
+        "crates/gents/src/tools/call/hook/tests/transcript_native.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs",
-        "crates/gents/src/background_tools.rs",
-        "crates/gents/src/hook/tests.rs"
+        "crates/gents/src/tools/background/status.rs",
+        "crates/gents/src/tools/call/hook/tests.rs"
       ],
       "native_status": "pending",
       "required_cases": [
@@ -69,16 +69,16 @@
       "generated_groups": ["compaction_reducer_cases", "compaction_cursor_cases"],
       "fixture_status": "summary_only",
       "native_owner_paths": [
-        "crates/gents/src/compaction.rs",
-        "crates/gents/src/provider_input.rs",
-        "crates/gents/src/agent/daemon/request.rs",
+        "crates/gents/src/inference/compaction.rs",
+        "crates/gents/src/turn/provider_input.rs",
+        "crates/gents/src/runtime/agent/daemon/request.rs",
         "crates/gents/src/session/compaction_entries.rs"
       ],
       "consumer_paths": [
         "crates/gents/tests/conformance/streaming_compaction.rs",
         "crates/gents/tests/conformance/compaction_gate.rs",
-        "crates/gents/src/compaction/tests.rs",
-        "crates/gents/src/provider_input/tests.rs",
+        "crates/gents/src/inference/compaction/tests.rs",
+        "crates/gents/src/turn/provider_input/tests.rs",
         "crates/gents/tests/conformance/prompt_assembly.rs"
       ],
       "native_status": "pending",
@@ -116,7 +116,7 @@
       "constructors": [],
       "generated_groups": ["compaction_projection_join_cases", "compaction_canonical_projection_cases", "repaired_projection_admission_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents/src/provider_input.rs", "crates/gents/src/compaction.rs", "crates/gents-loop/src/loop_stream/request_assembly.rs"],
+      "native_owner_paths": ["crates/gents/src/turn/provider_input.rs", "crates/gents/src/inference/compaction.rs", "crates/gents-loop/src/loop_stream/request_assembly.rs"],
       "consumer_paths": ["crates/gents/src/lean_vocab_test/compaction_projection_join.rs", "crates/gents/src/lean_vocab_test/compaction_canonical_projection.rs"],
       "native_status": "pending",
       "required_cases": [
@@ -142,8 +142,8 @@
       "constructors": [],
       "generated_groups": ["canonical_payload_presentation_cases", "terminal_diagnostic_presentation_cases", "terminal_diagnostic_replay_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs", "crates/gents/src/tool_call_lifecycle/delivery.rs", "crates/gents/src/toolset/cli_tool.rs"],
-      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs", "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs", "crates/gents/src/tool_call_lifecycle/delivery.rs"],
+      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs", "crates/gents/src/tools/call/lifecycle/delivery.rs", "crates/gents/src/tools/native/cli_tool.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs", "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs", "crates/gents/src/tools/call/lifecycle/delivery.rs"],
       "native_status": "pending",
       "required_cases": [
         "Bind exact terminal diagnostic ranges, literals and rendered bytes to the longest UTF-8-safe committed suffix within the supplied byte budget; invalid byte inputs are rejected at the adapter conversion boundary before the typed native helper.",
@@ -167,14 +167,14 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/streaming.rs",
-        "crates/gents/src/agent/stream_processor.rs",
+        "crates/gents/src/request/streaming.rs",
+        "crates/gents/src/runtime/agent/stream_processor.rs",
         "crates/gents-desktop-core/src/client/observe.rs",
         "crates/gents-desktop-core/src/client/observe/projection_store.rs",
         "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/agent/loop_stream/tests/streaming.rs",
+        "crates/gents/src/runtime/agent/loop_stream/tests/streaming.rs",
         "crates/gents-desktop-core/src/client/observe/tests.rs",
         "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
         "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
@@ -217,13 +217,13 @@
       "fixture_status": "summary_only",
       "native_owner_paths": [
         "crates/gents/src/session/fork.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs",
         "crates/gents-protocol/src/session_hydration.rs",
         "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/agent/p2p_reconcile/session_hydration_closure.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_closure.rs",
         "crates/gents/tests/conformance/session_hydration.rs",
         "crates/gents/src/session/tests.rs",
         "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
@@ -261,14 +261,14 @@
       "native_owner_paths": [
         "crates/gents-protocol/src/output.rs",
         "crates/gents-protocol/src/row.rs",
-        "crates/gents/src/background_tools.rs",
-        "crates/gents/src/background_tools/final_output.rs",
-        "crates/gents/src/background_completion/session_message.rs"
+        "crates/gents/src/tools/background/status.rs",
+        "crates/gents/src/tools/background/status/final_output.rs",
+        "crates/gents/src/tools/background/completion/session_message.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/tool_call_lifecycle/admission_fixture.rs",
+        "crates/gents/src/tools/call/lifecycle/admission_fixture.rs",
         "crates/gents/tests/conformance/background.rs",
-        "crates/gents/src/background_tools.rs"
+        "crates/gents/src/tools/background/status.rs"
       ],
       "native_status": "pending",
       "required_cases": [
@@ -300,18 +300,18 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/provider_input.rs",
-        "crates/gents/src/llm/rig_compat.rs",
+        "crates/gents/src/turn/provider_input.rs",
+        "crates/gents/src/inference/llm/rig_compat.rs",
         "crates/gents-loop/src/loop_stream/request_assembly.rs",
-        "crates/gents/src/agent/loop_stream.rs",
-        "crates/gents/src/compaction.rs"
+        "crates/gents/src/runtime/agent/loop_stream.rs",
+        "crates/gents/src/inference/compaction.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/provider_input/tests.rs",
+        "crates/gents/src/turn/provider_input/tests.rs",
         "crates/gents/tests/conformance/prompt_assembly.rs",
-        "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",
-        "crates/gents/src/agent/loop_stream/tests/capture.rs",
-        "crates/gents/src/compaction/tests.rs"
+        "crates/gents/src/runtime/agent/loop_stream/tests/request_assembly.rs",
+        "crates/gents/src/runtime/agent/loop_stream/tests/capture.rs",
+        "crates/gents/src/inference/compaction/tests.rs"
       ],
       "native_status": "pending",
       "required_cases": [

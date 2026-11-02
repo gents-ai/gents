@@ -46,7 +46,9 @@ fn generated_provider_eof_cases_fence_production_policy() {
     assert_eq!(cases.len(), 2);
     for case in cases {
         assert_eq!(
-            crate::lifecycle::execution_policy::provider_eof_is_failure(case.saw_explicit_final),
+            crate::request::lifecycle::execution_policy::provider_eof_is_failure(
+                case.saw_explicit_final
+            ),
             case.expected_failure,
             "{case:?}",
         );

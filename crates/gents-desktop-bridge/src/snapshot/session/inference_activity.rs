@@ -40,7 +40,7 @@ pub(crate) async fn read_activity(
     }
     let activity = match active_generation(request, node, session, request_id) {
         Some(generation) => {
-            let key = gents::inference_observation::InferenceKey {
+            let key = gents::observe::inference_observation::InferenceKey {
                 node: node.to_owned(),
                 session: session.to_owned(),
                 request: request_id.to_owned(),

@@ -372,7 +372,7 @@ async fn visible_turn(
                             escape_graphql_string(session),
                         );
                         let runtime_segments = graphql_query(graphql, &query).await;
-                        let client_segments = gents::graphql::graphql_with_transaction_retry(
+                        let client_segments = gents::store::graphql::graphql_with_transaction_retry(
                             core.node(), &query, "streaming failure diagnostics",
                         ).await;
                         tracing::error!(
@@ -448,7 +448,7 @@ async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
 }
 
 async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result<()> {
-    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
+    use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
     loop {
         core.ensure_session_hydration_started(session, agent)
             .await?;
@@ -847,7 +847,7 @@ async fn assert_local_pagination(
     agent: &str,
 ) -> Result<()> {
     timeout(TURN_BUDGET, async {
-        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
+        use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
         loop {
             match core.session_hydration_progress(session, agent).await?.phase {
                 ClientHydrationPhase::Complete => return Ok::<_, anyhow::Error>(()),
@@ -1098,13 +1098,13 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 sleep(Duration::from_millis(50)).await;
             }
         }).await.context("waiting for activity request generation")??;
-        let key = gents::inference_observation::InferenceKey {
+        let key = gents::observe::inference_observation::InferenceKey {
             node: node_did.clone(), session: session.clone(), request: request.clone(), generation,
         };
-        let url = format!("http://127.0.0.1:{port}{}", gents::inference_observation::INFERENCE_ACTIVITY_PATH);
+        let url = format!("http://127.0.0.1:{port}{}", gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH);
         let http = reqwest::Client::new();
-        let call = |did: String, key: gents::inference_observation::InferenceKey| {
-            let endpoint = gents::config_client::GraphqlEndpoint::as_principal(&graphql, &did);
+        let call = |did: String, key: gents::observe::inference_observation::InferenceKey| {
+            let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, &did);
             let request = endpoint.authorize(http.post(&url)).unwrap().json(&key);
             async move { request.send().await }
         };

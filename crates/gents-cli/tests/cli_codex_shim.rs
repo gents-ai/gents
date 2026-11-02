@@ -129,8 +129,9 @@ async fn seed_backend_catalog(
         rows.len() == 1,
         "seed backend catalog must update one backend"
     );
-    let observation = gents::backend_registry::decode_backend_observation(rows[0].clone())
-        .context("seeded backend observation is incoherent")?;
+    let observation =
+        gents::inference::backends::registry::decode_backend_observation(rows[0].clone())
+            .context("seeded backend observation is incoherent")?;
     anyhow::ensure!(
         observation.backend_id == backend_id
             && observation

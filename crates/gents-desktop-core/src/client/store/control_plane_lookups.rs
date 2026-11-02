@@ -144,7 +144,7 @@ impl ClientStore {
                 .filter(|trigger| {
                     matches!(
                         trigger.source,
-                        gents::document_config::TriggerSource::Schedule { .. }
+                        gents::documents::TriggerSource::Schedule { .. }
                     )
                 })
                 .count(),
@@ -153,7 +153,7 @@ impl ClientStore {
                 .filter(|trigger| {
                     matches!(
                         trigger.source,
-                        gents::document_config::TriggerSource::Event { .. }
+                        gents::documents::TriggerSource::Event { .. }
                     )
                 })
                 .count(),

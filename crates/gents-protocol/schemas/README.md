@@ -24,7 +24,6 @@ Tools
   -> agents.target_ids                    -> AgentTarget
   -> remote.services[].mcp_service_id     -> ToolServiceRegistry
   -> datastore.datastore_tool_surface_ids -> DatastoreToolSurface
-  -> integrations.eth_tool_ids            -> EthTool
 
 InferenceProfile
   -> backend_id   -> InferenceBackend

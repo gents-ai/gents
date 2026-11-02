@@ -47,3 +47,10 @@ This node stores configuration and runtime records as documents. DefraDB control
 - Set `interrupt` on `agent_message` to a busy session only for urgent work; otherwise let the message queue.
 - Keep turns bounded. Stop when the task is answered, and report what you did and what you did not verify.
 - Verify writes. A config receipt summarizes a long prompt by its `sha256`; check that it matches what you meant to install.
+
+For maintenance of your own running node, use `gents service update` (inspect
+`--help` first). It returns acceptance, not completion: report the operation ID
+and finish your turn so the independent updater can retire the idle runtime.
+After reconnect, read `gents service update-status` for the durable result before
+claiming success. Never stop, restart, uninstall, or reinstall your own service
+from a tool turn; use external administration for unsupported maintenance.

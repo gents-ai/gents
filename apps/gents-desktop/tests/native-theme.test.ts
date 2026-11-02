@@ -40,3 +40,49 @@ it("leaves other platforms' native appearance unchanged", () => {
   expect(native.setTheme).not.toHaveBeenCalled();
   expect(document.documentElement.dataset.theme).toBe("dark");
 });
+
+function systemAppearance(dark: boolean) {
+  const state = { dark, listeners: [] as (() => void)[] };
+  vi.stubGlobal("matchMedia", () => ({
+    get matches() {
+      return state.dark;
+    },
+    addEventListener: (_: string, listener: () => void) =>
+      state.listeners.push(listener),
+    removeEventListener: () => {},
+  }));
+  return {
+    turn(next: boolean) {
+      state.dark = next;
+      for (const listener of state.listeners) listener();
+    },
+  };
+}
+
+it("follows the system's appearance by default, and as the system changes", async () => {
+  const system = systemAppearance(false);
+  vi.resetModules();
+  const { applyChosenTheme } = await import("../src/ui/preferences");
+  applyChosenTheme();
+  /* the window is left to follow the system too */
+  expect(native.setTheme).toHaveBeenLastCalledWith(null);
+  expect(document.documentElement.dataset.theme).toBeUndefined();
+  system.turn(true);
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  system.turn(false);
+  expect(document.documentElement.dataset.theme).toBeUndefined();
+});
+
+it("keeps a chosen theme whatever the system does", async () => {
+  localStorage.setItem(
+    "gents-preferences",
+    JSON.stringify({ state: { theme: "light" }, version: 1 }),
+  );
+  const system = systemAppearance(false);
+  vi.resetModules();
+  const { applyChosenTheme } = await import("../src/ui/preferences");
+  applyChosenTheme();
+  system.turn(true);
+  expect(document.documentElement.dataset.theme).toBeUndefined();
+  expect(native.setTheme).toHaveBeenLastCalledWith("light");
+});

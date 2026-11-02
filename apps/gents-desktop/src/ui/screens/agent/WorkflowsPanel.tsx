@@ -3,6 +3,7 @@ import { Button } from "@gents/ui/components/button";
 import type { DynamicWorkflows } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
+import { EmptyList } from "./ListDetail";
 import { Group, Row } from "./rows";
 import { PromoteWorkflowDialog } from "../PromoteWorkflowDialog";
 import type { NodeView } from "../../../hooks/fleetStore";
@@ -60,9 +61,10 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
         </Group>
       )}
       {dynamic.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No dynamic workflow has completed yet.
-        </p>
+        <EmptyList>
+          No workflows yet. A workflow an agent writes and runs appears here once it
+          completes, to keep as a tool.
+        </EmptyList>
       ) : (
         <Group title="Dynamic workflows">
           {dynamic.map((w) => (

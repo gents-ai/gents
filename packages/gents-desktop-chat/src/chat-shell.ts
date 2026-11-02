@@ -4,6 +4,7 @@ import type {
   DesktopSessionSnapshot,
   OperationalStatus,
   PendingTurnView,
+  RequestLifecycleState,
 } from "@source-inc/gents-desktop-client";
 import {
   isTerminalTurnState,
@@ -23,8 +24,9 @@ export type RequestProgressPresentation = {
 };
 
 export function requestProgressPresentation(
-  lifecycleState?: string | null,
+  lifecycleState?: RequestLifecycleState | null,
 ): RequestProgressPresentation | null {
+  if (!lifecycleState) return null;
   switch (lifecycleState) {
     case "workspaceBindingPending":
     case "pending":
@@ -43,8 +45,6 @@ export function requestProgressPresentation(
       return { label: "Expired", animated: false };
     case "interrupted":
       return { label: "Stopped", animated: false };
-    default:
-      return null;
   }
 }
 
@@ -116,6 +116,7 @@ type ProjectionInput = {
     | "latestRequestId"
     | "pendingTurn"
     | "queuedTurns"
+    | "pendingQueue"
     | "foldedInputs"
   > | null;
   selectedSessionSummary: SessionSummary | null;
@@ -209,13 +210,13 @@ function hintFor(reason: ChatBlockedReason) {
     case "composerEmpty":
       return "Type a message to send";
     case "submittingRequest":
-      return "Submitting request";
+      return "Still sending your last message. Try again in a moment.";
     case "waitingForRequestObservation":
-      return "Waiting for request observation";
+      return "Your last message is still on its way. Try again in a moment.";
     case "sessionMissingFromSnapshot":
-      return "Session missing from snapshot";
+      return "This session is still loading. Try again in a moment.";
     case "inconsistentTurnObservation":
-      return "Waiting for consistent turn observation";
+      return "Still syncing this session. Try again in a moment.";
     case "sessionNotOwned":
       return "Read-only";
   }
@@ -360,9 +361,13 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     ? rawObservedTurnState
     : null;
 
-  const queuedRequestIds = new Set(
-    (input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
-  );
+  /* the queue the tray edits can hold a sent request that queuedTurns does
+     not list; a request seen in neither stays awaited until the snapshot
+     names it, which a replaced or removed request never is */
+  const queuedRequestIds = new Set([
+    ...(input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
+    ...(input.session?.pendingQueue ?? []).map((entry) => entry.requestId),
+  ]);
   const foldedRequestIds = new Set(
     (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
   );

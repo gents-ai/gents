@@ -5,12 +5,14 @@ use super::registry::{resolve_registry_url, RegistryClient};
 use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
-async fn outdated_packs(
+pub(crate) async fn outdated_packs(
     scope: &crate::cli::ScopeArgs,
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
     let home = crate::home_state::resolve_home_dir(scope.home.as_deref());
-    let node = if scope.graphql.is_some() || gents::home::init_config_path(&home).is_file() {
+    let node = if scope.graphql.is_some()
+        || gents::store::local::home::init_config_path(&home).is_file()
+    {
         Some(super::resolve_scope_owner(scope).await?)
     } else {
         None
@@ -181,7 +183,7 @@ mod tests {
             serde_json::to_vec_pretty(&config).unwrap(),
         )
         .unwrap();
-        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
+        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
         let digest = {
             use sha2::Digest;
             format!("{:x}", sha2::Sha256::digest(&bytes))
@@ -367,7 +369,7 @@ mod tests {
         .await
         .expect("installing an assets pack needs no node");
         assert!(
-            !gents::home::init_config_path(home.path()).is_file(),
+            !gents::store::local::home::init_config_path(home.path()).is_file(),
             "an assets install never initializes the home"
         );
 

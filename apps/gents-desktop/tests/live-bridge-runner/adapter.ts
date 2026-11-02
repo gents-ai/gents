@@ -96,6 +96,7 @@ export function createBridgeHttpAdapter(
     listPackPluginSlots: unsupported("listPackPluginSlots"),
     readPackAccount: unsupported("readPackAccount"),
     searchPacks: unsupported("searchPacks"),
+    packInfo: unsupported("packInfo"),
     installPack: unsupported("installPack"),
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),

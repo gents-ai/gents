@@ -1,5 +1,5 @@
 use super::*;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::NodeIdentity as _;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -69,11 +69,11 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
             )
             .await
             .unwrap();
-        let doc = gents::graphql::created_doc_id(&written, "AgentRequest").unwrap();
+        let doc = gents::store::graphql::created_doc_id(&written, "AgentRequest").unwrap();
         if index == 0 {
             opening_doc = Some(doc.clone());
         }
-        let goal_literal = gents::graphql::escape_graphql_string(&goal_id);
+        let goal_literal = gents::store::graphql::escape_graphql_string(&goal_id);
         let goal_doc = if index != 10 {
             let binding = if index == 5 {
                 "other-physical-request"
@@ -84,9 +84,9 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
                 goal_id: "{goal_literal}", node_did: "{}", session_id: "session", creation_key: "{goal_literal}",
                 objective: "Review the changes", status: "active", assignment_root_request_doc_id: "{}",
                 created_at: "2026-10-25T00:00:00Z", updated_at: "2026-10-25T00:00:00Z"
-            }}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(identity.did()),
-                gents::graphql::escape_graphql_string(binding))).await.unwrap();
-            Some(gents::graphql::created_doc_id(&goal, "Goal").unwrap())
+            }}) {{_docID}} }}"#, gents::store::graphql::escape_graphql_string(identity.did()),
+                gents::store::graphql::escape_graphql_string(binding))).await.unwrap();
+            Some(gents::store::graphql::created_doc_id(&goal, "Goal").unwrap())
         } else {
             None
         };
@@ -156,7 +156,9 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         } else {
             format!(
                 "\"{}\"",
-                gents::graphql::escape_graphql_string(&serde_json::to_string(&receipt).unwrap())
+                gents::store::graphql::escape_graphql_string(
+                    &serde_json::to_string(&receipt).unwrap()
+                )
             )
         };
         access
@@ -167,10 +169,10 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
             command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "session",
             intent_json: "{}", receipt_json: {receipt}
         }}) {{_docID}} }}"#,
-                    gents::graphql::escape_graphql_string(&command.command_id),
-                    gents::graphql::escape_graphql_string(identity.did()),
-                    gents::graphql::escape_graphql_string(identity.did()),
-                    gents::graphql::escape_graphql_string(
+                    gents::store::graphql::escape_graphql_string(&command.command_id),
+                    gents::store::graphql::escape_graphql_string(identity.did()),
+                    gents::store::graphql::escape_graphql_string(identity.did()),
+                    gents::store::graphql::escape_graphql_string(
                         &serde_json::to_string(&command).unwrap()
                     )
                 ),
@@ -180,7 +182,7 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         let response = access
             .execute(&format!(
                 "{{ AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} }} }}",
-                gents::graphql::escape_graphql_string(&doc),
+                gents::store::graphql::escape_graphql_string(&doc),
                 gents::SIGNED_REQUEST_FIELDS,
             ))
             .await
@@ -272,7 +274,9 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
                         "goal_provenance.remove",
                         &format!(
                             "mutation {{ delete_Goal(docID: \"{}\") {{_docID}} }}",
-                            gents::graphql::escape_graphql_string(goal_doc.as_ref().unwrap()),
+                            gents::store::graphql::escape_graphql_string(
+                                goal_doc.as_ref().unwrap()
+                            ),
                         ),
                     )
                     .await

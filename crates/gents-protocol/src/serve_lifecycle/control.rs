@@ -8,6 +8,8 @@ use super::ServeLifecycle;
 use crate::enrollment::canonical_domain_payload;
 
 pub const RUNTIME_CONTROL_VERSION: u8 = 1;
+/// Native server startup takes the reservation before reopening its store.
+pub const NATIVE_STARTUP_FENCE_CAPABILITY: &str = "native_startup_fence";
 pub const RUNTIME_CONTROL_PATH: &str = "/runtime/operator/control";
 
 #[derive(Debug, thiserror::Error)]
@@ -184,6 +186,7 @@ impl RuntimeControlReceipt {
 pub fn current_capabilities() -> BTreeMap<String, u64> {
     [
         ("runtime_control", u64::from(RUNTIME_CONTROL_VERSION)),
+        (NATIVE_STARTUP_FENCE_CAPABILITY, 1),
         (
             "mailbox_question",
             u64::from(crate::mailbox_question::MAILBOX_QUESTION_VERSION),

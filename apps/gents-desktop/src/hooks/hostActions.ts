@@ -20,6 +20,7 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     listPackPluginSlots: () => api.listPackPluginSlots(),
     readPackAccount: () => api.readPackAccount(),
     searchPacks: (query: string, page: number) => api.searchPacks(query, page),
+    packInfo: (pack: string) => api.packInfo(pack),
     installPack: (request: PackInstallRequest) => api.installPack(request),
     updatePack: (pack: string, edited: PackEditedChoice) =>
       api.updatePack(pack, edited),

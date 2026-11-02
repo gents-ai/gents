@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_protocol::file_image_hydration::FileImageScope;
@@ -344,7 +344,7 @@ async fn inventory_pages_refresh_and_reload_through_the_live_bridge() -> Result<
             Box::pin(async move {
                 txn.execute(&format!(
                     r#"mutation {{ delete_AgentSession(docID: "{}") {{ _docID }} }}"#,
-                    gents::graphql::escape_graphql_string(doc),
+                    gents::store::graphql::escape_graphql_string(doc),
                 ))
                 .await
             })

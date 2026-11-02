@@ -1,13 +1,14 @@
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
-use gents::document_config::{
-    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
-    DatastoreToolSurfaceDocument, EventSource, InferenceBackend, InferenceBackendObservation,
-    InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
-    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
+use gents::documents::{
+    Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
+    EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
+    InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
+    ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{
     AgentRequestRow, AgentToolCallRow, CompactionEntryRow, GoalRow, MailboxItemRow,
     NodeReadinessRow, NodeRuntimeRow,
@@ -141,12 +142,10 @@ pub(super) const AGENT_TARGET_FIELDS: &str =
     "target_id node_did target_node_did agent_id name description tags";
 pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id node_did display_name enabled entries created_at tags";
-pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
-    "binding_id node_did address key_backend attestation created_at revoked_at tags";
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
 pub async fn load_chat_patch(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     request_id: Option<&str>,
@@ -250,7 +249,7 @@ async fn load_chat_patch_with<'a>(
 }
 
 pub(crate) async fn load_request_documents_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     doc_ids: &[String],
 ) -> Result<Vec<AgentRequestRow>> {
     let (rows, expected) = session_transcript::read_request_documents(
@@ -449,7 +448,10 @@ fn session_request_seed_query(
             .map(|did| format!("\"{}\"", escape_graphql_string(did)))
             .unwrap_or_else(|| "null".to_string());
         let mut predicates = vec![
-            "lifecycle_state: { _neq: \"completed\" }".to_string(),
+            format!(
+                "lifecycle_state: {{ _neq: \"{}\" }}",
+                RequestLifecycleState::Completed.as_str()
+            ),
             "lifecycle_state: { _eq: null }".to_string(),
             "retry_parent_request: { _neq: null }".to_string(),
             "retry_parent_request_doc_id: { _neq: null }".to_string(),
@@ -568,7 +570,8 @@ pub(super) async fn execute_local_graphql_query(
     query: &str,
     operation: &str,
 ) -> Result<Value> {
-    let response = gents::graphql::graphql_with_transaction_retry(node, query, operation).await?;
+    let response =
+        gents::store::graphql::graphql_with_transaction_retry(node, query, operation).await?;
     response
         .data
         .with_context(|| format!("{operation} returned no data"))
@@ -579,7 +582,8 @@ where
     T: DeserializeOwned,
 {
     let operation = format!("query for {root}");
-    let response = gents::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
+    let response =
+        gents::store::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
 
     let data = response
         .data
@@ -588,7 +592,7 @@ where
 }
 
 pub(super) async fn execute_access_graphql_query(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     query: &str,
     operation: &str,
 ) -> Result<Value> {

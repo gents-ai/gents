@@ -1,6 +1,6 @@
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { sessionKeyOf } from "../../hooks/fleetStore";
-import { isLive } from "./live";
+import { isLive, stateOf, turnLabel } from "./live";
 
 export type SessionRow = {
   session: SessionSummary;
@@ -8,6 +8,10 @@ export type SessionRow = {
   started: number;
   /** of those, the ones still working, or with work running under them */
   running: number;
+  /** of those, the ones that failed, or with a failure under them */
+  failed: number;
+  /** of those, the ones stopped, or with a stopped session under them */
+  stopped: number;
   /** while narrowed: the sessions between the level shown and this one */
   path: readonly SessionSummary[] | null;
   /** how far it is opened out under a row of the level */
@@ -103,16 +107,24 @@ export function sessionRows({
   const level = under && listed.has(under) ? under : null;
   const trail = level ? lineOf(level).map((key) => listed.get(key)!) : [];
 
-  const busy = new Map<string, boolean>();
-  const working = (session: SessionSummary): boolean => {
-    const key = sessionKeyOf(session);
-    let result = busy.get(key);
-    if (result === undefined) {
-      result = isLive(session.turnState) || childrenOf(key).some((s) => working(s));
-      busy.set(key, result);
-    }
-    return result;
+  /* a state a session shows for itself or for any session under it */
+  const lifted = (holds: (session: SessionSummary) => boolean) => {
+    const known = new Map<string, boolean>();
+    const under = (session: SessionSummary): boolean => {
+      const key = sessionKeyOf(session);
+      let result = known.get(key);
+      if (result === undefined) {
+        result = holds(session) || childrenOf(key).some(under);
+        known.set(key, result);
+      }
+      return result;
+    };
+    return under;
   };
+  const working = lifted((session) => isLive(session.turnState));
+  const failing = lifted((session) => stateOf(session.turnState) === "failed");
+  /* stopped by someone, not replaced by an edit */
+  const stopping = lifted((session) => turnLabel(session.turnState) === "Stopped");
   const row = (
     session: SessionSummary,
     path: readonly SessionSummary[] | null,
@@ -125,6 +137,8 @@ export function sessionRows({
       session,
       started: kin.length,
       running: kin.filter(working).length,
+      failed: kin.filter(failing).length,
+      stopped: kin.filter(stopping).length,
       path,
       depth,
       open: !path && kin.length > 0 && isOpen(key),

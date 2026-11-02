@@ -246,7 +246,9 @@ fn questions_without_a_waiter_deadline_fail_with_a_version_error() {
 #[test]
 fn incompatible_responders_and_orphaned_questions_do_not_share_the_current_queue() {
     let home = tempfile::tempdir().unwrap();
-    let incompatible = home.path().join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
+    let incompatible = home
+        .path()
+        .join(crate::store::local::home::PLUGIN_APPROVALS_DIR_NAME);
     std::fs::create_dir_all(&incompatible).unwrap();
     let mark = incompatible.join(".listening");
     std::fs::write(&mark, []).unwrap();

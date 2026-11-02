@@ -184,9 +184,9 @@ fn signed_request_input_fields_match_lean_bytes() {
 
 #[test]
 fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
-    fn lineage(value: &serde_json::Value) -> gents::lifecycle::WorkspaceLineage {
+    fn lineage(value: &serde_json::Value) -> gents::request::lifecycle::WorkspaceLineage {
         let field = |name: &str| value[name].as_str().map(str::to_owned);
-        gents::lifecycle::WorkspaceLineage {
+        gents::request::lifecycle::WorkspaceLineage {
             workspace_id: field("workspace_id"),
             workspace_owner_node_did: field("workspace_owner_node_did"),
             workspace_authority: field("workspace_authority"),

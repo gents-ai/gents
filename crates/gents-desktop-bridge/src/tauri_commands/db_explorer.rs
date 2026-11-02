@@ -15,7 +15,7 @@ pub async fn desktop_open_db_explorer<R>(
 where
     R: Runtime,
 {
-    let status = super::managed_server::managed_server_status_for(&app, &state).await?;
+    let status = super::managed_server::status::managed_server_status_for(&app, &state).await?;
     let graphql = status
         .graphql
         .as_deref()

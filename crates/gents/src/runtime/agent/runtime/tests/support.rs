@@ -1,0 +1,630 @@
+use super::super::*;
+use crate::store::identity::{KeyIdentity, NodeIdentity};
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::thread::JoinHandle;
+
+pub(super) use crate::documents::{default_agent_id_for_node, Tools};
+pub(super) use crate::ensure_runtime_schemas;
+pub(super) use crate::request::watcher::AgentRequest;
+pub(super) use crate::runtime::status::RuntimeStatusHandle;
+pub(super) use crate::store::graphql::escape_graphql_string;
+pub(super) use crate::tools::surface::ToolCeiling;
+pub(super) use gents_protocol::node_readiness::{
+    AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessProcessState,
+    NodeReadinessSnapshot,
+};
+pub(super) use serde_json::Value;
+
+pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+    let identity = test_identity("runtime-test-node");
+    Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    )
+}
+
+pub(super) fn test_identity(name: &str) -> KeyIdentity {
+    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
+    KeyIdentity::load_or_create(path, None).unwrap()
+}
+
+pub(super) fn request(agent_id: Option<&str>, session_id: &str) -> AgentRequest {
+    AgentRequest {
+        retry_parent_request_doc_id: None,
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
+        doc_id: "doc-1".to_string(),
+        request_id: "req-1".to_string(),
+        node_did: "did:test:test".to_string(),
+        requester_did: None,
+        agent_id: agent_id.unwrap_or_default().to_owned(),
+        session_id: session_id.to_string(),
+        content: "hello".to_string(),
+        max_total_tokens: None,
+        input: Default::default(),
+        execution_origin: None,
+        created_at: "2026-04-09T00:00:00Z".to_string(),
+        deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_lease_secs: None,
+        request_hop: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
+        workspace_id: None,
+        workspace_owner_node_did: None,
+        workspace_authority: None,
+        workspace_seal_hash: None,
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct RuntimeStatusRow {
+    pub(super) process_state: String,
+    pub(super) active_generation: i64,
+    pub(super) reconcile_phase: String,
+    pub(super) last_reconcile_result: String,
+    pub(super) last_reconcile_error: String,
+    pub(super) updated_at: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RuntimeDiagnosticRow {
+    reconcile_phase: String,
+    last_reconcile_result: String,
+    last_reconcile_error: String,
+    updated_at: String,
+}
+
+pub(super) async fn fetch_runtime_status(
+    node: &defra_node::EmbeddedNode,
+    node_did: &str,
+) -> RuntimeStatusRow {
+    fetch_runtime_status_if_present(node, node_did)
+        .await
+        .expect("NodeRuntime row")
+}
+
+async fn fetch_runtime_status_if_present(
+    node: &defra_node::EmbeddedNode,
+    node_did: &str,
+) -> Option<RuntimeStatusRow> {
+    let escaped_node_did = escape_graphql_string(node_did);
+    let query = format!(
+        r#"{{
+            NodeRuntime(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}, limit: 1) {{
+                reconcile_phase
+                last_reconcile_result
+                last_reconcile_error
+                updated_at
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "NodeRuntime query failed: {:?}",
+        response.errors
+    );
+    let value = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("NodeRuntime"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()?;
+    let diagnostic: RuntimeDiagnosticRow =
+        serde_json::from_value(value).expect("decode NodeRuntime row");
+    let readiness = fetch_node_readiness(node, node_did).await;
+    Some(RuntimeStatusRow {
+        process_state: readiness.process_state.as_str().to_string(),
+        active_generation: i64::try_from(readiness.active_generation).unwrap_or(i64::MAX),
+        reconcile_phase: diagnostic.reconcile_phase,
+        last_reconcile_result: diagnostic.last_reconcile_result,
+        last_reconcile_error: diagnostic.last_reconcile_error,
+        updated_at: diagnostic.updated_at,
+    })
+}
+
+pub(super) async fn wait_for_runtime_reconcile_phase(
+    node: &defra_node::EmbeddedNode,
+    node_did: &str,
+    expected_reconcile_phase: &str,
+) -> RuntimeStatusRow {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(row) = fetch_runtime_status_if_present(node, node_did).await {
+            if row.reconcile_phase == expected_reconcile_phase {
+                return row;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for NodeRuntime {} to reach reconcile_phase={}",
+            node_did,
+            expected_reconcile_phase
+        );
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+pub(super) async fn fetch_node_readiness(
+    node: &defra_node::EmbeddedNode,
+    node_did: &str,
+) -> NodeReadinessSnapshot {
+    let escaped_node_did = escape_graphql_string(node_did);
+    let query = format!(
+        r#"{{
+            NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
+                limit: 1
+            ) {{
+                snapshot_json
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "NodeReadiness query failed: {:?}",
+        response.errors
+    );
+    let snapshot_json = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("NodeReadiness"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("snapshot_json"))
+        .and_then(Value::as_str)
+        .expect("NodeReadiness row");
+    serde_json::from_str(snapshot_json).expect("decode node readiness snapshot")
+}
+
+pub(super) async fn wait_for_runtime_process_state(
+    node: &defra_node::EmbeddedNode,
+    node_did: &str,
+    expected_process_state: &str,
+) {
+    let escaped_node_did = escape_graphql_string(node_did);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let query = format!(
+            r#"{{
+                NodeReadiness(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}, limit: 1) {{
+                    snapshot_json
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "NodeReadiness query failed: {:?}",
+            response.errors
+        );
+        let process_state = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("NodeReadiness"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("snapshot_json"))
+            .and_then(Value::as_str)
+            .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
+            .map(|snapshot| snapshot.process_state);
+        if process_state.map(NodeReadinessProcessState::as_str) == Some(expected_process_state) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for NodeReadiness {} to reach process_state={}; last={:?}",
+            node_did,
+            expected_process_state,
+            process_state
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+pub(super) struct MockModelEndpoint {
+    pub(super) endpoint: String,
+    pub(super) port: u16,
+    pub(super) stop: Arc<AtomicBool>,
+    pub(super) handle: Option<JoinHandle<()>>,
+}
+
+impl MockModelEndpoint {
+    pub(super) fn start(model_name: &str) -> anyhow::Result<Self> {
+        Self::start_with_blocking_chat(model_name, false)
+    }
+
+    pub(super) fn start_blocking_chat(model_name: &str) -> anyhow::Result<Self> {
+        Self::start_with_blocking_chat(model_name, true)
+    }
+
+    fn start_with_blocking_chat(model_name: &str, blocking_chat: bool) -> anyhow::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = stop.clone();
+        let model_name = model_name.to_string();
+        // Drop wakes the blocking accept with a self-connection.
+        let handle = thread::spawn(move || {
+            let mut held_chats = Vec::new();
+            for stream in listener.incoming() {
+                if stop_for_thread.load(Ordering::Relaxed) {
+                    break;
+                }
+                let Ok(mut stream) = stream else { break };
+                let request = match read_http_request(&mut stream) {
+                    Ok(request) => request,
+                    Err(_) => {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        continue;
+                    }
+                };
+                if blocking_chat
+                    && request.method == "POST"
+                    && request.path == "/v1/chat/completions"
+                {
+                    held_chats.push(stream);
+                    continue;
+                }
+
+                let (status, body) = if request.method == "GET"
+                    && (request.path == "/v1/models" || request.path == "/models")
+                {
+                    ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                } else {
+                    ("404 Not Found", r#"{"error":"not found"}"#.to_string())
+                };
+                let _ = write_http_response(&mut stream, status, "application/json", &body);
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            for stream in held_chats {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        });
+
+        Ok(Self {
+            endpoint: format!("http://127.0.0.1:{port}/v1"),
+            port,
+            stop,
+            handle: Some(handle),
+        })
+    }
+
+    pub(super) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+impl Drop for MockModelEndpoint {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+pub(super) struct HttpRequestData {
+    pub(super) method: String,
+    pub(super) path: String,
+}
+
+pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
+    // macOS accepts inherit the listener's nonblocking mode; the read timeout
+    // alone cannot stop an early WouldBlock from closing the fixture socket.
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    let mut buffer = Vec::new();
+    let mut temp = [0u8; 1024];
+    let header_end = loop {
+        let read = stream.read(&mut temp)?;
+        if read == 0 {
+            anyhow::bail!("connection closed before headers");
+        }
+        buffer.extend_from_slice(&temp[..read]);
+        if let Some(index) = find_subslice(&buffer, b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    let header_text = String::from_utf8_lossy(&buffer[..header_end]);
+    let mut lines = header_text.split("\r\n").filter(|line| !line.is_empty());
+    let request_line = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing request line"))?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing request method"))?
+        .to_string();
+    let path = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing request path"))?
+        .to_string();
+    Ok(HttpRequestData { method, path })
+}
+
+pub(super) fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+pub(super) fn write_http_response(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+#[derive(Default)]
+pub(super) struct RecordingObserver {
+    pub(super) states: std::sync::Mutex<Vec<crate::runtime::agent::ProcessLifecycleState>>,
+}
+
+impl crate::runtime::agent::ProcessLifecycleObserver for RecordingObserver {
+    fn on_process_state_change(&self, state: crate::runtime::agent::ProcessLifecycleState) {
+        self.states
+            .lock()
+            .expect("recording observer mutex poisoned")
+            .push(state);
+    }
+}
+
+pub(super) async fn bind_default_agent_backend(
+    node: &Arc<defra_node::EmbeddedNode>,
+    node_did: &str,
+    backend_id: &str,
+    endpoint: &str,
+) {
+    bind_default_agent_backend_with_capacity_and_probe_status(
+        node, node_did, backend_id, endpoint, 1, "healthy",
+    )
+    .await;
+}
+
+pub(super) async fn bind_default_agent_backend_with_capacity(
+    node: &Arc<defra_node::EmbeddedNode>,
+    node_did: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+) {
+    bind_default_agent_backend_with_capacity_and_probe_status(
+        node,
+        node_did,
+        backend_id,
+        endpoint,
+        max_concurrent,
+        "healthy",
+    )
+    .await;
+}
+
+pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
+    node: &Arc<defra_node::EmbeddedNode>,
+    node_did: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    probe_status: &str,
+) {
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    use crate::Collection;
+    let mut principal = crate::ensure_node(node, node_did).await.unwrap();
+    let agent_id = default_agent_id_for_node(node_did);
+    principal.default_agent_id = Some(agent_id.clone());
+    let context_id = format!("{agent_id}:context");
+    let tools_id = format!("{agent_id}:tools");
+    let profile_id = format!("{agent_id}:inference");
+    let documents = [
+        (Collection::Node, serde_json::to_value(principal).unwrap()),
+        (Collection::Agent, serde_json::json!({"node_did":node_did,
+            "agent_id":agent_id, "context_id":context_id, "inference_profile_id":profile_id})),
+        (Collection::AgentContext, serde_json::json!({"node_did":node_did,
+            "context_id":context_id, "tools_id":tools_id})),
+        (Collection::Tools, serde_json::json!({"node_did":node_did, "tools_id":tools_id})),
+        (Collection::InferenceProfile, serde_json::json!({"node_did":node_did,
+            "profile_id":profile_id, "backend_id":backend_id, "model_name":"default"})),
+        (Collection::InferenceBackend, serde_json::json!({"node_did":node_did,
+            "backend_id":backend_id, "name":backend_id, "provider_kind":"OpenAiCompatible",
+            "endpoint":endpoint, "max_concurrent":max_concurrent, "auth":{"kind":"unauthenticated"}})),
+    ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
+        collection, add:value.clone(), update:value,
+    }).collect();
+    let plan = DesiredStateApplyPlan::new(documents).unwrap();
+    ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
+        let plan = &plan;
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
+    })
+    .await
+    .unwrap();
+    let backend_id = escape_graphql_string(backend_id);
+    let owner = escape_graphql_string(node_did);
+    let status = escape_graphql_string(probe_status);
+    let response = node.execute(&format!(r#"mutation {{
+        update_InferenceBackend(filter: {{node_did: {{_eq: "{owner}"}}, backend_id: {{_eq: "{backend_id}"}}}},
+            input: {{probe_status: "{status}"}}) {{_docID}}
+    }}"#)).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+}
+
+pub(super) async fn create_agent_request(
+    node: &defra_node::EmbeddedNode,
+    node_did: &str,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> String {
+    create_agent_request_for_agent(node, node_did, None, request_id, session_id, content).await
+}
+
+pub(super) async fn create_agent_request_for_agent(
+    node: &defra_node::EmbeddedNode,
+    node_did: &str,
+    agent_id: Option<&str>,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> String {
+    let identity = crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
+        .expect("registered runtime test identity");
+    let agent_id = agent_id
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| default_agent_id_for_node(node_did));
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        node_did,
+        node_did,
+        agent_id,
+        session_id,
+        content,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
+    );
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .expect("sign runtime test AgentRequest");
+    let response = node.execute(&create.graphql_mutation().unwrap()).await;
+    assert!(
+        !response.has_errors(),
+        "create signed AgentRequest failed: {:?}",
+        response.errors
+    );
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#,
+        escape_graphql_string(request_id),
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentRequest lookup failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("AgentRequest _docID")
+}
+
+pub(super) async fn wait_for_inference_call_state(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+    expected_state: &str,
+) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let query = format!(
+            r#"{{
+                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{
+                    call_state
+                    failure_reason
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "InferenceCall query failed: {:?}",
+            response.errors
+        );
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("InferenceCall"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if rows.iter().any(|row| {
+            row.get("call_state")
+                .and_then(Value::as_str)
+                .is_some_and(|state| state == expected_state)
+        }) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for InferenceCall request_id={} to reach call_state={}, last rows={:?}",
+            request_id,
+            expected_state,
+            rows
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+pub(super) async fn update_backend_probe_status(
+    node: &defra_node::EmbeddedNode,
+    backend_id: &str,
+    probe_status: &str,
+) {
+    let escaped_backend_id = escape_graphql_string(backend_id);
+    let escaped_probe_status = escape_graphql_string(probe_status);
+    let mutation = format!(
+        r#"mutation {{
+            update_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
+                input: {{ probe_status: "{escaped_probe_status}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "update InferenceBackend probe_status failed: {:?}",
+        response.errors
+    );
+}
+
+pub(super) struct ScriptedWatcher {
+    pub(super) rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
+}
+
+impl Watcher for ScriptedWatcher {
+    async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
+        self.rx.recv().await
+    }
+}

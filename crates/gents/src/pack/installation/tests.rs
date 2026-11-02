@@ -87,16 +87,19 @@ async fn install(
 }
 
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
-    let edit = crate::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Tools,
-        add: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
-        update: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
-    }])
-    .unwrap();
+    let edit =
+        crate::store::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::Tools,
+            add: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
+            update: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
+        }])
+        .unwrap();
     access
         .transact_write("test.edit", |txn| {
             let edit = &edit;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, edit).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, edit).await
+            })
         })
         .await
         .unwrap();
@@ -324,7 +327,7 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
     let (node, access) = dependency_fixture().await;
     let pack = identity("1");
     let (result, fired) =
-        crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+        crate::store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
             Some("pack.record_plugin_store"),
             record_plugin_store_change(&access, OWNER, home.path(), &pack.coordinate, Some(&pack)),
         )
@@ -745,9 +748,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
 async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, OWNER)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, OWNER).await.unwrap();
     for profile in ["claude", "glm", "grok"] {
         crate::test_support::install_test_agent(&node, OWNER, profile).await;
     }
@@ -758,8 +759,8 @@ async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
 /// Installs `dependee_fixture` the way a front-end installs a documents pack.
 async fn install_dependee(access: &ConfigAccess, explicit: bool) {
     let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
-    let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let authored = crate::pack::load_pack_config(
         archive.manifest(),
         &crate::pack::PackInstallOptions {
@@ -1069,7 +1070,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         add: value.clone(),
         update: value,
     };
-    let seed = crate::config_client::DesiredStateApplyPlan::new(vec![
+    let seed = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         home(
             Collection::InferenceBackend,
             json!({"node_did":OWNER,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}),
@@ -1091,7 +1092,9 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     access
         .transact_write("test.seed", |txn| {
             let seed = &seed;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, seed).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, seed).await
+            })
         })
         .await
         .unwrap();
@@ -1199,8 +1202,8 @@ fn install_fixture_plugins_into(
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     edit(&mut manifest["plugins"][0]);
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     crate::plugin::install::install_pack_plugins(
         home,
         archive.manifest(),
@@ -1329,15 +1332,15 @@ fn installed_plugin_record_without_data_unique_keys_decodes() {
     assert!(record.data_unique_keys.is_empty());
 }
 
-fn documents_archive() -> crate::pack_archive::PackArchive {
+fn documents_archive() -> crate::pack::archive::PackArchive {
     let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
     let path = root.join("manifest.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
 }
 
 fn prepared() -> PreparedDocumentPackInstall {
@@ -1354,7 +1357,7 @@ fn prepared() -> PreparedDocumentPackInstall {
     }
 }
 
-fn operator_record(archive: &crate::pack_archive::PackArchive) -> crate::pack::HomePackInstall {
+fn operator_record(archive: &crate::pack::archive::PackArchive) -> crate::pack::HomePackInstall {
     crate::pack::HomePackInstall {
         coordinate: format!(
             "{}/{}",
@@ -1373,7 +1376,7 @@ fn operator_record(archive: &crate::pack_archive::PackArchive) -> crate::pack::H
     }
 }
 
-async fn self_config_install(archive: &crate::pack_archive::PackArchive, home: Option<&Path>) {
+async fn self_config_install(archive: &crate::pack::archive::PackArchive, home: Option<&Path>) {
     install_prepared_document_pack(
         &access().await,
         OWNER,
@@ -1432,7 +1435,7 @@ async fn explicit_self_config_reinstall_lowers_the_pack_record() {
     assert_eq!(stored.digest, archive.digest());
 }
 
-fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack_archive::PackArchive {
+fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack::archive::PackArchive {
     let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
     let path = root.join("manifest.json");
     let mut manifest: serde_json::Value =
@@ -1448,8 +1451,8 @@ fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack_archive::Pa
     }
     object.insert("assets".into(), json!(assets));
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
 }
 
 #[tokio::test]
@@ -1468,8 +1471,8 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
         "contributes": { "areas": ["nav"], "directives": [] }
     }]);
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let home = tempfile::tempdir().unwrap();
     install_prepared_document_pack(
         &access().await,
@@ -1491,7 +1494,7 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
         .plugins
         .iter()
         .any(|plugin| plugin.name == "job_fixture"));
-    let listing = crate::ux_plugin::find(home.path(), "fixture/job_plugin_fixture/board").unwrap();
+    let listing = crate::plugin::ux::find(home.path(), "fixture/job_plugin_fixture/board").unwrap();
     assert_eq!(listing.pack.as_deref(), Some("fixture/job_plugin_fixture"));
     assert!(std::path::Path::new(&listing.file).is_file());
     let plugin = crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap();
@@ -1516,7 +1519,7 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
 
 fn recorded(
     home: &Path,
-    archive: &crate::pack_archive::PackArchive,
+    archive: &crate::pack::archive::PackArchive,
 ) -> crate::pack::HomePackInstall {
     crate::pack::read_home_install(home, &operator_record(archive).coordinate)
         .unwrap()
@@ -1561,7 +1564,7 @@ async fn self_config_install_succeeds_without_a_home() {
     self_config_install(&archive, None).await;
 }
 
-fn job_tools(job: serde_json::Value) -> crate::document_config::Tools {
+fn job_tools(job: serde_json::Value) -> crate::documents::Tools {
     serde_json::from_value(json!({
         "tools_id": "engine-tools",
         "node_did": OWNER,
@@ -1589,7 +1592,7 @@ fn engine_admission(job: serde_json::Value, via: crate::pack::InstalledVia) -> R
     metadata.dependencies = vec!["acme/base".into()];
     let own = shipping(&["wf-run"]);
     let base = shipping(&["wf-read-only"]);
-    crate::plugin_job::settings::pack_job_block_admissible(
+    crate::tools::background::job::settings::pack_job_block_admissible(
         &job_tools(job),
         &metadata,
         "acme/engine",
@@ -1621,9 +1624,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
     config.agent_targets = shipping(&["wf-run"]).agent_targets;
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, OWNER)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, OWNER).await.unwrap();
     let access = ConfigAccess::local(node);
     let requested = Default::default();
     let home = tempfile::tempdir().unwrap();
@@ -1695,12 +1696,12 @@ fn documents_dependency_pair(
     broken_dependent_plugin: bool,
 ) -> (
     [tempfile::TempDir; 2],
-    crate::pack_archive::PackArchive,
-    crate::pack_archive::PackArchive,
+    crate::pack::archive::PackArchive,
+    crate::pack::archive::PackArchive,
 ) {
     let archive = |dir: &std::path::Path| {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     };
     let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
         let path = dir.join("manifest.json");
@@ -1763,8 +1764,8 @@ fn documents_dependency_pair(
 
 async fn install_dependent_with_dependee(
     access: &ConfigAccess,
-    dependee: &crate::pack_archive::PackArchive,
-    dependent: &crate::pack_archive::PackArchive,
+    dependee: &crate::pack::archive::PackArchive,
+    dependent: &crate::pack::archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) {
     try_install_dependent_with_dependee(access, dependee, dependent, plugin_home)
@@ -1774,8 +1775,8 @@ async fn install_dependent_with_dependee(
 
 async fn try_install_dependent_with_dependee(
     access: &ConfigAccess,
-    dependee: &crate::pack_archive::PackArchive,
-    dependent: &crate::pack_archive::PackArchive,
+    dependee: &crate::pack::archive::PackArchive,
+    dependent: &crate::pack::archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) -> Result<InstallReport> {
     let authored = crate::pack::load_pack_config(
@@ -1902,8 +1903,8 @@ async fn a_failing_dependent_does_not_publish_dependency_plugin() {
 /// `dependee_plugin` the dependee also ships the plugin `echo`.
 async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) -> String {
     let archive = |dir: &std::path::Path| {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     };
     let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
         let path = dir.join("manifest.json");
@@ -2045,9 +2046,7 @@ async fn prepare_naming_plugin(
 ) -> Result<PreparedDocumentPackInstall> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, OWNER)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, OWNER).await.unwrap();
     prepare_document_pack_install(
         &ConfigAccess::local(node),
         OWNER,
@@ -2081,7 +2080,7 @@ async fn an_install_naming_an_unresolved_plugin_is_refused_before_writing() {
 
 #[tokio::test]
 async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_plugin_free_pack() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
 
     let root = tempfile::tempdir().unwrap();
     let key = root.path().join("remote-install.key");
@@ -2102,7 +2101,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, identity.did())
+    crate::documents::ensure_node(&node, identity.did())
         .await
         .unwrap();
     let access = ConfigAccess::graphql_as(endpoint, identity.did());
@@ -2114,8 +2113,8 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
     manifest.as_object_mut().unwrap().remove("schemas");
     manifest.as_object_mut().unwrap().remove("inference_slots");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&directory).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let config = |plugin: Option<&str>| -> PackConfig {
         serde_json::from_value(json!({
             "node": {"node_did": identity.did()},
@@ -2127,7 +2126,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
     async fn prepare_remote(
         access: &ConfigAccess,
         owner: &str,
-        archive: &crate::pack_archive::PackArchive,
+        archive: &crate::pack::archive::PackArchive,
         config: &PackConfig,
     ) -> Result<PreparedDocumentPackInstall> {
         prepare_document_pack_install(
@@ -2485,8 +2484,8 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
             })).unwrap();
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }
-        let (packed, _) = crate::pack_archive::pack_dir(dir.path()).unwrap();
-        let archive = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+        let (packed, _) = crate::pack::archive::pack_dir(dir.path()).unwrap();
+        let archive = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
         let mut config = config_naming_plugin("acme/web_search");
         let plugin = &mut config.tools[0]
             .integrations
@@ -2946,8 +2945,8 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         )),
     )
     .unwrap();
-    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
-    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     crate::pack::plugin_lifecycle::install(
         home.path(),
         &updated,
@@ -3069,8 +3068,8 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         )),
     )
     .unwrap();
-    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
-    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
     let update = crate::pack::plugin_lifecycle::install(
@@ -3166,8 +3165,8 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         changed,
     )
     .unwrap();
-    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
-    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
     let error = crate::pack::plugin_lifecycle::install(
@@ -3235,8 +3234,8 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
         std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
     let archive = |dir: &std::path::Path| {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     };
     let dependency = archive(&dependency_root);
     let dependent = archive(&root);
@@ -3388,7 +3387,7 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
         .unwrap();
     let reached = Arc::new(tokio::sync::Notify::new());
     let mut write = Box::pin(
-        crate::config_client::ConfigApplyTxn::with_embedded_commit_ack_pause(
+        crate::store::config_client::ConfigApplyTxn::with_embedded_commit_ack_pause(
             reached.clone(),
             access.transact_write_with_finality("test.pack.ack_timeout", |txn| {
                 Box::pin(async move {
@@ -3406,7 +3405,8 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
         result = &mut write => panic!("commit did not reach acknowledgement pause: {result:?}"),
     }
     tokio::time::pause();
-    tokio::time::advance(crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT).await;
+    tokio::time::advance(crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+        .await;
     tokio::time::resume();
     let error = write.await.unwrap_err();
     let cases = tokio::task::spawn_blocking(|| {

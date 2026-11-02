@@ -211,25 +211,25 @@ impl SpeechClient {
 async fn services(
     core: &ClientCore,
     node_did: &str,
-) -> Result<Vec<gents::document_config::ToolServiceRegistry>> {
+) -> Result<Vec<gents::documents::ToolServiceRegistry>> {
     let records = core.peer_records().await;
     ensure!(records.iter().filter(|record| record.node_did == node_did).count() == 1,
         "Choose a connected runtime with an operator configuration route to configure speech services.");
     let access = core.operator_graphql(node_did).map(gents::ConfigAccess::Graphql).context(
         "Speech configuration cannot be read for this runtime. Use Gents: Connect Local Runtime on this machine, or choose another service runtime."
     )?;
-    gents::registry::configured_mcp_services_on(&access, node_did).await
+    gents::tools::mcp::registry::configured_mcp_services_on(&access, node_did).await
 }
 
 async fn route(
     core: &ClientCore,
     node_did: &str,
     service_id: &str,
-) -> Result<gents::registry::ResolvedMcpService> {
+) -> Result<gents::tools::mcp::registry::ResolvedMcpService> {
     let service = services(core, node_did).await?.into_iter().find(|service| service.enabled && service.service_id == service_id)
         .context("The selected speech service is no longer enabled for this runtime. Open Gents voice settings.")?;
     let hostname = hostname::get()?.to_string_lossy().into_owned();
-    gents::registry::resolve_mcp_service(&service, &hostname, None)
+    gents::tools::mcp::registry::resolve_mcp_service(&service, &hostname, None)
 }
 
 fn validate_label(value: Option<&str>) -> Result<()> {

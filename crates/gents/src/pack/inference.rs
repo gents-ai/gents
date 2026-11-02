@@ -7,8 +7,8 @@ use super::{
     inference_slot_reference, PackInferenceBindings, PackInferenceSlot, PackManifest,
     INFERENCE_SLOT_REFERENCE_PREFIX,
 };
-use crate::config_client::ConfigAccess;
-use crate::document_config::{InferenceBackend, InferenceProfile, PackConfig};
+use crate::documents::{InferenceBackend, InferenceProfile, PackConfig};
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -17,10 +17,10 @@ pub struct PackInferenceProfileOption {
     pub profile_id: String,
     pub display_name: Option<String>,
     pub model_name: String,
-    pub reasoning_effort: Option<crate::config::ReasoningEffort>,
+    pub reasoning_effort: Option<crate::inference::resolved::ReasoningEffort>,
     pub backend_id: String,
     pub backend_name: Option<String>,
-    pub provider_kind: Option<crate::backend_provider::BackendProviderKind>,
+    pub provider_kind: Option<crate::inference::backends::provider::BackendProviderKind>,
     pub usable: bool,
     pub unavailable_reason: Option<String>,
 }
@@ -271,7 +271,7 @@ pub async fn install_pack_documents_with_expectations(
     pack: &super::PackIdentity,
     config: &PackConfig,
     policy: super::DriftPolicy,
-    expected: Vec<crate::config_client::DesiredStateExpectation>,
+    expected: Vec<crate::store::config_client::DesiredStateExpectation>,
 ) -> Result<super::InstallReport> {
     super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected).await
 }
@@ -352,9 +352,7 @@ mod tests {
         let owner = "did:key:preview-owner";
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::document_config::ensure_node(&node, owner)
-            .await
-            .unwrap();
+        crate::documents::ensure_node(&node, owner).await.unwrap();
         crate::test_support::install_test_agent(&node, owner, "only").await;
         let access = ConfigAccess::local(node);
         let one = manifest(json!([
@@ -376,13 +374,11 @@ mod tests {
         let owner = "did:key:binding-owner";
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::document_config::ensure_node(&node, owner)
-            .await
-            .unwrap();
+        crate::documents::ensure_node(&node, owner).await.unwrap();
         crate::test_support::install_test_agent(&node, owner, "claude").await;
         crate::test_support::install_test_agent(&node, owner, "glm").await;
         let foreign_owner = "did:key:foreign-owner";
-        crate::document_config::ensure_node(&node, foreign_owner)
+        crate::documents::ensure_node(&node, foreign_owner)
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, foreign_owner, "foreign").await;

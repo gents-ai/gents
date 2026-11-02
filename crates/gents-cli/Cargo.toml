@@ -92,6 +92,7 @@ uuid.workspace = true
 url = "2"
 semver = "1"
 tempfile = "3"
+notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }
 wait-timeout = "0.2"
 # `gents eval init` holds a draft's check params to each check's schema.
 jsonschema = { version = "0.46.5", default-features = false }

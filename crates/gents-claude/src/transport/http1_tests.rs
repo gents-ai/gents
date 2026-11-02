@@ -9,6 +9,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use super::http1::classify;
 use super::{Body, Client, ClientOptions, Target, TransportError};
 
 pub(super) fn client() -> Client {
@@ -351,7 +352,10 @@ async fn pool_respects_max_idle_per_host() {
 }
 
 #[tokio::test]
-async fn stale_pooled_connection_is_retried_once() {
+async fn stale_pooled_connection_is_not_replayed() {
+    // A pooled connection the server closed while idle must not cause the
+    // request to be written twice: the server may have acted on the first
+    // copy. The failure is returned and the caller's retry owner decides.
     let (l, t) = listener().await;
     let accepts = Arc::new(AtomicUsize::new(0));
     let (closed_tx, closed_rx) = oneshot::channel();
@@ -365,6 +369,7 @@ async fn stale_pooled_connection_is_retried_once() {
             .unwrap();
         drop(s);
         closed_tx.send(()).unwrap();
+        // A second connection is only accepted if the client replays.
         let (mut s, _) = l.accept().await.unwrap();
         n.fetch_add(1, Ordering::SeqCst);
         read_request(&mut s).await.unwrap();
@@ -376,9 +381,61 @@ async fn stale_pooled_connection_is_retried_once() {
     let mut r = c.send(&t, &head(0), b"").await.unwrap();
     assert_eq!(collect(&mut r.body).await, b"one");
     closed_rx.await.unwrap();
-    let mut r = c.send(&t, &head(0), b"").await.unwrap();
-    assert_eq!(collect(&mut r.body).await, b"two");
-    assert_eq!(accepts.load(Ordering::SeqCst), 2);
+    let err = c.send(&t, &head(0), b"").await.err().unwrap();
+    assert!(matches!(err, TransportError::Closed), "{err:?}");
+    assert_eq!(accepts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn full_post_on_a_reused_connection_is_sent_once() {
+    // The regression: the server reads the whole second POST on the reused
+    // connection and closes before answering. The client must not write that
+    // POST again on a fresh connection.
+    let (l, t) = listener().await;
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let posts = Arc::new(AtomicUsize::new(0));
+    let (second_tx, second_rx) = oneshot::channel();
+    let (n, p) = (accepts.clone(), posts.clone());
+    tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        n.fetch_add(1, Ordering::SeqCst);
+        // First request: answered normally, connection stays open and pooled.
+        read_request(&mut s).await.unwrap();
+        p.fetch_add(1, Ordering::SeqCst);
+        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .await
+            .unwrap();
+        // Second request on the same connection: read it in full, then close
+        // without a response.
+        let second = read_request(&mut s).await.unwrap();
+        p.fetch_add(1, Ordering::SeqCst);
+        second_tx.send(second).unwrap();
+        drop(s);
+        // Any further connection means the client replayed the POST.
+        if let Ok((mut s, _)) = l.accept().await {
+            n.fetch_add(1, Ordering::SeqCst);
+            if read_request(&mut s).await.is_some() {
+                p.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    let c = client();
+    let mut r = c.send(&t, &head(2), b"hi").await.unwrap();
+    assert_eq!(collect(&mut r.body).await, b"ok");
+    let err = c.send(&t, &head(2), b"hi").await.err().unwrap();
+    assert!(matches!(err, TransportError::Closed), "{err:?}");
+    let second = second_rx.await.unwrap();
+    assert_eq!(second, [head(2).as_slice(), b"hi"].concat());
+    assert_eq!(
+        posts.load(Ordering::SeqCst),
+        2,
+        "the POST was written twice"
+    );
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        1,
+        "a second connection was opened"
+    );
 }
 
 #[tokio::test]
@@ -550,6 +607,48 @@ async fn early_response_to_a_large_upload_is_returned() {
     let mut r = client().send(&t, &head(body.len()), &body).await.unwrap();
     assert_eq!(r.status, 413);
     assert_eq!(collect(&mut r.body).await, b"big");
+}
+
+#[tokio::test]
+async fn fresh_connection_reset_keeps_its_io_error() {
+    // A reset on a fresh connection is not a stale pooled socket: it must keep
+    // its `Io` error, exactly as before the replay fix. Only a pooled socket
+    // with nothing read is normalized to `Closed`.
+    let (l, t) = listener().await;
+    tokio::spawn(async move {
+        let (s, _) = l.accept().await.unwrap();
+        // Read the request, then reset rather than close cleanly.
+        let mut s = s;
+        let _ = read_request(&mut s).await;
+        // `SO_LINGER` with a zero timeout makes `close` send RST instead of
+        // FIN, so the client sees a reset. Tokio's own `set_linger` is
+        // deprecated; `SockRef` sets the same option on the same fd.
+        socket2::SockRef::from(&s)
+            .set_linger(Some(std::time::Duration::ZERO))
+            .unwrap();
+        drop(s);
+    });
+    let err = client().send(&t, &head(0), b"").await.err().unwrap();
+    assert!(matches!(err, TransportError::Io(_)), "{err:?}");
+}
+
+#[test]
+fn classify_normalizes_only_a_dead_pooled_socket() {
+    // Pure classification: the `reused` flag is the only thing that decides
+    // whether a peer-gone error becomes `Closed`.
+    let reset = || TransportError::Io(std::io::ErrorKind::ConnectionReset.into());
+    // Pooled socket, nothing read: the server closed it while idle.
+    assert!(matches!(classify(reset(), true), TransportError::Closed));
+    // Fresh connection, nothing read: keep the original error.
+    assert!(matches!(classify(reset(), false), TransportError::Io(_)));
+    // Pooled socket with bytes already read: keep the original error.
+    assert!(matches!(classify(reset(), false), TransportError::Io(_)));
+    // A non-peer-gone error is never normalized.
+    let malformed = TransportError::MalformedHead;
+    assert!(matches!(
+        classify(malformed, true),
+        TransportError::MalformedHead
+    ));
 }
 
 #[tokio::test]

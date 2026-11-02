@@ -1,6 +1,6 @@
 use super::*;
-use crate::config_client::ConfigAccess;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::config_client::ConfigAccess;
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -84,7 +84,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             )
             .await
             .unwrap();
-        let physical = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let physical = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         super::super::create_goal_for_session(&node, signer.did(), "session", "Start work", None)
             .await
             .unwrap();
@@ -288,7 +288,8 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         crate::sign_agent_request_create(&signer, &mut request)
             .await
             .unwrap();
-        let admitted = crate::lifecycle::write_task_delivery(&access, &fire, true, &request).await;
+        let admitted =
+            crate::request::lifecycle::write_task_delivery(&access, &fire, true, &request).await;
         assert_eq!(
             admitted.is_ok(),
             case["task_binding_valid"] == true,
@@ -297,7 +298,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             admitted.as_ref().err()
         );
         if let Ok(admitted) = admitted {
-            let persisted = crate::request_binding::load_agent_request_by_doc_id(
+            let persisted = crate::request::binding::load_agent_request_by_doc_id(
                 &node,
                 &admitted.request.doc_id,
             )

@@ -3,7 +3,7 @@ use defra_node::EmbeddedNode;
 use gents_protocol::schemas::ALL_COLLECTION_NAMES;
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
-    gents::schema::ensure_runtime_schemas(node).await
+    gents::store::schema::ensure_runtime_schemas(node).await
 }
 
 #[allow(dead_code)]
@@ -43,7 +43,7 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::subscribed_collection_names;
-    use gents::agent::p2p_reconcile::templates::CLIENT_INDEX_COLLECTIONS;
+    use gents::runtime::agent::p2p_reconcile::templates::CLIENT_INDEX_COLLECTIONS;
 
     #[test]
     fn the_desktop_does_not_replicate_plaintext_provider_bodies_or_credentials() {
