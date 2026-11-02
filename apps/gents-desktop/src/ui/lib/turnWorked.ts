@@ -43,9 +43,16 @@ export function turnWorked(
 export function turnsWorked(
   entries: readonly TranscriptEntry[],
   finalKeys: ReadonlySet<string>,
+  startLoaded = true,
 ): Map<string, number> {
   const worked = new Map<string, number>();
-  for (const [key, { reply, tools }] of turnTools(entries, finalKeys)) {
+  for (const [key, { reply, tools, whole }] of turnTools(
+    entries,
+    finalKeys,
+    startLoaded,
+  )) {
+    // a turn whose start isn't loaded would count from its first loaded call
+    if (!whole) continue;
     const ms = turnWorked(tools, "timestamp" in reply ? reply.timestamp : null);
     if (ms !== null) worked.set(key, ms);
   }

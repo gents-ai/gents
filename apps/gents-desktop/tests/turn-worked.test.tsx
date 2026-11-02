@@ -94,6 +94,18 @@ describe("how long a turn worked, from its rows", () => {
     const worked = turnsWorked(entries, new Set(["a3", "a6"]));
     expect(Object.fromEntries(worked)).toEqual({ a3: 3_000, a6: 84_000 });
   });
+
+  it("leaves out a turn whose start is not loaded yet", () => {
+    const entries = groupTranscript([
+      group(2, call(after(60_000))),
+      said(3, after(64_000)),
+      person(4, after(65_000)),
+      group(5, call(after(66_000))),
+      said(6, after(70_000)),
+    ]);
+    const worked = turnsWorked(entries, new Set(["a3", "a6"]), false);
+    expect(Object.fromEntries(worked)).toEqual({ a6: 4_000 });
+  });
 });
 
 describe("how long a group of steps took", () => {

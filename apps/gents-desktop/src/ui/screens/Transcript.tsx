@@ -718,7 +718,10 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     keptChanges.current = next;
     return next;
   }, [entries, finalKeys, startLoaded, nodeDid, sessionKey]);
-  const worked = useMemo(() => turnsWorked(entries, finalKeys), [entries, finalKeys]);
+  const worked = useMemo(
+    () => turnsWorked(entries, finalKeys, startLoaded),
+    [entries, finalKeys, startLoaded],
+  );
   const groupState = useGroupState(sessionKey);
   const dayOpens = useMemo(
     () =>
