@@ -4,13 +4,13 @@ An RC0 home upgrades in place: the first start of a newer `gents` runs the
 schema migrations in `crates/gents-migration` and logs one line such as
 
 ```
-ensure_migrations complete baseline_already_present=86 steps_applied=3 ...
+ensure_migrations complete baseline_already_present=86 steps_applied=2 ...
 ```
 
-Later starts report `steps_applied=0`. No manual migration command exists or is
-needed. The first start rewrites existing documents onto the new versions: on a
-4.4 GB store with about 71,000 affected documents it took 2m18s
-before the node reported ready (later starts: about 70 seconds).
+(`InferenceBackend` and `Node`). Later starts report `steps_applied=0`. No
+manual migration command exists or is needed. Measured on a clone of a real
+4.4 GB RC0 store: the first start rewrote 6 documents and reported ready in
+22 seconds, about what RC0 itself takes; later starts took 10 seconds.
 
 ## Before you start
 
