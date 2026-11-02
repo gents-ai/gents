@@ -29,6 +29,7 @@ import { isLocalNode } from "@/lib/firstRun";
 import { switchedRoute } from "@/app/NodeSwitcher";
 import { NodeAvatar } from "./AgentAvatar";
 import { NodeActivity } from "@/app/NodeActivity";
+import { packOrigin } from "./agent/ListDetail";
 import {
   searchEntries,
   searchGroups,
@@ -188,6 +189,7 @@ function useEntries(): SearchEntry[] {
           nodeDid: n.nodeDid,
           name: a.displayName ?? a.agentId,
           node: nodeName(n.nodeDid),
+          pack: packOrigin(a.tags),
         })),
       ),
       nodes: nodes.map((n) => ({

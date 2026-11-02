@@ -74,7 +74,14 @@ export function entryScore(words: readonly string[], e: SearchEntry) {
 export type SearchSources = {
   sessions: readonly SessionSummary[];
   attention: readonly MailboxItemView[];
-  agents: readonly { agentId: string; nodeDid: string; name: string; node: string }[];
+  /** every agent, with its node and the pack it came from, if any */
+  agents: readonly {
+    agentId: string;
+    nodeDid: string;
+    name: string;
+    node: string;
+    pack: string | null;
+  }[];
   /** every node, with what it is to this app and whether it answers */
   nodes: readonly { nodeDid: string; name: string; place: string; offline: boolean }[];
   agentName: (session: SessionSummary) => string;
@@ -137,8 +144,8 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
         },
         `agent:${a.nodeDid}:${a.agentId}`,
         a.name,
-        a.node,
-        [a.node],
+        a.pack ? `${a.node} · ${a.pack}` : a.node,
+        a.pack ? [a.node, a.pack] : [a.node],
       ),
     ),
     ...src.places.map((p) =>
