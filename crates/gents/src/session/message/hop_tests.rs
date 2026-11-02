@@ -366,7 +366,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             create.input.session_creation,
             Some(gents_protocol::request_input::SessionCreationIntent::AgentNew)
         );
-        assert!(crate::identity::verify_did_signature(
+        assert!(crate::store::identity::verify_did_signature(
             &create.admission.signer_did,
             &create.signing_payload(),
             &create.admission.signature
@@ -374,7 +374,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
         .unwrap());
         let mut altered = create.clone();
         altered.input.cwd = Some("/workspace/other".into());
-        assert!(crate::identity::verify_did_signature(
+        assert!(crate::store::identity::verify_did_signature(
             &altered.admission.signer_did,
             &altered.signing_payload(),
             &altered.admission.signature
