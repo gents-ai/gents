@@ -56,7 +56,8 @@ function HistoryNav({ history }: { history: History }) {
   );
 }
 
-/* at the sidebar's edge, by the window's own controls, where a hidden
+/* on an expanded sidebar's inside edge, with its other controls; with the
+   sidebar hidden or icons only, first in the page's bar, where a hidden
    sidebar is brought back */
 function SidebarToggle({ hidden }: { hidden: boolean }) {
   const label = hidden ? "Show sidebar" : "Hide sidebar";
@@ -167,6 +168,11 @@ export function WindowBar({
             </div>
           )}
           {navHoldsHistory && history && <HistoryNav history={history} />}
+          {navHoldsHistory && (
+            <div className="ml-auto pr-2" data-tauri-drag-region={drag}>
+              <SidebarToggle hidden={false} />
+            </div>
+          )}
         </div>
       )}
       <div
@@ -180,7 +186,7 @@ export function WindowBar({
         data-tauri-drag-region={drag}
       >
         <NavSheet route={route} settings={settings} />
-        {wide && <SidebarToggle hidden={navHidden} />}
+        {wide && !navHoldsHistory && <SidebarToggle hidden={navHidden} />}
         <MarkLink className="md:hidden" current={onNodes} />
         {history && !navHoldsHistory && <HistoryNav history={history} />}
         <ActiveNodeLabel />
