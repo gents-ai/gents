@@ -57,6 +57,7 @@ test("moves through the stack without capturing the session's question card bene
   page,
 }) => {
   await gotoHarness(page, "mailbox-many");
+  const started = Date.now();
   await openMailbox(page);
   const dialog = page.getByTestId("mailbox-dialog");
   await rowButton(page, "Button colour").click();
@@ -83,10 +84,13 @@ test("moves through the stack without capturing the session's question card bene
       });
     };
   });
+  /* away from the Mailbox the stack holds every item, including the one the
+     harness files 2.5s after start; wait it out so the count is settled */
+  await page.waitForTimeout(Math.max(0, 3_000 - (Date.now() - started)));
   await page.keyboard.press("ControlOrMeta+Shift+KeyM");
-  await expect(dialog).toContainText("1 of 5");
+  await expect(dialog).toContainText("1 of 6");
   await page.keyboard.press("ArrowRight");
-  await expect(dialog).toContainText("2 of 5");
+  await expect(dialog).toContainText("2 of 6");
   const captured = await page.evaluate(
     () => (window as unknown as { captured: string[][] }).captured,
   );
