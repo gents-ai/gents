@@ -101,7 +101,10 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
     let pending = snapshot.pending_turn.expect("request-owned steering input");
     assert_eq!(pending.request_doc_id.as_deref(), Some("steering-doc-1"));
     assert_eq!(pending.content, "queued steering text");
-    assert_eq!(pending.lifecycle_state, Some(RequestLifecycleState::Interrupted));
+    assert_eq!(
+        pending.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
     assert!(snapshot.messages.is_empty());
 }
 

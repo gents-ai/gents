@@ -10,10 +10,10 @@ use gents_loop::provider_stream::{guard_response, ProviderStreamProtocol};
 use rig::completion::CompletionError;
 use rig::http_client;
 
-pub use super::sse_state::{parse_messages_sse, parse_messages_sse_typed, MessagesSseState};
-pub(super) use super::sse_body::stream_sse_body_observed;
 #[cfg(test)]
 pub(crate) use super::sse_body::stream_sse_body;
+pub(super) use super::sse_body::stream_sse_body_observed;
+pub use super::sse_state::{parse_messages_sse, parse_messages_sse_typed, MessagesSseState};
 
 /// A failure while reading Amazon Bedrock's event stream.
 #[derive(Debug, thiserror::Error)]
