@@ -179,10 +179,11 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
     );
     create.input.cwd = Some(dir.path().to_string_lossy().into_owned());
-    let lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_create(
-        &node, &identity, create,
-    )
-    .await;
+    let lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create(
+            &node, &identity, create,
+        )
+        .await;
     bind_claimed_hook_request(
         &hook,
         lifecycle,
@@ -206,7 +207,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         let (_, caused) = dispatch_with_lost_receipt(
             &hook,
             call_id,
-            crate::toolset::AGENT_NEW_TOOL_NAME,
+            crate::tools::native::AGENT_NEW_TOOL_NAME,
             args,
             operation,
         )
