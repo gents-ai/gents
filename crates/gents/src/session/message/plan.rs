@@ -22,19 +22,24 @@ pub(super) enum PlannedWrite {
 
 pub(crate) struct Plan {
     pub(super) session_id: String,
-    hop: u32,
+    pub(super) hop: u32,
     pub(super) steer_head: Option<Option<String>>,
     pub(super) interrupt_before_publish: bool,
     pub(super) write: PlannedWrite,
 }
 
 impl Plan {
-    pub(crate) async fn sign_agent_creation(&mut self, node_did: &str) -> Result<()> {
+    pub(crate) async fn sign_agent_creation(
+        &mut self,
+        node_did: &str,
+        parent: &gents_protocol::request_input::RequestInput,
+    ) -> Result<()> {
         let create = match &mut self.write {
             PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
         };
         create.input.session_creation =
             Some(gents_protocol::request_input::SessionCreationIntent::AgentNew);
+        create.input.cwd = parent.agent_new_cwd(create.node_did == node_did);
         let signer =
             crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
         crate::sign_agent_request_create(&signer, create).await

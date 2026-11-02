@@ -247,9 +247,7 @@ fn selected_group<'a>(
                     .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
                     .and_then(|row| row.input.as_ref())
                     .is_some_and(|input| input.has_authored_input(&message.content)),
-                |input| !message.content.trim().is_empty()
-                    || !input.captured_context.is_empty()
-                    || !input.attachments.is_empty(),
+                |input| input.has_authored_input(&message.content),
             ),
             "A message cannot be empty. Remove it instead."
         );

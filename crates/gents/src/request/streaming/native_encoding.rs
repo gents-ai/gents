@@ -254,6 +254,32 @@ fn media_plan(
     }
 }
 
+/// Whether a provider assistant message persists its request id. The gate itself is enforced
+/// where the `AgentMessage` publication is encoded
+/// ([`gents_protocol::output::storage::PERSIST_NATIVE_REQUEST_ID`]); this build strips the id
+/// from the native message before publishing too, so the message reconstructed from the stored
+/// rows equals what was published. Without it, Claude replays lack the previous request id
+/// after the message is reloaded, as they did on rc0.
+pub(crate) use gents_protocol::output::storage::PERSIST_NATIVE_REQUEST_ID;
+
+/// The native message exactly as publication stores it, so a message reconstructed from the
+/// stored rows equals it.
+pub(crate) fn persisted_native_message(message: &Message) -> std::borrow::Cow<'_, Message> {
+    match message {
+        Message::Assistant {
+            request_id: Some(_),
+            ..
+        } if !PERSIST_NATIVE_REQUEST_ID => {
+            let mut stored = message.clone();
+            if let Message::Assistant { request_id, .. } = &mut stored {
+                *request_id = None;
+            }
+            std::borrow::Cow::Owned(stored)
+        }
+        _ => std::borrow::Cow::Borrowed(message),
+    }
+}
+
 pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMessage> {
     if let Message::User { content } = message {
         let mut streams = Vec::new();
@@ -563,16 +589,75 @@ mod tests {
         );
         assert_eq!(segment.payload.matches(r#"{ "path": "é" }"#).count(), 1);
 
-        // A row written before the request id existed has no such key.
-        let mut row = serde_json::to_value(&header).unwrap();
-        assert_eq!(row["native_request_id"], "req_α");
-        row.as_object_mut().unwrap().remove("native_request_id");
-        let old: TranscriptMessage = serde_json::from_value(row).unwrap();
+        // The stored row keeps exactly the v1.0.0-rc0 AgentMessage fields: with the write gate
+        // off the request id is stored nowhere, even for a header that carries one.
+        let row = serde_json::to_value(&header).unwrap();
+        const { assert!(!PERSIST_NATIVE_REQUEST_ID) };
+        assert!(row.get("native_request_id").is_none(), "{row}");
+        assert!(
+            row["publication"].get("native_request_id").is_none(),
+            "{row}"
+        );
+        let reloaded: TranscriptMessage = serde_json::from_value(row).unwrap();
+        assert_eq!(reloaded.native_request_id, None);
         let Message::Assistant { request_id, .. } =
-            reconstruct_message(&observed, &[], &[], &old).unwrap()
+            reconstruct_message(&observed, &[], &[], &reloaded).unwrap()
         else {
             panic!("assistant message expected");
         };
         assert_eq!(request_id, None);
+    }
+
+    #[test]
+    fn the_request_id_is_not_published_while_the_write_gate_is_off() {
+        const {
+            assert!(
+                !PERSIST_NATIVE_REQUEST_ID,
+                "the write gate is off until no rc0-era reader remains; update this test and the \
+                 runbook when it is turned on"
+            )
+        };
+        let native = Message::Assistant {
+            id: Some("msg_1".into()),
+            request_id: Some("req_1".into()),
+            content: vec![AssistantContent::Text(gents_protocol::message::Text {
+                text: "hi".into(),
+            })],
+        };
+        // Every publisher goes through persisted_native_message.
+        let stored = persisted_native_message(&native);
+        let Message::Assistant { request_id, id, .. } = stored.as_ref() else {
+            panic!("assistant message expected");
+        };
+        assert_eq!(id.as_deref(), Some("msg_1"));
+        assert_eq!(request_id.as_deref(), None);
+        let encoded = encode_native_message(&stored).unwrap();
+        assert_eq!(encoded.native_request_id, None);
+        // A writer that skipped it would still store no id: the storage boundary drops it.
+        let bypass = encode_native_message(&native).unwrap();
+        assert_eq!(bypass.native_request_id.as_deref(), Some("req_1"));
+        let header = TranscriptMessage {
+            message_key: "provider-turn".into(),
+            session_id: "session".into(),
+            node_did: "did:key:agent".into(),
+            requester_did: None,
+            request_doc_id: Some("request".into()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: 1,
+            role: bypass.role,
+            native_id: bypass.native_id.clone(),
+            native_request_id: bypass.native_request_id.clone(),
+            blocks: Vec::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let row = serde_json::to_value(&header).unwrap();
+        assert!(
+            row["publication"].get("native_request_id").is_none(),
+            "{row}"
+        );
+        assert!(row.get("native_request_id").is_none(), "{row}");
     }
 }

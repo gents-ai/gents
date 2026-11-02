@@ -249,6 +249,11 @@ pub struct SessionSummary {
     pub provenance: Option<gents_protocol::session::SessionProvenance>,
     pub title: Option<String>,
     pub preview_text: Option<String>,
+    /// The first visible line of the session's latest assistant reply, as its
+    /// node recorded it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub reply_preview: Option<String>,
     pub status: Option<String>,
     pub agent_id: Option<String>,
     pub latest_request_id: Option<String>,

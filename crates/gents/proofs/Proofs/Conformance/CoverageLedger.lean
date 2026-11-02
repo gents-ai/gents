@@ -1499,6 +1499,11 @@ def caseCoverage : List CoverageEntry :=
       "FileImageHydrationRouteCases"
       "runtime::agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "scope_node_route_cases"
+      "ScopeNodeRouteCases"
+      "conformance::scope_templates::node_replication_matches_executable_scope_model")
+      "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_window_cases"
       "FileInventoryOrderWindowCases"
@@ -2704,6 +2709,9 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "request_input_cases" "RequestInputCases"
       "conformance::request_input::runtime_continuation_inputs_match_the_lean_owner")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "request_input_cases" "RequestInputCases"
+      "conformance::request_input::agent_new_directory_inheritance_matches_the_model")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases"
       "session::preview::tests::terminal_reply_projection_follows_the_model")

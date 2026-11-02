@@ -674,7 +674,8 @@ pub(crate) async fn materialize_session_message(
     )
     .await?
     .map_err(anyhow::Error::msg)?;
-    plan.sign_agent_creation(&cause.caller_node_did).await?;
+    plan.sign_agent_creation(&cause.caller_node_did, &caller.input)
+        .await?;
     crate::session::message::commit(node, &cause, tool, plan, false)
         .await
         .map_err(Into::into)

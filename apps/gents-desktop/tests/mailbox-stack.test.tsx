@@ -10,7 +10,7 @@ import { node, testApp, withApp } from "./app-fixture";
 it("says nothing needs the person when ⌘⇧M finds the mailbox empty", () => {
   const app = testApp({ deployments: [node({ mailboxItems: [] })] });
   render(<MailboxStack route={{ name: "sessions" }} />, { wrapper: withApp(app) });
-  fireEvent.keyDown(window, { key: "M", code: "KeyM", ctrlKey: true, shiftKey: true });
+  fireEvent.keyDown(window, { key: "M", ctrlKey: true, shiftKey: true });
   expect(toast).toHaveBeenCalledWith("Nothing needs you right now", {
     id: "mailbox-empty",
   });

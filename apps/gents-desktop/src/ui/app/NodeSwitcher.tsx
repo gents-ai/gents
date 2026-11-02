@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, type ReactElement, type ReactNode } from "react";
 import { ChevronsUpDown, Waypoints } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";
@@ -14,12 +14,13 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
-import { activityOf, activityText, useFleet } from "@/hooks/useFleet";
+import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
-import { navigate, type Route } from "@/lib/router";
+import { navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
 import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeActivity } from "./NodeActivity";
 
 /** Where switching to `nodeDid` leads from `route`: the same page on the
     new node where the page belongs to a node, a new session where it
@@ -32,30 +33,25 @@ export function switchedRoute(route: Route, nodeDid: string): Route | null {
   return null;
 }
 
-/** The nav's way to change the node the app works with. */
+/** The nav's way to change the node the app works with, and the node
+    name's in New session's heading. */
 export function NodeSwitcher({
   route,
   current,
   className,
+  trigger,
+  children,
 }: {
   route: Route;
   current: string;
   className?: string;
+  /** the element that opens it, in place of the nav's ⇅ button */
+  trigger?: ReactElement;
+  children?: ReactNode;
 }) {
   const { actions } = useApp();
   const homeDid = useHomeDid();
   const nodes = useFleet(useShallow(fleetNodes));
-  /* what each node has going on, as the Nodes page counts it */
-  const doing = useFleet(
-    useShallow((state) =>
-      Object.fromEntries(
-        fleetNodes(state).map((node) => [
-          node.nodeDid,
-          activityText(activityOf(state, node.nodeDid)),
-        ]),
-      ),
-    ),
-  );
   /* as the Nodes page has them: this machine's first, then the remote ones */
   const groups = [
     { label: "Local", nodes: nodes.filter((n) => isLocalNode(n, homeDid)) },
@@ -63,23 +59,29 @@ export function NodeSwitcher({
   ].filter((group) => group.nodes.length > 0);
   const choose = (nodeDid: string) => {
     if (nodeDid === current) return;
-    actions.selectNode(nodeDid);
     const next = switchedRoute(route, nodeDid);
-    if (next) navigate(next);
+    /* asked first like a link to the node's page, since a draft stays
+       with the node it was written for */
+    reviewNavigation({ name: "sessions", nodeDid }, () => {
+      actions.selectNode(nodeDid);
+      if (next) navigate(next);
+    });
   };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button
-            variant="quiet"
-            size="icon-xs"
-            aria-label="Switch node"
-            className={cn("shrink-0 text-muted-foreground", className)}
-          />
+          trigger ?? (
+            <Button
+              variant="quiet"
+              size="icon-xs"
+              aria-label="Switch node"
+              className={cn("shrink-0 text-muted-foreground", className)}
+            />
+          )
         }
       >
-        <ChevronsUpDown />
+        {children ?? <ChevronsUpDown />}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuRadioGroup
@@ -110,9 +112,13 @@ export function NodeSwitcher({
                         />
                       </span>
                       <span className="min-w-0 truncate">{name}</span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                        {node.dialSucceeded ? doing[node.nodeDid] : "Offline"}
-                      </span>
+                      {node.dialSucceeded ? (
+                        <NodeActivity nodeDid={node.nodeDid} className="ml-auto" />
+                      ) : (
+                        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                          Offline
+                        </span>
+                      )}
                     </span>
                   </DropdownMenuRadioItem>
                 );

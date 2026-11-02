@@ -119,6 +119,8 @@ def capturedContextCases : List RequestInputCase :=
 
 def capturedPresentationCases : List RequestInputCase :=
   [ { name := "empty-authored-input-has-no-user-content", input := {}, contextSkillIds := [], authoredText := "" }
+  , { name := "skill-only-authored-input", input := { selectedSkillIds := ["review"] }, contextSkillIds := ["review"], authoredText := "" }
+  , { name := "skill-with-whitespace-only-prose", input := { selectedSkillIds := ["review"] }, contextSkillIds := ["review"], authoredText := "  " }
   , { name := "capture-only-without-invented-prose", input := { capturedContext := [capturedSelection] },
       contextSkillIds := [], authoredText := "" }
   , { name := "literal-context-envelope-remains-user-text", input := {}, contextSkillIds := [],
@@ -275,7 +277,7 @@ theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.acc
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 31 true ++ List.replicate 4 false := by native_decide
+      List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 33 true ++ List.replicate 4 false := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map

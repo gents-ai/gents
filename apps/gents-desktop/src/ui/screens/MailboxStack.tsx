@@ -8,6 +8,7 @@ import { useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { listViews, useListViews } from "@/app/listViews";
 import { groupItems, matches, type TriageGroup } from "./mailbox-triage";
 import { ItemDialog } from "./MailboxItem";
+import { commandKey } from "./shortcutKeys";
 import { useMinute } from "./time";
 
 const SCOPE = defaultScope("mailbox");
@@ -91,7 +92,7 @@ export function MailboxStack({ route }: { route: Route }) {
   const close = useCallback(() => listViews.setMailboxOpen(null), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey || e.code !== "KeyM")
+      if (!commandKey(e) || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "m")
         return;
       e.preventDefault();
       if (openId !== null) return close();

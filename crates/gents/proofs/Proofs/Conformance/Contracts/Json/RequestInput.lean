@@ -135,6 +135,8 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"expected_edit_directory_same\":" ++ boolString (editDirectoryCompatible c.input (editedInput c.input {} "physical:parent" queue)) ++
   ",\"expected_edit_directory_changed\":" ++ boolString (editDirectoryCompatible c.input { c.input with cwd := some "/gents-edit-different" }) ++
   ",\"expected_fresh_input\":" ++ requestInputJson (freshSessionInput c.input) ++
+  ",\"expected_agent_new_local_cwd\":" ++ optionalString (agentNewCwd c.input true) ++
+  ",\"expected_agent_new_remote_cwd\":" ++ optionalString (agentNewCwd c.input false) ++
   ",\"workspace\":" ++ workspaceJson c.workspace ++
   ",\"workspace_source\":" ++ workspaceJson c.workspaceSource ++
   ",\"workspace_source_authenticated\":" ++ boolString c.workspaceSourceAuthenticated ++

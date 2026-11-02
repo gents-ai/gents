@@ -5,13 +5,14 @@ import type {
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
+import type { ShellActions } from "@/../hooks/shellActions";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Switch } from "@gents/ui/components/switch";
 import { Pencil } from "lucide-react";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { href, type Route } from "@/lib/router";
-import { NodeAvatar } from "../AgentAvatar";
+import { AvatarRoll } from "../AvatarRoll";
 import { isLive } from "@/lib/live";
 import { useApp } from "@/app/AppContext";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
@@ -48,6 +49,17 @@ function pulse(
     busy: parts.length > 0,
     overdue,
   };
+}
+
+/** Keeps `avatar` as the node's, leaving its other settings as saved. */
+export async function saveNodeAvatar(
+  changeConfig: ShellActions["changeConfig"],
+  deployment: NodeView,
+  avatar: string,
+) {
+  const node = deployment.nodeConfig;
+  if (!node) throw new Error("The node's settings have not loaded yet.");
+  await changeConfig("saveNodeConfig", { document: { ...node, avatar } });
 }
 
 /* a card under the node's header: one thing about the node right now, and
@@ -140,10 +152,13 @@ function PacksValue({ packs }: { packs: PacksRead }) {
 }
 
 /** The node page's header: what the node is called, its state and summary;
-    with `edit`, its tags show and its name and tags can be opened to edit. */
+    with `edit`, its tags show and its name and tags can be opened to edit;
+    its portrait rolls into the settings form's draft. */
 export function AgentCard({
   deployment,
   edit,
+  avatar,
+  onAvatar,
 }: {
   deployment: NodeView;
   edit?: {
@@ -157,6 +172,8 @@ export function AgentCard({
     enabled: boolean;
     onEnabled: (enabled: boolean) => void;
   };
+  avatar: string | null;
+  onAvatar: (avatar: string) => void;
 }) {
   const {
     actions: { fetchOperationsSnapshot },
@@ -204,7 +221,13 @@ export function AgentCard({
   return (
     <div className="@container mb-8 grid gap-4">
       <div className="flex items-start gap-4">
-        <NodeAvatar name={name} className="size-14" />
+        <AvatarRoll
+          rollId={deployment.nodeDid}
+          name={name}
+          avatar={avatar}
+          disabled={!deployment.nodeConfig}
+          onChange={onAvatar}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate font-heading text-lg font-medium text-heading">

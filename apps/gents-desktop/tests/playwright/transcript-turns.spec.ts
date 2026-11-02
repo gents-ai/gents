@@ -56,14 +56,14 @@ test.describe("moving between turns", () => {
     await expect(viewport).toHaveAttribute("data-following", "true");
     const start = await current(page);
     await page.getByTestId("transcript-panel").hover();
-    await page.keyboard.press("Alt+Meta+ArrowUp");
+    await page.keyboard.press("Alt+ControlOrMeta+ArrowUp");
     const up = await landed(page, start?.key);
     expect(up.following).toBe("false");
 
-    await page.keyboard.press("Alt+Meta+ArrowUp");
+    await page.keyboard.press("Alt+ControlOrMeta+ArrowUp");
     await landed(page, up.key);
 
-    await page.keyboard.press("Alt+Meta+ArrowDown");
+    await page.keyboard.press("Alt+ControlOrMeta+ArrowDown");
     await expect
       .poll(async () => {
         const turn = await current(page);

@@ -11,7 +11,15 @@ import { navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedNodeDid } from "@/hooks/useClient";
 import { openSearch } from "./SearchPalette";
-import { DESKTOP_ONLY, IN_DESKTOP, IS_MAC, MAILBOX_KEYS, MOD } from "./shortcutKeys";
+import {
+  commandKey,
+  DESKTOP_ONLY,
+  IN_DESKTOP,
+  IS_MAC,
+  keyTaken,
+  MAILBOX_KEYS,
+  MOD,
+} from "./shortcutKeys";
 
 export { MAILBOX_KEYS, MOD, PAGE_KEYS } from "./shortcutKeys";
 
@@ -34,13 +42,23 @@ const transcriptScroller = () =>
     '[data-slot="scroll-area-viewport"][data-following]',
   );
 
+/* the composer on screen, New session's or an open session's; its field is
+   an editable element, not a textarea */
+const shownComposerField = () =>
+  [
+    ...document.querySelectorAll<HTMLElement>(
+      '[data-slot="composer"] [contenteditable="true"]',
+    ),
+  ].find((field) => !field.closest("[hidden]")) ?? null;
+
 export function Shortcuts() {
   const nodeDid = useSelectedNodeDid();
   const [open, setOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
+      if (!commandKey(e)) return;
       if (e.altKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        if (keyTaken(e)) return;
         const scroller = transcriptScroller();
         if (!scroller) return;
         e.preventDefault();
@@ -50,12 +68,13 @@ export function Shortcuts() {
         return;
       }
       if (e.altKey || e.shiftKey) return;
-      if (!IN_DESKTOP && DESKTOP_ONLY.has(e.key)) return;
+      const key = e.key.toLowerCase();
+      if (!IN_DESKTOP && DESKTOP_ONLY.has(key)) return;
       const go = (to: Parameters<typeof navigate>[0]) => {
         e.preventDefault();
         navigate(to);
       };
-      switch (e.key) {
+      switch (key) {
         case "1":
           return go({ name: "agents" });
         case "2":
@@ -73,8 +92,10 @@ export function Shortcuts() {
           openSearch();
           return;
         case "l": {
+          const field = shownComposerField();
+          if (!field) return;
           e.preventDefault();
-          document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+          field.focus();
           return;
         }
         case "/":

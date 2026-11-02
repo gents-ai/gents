@@ -11,6 +11,7 @@ structure SessionObservation where
   latestObservedRequest : Option RequestId
   latestTurn            : Option ClientTurnState
   queuedRequests        : List RequestId := []
+  pendingQueueRequests  : List RequestId := []
   foldedRequests        : List RequestId := []
   deriving DecidableEq, Repr
 

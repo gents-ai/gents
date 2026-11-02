@@ -1,4 +1,5 @@
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 import {
   useEffect,
   useLayoutEffect,
@@ -717,6 +718,7 @@ export function RefRow({
               <ComboboxInput
                 showTrigger={false}
                 aria-label={`Search ${String(label).toLowerCase()}`}
+                {...SEARCH_FIELD}
                 placeholder={`Search ${items.length}`}
               />
             )}

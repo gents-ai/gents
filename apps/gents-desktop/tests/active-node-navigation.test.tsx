@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { expect, it } from "vitest";
 
@@ -55,4 +55,33 @@ it("draws the active node in the collapsed rail by its label when it has no name
   );
   const active = screen.getByRole("link", { name: "studio-1 configuration" });
   expect(active.querySelector("img")).toHaveAttribute("src", avatarFor("studio-1"));
+});
+
+it("names the number of nodes quietly, and only once there is more than one", () => {
+  const nodesRow = () =>
+    screen.getAllByRole("link").find((a) => a.textContent?.startsWith("Nodes"))!;
+  const { unmount } = renderIn(
+    testApp({ deployments: [node()] }),
+    <TooltipProvider>
+      <NavPanel route={{ name: "sessions" }} settings={null} syncRow={false} />
+    </TooltipProvider>,
+  );
+  expect(nodesRow().textContent).not.toMatch(/\d$/);
+  unmount();
+
+  const other = node({
+    nodeDid: "did:key:other",
+    source: "peer",
+    node: { ...deployment.node, nodeDid: "did:key:other", displayName: "Amy" },
+  });
+  renderIn(
+    testApp({ deployments: [node(), other] }),
+    <TooltipProvider>
+      <NavPanel route={{ name: "sessions" }} settings={null} syncRow={false} />
+    </TooltipProvider>,
+  );
+  const tally = within(nodesRow()).getByText("2");
+  /* a fact, not something waiting: no brand badge */
+  expect(tally).not.toHaveClass("bg-brand");
+  expect(tally).toHaveClass("text-muted-foreground");
 });

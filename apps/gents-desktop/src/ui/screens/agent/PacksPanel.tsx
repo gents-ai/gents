@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -19,6 +19,8 @@ import { Group, Row } from "./rows";
 import { WirePackDialog, type WirePackDialogProps } from "./WirePackDialog";
 import { RegistryPack } from "./RegistryPack";
 import { errorText } from "../../../lib/errorText";
+import { href } from "@/lib/router";
+import { packContents } from "./packContents";
 
 /** An install or update that would replace documents someone edited stops and
  * names them; the person chooses keep or overwrite. */
@@ -257,15 +259,18 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
             key={pack.pack}
             label={pack.pack}
             description={
-              pack.outdated ? (
-                `${pack.installed}, ${pack.latest} available`
-              ) : pack.error ? (
-                <span title={pack.error}>
-                  {pack.installed} · couldn't check for updates
-                </span>
-              ) : (
-                pack.installed
-              )
+              <>
+                {pack.outdated ? (
+                  `${pack.installed}, ${pack.latest} available`
+                ) : pack.error ? (
+                  <span title={pack.error}>
+                    {pack.installed} · couldn't check for updates
+                  </span>
+                ) : (
+                  pack.installed
+                )}
+                <PackAdds deployment={deployment} pack={pack.pack} />
+              </>
             }
           >
             <div className="flex gap-2">
@@ -419,5 +424,31 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
         )}
       </Group>
     </div>
+  );
+}
+
+/* what a pack installed, each kind linked to the section that lists it */
+function PackAdds({ deployment, pack }: { deployment: NodeView; pack: string }) {
+  const kinds = packContents(deployment, pack);
+  if (!kinds.length) return null;
+  return (
+    <span className="block">
+      Adds{" "}
+      {kinds.map((kind, i) => (
+        <Fragment key={kind.section}>
+          {i > 0 && " · "}
+          <a
+            href={href({
+              name: "agent",
+              nodeDid: deployment.nodeDid,
+              section: kind.section,
+            })}
+            className="text-foreground underline-offset-2 hover:underline"
+          >
+            {kind.count} {kind.count === 1 ? kind.one : kind.many}
+          </a>
+        </Fragment>
+      ))}
+    </span>
   );
 }

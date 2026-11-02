@@ -1,32 +1,36 @@
 import { createContext } from "react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  ChevronRight,
-  CornerDownRight,
-  Inbox,
-  Lock,
-  Plus,
-  ScrollText,
-  Waypoints,
-} from "lucide-react";
-import { ScrollArea } from "@gents/ui/components/scroll-area";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, CornerDownRight, Lock, Waypoints } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { isLocalNode } from "@/lib/firstRun";
 import { href, type Route } from "@/lib/router";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { Hint } from "@/screens/Hint";
 import { parentOf, useFleet } from "@/hooks/useFleet";
 import { SyncHealth } from "./SyncHealth";
 import { NodeSwitcher } from "./NodeSwitcher";
-import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { RecentFilter } from "./RecentFilter";
 import { listViews, recentDefault, useListViews } from "./listViews";
 import { sameFilter } from "@/lib/session-filter";
-import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
+import { navRowState, type NavContext } from "./navRegistry";
+import {
+  drawNavRows,
+  mailboxGroupOf,
+  useNavFooter,
+  useNavRows,
+  useNavSections,
+  type NavRow,
+  type NavSection,
+} from "./navLayout";
+import { useMailboxList } from "@/screens/MailboxStack";
+import { NavMenu } from "./CustomizeNav";
+import { NavScroll } from "./NavScroll";
+import { NavMailbox } from "./NavMailbox";
+import { NavNodes } from "./NavNodes";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
@@ -42,7 +46,6 @@ import {
 
 const OPEN_AFTER = 80;
 const CLOSE_AFTER = 180;
-const RECENT = 8;
 
 /* a row's key, faint, once the pointer rests on it or it has focus; a sweep
    down the nav shows none */
@@ -62,13 +65,17 @@ function Item({
   to,
   active,
   count,
+  tally,
   icon,
   keys,
   children,
 }: {
   to: string;
   active?: boolean;
+  /** what waits for the person here, in the brand badge */
   count?: number;
+  /** how many there are here, a plain fact, in quiet text */
+  tally?: number;
   icon: ReactNode;
   /** the key that goes here, named on hover */
   keys?: string;
@@ -90,6 +97,11 @@ function Item({
       <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       <KeyHint keys={keys} />
+      {tally ? (
+        <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+          {tally}
+        </span>
+      ) : null}
       {count ? (
         <span className="grid h-4 min-w-4 place-items-center rounded-full bg-brand px-1 font-mono text-[10px] leading-none text-brand-foreground">
           {count}
@@ -115,7 +127,9 @@ export function NavPanel({
   const online = useOnline();
   const mailboxCount = useMailboxCount();
   const pinned = usePinnedSessionList();
-  const recent = useRecentSessions(RECENT);
+  const { sections, recent: recentCount, listed } = useNavSections();
+  const { groups: mailboxGroups } = useMailboxList("");
+  const recent = useRecentSessions(recentCount);
   const recentCandidates = useRecentCandidates();
   const recentFiltered = useListViews(
     (views) => !sameFilter(views.recentFilter, recentDefault),
@@ -124,28 +138,114 @@ export function NavPanel({
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
   const selected = useSelectedNode();
-  const primary = useNavItems("primary");
-  const footer = useNavItems("footer");
+  const rows = useNavRows();
+  const footer = useNavFooter();
   const navContext: NavContext = {
     mailboxCount,
     selectedNodeDid: selected?.nodeDid ?? null,
   };
-  /* a row a UX plugin contributed, drawn like the app's own; its
+  /* a row a UX plugin contributed is drawn like the app's own; its
      predicates are evaluated apart and its icon drawn behind a boundary,
      so one bad row costs that row; a row with nowhere to go right now is
      not drawn */
-  const contributed = (item: NavItem) => {
+  const drawRow = (item: NavRow) => {
     const { to, active, count } = navRowState(item, route, navContext);
     if (!to) return null;
+    const drawn = (
+      <Item
+        key={item.id}
+        to={href(to)}
+        keys={item.keys}
+        active={active}
+        count={count}
+        /* one node, the person's own, is no news */
+        tally={item.countsNodes && nodeCount > 1 ? nodeCount : undefined}
+        icon={item.icon}
+      >
+        {item.label}
+      </Item>
+    );
+    if (item.own) return drawn;
     return (
       <ContribBoundary key={item.id} id={item.id} variant="chip">
-        <Item to={href(to)} active={active} count={count} icon={item.icon}>
-          {item.label}
-        </Item>
+        {drawn}
       </ContribBoundary>
     );
   };
   const currentSession = route.name === "session" ? route.sessionId : null;
+  /* a section, or nothing while it has nothing to list, so a divider
+     beside it isn't drawn either */
+  const drawSection = (section: NavSection): ReactNode => {
+    const group = mailboxGroupOf(section.id);
+    if (group) {
+      /* every item, a decision before what went wrong before what's worth
+         a look before what's done, so the few shown are those that most
+         need the person */
+      const found =
+        group === "all"
+          ? {
+              key: group,
+              label: "Mailbox",
+              items: mailboxGroups.flatMap((g) => g.items),
+            }
+          : mailboxGroups.find((g) => g.key === group);
+      return found && found.items.length > 0 ? (
+        <NavMailbox key={section.id} group={found} limit={listed(section.id)} />
+      ) : null;
+    }
+    if (section.id === "node-list")
+      return nodeCount > 1 ? (
+        <NavNodes key="node-list" route={route} current={selected?.nodeDid ?? null} />
+      ) : null;
+    if (section.id === "pinned")
+      return pinned.length > 0 ? (
+        <Fragment key="pinned">
+          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+            Pinned
+          </p>
+          <ul className="px-3">
+            {pinned.map((c) => (
+              <SessionLink key={c.sessionId} session={c} current={currentSession} />
+            ))}
+          </ul>
+        </Fragment>
+      ) : null;
+    return recent.length > 0 || recentFiltered ? (
+      <Fragment key="recent">
+        <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
+          <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+            Recent
+          </p>
+          <RecentFilter sessions={recentCandidates} />
+        </div>
+        <div>
+          <ul className="px-3">
+            {recent.map((c) => (
+              <SessionLink key={c.sessionId} session={c} current={currentSession} />
+            ))}
+          </ul>
+          {recent.length === 0 && (
+            <p className="m-0 px-5 py-1 text-xs text-muted-foreground">
+              No sessions match.{" "}
+              <button
+                type="button"
+                className="cursor-pointer underline hover:text-foreground"
+                onClick={() => listViews.setRecentFilter(recentDefault)}
+              >
+                Reset filters
+              </button>
+            </p>
+          )}
+        </div>
+        <a
+          href={href({ name: "sessions" })}
+          className="flex items-center gap-1 px-5 py-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          All sessions <ChevronRight className="size-3" />
+        </a>
+      </Fragment>
+    ) : null;
+  };
   const selectedCurrent =
     selected !== null && route.name === "agent" && route.nodeDid === selected.nodeDid;
   return (
@@ -180,6 +280,7 @@ export function NavPanel({
             >
               <NodeAvatar
                 name={selected.node.displayName ?? selected.label}
+                {...nodeAvatarOf(selected)}
                 className="size-7"
               />
               <span
@@ -223,100 +324,39 @@ export function NavPanel({
         </a>
       )}
       <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
-      <Item
-        to={href({ name: "session", sessionId: null })}
-        keys={PAGE_KEYS.newSession}
-        active={route.name === "session" && route.sessionId === null}
-        icon={<Plus className="size-4" />}
-      >
-        New session
-      </Item>
-      <Item
-        to={href({ name: "mailbox" })}
-        keys={MAILBOX_KEYS}
-        active={route.name === "mailbox"}
-        count={mailboxCount}
-        icon={<Inbox className="size-4" />}
-      >
-        Mailbox
-      </Item>
-      <Item
-        to={href({ name: "sessions" })}
-        keys={PAGE_KEYS.sessions}
-        active={
-          route.name === "sessions" ||
-          route.name === "sessionsUnder" ||
-          route.name === "sessionsArchived"
-        }
-        icon={<ScrollText className="size-4" />}
-      >
-        Sessions
-      </Item>
-      {primary.map(contributed)}
-      {pinned.length > 0 && (
-        <>
-          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-            Pinned
-          </p>
-          <ul className="px-3">
-            {pinned.map((c) => (
-              <SessionLink key={c.sessionId} session={c} current={currentSession} />
-            ))}
-          </ul>
-        </>
-      )}
-      {(recent.length > 0 || recentFiltered) && (
-        <>
-          <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
-            <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-              Recent
-            </p>
-            <RecentFilter sessions={recentCandidates} />
-          </div>
-          <ScrollArea className="min-h-0">
-            <ul className="px-3">
-              {recent.map((c) => (
-                <SessionLink key={c.sessionId} session={c} current={currentSession} />
-              ))}
-            </ul>
-            {recent.length === 0 && (
-              <p className="m-0 px-5 py-1 text-xs text-muted-foreground">
-                No sessions match.{" "}
-                <button
-                  type="button"
-                  className="cursor-pointer underline hover:text-foreground"
-                  onClick={() => listViews.setRecentFilter(recentDefault)}
-                >
-                  Reset filters
-                </button>
-              </p>
-            )}
-          </ScrollArea>
-          <a
-            href={href({ name: "sessions" })}
-            className="flex items-center gap-1 px-5 py-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            All sessions <ChevronRight className="size-3" />
-          </a>
-        </>
-      )}
-      <div className="mt-auto flex flex-col gap-1">
-        {syncRow && (
-          <div className="mx-3">
-            <SyncHealth syncHealth={syncHealth} row />
-          </div>
-        )}
+      {/* the top items and the sections scroll together when the window
+          is too short for them, and the foot stays */}
+      <NavScroll>
+        <div className="flex flex-col gap-2 py-1.5">
+          {drawNavRows(rows, drawRow, (id) => (
+            <div
+              key={id}
+              data-testid="nav-divider"
+              className="mx-3 my-1 h-px bg-border"
+            />
+          ))}
+          {drawNavRows(sections, drawSection, (id) => (
+            <div
+              key={id}
+              data-testid="nav-divider"
+              className="mx-5 my-1 h-px bg-border"
+            />
+          ))}
+        </div>
+      </NavScroll>
+      <div className="flex shrink-0 flex-col gap-1">
+        {footer.status &&
+          (syncRow ? (
+            <div className="mx-3">
+              <SyncHealth syncHealth={syncHealth} row />
+            </div>
+          ) : (
+            /* on hover the rail's status dot grows into this row over the
+               panel; its place is kept so nothing scrolls under it */
+            railAligned && <div aria-hidden className="h-8 shrink-0" />
+          ))}
         <div className="mx-3 h-px bg-border" />
-        {footer.map(contributed)}
-        <Item
-          to={href({ name: "nodes" })}
-          keys={PAGE_KEYS.nodes}
-          active={route.name === "nodes" || route.name === "agents"}
-          count={nodeCount}
-          icon={<Waypoints className="size-4" />}
-        >
-          Nodes
-        </Item>
+        {footer.rows.map(drawRow)}
         {settings}
       </div>
     </>
@@ -408,9 +448,11 @@ export function RailFlyout({
           {/* the panel keeps its margin from the window's edge, and its
               content moves left by the rest, so each icon sits where the
               rail's does */}
-          <div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-1">
+          <NavMenu
+            render={<div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-1" />}
+          >
             <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
-          </div>
+          </NavMenu>
         </div>
       </PortalContainerProvider>
     </div>

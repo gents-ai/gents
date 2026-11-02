@@ -69,17 +69,33 @@ async fn claude_platform_extends_the_original_rc1_lineage_through_catalog_freshn
 }
 
 #[tokio::test]
-async fn a_fresh_store_registers_the_current_backend_baseline() {
-    let fresh = common::fresh_node().await;
-    fresh
-        .add_collection(schemas::INFERENCE_BACKEND)
-        .await
+async fn a_fresh_store_registers_the_rc0_backend_root_and_patches_onto_the_canonical_version() {
+    let plan = gents_migration::canonical_schema_plan("InferenceBackend")
+        .unwrap()
         .unwrap();
-    let version = fresh.get_collection("InferenceBackend").unwrap().unwrap();
-    let expected = gents_migration::DEFAULT_BASELINE
+    let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
         .find(|entry| entry.name == "InferenceBackend")
         .unwrap();
-    assert_eq!(Some(version.version_id.as_str()), expected.expected_version);
+    assert_eq!(baseline.sdl, plan.root_sdl);
+    assert_eq!(baseline.expected_version, Some(plan.root_version));
+
+    let fresh = common::fresh_node().await;
+    gents_migration::ensure_migrations(&fresh).await.unwrap();
+    let version = fresh.get_collection("InferenceBackend").unwrap().unwrap();
+    assert_eq!(version.version_id, plan.version);
+
+    // Registering the current SDL directly (what v1.0.0-rc1 did) lands off the lineage.
+    let direct = common::fresh_node().await;
+    direct
+        .add_collection(schemas::INFERENCE_BACKEND)
+        .await
+        .unwrap();
+    let direct_version = direct.get_collection("InferenceBackend").unwrap().unwrap();
+    assert!(gents_migration::is_known_off_lineage(
+        "InferenceBackend",
+        &direct_version.version_id
+    ));
     fresh.shutdown().await;
+    direct.shutdown().await;
 }

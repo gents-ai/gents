@@ -16,6 +16,11 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
+    /// The desktop's portrait for the node, by number. Cosmetic; a node
+    /// without one is drawn with the portrait its name picks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub avatar: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub default_agent_id: Option<String>,
@@ -65,6 +70,7 @@ pub(crate) async fn load_node_record(
                 _docID
                 node_did
                 display_name
+                avatar
                 default_agent_id
                 enabled
                 created_at

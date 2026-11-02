@@ -133,6 +133,50 @@ fn runtime_graphql_url_accepts_case_insensitive_http_schemes() {
 }
 
 #[test]
+fn peer_status_url_selects_mixed_case_http_and_skips_non_http_addresses() {
+    let mut record = crate::client::PeerRecord::local_standard(
+        "Node",
+        "iroh://peer",
+        "did:key:node",
+        "HTTPS://Example.com:9191/api/v0/graphql",
+    );
+    assert_eq!(
+        super::http::peer_status_url(&record).unwrap().as_deref(),
+        Some("https://example.com:9191/status")
+    );
+    record.graphql = Some("iroh://peer".into());
+    record.addr = "hTtP://Example.com:9191/prefix".into();
+    assert_eq!(
+        super::http::peer_status_url(&record).unwrap().as_deref(),
+        Some("http://example.com:9191/prefix/status")
+    );
+    record.addr = "iroh://peer".into();
+    assert!(super::http::peer_status_url(&record).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn peer_status_fetches_a_mixed_case_http_endpoint() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"node_did": "did:key:node"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let endpoint = server.uri().replacen("http://", "hTtP://", 1);
+    let record = crate::client::PeerRecord::local_standard(
+        "Node",
+        "iroh://peer",
+        "did:key:node",
+        format!("{endpoint}/api/v0/graphql"),
+    );
+    let status = super::http::peer_status(&record).await.unwrap().unwrap();
+    assert_eq!(status["node_did"], "did:key:node");
+}
+
+#[test]
 fn desktop_graphql_rewrites_loopback_endpoint_for_remote_status_host() {
     let payload = serde_json::json!({
         "graphql": "http://127.0.0.1:9181/api/v0/graphql"

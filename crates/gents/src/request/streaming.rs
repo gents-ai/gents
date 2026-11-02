@@ -145,6 +145,7 @@ impl DefraStreamWriter {
     ) -> Result<String> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter, SegmentRun};
         let request = lifecycle.request();
+        let message = &*native_encoding::persisted_native_message(message);
         let encoded = Arc::new(native_encoding::encode_native_message(message)?);
         let mut payload = String::new();
         let mut runs = Vec::new();
@@ -238,6 +239,7 @@ impl DefraStreamWriter {
         message: &gents_protocol::message::Message,
     ) -> Result<bool> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
+        let message = &*native_encoding::persisted_native_message(message);
         let encoded = native_encoding::encode_native_message(message)?;
         let mut tails = self.provider_tails.lock().await;
         let tail = tails
@@ -379,6 +381,7 @@ impl DefraStreamWriter {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
         let request = lifecycle.request();
+        let message = &*native_encoding::persisted_native_message(message);
         let encoded = std::sync::Arc::new(native_encoding::encode_native_message(message)?);
         let expected = std::sync::Arc::new(message.clone());
         let mut tails = self.provider_tails.lock().await;

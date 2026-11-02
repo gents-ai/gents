@@ -7,7 +7,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
-function show(listInstalledPacks: () => Promise<unknown>) {
+function show(listInstalledPacks: () => Promise<unknown>, view = deployment) {
   return renderIn(
     testApp({
       api: {
@@ -19,7 +19,7 @@ function show(listInstalledPacks: () => Promise<unknown>) {
         listPackWireSources: async () => ({ plugins: [], target_packs: [] }),
       },
     }),
-    <PacksPanel deployment={deployment} />,
+    <PacksPanel deployment={view} />,
   );
 }
 
@@ -51,5 +51,48 @@ describe("PacksPanel installed packs", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("the local node could not be opened")).toBeInTheDocument();
     expect(screen.queryByText("No packs installed")).toBeNull();
+  });
+
+  it("says what a pack installed, each kind linked to its section", async () => {
+    const tag = ["gents:pack:research"];
+    const view = {
+      ...deployment,
+      agents: [
+        ...deployment.agents,
+        { ...deployment.agents[0]!, agentId: "r1", tags: tag },
+        { ...deployment.agents[0]!, agentId: "r2", tags: tag },
+      ],
+      skills: deployment.skills.map((s) => ({ ...s, tags: tag })),
+    };
+    show(
+      async () => ({
+        packs: [
+          {
+            pack: "demo/research",
+            installed: "1.0.0",
+            latest: null,
+            outdated: false,
+            error: null,
+          },
+          {
+            pack: "demo/empty",
+            installed: "1.0.0",
+            latest: null,
+            outdated: false,
+            error: null,
+          },
+        ],
+      }),
+      view,
+    );
+    const agents = await screen.findByRole("link", { name: "2 agents" });
+    expect(agents).toHaveAttribute("href", expect.stringContaining("/agents"));
+    expect(agents.parentElement).toHaveTextContent("Adds 2 agents · 1 skill");
+    expect(screen.getByRole("link", { name: "1 skill" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/skills"),
+    );
+    /* a pack that installed no documents says nothing of them */
+    expect(screen.getAllByText(/^Adds/)).toHaveLength(1);
   });
 });

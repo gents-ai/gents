@@ -2,7 +2,12 @@
 import type { LinkedSessionView } from "./LinkedSessionView.js";
 import type { SessionProvenance } from "./SessionProvenance.js";
 
-export type SessionSummary = { startedBy: LinkedSessionView | null, sessionId: string, nodeDid: string, requesterDid: string | null, latestRequestDocId: string | null, closedAt: string | null, archivedAt: string | null, archiveRevision: string, tags: Array<string>, provenance: SessionProvenance | null, title: string | null, previewText: string | null, status: string | null, agentId: string | null, latestRequestId: string | null, taskId: string | null, taskName: string | null, triggerId: string | null, triggerKind: string | null, createdAt: string | null, updatedAt: string | null, turnState: string | null,
+export type SessionSummary = { startedBy: LinkedSessionView | null, sessionId: string, nodeDid: string, requesterDid: string | null, latestRequestDocId: string | null, closedAt: string | null, archivedAt: string | null, archiveRevision: string, tags: Array<string>, provenance: SessionProvenance | null, title: string | null, previewText: string | null,
+/**
+ * The first visible line of the session's latest assistant reply, as its
+ * node recorded it.
+ */
+replyPreview?: string | null, status: string | null, agentId: string | null, latestRequestId: string | null, taskId: string | null, taskName: string | null, triggerId: string | null, triggerKind: string | null, createdAt: string | null, updatedAt: string | null, turnState: string | null,
 /**
  * Absent when the bounded projection did not query transcript aggregates.
  */

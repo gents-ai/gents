@@ -320,6 +320,25 @@ async fn documents_install_writes_an_operator_home_record() {
         record.installed_via,
         Some(gents::pack::InstalledVia::Operator)
     );
+
+    let staged = documents_pack_dir("1.1.0");
+    let mut preview = document_install_args(home.path(), staged.path(), Vec::new());
+    preview.preview = true;
+    crate::request_helpers::capture_report(install(preview))
+        .await
+        .unwrap();
+    let listed = list_packs(home.path()).unwrap();
+    let entry = listed["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["pack"] == "gents/demo_pack")
+        .unwrap();
+    assert_eq!(entry["installed"], true);
+    assert_eq!(entry["version"], "1.0.0");
+    assert_eq!(entry["digest"], record.digest);
+    assert_eq!(entry["available_version"], "1.1.0");
+    assert_eq!(entry["other_stored_versions"][0]["version"], "1.1.0");
 }
 
 #[tokio::test]

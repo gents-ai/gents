@@ -459,7 +459,7 @@ pub struct DatastoreTools {
 
 /// Domain-specific external integrations. Extension design remains to be settled.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, from = "IntegrationToolsStored")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct IntegrationTools {
     /// Presence selects the LSP integration; absent means disabled.
@@ -471,6 +471,42 @@ pub struct IntegrationTools {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub plugins: Option<Vec<PluginToolRef>>,
+}
+
+/// What a stored `integrations` value may hold. v1.0.0-rc0 also accepted
+/// `eth_tool_ids` (refs to the since-removed `EthTool` collection), so a Tools
+/// document an RC0 node wrote can carry it. It is read and dropped, never
+/// written, so an upgraded node keeps loading that agent's tools instead of
+/// failing the whole document on a capability that no longer exists.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntegrationToolsStored {
+    #[serde(default)]
+    lsp: Option<LspTools>,
+    #[serde(default)]
+    plugins: Option<Vec<PluginToolRef>>,
+    #[serde(default)]
+    eth_tool_ids: Option<serde_json::Value>,
+}
+
+impl From<IntegrationToolsStored> for IntegrationTools {
+    fn from(stored: IntegrationToolsStored) -> Self {
+        let dropped = match &stored.eth_tool_ids {
+            Some(serde_json::Value::Array(ids)) => ids.len(),
+            Some(serde_json::Value::Null) | None => 0,
+            Some(_) => 1,
+        };
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "ignoring integrations.eth_tool_ids from a v1.0.0-rc0 Tools document; Ethereum tools were removed from core"
+            );
+        }
+        Self {
+            lsp: stored.lsp,
+            plugins: stored.plugins,
+        }
+    }
 }
 
 /// One installed plugin offered to the model as a tool.

@@ -1,4 +1,24 @@
 use super::*;
+
+#[test]
+fn agent_new_directory_inheritance_matches_the_model() {
+    let cases = &lean_contract_snapshot().request_input_cases;
+    assert!(cases.iter().any(|case| case["input"]["cwd"].is_string()));
+    for case in cases {
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        for (same_node, expected) in [
+            (true, &case["expected_agent_new_local_cwd"]),
+            (false, &case["expected_agent_new_remote_cwd"]),
+        ] {
+            assert_eq!(
+                serde_json::to_value(input.agent_new_cwd(same_node)).unwrap(),
+                *expected,
+                "{}: same node = {same_node}",
+                case["name"]
+            );
+        }
+    }
+}
 use gents_protocol::request_input::RequestInput;
 
 #[test]
@@ -244,6 +264,16 @@ fn captured_native_documents_and_provider_parts_match_the_model() {
             input.has_authored_input(case["authored_text"].as_str().unwrap()),
             case["expected_has_authored_input"].as_bool().unwrap(),
             "{name}: user input presence"
+        );
+        let authored = gents_protocol::request_input::AuthoredRequestInput {
+            selected_skill_ids: input.selected_skill_ids.clone(),
+            captured_context: input.captured_context.clone(),
+            attachments: input.attachments.clone(),
+        };
+        assert_eq!(
+            authored.has_authored_input(case["authored_text"].as_str().unwrap()),
+            case["expected_has_authored_input"].as_bool().unwrap(),
+            "{name}: replacement input presence"
         );
         let native = input
             .authored_message(case["authored_text"].as_str().unwrap())

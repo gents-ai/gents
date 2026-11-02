@@ -85,6 +85,7 @@ describe("flags read back from storage", () => {
     followUp: "steer",
     pinnedSessions: [],
     flags: {},
+    navLayout: { order: [], shown: {} },
   };
 
   it("takes the defaults from preferences saved before there were flags", () => {

@@ -17,7 +17,7 @@ fn canonical_session(requester: Option<&str>) -> AgentSession {
 fn indexed_session(requester: Option<&str>) -> AgentSession {
     let mut session = canonical_session(requester);
     session.observation = Some(SessionObservation {
-        reply_preview: None,
+        reply_preview: Some("latest reply".into()),
         last_activity_at: "2026-09-02T00:00:00Z".into(),
         preview: Some("latest prompt".into()),
         latest_request: Some(SessionRequestObservation {
@@ -83,8 +83,33 @@ fn missing_indexed_request_does_not_fall_back_to_older_or_foreign_rows() {
     );
     assert_eq!(summaries[0].status.as_deref(), Some("processing"));
     assert_eq!(summaries[0].preview_text.as_deref(), Some("latest prompt"));
+    assert_eq!(summaries[0].reply_preview.as_deref(), Some("latest reply"));
     assert!(
         session_summaries(&[], &[indexed_request(None)], "did:test:owner", &[], &[]).is_empty()
+    );
+}
+
+#[test]
+fn session_reply_previews_are_cut_on_a_character_boundary() {
+    let reply_for = |reply: String| {
+        let mut session = indexed_session(None);
+        session
+            .observation
+            .as_mut()
+            .expect("observation")
+            .reply_preview = Some(reply);
+        session_summaries(&[session], &[], "did:test:owner", &[], &[])
+            .remove(0)
+            .reply_preview
+            .expect("reply preview")
+    };
+    let exact = "a".repeat(120);
+    assert_eq!(reply_for(exact.clone()), exact);
+    let cut = reply_for("é".repeat(200));
+    assert_eq!(cut, format!("{}…", "é".repeat(120)));
+    assert_eq!(
+        reply_for(format!("{} tail", "b".repeat(119))),
+        format!("{}…", "b".repeat(119))
     );
 }
 

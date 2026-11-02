@@ -6,7 +6,7 @@ import { useHomeDid } from "@/hooks/useClient";
 import { nodeOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
 import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
-import { NodeAvatar } from "./AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { AgentHoverCard, NodeHoverCard } from "./HoverCards";
 import { AgentInitials } from "./parts";
 import { agentName } from "./behavior";
@@ -79,7 +79,11 @@ export function NodeAgentStack({
     >
       {node && (
         <NodeHoverCard deployment={node} side="bottom">
-          <NodeAvatar name={node.node.displayName ?? node.label} className={shifted} />
+          <NodeAvatar
+            name={node.node.displayName ?? node.label}
+            {...nodeAvatarOf(node)}
+            className={shifted}
+          />
         </NodeHoverCard>
       )}
       <AgentHoverCard
@@ -110,7 +114,11 @@ export function NodeAgentStack({
       ))}
       {shownNodes.map((n) => (
         <NodeHoverCard key={nodeDidOf(n)} deployment={n} side="bottom">
-          <NodeAvatar name={n.node.displayName ?? n.label} className={shifted} />
+          <NodeAvatar
+            name={n.node.displayName ?? n.label}
+            {...nodeAvatarOf(n)}
+            className={shifted}
+          />
         </NodeHoverCard>
       ))}
       {leftOut > 0 && (

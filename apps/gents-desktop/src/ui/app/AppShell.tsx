@@ -6,6 +6,7 @@ import type { History, Route } from "@/lib/router";
 import "@/screens/surfaces";
 import { useApp } from "./AppContext";
 import { PaneBarSlotContext } from "./PaneBar";
+import { CustomizeNavDialog } from "./CustomizeNav";
 import { Rail } from "./Rail";
 import { RailFlyout } from "./RailFlyout";
 import { SettingsLink } from "./SettingsLink";
@@ -102,6 +103,7 @@ export function AppShell({
         </section>
         {docked && <DockColumn route={route} layout={layout} />}
         <DockSheet route={route} layout={layout} />
+        <CustomizeNavDialog />
       </div>
     </PaneBarSlotContext.Provider>
   );
