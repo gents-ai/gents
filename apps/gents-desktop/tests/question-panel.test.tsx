@@ -232,4 +232,11 @@ describe("the question panel", () => {
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
+
+  it("leaves out the last row when a click is the only way to answer", () => {
+    renderPanel([ask("q8", { allow_free_text: false })]);
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByRole("radio", { name: /Claude/ })).toBeVisible();
+  });
 });

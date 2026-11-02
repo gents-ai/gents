@@ -15,7 +15,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
-import { MailboxStack } from "../src/ui/screens/MailboxStack";
+import { MailboxStack, openInStack } from "../src/ui/screens/MailboxStack";
 import { mailboxSeen } from "../src/ui/app/mailboxSeen";
 import { listViews } from "../src/ui/app/listViews";
 import { node, testApp, withApp } from "./app-fixture";
@@ -286,6 +286,64 @@ describe("an opened item", () => {
     expect(within(dialog()).getByRole("heading", { name: "First" })).toBeVisible();
   });
 
+  it("goes through every item away from the Mailbox, whatever its tab, and links to it", () => {
+    listViews.setMailboxTab("done");
+    const app = mailboxWith([
+      item({
+        itemId: "a",
+        title: "Flagged",
+        kind: "flag",
+        createdAt: new Date().toISOString(),
+      }),
+      item({ itemId: "b", title: "Landed", kind: "finished" }),
+    ]);
+    renderMailbox(app, { name: "session", sessionId: "session-1" });
+    fireEvent.keyDown(window, {
+      key: "M",
+      code: "KeyM",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(within(dialog()).getByText("1 of 2")).toBeVisible();
+    expect(within(dialog()).getByRole("heading", { name: "Flagged" })).toBeVisible();
+    expect(within(dialog()).getByRole("link", { name: "Mailbox" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/mailbox$/),
+    );
+    listViews.setMailboxTab("all");
+  });
+
+  it("keeps to the Mailbox's tab on the Mailbox, with no link to itself", () => {
+    listViews.setMailboxTab("done");
+    renderMailbox(
+      mailboxWith([
+        item({ itemId: "a", title: "Flagged", kind: "flag" }),
+        item({ itemId: "b", title: "Landed", kind: "finished" }),
+      ]),
+    );
+    open("Landed");
+    expect(within(dialog()).queryByText(/of 2/)).toBeNull();
+    expect(within(dialog()).queryByRole("link", { name: "Mailbox" })).toBeNull();
+    listViews.setMailboxTab("all");
+  });
+
+  it("opens an item from outside the page's list over every item, the page's tab left as it was", () => {
+    listViews.setMailboxTab("done");
+    const flagged = item({ itemId: "a", title: "Flagged", kind: "flag" });
+    renderMailbox(
+      mailboxWith([flagged, item({ itemId: "b", title: "Landed", kind: "finished" })]),
+    );
+    /* as the side nav's mailbox section and the search palette do */
+    act(() => openInStack(flagged));
+    expect(within(dialog()).getByRole("heading", { name: "Flagged" })).toBeVisible();
+    expect(within(dialog()).getByText("1 of 2")).toBeVisible();
+    /* the page behind still lists its Done tab alone */
+    const list = screen.getByTestId("mailbox-list");
+    expect(within(list).getByText("Landed")).toBeInTheDocument();
+    expect(within(list).queryByText("Flagged")).toBeNull();
+    listViews.setMailboxTab("all");
+  });
+
   it("stays with the node it was opened on", () => {
     const nodeWith = (suffix: string) =>
       node({
@@ -489,6 +547,46 @@ describe("a question in the mailbox", () => {
         answer: { option_ids: [], free_text: "Ollama" },
       }),
     );
+  });
+
+  it("moves on with the arrow keys from a text-only question's empty field", () => {
+    renderMailbox(
+      mailboxWith([
+        {
+          ...questionItem({ version: 2, options: [], allow_free_text: true }),
+          questionHash: "text-question",
+          createdAt: new Date().toISOString(),
+        },
+        item({ itemId: "b", title: "Second" }),
+      ]),
+    );
+    open("Backend");
+    const field = within(dialog()).getByRole("textbox", { name: "Your answer" });
+    expect(field).toHaveFocus();
+    fireEvent.change(field, { target: { value: "Ship" } });
+    fireEvent.keyDown(field, { key: "ArrowRight" });
+    expect(within(dialog()).getByText("1 of 2")).toBeVisible();
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.keyDown(field, { key: "ArrowRight" });
+    expect(within(dialog()).getByRole("heading", { name: "Second" })).toBeVisible();
+  });
+
+  it("keeps the arrow keys working past a question onto an item without one", () => {
+    renderMailbox(
+      mailboxWith([
+        { ...questionItem({}), createdAt: new Date().toISOString() },
+        item({ itemId: "b", title: "Second" }),
+        item({ itemId: "c", title: "Third", createdAt: "2020-01-01T00:00:00Z" }),
+      ]),
+    );
+    open("Backend");
+    /* the keys go where focus is, as a keyboard's do */
+    const press = (key: string) => fireEvent.keyDown(document.activeElement!, { key });
+    press("ArrowRight");
+    expect(within(dialog()).getByRole("heading", { name: "Second" })).toBeVisible();
+    expect(dialog()).toContainElement(document.activeElement as HTMLElement);
+    press("ArrowRight");
+    expect(within(dialog()).getByRole("heading", { name: "Third" })).toBeVisible();
   });
 
   it("shows a malformed question as its details", () => {

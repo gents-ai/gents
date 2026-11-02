@@ -1,4 +1,5 @@
 import {
+  ArrowUpRight,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -29,7 +30,7 @@ import type { ShellActions } from "@/../hooks/shellActions";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
 import { QuestionPanel } from "./session/QuestionPanel";
-import { morph } from "@/lib/morph";
+import { MorphProvider, useMorph, useMorphCard } from "@/lib/morph";
 import { mailboxSeen, useNewItem } from "@/app/mailboxSeen";
 import { ChatDeliveryFeedback } from "./session/ChatDeliveryFeedback";
 import { parseQuestion, useAnswerDelivery } from "./MailboxQuestion";
@@ -54,6 +55,9 @@ export const KIND: Record<
 
 /** One item of the mailbox: who sent it, its title, what kind it is and
     where it came from, and when it came or falls due. The whole row opens it. */
+const PILL =
+  "inline-flex items-center rounded-full bg-background/90 text-foreground/85 shadow-sm ring-1 ring-border/50 supports-backdrop-filter:backdrop-blur-sm";
+
 export function ItemRow({
   item: m,
   now,
@@ -239,6 +243,7 @@ export function ItemDialog({
   now,
   onOpen,
   onClose,
+  toMailbox = false,
 }: {
   items: readonly MailboxItemView[];
   openId: string | null;
@@ -247,6 +252,8 @@ export function ItemDialog({
   now: number;
   onOpen: (itemId: string, at: number) => void;
   onClose: () => void;
+  /** a link to the whole Mailbox, from a page other than it */
+  toMailbox?: boolean;
 }) {
   const at = openId === null ? -1 : items.findIndex((m) => m.itemId === openId);
   /* the open item left the list, answered or dismissed here or elsewhere:
@@ -259,15 +266,25 @@ export function ItemDialog({
     else onClose();
   }, [openId, at, lastAt, items, onOpen, onClose]);
   const item = at >= 0 ? items[at]! : null;
+  const card = useMorphCard();
+  const content = useRef<HTMLDivElement>(null);
+  /* focus left with the card that held it, and keys pressed outside the
+     dialog never reach its ← and →; a card that takes focus itself has done
+     so already, its effects running before this one */
+  useEffect(() => {
+    const el = content.current;
+    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+  }, [item?.itemId]);
   const go = (index: number) => {
     const next = items[index];
-    if (next) morph(() => onOpen(next.itemId, index));
+    if (next) card.morph(() => onOpen(next.itemId, index));
   };
   const done = () => (at + 1 < items.length ? go(at + 1) : onClose());
   return (
     <Dialog open={openId !== null} onOpenChange={(open) => !open && onClose()}>
       {item && (
         <DialogContent
+          ref={content}
           showCloseButton={false}
           className="grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-visible bg-transparent p-0 shadow-none ring-0 sm:max-w-xl dark:ring-0"
           /* the list stays readable behind, with the open row marked */
@@ -283,46 +300,64 @@ export function ItemDialog({
             }
           }}
         >
-          <div className="flex items-center justify-end gap-0.5 text-xs text-muted-foreground tabular-nums">
-            {items.length > 1 && (
-              <>
-                <Button
-                  variant="quiet"
-                  size="icon-xs"
-                  aria-label="Previous item"
-                  disabled={at === 0}
-                  onClick={() => go(at - 1)}
-                >
-                  <ChevronLeft />
-                </Button>
-                {at + 1} of {items.length}
-                <Button
-                  variant="quiet"
-                  size="icon-xs"
-                  aria-label="Next item"
-                  disabled={at === items.length - 1}
-                  onClick={() => go(at + 1)}
-                >
-                  <ChevronRight />
-                </Button>
-              </>
+          {/* over whatever the backdrop shows: each side on a pill of the
+              card's own surface, so it reads on any page */}
+          <div className="flex items-center justify-end gap-2 text-xs tabular-nums">
+            {toMailbox && (
+              <a
+                href={href({ name: "mailbox" })}
+                onClick={onClose}
+                className={cn(
+                  PILL,
+                  "mr-auto h-7 gap-1 px-2.5 underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline",
+                )}
+              >
+                Mailbox <ArrowUpRight className="size-3" />
+              </a>
             )}
-            <Button
-              variant="quiet"
-              size="icon-sm"
-              aria-label="Close mailbox"
-              onClick={onClose}
-            >
-              <X />
-            </Button>
+            <div className={cn(PILL, "gap-0.5 pr-0.5", "pl-0.5")}>
+              {items.length > 1 && (
+                <>
+                  <Button
+                    variant="quiet"
+                    size="icon-xs"
+                    aria-label="Previous item"
+                    disabled={at === 0}
+                    onClick={() => go(at - 1)}
+                  >
+                    <ChevronLeft />
+                  </Button>
+                  {at + 1} of {items.length}
+                  <Button
+                    variant="quiet"
+                    size="icon-xs"
+                    aria-label="Next item"
+                    disabled={at === items.length - 1}
+                    onClick={() => go(at + 1)}
+                  >
+                    <ChevronRight />
+                  </Button>
+                </>
+              )}
+              <Button
+                variant="quiet"
+                size="icon-sm"
+                aria-label="Close mailbox"
+                onClick={onClose}
+              >
+                <X />
+              </Button>
+            </div>
           </div>
-          <Opened
-            key={item.itemId}
-            item={item}
-            now={now}
-            behind={Math.min(2, items.length - at - 1)}
-            onDone={done}
-          />
+          <MorphProvider value={card}>
+            <Opened
+              key={item.itemId}
+              item={item}
+              now={now}
+              behind={Math.min(2, items.length - at - 1)}
+              onDone={done}
+            />
+          </MorphProvider>
         </DialogContent>
       )}
     </Dialog>
@@ -337,24 +372,34 @@ const ownsArrows = (target: EventTarget) =>
     ),
   );
 
-const typing = (target: EventTarget) =>
-  target instanceof HTMLElement &&
-  (target.isContentEditable || Boolean(target.closest("input, textarea, select")));
+/* an empty field has no caret to move, so ← and → still move through the
+   items when a question's only field takes focus as it opens */
+const typing = (target: EventTarget) => {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const field = target.closest("input, textarea, select");
+  if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)
+    return field.value !== "";
+  return field !== null;
+};
 
 /** the edges of the next items, behind the card and sized to it */
 function Stack({ behind }: { behind: number }) {
+  const { part } = useMorph();
   return (
     <>
       {behind >= 2 && (
         <span
           aria-hidden
-          className="absolute inset-x-6 top-4 -bottom-4 -z-10 rounded-2xl bg-popover/50 ring-1 ring-foreground/5 [view-transition-name:mailbox-stack-2] [view-transition-class:morph-edge]"
+          className="absolute inset-x-6 top-4 -bottom-4 -z-10 rounded-2xl bg-popover/50 ring-1 ring-foreground/5 [view-transition-class:morph-edge]"
+          ref={part("edge-2")}
         />
       )}
       {behind >= 1 && (
         <span
           aria-hidden
-          className="absolute inset-x-3 top-2 -bottom-2 -z-10 rounded-2xl bg-popover/80 ring-1 ring-foreground/10 [view-transition-name:mailbox-stack-1] [view-transition-class:morph-edge]"
+          className="absolute inset-x-3 top-2 -bottom-2 -z-10 rounded-2xl bg-popover/80 ring-1 ring-foreground/10 [view-transition-class:morph-edge]"
+          ref={part("edge-1")}
         />
       )}
     </>
@@ -372,6 +417,7 @@ function Opened({
   behind: number;
   onDone: () => void;
 }) {
+  const { part } = useMorph();
   const question = parseQuestion(m);
   const { pending, confirmed, inFlight } = useAnswerDelivery(m);
   const answered = pending || confirmed;
@@ -396,7 +442,10 @@ function Opened({
       {asking && <DialogTitle className="sr-only">{m.title}</DialogTitle>}
       <div className="relative min-h-0 min-w-0">
         <Stack behind={behind} />
-        <div className="h-full min-h-0 [view-transition-name:mailbox-card] [view-transition-class:morph-card]">
+        <div
+          ref={part("card")}
+          className="h-full min-h-0 [view-transition-class:morph-card]"
+        >
           {asking ? (
             <QuestionPanel
               items={[m]}
@@ -562,7 +611,7 @@ function Footer({
               Open session
             </Button>
           )
-        : openable(m) && <Primary item={m} />}
+        : openable(m) && <Primary item={m} variant="raised" />}
     </div>
   );
 }
@@ -627,14 +676,21 @@ export const KEY =
 const CONTROLS =
   'button, a, input, textarea, pre, [role="checkbox"], [role="button"], [role="link"]';
 
-export function Primary({ item }: { item: MailboxItemView }) {
+export function Primary({
+  item,
+  variant = "outline",
+}: {
+  item: MailboxItemView;
+  /** over the dialog's backdrop it wants a fill of its own, as Dismiss has */
+  variant?: "outline" | "raised";
+}) {
   const { openMailboxItem } = useApp().actions;
   const extras = extrasOf(item);
   return (
     <ButtonGroup>
       <Button
         size="sm"
-        variant="outline"
+        variant={variant}
         data-testid="mailbox-selection-open"
         onClick={() => void openItem(item, openMailboxItem)}
       >
@@ -646,7 +702,7 @@ export function Primary({ item }: { item: MailboxItemView }) {
             render={
               <Button
                 size="icon-sm"
-                variant="outline"
+                variant={variant}
                 className="h-7 w-7"
                 aria-label="More actions"
                 data-testid="mailbox-selection-more"

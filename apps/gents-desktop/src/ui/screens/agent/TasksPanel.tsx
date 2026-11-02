@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { TaskView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
 import { Textarea } from "@gents/ui/components/textarea";
 import {
   AreaRow,
@@ -19,9 +20,9 @@ import {
 } from "./editors";
 import { optionalInteger, problemOf, str, useDraft } from "./draft";
 import { HooksRows, hooksFromDraft, toHookDraft } from "./HooksRows";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { newId } from "./draft";
-import { Group, Row } from "./rows";
+import { focusField, Group, Row, Unfold } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { AgentSheet } from "./BehaviorSheet";
 import { NewAutomationDialog } from "./NewAutomationDialog";
@@ -29,9 +30,14 @@ import { EditorSheet } from "./EditorSheet";
 import { TriggerEditor } from "./TriggersPanel";
 import { sourceInWords, triggerReadiness } from "./automation";
 import { Switch } from "@gents/ui/components/switch";
-import { ExternalLink, Plus } from "lucide-react";
+import { ExternalLink, Pencil, Play, Plus } from "lucide-react";
+import { Hint } from "../Hint";
+import { href, navigate } from "@/lib/router";
 import { toastFailure } from "@/lib/failure";
 import { agentOf } from "@/lib/agents";
+import { Badge } from "@gents/ui/components/badge";
+import { Summary } from "./AgentCard";
+import { StateDot } from "../NodeFacts";
 import { useApp } from "@/app/AppContext";
 
 const when = (iso: string | null | undefined) =>
@@ -54,6 +60,9 @@ export function TaskEditor({
     nodeDid: deployment.nodeDid,
     section: "tasks",
   };
+  /* name, description and tags show in the header; their fields open
+     under it on Edit */
+  const [editing, setEditing] = useState(false);
   const saved = {
     name: task.name ?? "",
     agentId: task.agentId ?? "",
@@ -121,11 +130,13 @@ export function TaskEditor({
     deployment.triggers.find((x) => x.config.trigger_id === besideTrigger) ?? null;
   const [adding, setAdding] = useState<"schedule" | "event" | null>(null);
   const [args, setArgs] = useState("{}");
-  const [lastRun, setLastRun] = useState<string | null>(null);
+  /* the session the page's last Run started, for the Last run card */
+  const [started, setStarted] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const id = (f: string) => `${task.taskId}-${f}`;
   const agents = deployment.agents.map((b) => ({
     value: b.agentId,
+    pack: packOrigin(b.tags),
     label: b.displayName,
   }));
   const run = async () => {
@@ -148,8 +159,13 @@ export function TaskEditor({
     try {
       const r = await pending;
       if (!acceptsComposeIntent(intentGeneration)) return;
-      setLastRun(r.requestId);
-      toast(`Task started · ${r.requestId}`);
+      setStarted(r.sessionId);
+      toast(`${d.draft.name.trim() || task.taskId} started`, {
+        action: {
+          label: "Open session",
+          onClick: () => navigate({ name: "session", sessionId: r.sessionId }),
+        },
+      });
     } catch (error) {
       if (!acceptsComposeIntent(intentGeneration)) return;
       toastFailure("start the task", error);
@@ -157,18 +173,101 @@ export function TaskEditor({
       setRunning(false);
     }
   };
+  /* a template that names {{placeholders}} needs its args filled first */
+  const placeholders = [
+    ...new Set(
+      [
+        ...`${d.draft.promptTemplate}\n${d.draft.goalObjectiveTemplate}`.matchAll(
+          /\{\{\s*([\w.]+)\s*\}\}/g,
+        ),
+      ].map((m) => m[1]!),
+    ),
+  ];
+  const startRun = () => {
+    if (placeholders.length && args.replace(/\s/g, "") === "{}") {
+      toast(`Fill in ${placeholders.join(", ")} under Args to run this task`);
+      focusField(id("args"));
+      return;
+    }
+    void run();
+  };
+  const runBlocked = !d.draft.enabled
+    ? "Enable the task to run it"
+    : d.dirty
+      ? "Save your changes first"
+      : null;
   return (
     <>
-      <Group title={embedded ? undefined : (task.name ?? task.taskId)}>
-        <FactRow label="Task ID" mono>
-          {task.taskId}
-        </FactRow>
-        <TextRow
-          id={id("name")}
-          label="Name"
-          value={d.draft.name}
-          onChange={(v) => d.set("name", v)}
-        />
+      {!embedded && (
+        <>
+          <TaskSummary
+            deployment={deployment}
+            task={task}
+            draft={{
+              name: d.draft.name,
+              description: d.draft.description,
+              tags: d.draft.tags,
+              enabled: d.draft.enabled,
+              onEnabled: (v) => d.set("enabled", v),
+            }}
+            run={{
+              onRun: startRun,
+              running,
+              blocked: runBlocked,
+              started,
+            }}
+            edit={{
+              open: editing,
+              onToggle: () => setEditing((open) => !open),
+              onTags: () => {
+                setEditing(true);
+                focusField(id("tags"));
+              },
+              controls: id("about"),
+            }}
+          />
+          <Unfold open={editing} id={id("about")}>
+            <Group title="About">
+              <FactRow label="Task ID" mono>
+                {task.taskId}
+              </FactRow>
+              <TextRow
+                id={id("name")}
+                label="Name"
+                value={d.draft.name}
+                onChange={(v) => d.set("name", v)}
+              />
+              <AreaRow
+                id={id("desc")}
+                label="Description"
+                value={d.draft.description}
+                onChange={(v) => d.set("description", v)}
+                rows={2}
+              />
+              <TagsRow
+                id={id("tags")}
+                label="Tags"
+                value={d.draft.tags}
+                onChange={(v) => d.set("tags", v)}
+              />
+            </Group>
+          </Unfold>
+        </>
+      )}
+      <Group title={embedded ? undefined : "Details"}>
+        {embedded && (
+          <>
+            <FactRow label="Task ID" mono>
+              {task.taskId}
+            </FactRow>
+            <TextRow
+              id={id("name")}
+              label="Name"
+              value={d.draft.name}
+              onChange={(v) => d.set("name", v)}
+            />
+          </>
+        )}
         <RefRow
           id={id("agent")}
           label="Agent"
@@ -198,19 +297,23 @@ export function TaskEditor({
             setNewAgent(null);
           }}
         />
-        <SwitchRow
-          id={id("enabled")}
-          label="Enabled"
-          checked={d.draft.enabled}
-          onChange={(v) => d.set("enabled", v)}
-        />
-        <AreaRow
-          id={id("desc")}
-          label="Description"
-          value={d.draft.description}
-          onChange={(v) => d.set("description", v)}
-          rows={2}
-        />
+        {embedded && (
+          <>
+            <SwitchRow
+              id={id("enabled")}
+              label="Enabled"
+              checked={d.draft.enabled}
+              onChange={(v) => d.set("enabled", v)}
+            />
+            <AreaRow
+              id={id("desc")}
+              label="Description"
+              value={d.draft.description}
+              onChange={(v) => d.set("description", v)}
+              rows={2}
+            />
+          </>
+        )}
         <AreaRow
           id={id("prompt")}
           label="Prompt template"
@@ -260,12 +363,14 @@ export function TaskEditor({
           error={d.problems.hooks}
           onChange={(v) => d.set("hooks", v)}
         />
-        <TagsRow
-          id={id("tags")}
-          label="Tags"
-          value={d.draft.tags}
-          onChange={(v) => d.set("tags", v)}
-        />
+        {embedded && (
+          <TagsRow
+            id={id("tags")}
+            label="Tags"
+            value={d.draft.tags}
+            onChange={(v) => d.set("tags", v)}
+          />
+        )}
       </Group>
       <DraftActions
         draft={d}
@@ -396,9 +501,11 @@ export function TaskEditor({
       <Group
         title="Manual run"
         action={
-          <Button size="sm" variant="brand" disabled={running} onClick={run}>
-            {running ? "Starting…" : "Run task"}
-          </Button>
+          embedded ? (
+            <Button size="sm" variant="brand" disabled={running} onClick={run}>
+              {running ? "Starting…" : "Run task"}
+            </Button>
+          ) : undefined
         }
       >
         <Row label="Args" description="Must be a JSON object." htmlFor={id("args")}>
@@ -410,9 +517,14 @@ export function TaskEditor({
             className="max-h-48 w-96 max-md:w-full font-mono text-xs"
           />
         </Row>
-        {lastRun && (
-          <FactRow label="Started" mono>
-            {lastRun}
+        {embedded && started && (
+          <FactRow label="Started">
+            <a
+              href={href({ name: "session", sessionId: started })}
+              className="underline-offset-2 hover:underline"
+            >
+              Open session
+            </a>
           </FactRow>
         )}
       </Group>
@@ -430,6 +542,168 @@ export function TaskEditor({
         />
       )}
     </>
+  );
+}
+
+/** The task page's header and cards, as the node and agent pages': its name
+    and state, then what it runs with, when, and how its last run went. */
+function TaskSummary({
+  deployment,
+  task,
+  draft,
+  edit,
+  run,
+}: {
+  deployment: NodeView;
+  task: TaskView;
+  /** what the header shows and switches, as the form has it */
+  draft: {
+    name: string;
+    description: string;
+    tags: string[];
+    enabled: boolean;
+    onEnabled: (enabled: boolean) => void;
+  };
+  edit: { open: boolean; onToggle: () => void; onTags: () => void; controls: string };
+  run: {
+    onRun: () => void;
+    running: boolean;
+    /** why Run can't start now, if it can't */
+    blocked: string | null;
+    /** the session the last Run started from this page */
+    started: string | null;
+  };
+}) {
+  const agent = agentOf(deployment, task.agentId);
+  const runs = whenItRuns(deployment, task);
+  /* green only for a task that runs on its own */
+  const automatic =
+    task.enabled !== false &&
+    deployment.triggers.some((x) => x.config.task_id === task.taskId);
+  const last = task.runHistory[0];
+  const status = task.recentRuns.lastStatus;
+  const failed = Boolean(task.recentRuns.lastError) || /fail|error/i.test(status ?? "");
+  const section = (section: string, item?: string) => ({
+    name: "agent" as const,
+    nodeDid: deployment.nodeDid,
+    section,
+    ...(item ? { item } : {}),
+  });
+  return (
+    <div className="@container mb-8 grid gap-4">
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2
+              className={cn(
+                "truncate font-heading text-lg font-medium",
+                draft.enabled ? "text-heading" : "text-muted-foreground",
+              )}
+            >
+              {draft.name.trim() || task.taskId}
+            </h2>
+            {!draft.enabled && <Badge variant="outline">Disabled</Badge>}
+            <Button
+              size="xs"
+              variant="quiet"
+              aria-expanded={edit.open}
+              aria-controls={edit.controls}
+              onClick={edit.onToggle}
+            >
+              {edit.open ? (
+                "Done"
+              ) : (
+                <>
+                  <Pencil /> Edit
+                </>
+              )}
+            </Button>
+          </div>
+          {draft.description.trim() && (
+            <p className="mt-0.5 text-sm text-foreground/80">{draft.description}</p>
+          )}
+          {draft.tags.length > 0 && (
+            <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
+              {draft.tags.map((tag) => (
+                <li key={tag}>
+                  <button
+                    type="button"
+                    onClick={edit.onTags}
+                    className="cursor-pointer rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                  >
+                    {tag}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          {/* switched here, saved with the rest of the form */}
+          <label className="flex items-center gap-2.5 text-sm">
+            {draft.enabled ? "Enabled" : "Disabled"}
+            <Switch
+              aria-label="Enabled"
+              checked={draft.enabled}
+              onCheckedChange={draft.onEnabled}
+            />
+          </label>
+          <Hint label={run.blocked ?? "Run the task now"}>
+            {/* a disabled button takes no pointer, so its hint hangs on a wrapper */}
+            <span className="inline-flex" tabIndex={run.blocked ? 0 : undefined}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={Boolean(run.blocked) || run.running}
+                onClick={run.onRun}
+              >
+                <Play /> {run.running ? "Starting…" : "Run"}
+              </Button>
+            </span>
+          </Hint>
+        </div>
+      </div>
+      <div className="grid gap-2 @xl:grid-cols-3">
+        <Summary
+          label="Runs with"
+          to={agent ? section("agents", agent.agentId) : section("agents")}
+        >
+          <span className="truncate">{agent?.displayName ?? "No agent"}</span>
+        </Summary>
+        <Summary label="When it runs" to={section("triggers")}>
+          <StateDot tone={runs.problem ? "bad" : automatic ? "good" : "idle"} />
+          <span title={runs.problem ?? undefined} className="truncate">
+            {runs.when}
+          </span>
+        </Summary>
+        <Summary
+          label="Last run"
+          to={
+            run.started
+              ? { name: "session", sessionId: run.started }
+              : last?.sessionId
+                ? { name: "session", sessionId: last.sessionId }
+                : undefined
+          }
+        >
+          {run.started ? (
+            <>
+              <StateDot tone="busy" />
+              <span className="truncate">Running…</span>
+            </>
+          ) : task.recentRuns.lastAttemptAt ? (
+            <>
+              <StateDot tone={failed ? "bad" : "idle"} />
+              <span className="truncate">
+                {status ?? "Started"} · {when(task.recentRuns.lastAttemptAt)}
+              </span>
+            </>
+          ) : (
+            <span className="truncate">Never run</span>
+          )}
+        </Summary>
+      </div>
+    </div>
   );
 }
 

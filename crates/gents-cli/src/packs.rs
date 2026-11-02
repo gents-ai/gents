@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::cli::args::{JobPromoteArgs, PluginBindArgs, PluginCommand, PluginUnbindArgs};
 use crate::cli::{
-    PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs, PackOutdatedArgs,
-    PackRemoveArgs, PackSearchArgs, PackUpdateArgs, PackWireArgs, ScopeArgs,
+    PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs, PackRemoveArgs,
+    PackSearchArgs, PackUpdateArgs, PackWireArgs, ScopeArgs,
 };
 use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
@@ -38,12 +38,14 @@ fn scope(home: PathBuf) -> ScopeArgs {
     }
 }
 
+/// The packs installed in `home`, each with its registry status. A failed
+/// registry lookup is that pack's `error`, never the whole read's: the
+/// installed list is local, and offline, signed out or an unpublished pack
+/// must not hide it. The CLI's `pack outdated` still fails on such a lookup,
+/// for scripts.
 pub async fn installed(home: PathBuf, registry: Option<String>) -> Result<Value> {
-    capture_report(command::update::outdated(PackOutdatedArgs {
-        scope: scope(home),
-        registry,
-    }))
-    .await
+    let packs = command::update::outdated_packs(&scope(home), registry.as_deref()).await?;
+    Ok(serde_json::json!({ "packs": packs }))
 }
 
 pub async fn search(registry: Option<String>, query: String, page: u32) -> Result<Value> {

@@ -5,7 +5,7 @@ use super::registry::{resolve_registry_url, RegistryClient};
 use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
-async fn outdated_packs(
+pub(crate) async fn outdated_packs(
     scope: &crate::cli::ScopeArgs,
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {

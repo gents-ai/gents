@@ -7,7 +7,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { useSelectedNodeDid } from "@/hooks/useClient";
 import { listViews, useListViews, type MailboxTab } from "@/app/listViews";
-import { TRIAGE } from "./mailbox-triage";
+import { TRIAGE, greeting, groupItems, waiting } from "./mailbox-triage";
 import { ItemRow } from "./MailboxItem";
 import { MAILBOX, openHere, useMailboxList } from "./MailboxStack";
 import { useMinute } from "./time";
@@ -26,6 +26,8 @@ export function MailboxScreen() {
   const kept = useListViews((views) => views.mailboxOpen);
   const openId = openHere(kept, selectedNodeDid, MAILBOX);
   const { items, searched, groups, shown } = useMailboxList(query ?? "");
+  /* the whole mailbox, whatever the search narrows the list to */
+  const summary = waiting(groupItems(items));
   const tabs = TRIAGE.map((t) => ({
     key: t.key as Tab,
     label: t.label,
@@ -37,6 +39,12 @@ export function MailboxScreen() {
       <div className="mx-auto max-w-page px-6 py-6">
         {items.length > 0 && (
           <>
+            <header className="mb-4" data-testid="mailbox-greeting">
+              <h1 className="font-heading text-lg font-medium text-heading">
+                {greeting(new Date(now).getHours())}
+              </h1>
+              <p className="mt-0.5 text-sm text-muted-foreground">{summary}</p>
+            </header>
             <div className="flex items-center gap-2">
               <div
                 className="min-w-0 flex-1 overflow-x-auto py-1"

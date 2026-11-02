@@ -15,7 +15,7 @@ import { useFleet } from "../../hooks/useFleet";
 import { agentName } from "../behavior";
 import { parseQuestion } from "../MailboxQuestion";
 import { Markdown } from "../Markdown";
-import { morph } from "@/lib/morph";
+import { useMorph } from "@/lib/morph";
 
 /* a field the panel's composer hides as it opens is not one being written in */
 const writingElsewhere = (element: Element | null) =>
@@ -57,6 +57,7 @@ export function QuestionPanel({
   /** a first header line, ahead of who asks: what kind of item this is */
   kind?: ReactNode;
 }) {
+  const { morph } = useMorph();
   const [at, setAt] = useState(0);
   const shown = Math.min(at, items.length - 1);
   const item = items[shown];
@@ -186,6 +187,8 @@ function QuestionForm({
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const typing = event.target instanceof HTMLInputElement;
+    /* an empty field has no caret to move; ← and → step through the questions */
+    const caret = event.target instanceof HTMLInputElement && event.target.value !== "";
     if (event.key === "Escape" && onTypeInstead) {
       event.preventDefault();
       onTypeInstead();
@@ -204,8 +207,8 @@ function QuestionForm({
       if (n < question.options.length) choose(question.options[n]!.id);
       else if (n === question.options.length && question.allow_free_text)
         field.current?.focus();
-    } else if (!typing && position && event.key === "ArrowRight") position.step(1);
-    else if (!typing && position && event.key === "ArrowLeft") position.step(-1);
+    } else if (!caret && position && event.key === "ArrowRight") position.step(1);
+    else if (!caret && position && event.key === "ArrowLeft") position.step(-1);
   };
 
   const action =
@@ -294,7 +297,14 @@ function QuestionForm({
           {!kind && controls}
         </div>
       </header>
-      <div className="min-h-0 overflow-y-auto px-4 pb-1">
+      <div
+        className={cn(
+          "min-h-0 overflow-y-auto px-4",
+          question.allow_free_text || question.multi_select || skippable
+            ? "pb-1"
+            : "pb-3",
+        )}
+      >
         <h3 className="mt-1 mb-2 font-heading text-base font-normal break-words text-foreground">
           {question.prompt}
         </h3>
@@ -407,25 +417,29 @@ function QuestionForm({
           </p>
         )}
       </div>
-      <div className="m-1.5 mt-1 flex shrink-0 items-center gap-3 rounded-xl bg-background/60 py-1.5 pr-1.5 pl-3">
-        {question.allow_free_text ? (
-          <>
-            <Pencil aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            <input
-              ref={field}
-              aria-label={textOnly ? "Your answer" : "Something else"}
-              placeholder={textOnly ? "Your answer" : "Something else"}
-              value={other}
-              disabled={busy}
-              onChange={(event) => write(event.target.value)}
-              className="min-w-0 flex-1 bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
-          </>
-        ) : (
-          <span className="flex-1" />
-        )}
-        {action}
-      </div>
+      {/* with one choice to click and nothing to write or skip, a choice is
+          the answer and the row would hold only a Send that does nothing */}
+      {(question.allow_free_text || question.multi_select || skippable) && (
+        <div className="m-1.5 mt-1 flex shrink-0 items-center gap-3 rounded-xl bg-background/60 py-1.5 pr-1.5 pl-3">
+          {question.allow_free_text ? (
+            <>
+              <Pencil aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              <input
+                ref={field}
+                aria-label={textOnly ? "Your answer" : "Something else"}
+                placeholder={textOnly ? "Your answer" : "Something else"}
+                value={other}
+                disabled={busy}
+                onChange={(event) => write(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </>
+          ) : (
+            <span className="flex-1" />
+          )}
+          {action}
+        </div>
+      )}
     </section>
   );
 }

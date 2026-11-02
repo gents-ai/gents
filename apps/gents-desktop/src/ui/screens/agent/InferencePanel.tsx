@@ -26,7 +26,7 @@ import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
 import { useAccounts, useProviderUsage, useSetupCatalog } from "@/hooks/useProviders";
 import { healthy, KINDS, SUBSCRIPTION } from "./inferenceKinds";
-import { UsageBar, AllProviderLimits } from "./ProviderUsage";
+import { UsageSummary, AllProviderLimits } from "./ProviderUsage";
 import { AccountDialogs, backendAccount, type AccountAction } from "./ProviderAccounts";
 import { BackendEditor } from "./BackendEditor";
 import { addItem, addingFrom } from "./draftItems";
@@ -113,28 +113,43 @@ export function InferencePanel({
     .map((b) => ({ b, provider: providerOf(b), stored: backendAccount(accounts, b) }))
     .sort((x, y) => order(x.provider) - order(y.provider));
   const missing = providers.filter((p) => !configured.some((c) => c.provider === p.id));
+  /* a row says what kind of backend it is and, only when something keeps it
+     from working, what: a usable login or key needs no word, and the switch
+     already says when it is off */
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
     const stored = backendAccount(accounts, b);
-    const label =
-      stored?.label && stored.label !== (b.name ?? b.backendId)
-        ? `${stored.label} · `
-        : "";
-    const cred = sub
+    const kind = KINDS.find((k) => k.value === b.providerKind)?.label ?? b.providerKind;
+    const account =
+      stored?.label &&
+      stored.label !== (b.name ?? b.backendId) &&
+      !(sub?.title ?? kind ?? "").toLowerCase().includes(stored.label.toLowerCase())
+        ? stored.label
+        : null;
+    const problem = sub
       ? stored
-        ? `${label}${b.enabled === false ? "off" : stored.enabled ? "signed in" : "disabled"}`
+        ? b.enabled === false || stored.enabled
+          ? null
+          : "login disabled"
         : b.accountRef
           ? "account not on this node"
           : "not signed in"
       : b.apiKeyConfigured
-        ? "key stored"
+        ? null
         : b.apiKeyEnvVar
           ? `key from ${b.apiKeyEnvVar}`
           : "no key";
     const profiles = deployment.inferenceProfiles.filter(
       (profile) => profile.backend_id === b.backendId,
     );
-    return `${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"} · ${KINDS.find((k) => k.value === b.providerKind)?.label ?? b.providerKind} · ${cred}`;
+    return [
+      `${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"}`,
+      sub ? "Subscription" : kind,
+      account,
+      problem,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   };
   return (
     <>
@@ -166,6 +181,7 @@ export function InferencePanel({
       {!item && (
         <AllProviderLimits
           views={providerUsage.usage}
+          loading={providerUsage.loading}
           onRefresh={() => providerUsage.refresh(null)}
         />
       )}
@@ -197,7 +213,7 @@ export function InferencePanel({
             trailing: (
               <>
                 {(!SUBSCRIPTION[b.providerKind ?? ""] || stored?.enabled) && (
-                  <UsageBar view={usageOf(b.backendId)} />
+                  <UsageSummary view={usageOf(b.backendId)} />
                 )}
                 <RowMenu
                   name={b.name ?? b.backendId}
@@ -320,6 +336,7 @@ export function InferencePanel({
               accounts={accounts}
               usage={{
                 view: usageOf(backend.backendId),
+                loading: providerUsage.loading,
                 refresh: providerUsage.refresh,
               }}
             />

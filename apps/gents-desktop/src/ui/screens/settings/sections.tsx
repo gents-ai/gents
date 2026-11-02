@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
-import { SlidersHorizontal, Wrench } from "lucide-react";
+import { FlaskConical, SlidersHorizontal, Wrench } from "lucide-react";
 import { DeveloperPanel } from "./DeveloperPanel";
+import { ExperimentalPanel } from "./ExperimentalPanel";
 import { GeneralPanel } from "./GeneralPanel";
 
 export type SettingsSection = {
@@ -27,6 +28,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "Developer",
     icon: Wrench,
     Panel: DeveloperPanel,
+  },
+  {
+    group: "App",
+    id: "experimental",
+    label: "Experimental features",
+    icon: FlaskConical,
+    Panel: ExperimentalPanel,
   },
 ];
 

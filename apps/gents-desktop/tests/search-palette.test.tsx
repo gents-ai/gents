@@ -204,6 +204,17 @@ describe("the search palette", () => {
     expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
   });
 
+  it("goes to the experimental features settings", async () => {
+    const view = open();
+    const box = screen.getByRole("combobox", { name: "Search" });
+    fireEvent.change(box, { target: { value: "experimental" } });
+    expect((await screen.findAllByRole("option"))[0]).toHaveTextContent(
+      "Experimental features",
+    );
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(view.nav().route).toEqual({ name: "settings", section: "experimental" });
+  });
+
   it("opens from the title bar's Search button", async () => {
     renderIn(
       testApp({ deployments: [node()] }),

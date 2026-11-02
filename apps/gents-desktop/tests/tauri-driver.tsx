@@ -135,6 +135,9 @@ export function renderTauriAppDriverWithBridge(
       })[0];
     },
     contextSystemPrompt() {
+      /* the prompt reads rendered until its Raw view is chosen */
+      const raw = screen.queryByRole("button", { name: "Raw", pressed: false });
+      if (raw) fireEvent.click(raw);
       return screen.getByRole("textbox", {
         name: "System prompt",
       }) as HTMLTextAreaElement;

@@ -310,7 +310,7 @@ test.describe("kit shell", () => {
       .first()
       .click();
 
-    await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
+    await expect(page.getByTestId("agent-header")).toBeVisible();
     await page.getByRole("button", { name: "Delete agent" }).click();
     const confirm = page.getByRole("textbox", {
       name: "Type Ops to confirm",
