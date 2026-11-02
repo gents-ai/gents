@@ -349,7 +349,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             what: "inspect verified local plugin artifacts and discover registry packs; install document or plugins-only packs (pack grant).",
             commands: &[
                 "pack search  options: query (omit to browse), page (starts at 1); reads the registry",
-                "pack list  options: limit, cursor; reads this home's store",
+                "pack list  options: limit, cursor; shows installed and locally stored versions",
                 "pack get PACKAGE  a name, sha256:<hex>, or explicit built .pack path",
                 "pack preview install|update PACKAGE [--inference-slot NAME=PROFILE_ID ...] [--var NAME=VALUE ...]",
                 "pack install|update PACKAGE  the same pairs, and options.digest from the preview",

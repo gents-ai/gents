@@ -234,31 +234,51 @@ pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
 
 async fn list(args: PackListArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
-    let store = gents::pack_store::PackStore::new(&home);
-    let (records, skipped) = gents::pack::list_home_installs_with_skips(&home)?;
-    let installed: std::collections::BTreeSet<String> = records
+    crate::print_json(&list_packs(&home)?)
+}
+
+fn list_packs(home: &std::path::Path) -> Result<serde_json::Value> {
+    let store = gents::pack_store::PackStore::new(home);
+    let (records, skipped) = gents::pack::list_home_installs_with_skips(home)?;
+    let installed: std::collections::BTreeMap<_, _> = records
         .into_iter()
-        .map(|record| record.coordinate)
+        .map(|record| (record.coordinate.clone(), record))
         .collect();
+    let mut names: std::collections::BTreeMap<_, _> = store.names()?.into_iter().collect();
+    for coordinate in installed.keys() {
+        names.entry(coordinate.clone()).or_default();
+    }
     let mut entries = Vec::new();
-    for (coordinate, versions) in store.names()? {
-        let (namespace, name) = coordinate
-            .split_once('/')
-            .context("malformed pack store name index entry")?;
-        let Some(preferred) = store.lookup(namespace, name, None)? else {
-            continue;
+    for (coordinate, versions) in names {
+        let record = installed.get(&coordinate);
+        let listing = gents::pack_store::list_pack_versions(
+            &versions,
+            record.map(|record| gents::pack_store::StoredName {
+                version: record.version.clone(),
+                digest: record.digest.clone(),
+            }),
+        );
+        let preferred = versions.first();
+        let display = listing.installed.as_ref().or(preferred);
+        let archive = display.map(|entry| store.open(&entry.digest)).transpose();
+        let (manifest, metadata_error) = match &archive {
+            Ok(Some(archive)) => (Some(archive.manifest()), None),
+            Ok(None) => (None, None),
+            Err(error) => (None, Some(format!("{error:#}"))),
         };
-        let archive = store.open(&preferred.digest)?;
-        let manifest = archive.manifest();
         entries.push(json!({
             "pack": coordinate,
-            "versions": versions.into_iter().map(|entry| entry.version).collect::<Vec<_>>(),
-            "version": preferred.version,
-            "digest": preferred.digest,
-            "kind": manifest.metadata.kind,
-            "description": manifest.description,
-            "inference_slots": manifest.metadata.inference_slots,
-            "installed": installed.contains(&coordinate),
+            "versions": versions.iter().map(|entry| &entry.version).collect::<Vec<_>>(),
+            "version": listing.installed.as_ref().map(|entry| &entry.version),
+            "digest": listing.installed.as_ref().map(|entry| &entry.digest),
+            "available_version": preferred.map(|entry| &entry.version),
+            "available_digest": preferred.map(|entry| &entry.digest),
+            "other_stored_versions": listing.other_stored.iter().map(|entry| json!({"version": entry.version, "digest": entry.digest})).collect::<Vec<_>>(),
+            "kind": manifest.map(|manifest| &manifest.metadata.kind).or_else(|| record.map(|record| &record.kind)),
+            "description": manifest.map(|manifest| &manifest.description),
+            "inference_slots": manifest.map(|manifest| &manifest.metadata.inference_slots),
+            "metadata_error": metadata_error,
+            "installed": record.is_some(),
         }));
     }
     let mut output = json!({ "packs": entries });
@@ -268,7 +288,7 @@ async fn list(args: PackListArgs) -> Result<()> {
             .map(|skip| json!({ "path": skip.path.display().to_string(), "reason": skip.reason }))
             .collect();
     }
-    crate::print_json(&output)
+    Ok(output)
 }
 
 pub(crate) async fn resolve_pack_source(
@@ -1283,6 +1303,24 @@ mod tests {
             record.installed_via,
             Some(gents::pack::InstalledVia::Operator)
         );
+
+        let staged = documents_pack_dir("1.1.0");
+        let (bytes, _) = gents::pack_archive::pack_dir(staged.path()).unwrap();
+        gents::pack_store::PackStore::new(home.path())
+            .import(&bytes[..], None)
+            .unwrap();
+        let listed = list_packs(home.path()).unwrap();
+        let entry = listed["packs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["pack"] == "gents/demo_pack")
+            .unwrap();
+        assert_eq!(entry["installed"], true);
+        assert_eq!(entry["version"], "1.0.0");
+        assert_eq!(entry["digest"], record.digest);
+        assert_eq!(entry["available_version"], "1.1.0");
+        assert_eq!(entry["other_stored_versions"][0]["version"], "1.1.0");
     }
 
     #[tokio::test]

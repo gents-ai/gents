@@ -30,6 +30,30 @@ pub struct StoredName {
     pub digest: String,
 }
 
+pub struct PackVersionListing {
+    pub installed: Option<StoredName>,
+    pub other_stored: Vec<StoredName>,
+}
+
+pub fn list_pack_versions(
+    stored: &[StoredName],
+    installed: Option<StoredName>,
+) -> PackVersionListing {
+    let other_stored = stored
+        .iter()
+        .filter(|entry| {
+            installed
+                .as_ref()
+                .is_none_or(|current| current.digest != entry.digest)
+        })
+        .cloned()
+        .collect();
+    PackVersionListing {
+        installed,
+        other_stored,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum VersionKey {
     Other(String),

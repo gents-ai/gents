@@ -1270,10 +1270,39 @@ impl PackInstaller {
             "--limit must be between 1 and 50"
         );
         let store = self.home.as_deref().map(crate::pack_store::PackStore::new);
-        let names = match &store {
-            Some(store) => store.names()?,
-            None => Vec::new(),
+        let mut names: BTreeMap<_, _> = match &store {
+            Some(store) => store.names()?.into_iter().collect(),
+            None => BTreeMap::new(),
         };
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let mut installed = BTreeMap::new();
+        for record in crate::pack::list_installed_packs(&access, self.core.node_did()).await? {
+            names.entry(record.coordinate.clone()).or_default();
+            installed.insert(
+                record.coordinate.clone(),
+                (
+                    serde_json::to_value(record)?,
+                    crate::pack::PackKind::Documents,
+                ),
+            );
+        }
+        if let Some(home) = self.home.as_deref() {
+            for record in crate::pack::list_home_installs(home)? {
+                if record.kind == crate::pack::PackKind::Documents {
+                    continue;
+                }
+                anyhow::ensure!(
+                    !installed.contains_key(&record.coordinate),
+                    "pack {} has conflicting installed kinds",
+                    record.coordinate
+                );
+                names.entry(record.coordinate.clone()).or_default();
+                installed.insert(
+                    record.coordinate.clone(),
+                    (serde_json::to_value(&record)?, record.kind),
+                );
+            }
+        }
         let total = names.len();
         let mut selected = names
             .into_iter()
@@ -1287,48 +1316,63 @@ impl PackInstaller {
             .flatten();
         let mut items = Vec::with_capacity(selected.len());
         for (coordinate, versions) in selected {
-            let (Some(store), Some(preferred)) = (&store, versions.first()) else {
-                continue;
+            let current = installed.get(&coordinate);
+            let current_name = current
+                .map(|(record, _)| -> Result<crate::pack_store::StoredName> {
+                    Ok(crate::pack_store::StoredName {
+                        version: record["version"]
+                            .as_str()
+                            .context("installed pack version is missing")?
+                            .to_owned(),
+                        digest: record["digest"]
+                            .as_str()
+                            .context("installed pack digest is missing")?
+                            .to_owned(),
+                    })
+                })
+                .transpose()?;
+            let listing = crate::pack_store::list_pack_versions(&versions, current_name);
+            let preferred = versions.first();
+            let display = listing.installed.as_ref().or(preferred);
+            let archive = match (&store, display) {
+                (Some(store), Some(entry)) => store.open(&entry.digest).map(Some),
+                _ => Ok(None),
             };
-            let archive = match store.open(&preferred.digest) {
-                Ok(archive) => archive,
-                Err(error) => {
-                    tracing::warn!(pack = %coordinate, %error, "a stored pack archive could not be opened");
-                    items.push(json!({
-                        "name": coordinate,
-                        "version": preferred.version,
-                        "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
-                        "artifact_digest": preferred.digest,
-                        "installable": false,
-                        "error": format!("the stored archive could not be opened: {error:#}"),
-                    }));
-                    continue;
-                }
+            let (manifest, error) = match &archive {
+                Ok(Some(archive)) => (Some(archive.manifest()), None),
+                Ok(None) => (None, None),
+                Err(error) => (
+                    None,
+                    Some(format!("the stored archive could not be opened: {error:#}")),
+                ),
             };
-            let manifest = archive.manifest();
-            let installable = matches!(
-                manifest.metadata.kind,
-                crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
-            );
-            let installed = if installable {
-                self.installation_status(manifest).await?
-            } else {
-                None
-            };
+            let kind = current
+                .map(|(_, kind)| kind)
+                .or_else(|| manifest.map(|manifest| &manifest.metadata.kind));
+            let installable = kind.is_some_and(|kind| {
+                matches!(
+                    kind,
+                    crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
+                )
+            });
             items.push(json!({
                 "name": coordinate,
-                "version": preferred.version,
+                "version": listing.installed.as_ref().map(|entry| &entry.version),
                 "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
-                "description": manifest.description,
-                "kind": manifest.metadata.kind,
-                "artifact_digest": preferred.digest,
-                "inference_slots": manifest.metadata.inference_slots,
+                "available_version": preferred.map(|entry| &entry.version),
+                "other_stored_versions": listing.other_stored.iter().map(|entry| json!({"version": entry.version, "digest": entry.digest})).collect::<Vec<_>>(),
+                "description": manifest.map(|manifest| &manifest.description),
+                "kind": kind,
+                "artifact_digest": display.map(|entry| &entry.digest),
+                "installed_digest": listing.installed.as_ref().map(|entry| &entry.digest),
+                "inference_slots": manifest.map(|manifest| &manifest.metadata.inference_slots),
                 "installable": installable,
-                "installed": installed,
+                "installed": current.map(|(record, _)| record),
+                "error": error,
             }));
         }
         Ok(serde_json::to_string_pretty(&json!({
-            "source": "store",
+            "source": "store_and_installations",
             "page": {
                 "limit": limit,
                 "total": total,
@@ -1337,7 +1381,7 @@ impl PackInstaller {
                 "next_cursor": next_cursor,
             },
             "items": items,
-            "registry_lookup": "Use pack search to discover registry packages, then pack get NAMESPACE/NAME to inspect one. List shows only packs this home's store already holds.",
+            "registry_lookup": "Use pack search to discover registry packages, then pack get NAMESPACE/NAME to inspect one. List shows installed packs and artifacts this home's store already holds.",
         }))?)
     }
 
