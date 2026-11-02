@@ -141,9 +141,20 @@ pub(crate) fn session_summaries(
             let lifecycle = request
                 .and_then(|request| request.lifecycle_state)
                 .or_else(|| indexed.map(|indexed| indexed.lifecycle_state));
-            let trigger_owner = request
-                .filter(|request| request.caused_by_trigger_id.is_some())
-                .or_else(|| exact.filter(|request| request.caused_by_trigger_id.is_some()));
+            let opening_doc = session
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.opening_request_doc_id.as_deref());
+            let mut openings = session_requests.iter().copied().filter(|candidate| {
+                opening_doc.is_some()
+                    && candidate.doc_id.as_deref() == opening_doc
+                    && candidate.agent_id.as_deref() == Some(session.agent_id.as_str())
+            });
+            let opening = openings.next().filter(|_| openings.next().is_none());
+            let trigger_owner = opening
+                .filter(|request| request.caused_by_trigger_kind.is_some())
+                .or_else(|| request.filter(|request| request.caused_by_trigger_kind.is_some()))
+                .or_else(|| exact.filter(|request| request.caused_by_trigger_kind.is_some()));
             let trigger_id = trigger_owner.and_then(|request| request.caused_by_trigger_id.clone());
             let trigger_kind =
                 trigger_owner.and_then(|request| request.caused_by_trigger_kind.clone());
@@ -232,18 +243,76 @@ pub(super) fn task_run_histories(
             tasks.push(task_id);
         }
     }
+    let mut openings: RapidHashMap<(&str, Option<&str>, &str, &str), Option<&str>> =
+        RapidHashMap::new();
+    for session in store
+        .sessions
+        .iter()
+        .filter(|session| session.node_did == node_did)
+    {
+        let Some(provenance) = &session.provenance else {
+            continue;
+        };
+        let (Some(task), Some(opening)) = (
+            provenance.task_id.as_deref(),
+            provenance.opening_request_doc_id.as_deref(),
+        ) else {
+            continue;
+        };
+        let key = (
+            session.session_id.as_str(),
+            session.requester_did.as_deref(),
+            opening,
+            session.agent_id.as_str(),
+        );
+        openings
+            .entry(key)
+            .and_modify(|value| *value = None)
+            .or_insert(Some(task));
+    }
+    let mut opening_request_counts: RapidHashMap<(&str, Option<&str>, &str, &str), usize> =
+        RapidHashMap::new();
+    for request in store
+        .requests
+        .iter()
+        .filter(|request| request_matches_node(request, node_did))
+    {
+        if let (Some(session), Some(doc), Some(agent)) = (
+            request.session_id.as_deref(),
+            request.doc_id.as_deref(),
+            request.agent_id.as_deref(),
+        ) {
+            let key = (session, request.requester_did.as_deref(), doc, agent);
+            if openings.contains_key(&key) {
+                *opening_request_counts.entry(key).or_default() += 1;
+            }
+        }
+    }
     let mut latest: RapidHashMap<&str, Vec<&AgentRequestRow>> = RapidHashMap::new();
     for request in &store.requests {
         if !request_matches_node(request, node_did) {
             continue;
         }
-        let Some(tasks) = request
+        let mut tasks = request
             .caused_by_trigger_id
             .as_deref()
             .and_then(|id| trigger_tasks.get(id))
-        else {
-            continue;
-        };
+            .cloned()
+            .unwrap_or_default();
+        if let (Some(session), Some(doc), Some(agent)) = (
+            request.session_id.as_deref(),
+            request.doc_id.as_deref(),
+            request.agent_id.as_deref(),
+        ) {
+            let key = (session, request.requester_did.as_deref(), doc, agent);
+            if opening_request_counts.get(&key) == Some(&1) {
+                if let Some(Some(task)) = openings.get(&key) {
+                    if !tasks.contains(task) {
+                        tasks.push(*task);
+                    }
+                }
+            }
+        }
         for task in tasks {
             let rows = latest.entry(task).or_default();
             rows.push(request);

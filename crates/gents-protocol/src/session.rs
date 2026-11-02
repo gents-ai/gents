@@ -114,8 +114,8 @@ pub struct SessionProvenance {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub started_by: Option<SessionReference>,
     /// The request whose claim or refusal created this session through a
-    /// calling tool call, recorded once with `parent_request_doc_id` and
-    /// never rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
+    /// calling tool call or Task delivery. It is recorded once and never
+    /// rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
     /// Readers open a caused session at it (Lean
     /// `DurableLineage.openingRequest`); a session created before it was
     /// recorded has none and falls back to `(created_at, _docID)`.
