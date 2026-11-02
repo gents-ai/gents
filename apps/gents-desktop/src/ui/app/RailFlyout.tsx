@@ -441,6 +441,21 @@ export function RailFlyout({
   );
   const hover = mode === "hover" && !peek;
   const closings = useClosings(peek ? peekOpen : hover ? open : true, portal);
+  /* a menu from the panel draws inside it, so the pointer on the menu is
+     inside; when the menu goes away from under the pointer (a choice was
+     made), no leave event follows, so the next move outside closes it */
+  useEffect(() => {
+    if (!hover || !open || !portal) return;
+    const moved = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || !(e.target instanceof Node)) return;
+      const inside = portal.contains(e.target);
+      if (inside === pointerInside.current) return;
+      pointerInside.current = inside;
+      later(inside, inside ? 0 : CLOSE_AFTER);
+    };
+    document.addEventListener("pointermove", moved);
+    return () => document.removeEventListener("pointermove", moved);
+  }, [hover, open, portal]);
   if (mode === "collapsed") return <>{children}</>;
   const shown = mode === "expanded" || open || peek;
   const floating = hover || peek;

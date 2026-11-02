@@ -50,6 +50,21 @@ test.describe("the hover panel and what opens from it", () => {
     await expect(panel).toHaveAttribute("aria-hidden", "true");
   });
 
+  test("closes once a choice from its menu is made and the pointer moves away", async ({
+    page,
+  }) => {
+    await hoverMode(page);
+    const { panel, menu } = await openSwitcher(page);
+    const other = menu.getByRole("menuitemradio", { checked: false }).first();
+    const item = await centre(other);
+    await page.mouse.move(item.x, item.y, { steps: 8 });
+    await page.mouse.click(item.x, item.y);
+    await expect(menu).toBeHidden();
+    /* the menu went from under the pointer, which now rests outside the panel */
+    await page.mouse.move(item.x + 40, item.y + 10, { steps: 4 });
+    await expect(panel).toHaveAttribute("aria-hidden", "true");
+  });
+
   test("close together when the pointer goes back to the panel and leaves it", async ({
     page,
   }) => {
