@@ -90,6 +90,15 @@ export function useRenameFromMenu(start: (() => void) | null) {
   };
 }
 
+/** Pins or unpins a session, with an Undo that puts it back where it was. */
+export function pinSession(key: string, next: boolean, pinned: readonly string[]) {
+  const at = pinned.indexOf(key);
+  preferences.setPinned(key, next);
+  toast(next ? "Pinned" : "Unpinned", {
+    action: { label: "Undo", onClick: () => preferences.setPinned(key, !next, at) },
+  });
+}
+
 /** what can be done to a session wherever it shows: its row and its header */
 export function SessionItems({
   session,
@@ -139,13 +148,7 @@ export function SessionItems({
       },
     });
   };
-  const pin = (next: boolean) => {
-    const at = pinnedKeys.indexOf(key);
-    preferences.setPinned(key, next);
-    toast(next ? "Pinned" : "Unpinned", {
-      action: { label: "Undo", onClick: () => preferences.setPinned(key, !next, at) },
-    });
-  };
+  const pin = (next: boolean) => pinSession(key, next, pinnedKeys);
   const archive = (target: SessionSummary, archived: boolean) => {
     actions.setSessionArchived(target, archived).then(
       (receipt) => {

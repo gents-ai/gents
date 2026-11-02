@@ -138,18 +138,20 @@ export function DayMarker({ day }: { day: number }) {
 }
 
 /* the rows that open a day: the first dated row after one from an earlier
-   day, or the first dated row drawn */
+   day, or the first dated row drawn unless it is from today, which a
+   session begun today needn't be told */
 export function dayOpenings<T>(
-  rows: T[],
+  rows: readonly T[],
   keyOf: (row: T) => string,
   timestampOf: (row: T) => string | null | undefined,
+  today = dayStart(new Date()),
 ) {
   const opens = new Map<string, number>();
   let last: number | null = null;
   for (const row of rows) {
     const day = dayOf(timestampOf(row));
     if (day === null || day === last) continue;
-    opens.set(keyOf(row), day);
+    if (last !== null || day !== today) opens.set(keyOf(row), day);
     last = day;
   }
   return opens;

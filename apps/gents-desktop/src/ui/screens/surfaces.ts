@@ -8,6 +8,7 @@ import { WorkersSurface } from "./WorkersSurface";
 registerSurface({
   id: "workers",
   title: "Started sessions",
+  tab: "Started",
   icon: SquareStack,
   placements: ["dock", "sheet"],
   routes: ["session"],

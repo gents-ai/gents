@@ -12,7 +12,7 @@ import {
 import { cn } from "@gents/ui/lib/utils";
 import { Hint } from "@/screens/Hint";
 import { useSurfaces } from "./surfaces";
-import { inScope } from "./dock-scope";
+import { dockView, inScope } from "./dock-scope";
 import { useDock } from "./workspace";
 
 export function PanelMenu({
@@ -28,11 +28,11 @@ export function PanelMenu({
   children?: ReactNode;
 }) {
   const { dock, closeTab, openSurface, closeDock, reopenDock } = useDock();
-  const surfaces = useSurfaces().filter(
+  const all = useSurfaces();
+  const surfaces = all.filter(
     (s) => s.placements.includes("dock") && inScope(s, routeName),
   );
-  const showing =
-    dock.open && dock.tabs.some((id) => surfaces.some((s) => s.id === id));
+  const showing = dockView(dock, routeName, all).shown;
   return (
     <DropdownMenu onOpenChange={onOpenChange}>
       <Hint label="More">
@@ -77,14 +77,14 @@ export function PanelMenu({
             );
           })}
         </DropdownMenuGroup>
-        {dock.tabs.length > 0 && (
+        {surfaces.length > 0 && (
           <>
             <DropdownMenuSeparator className="max-md:hidden" />
             <DropdownMenuItem
               className="max-md:hidden"
-              onClick={() => (dock.open ? closeDock() : reopenDock())}
+              onClick={() => (showing ? closeDock() : reopenDock())}
             >
-              {dock.open ? "Hide panel" : "Show panel"}
+              {showing ? "Hide panel" : "Show panel"}
             </DropdownMenuItem>
           </>
         )}

@@ -1,6 +1,14 @@
 import { createContext } from "react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, Inbox, Lock, Plus, ScrollText, Waypoints } from "lucide-react";
+import {
+  ChevronRight,
+  CornerDownRight,
+  Inbox,
+  Lock,
+  Plus,
+  ScrollText,
+  Waypoints,
+} from "lucide-react";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
@@ -10,10 +18,14 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { ListedSessionStatus } from "@/screens/SessionStatus";
+import { Hint } from "@/screens/Hint";
+import { parentOf, useFleet } from "@/hooks/useFleet";
 import { SyncHealth } from "./SyncHealth";
+import { NodeSwitcher } from "./NodeSwitcher";
+import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { RecentFilter } from "./RecentFilter";
-import { listViews, useListViews } from "./listViews";
-import { emptyFilter, hasFilter } from "@/lib/session-filter";
+import { listViews, recentDefault, useListViews } from "./listViews";
+import { sameFilter } from "@/lib/session-filter";
 import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
@@ -32,17 +44,34 @@ const OPEN_AFTER = 80;
 const CLOSE_AFTER = 180;
 const RECENT = 8;
 
+/* a row's key, faint, once the pointer rests on it or it has focus; a sweep
+   down the nav shows none */
+export function KeyHint({ keys }: { keys?: string }) {
+  if (!keys) return null;
+  return (
+    <span
+      aria-hidden
+      className="shrink-0 font-mono text-[11px] text-muted-foreground opacity-0 transition-opacity delay-0 group-hover/item:opacity-100 group-hover/item:delay-500 group-focus-visible/item:opacity-100"
+    >
+      {keys}
+    </span>
+  );
+}
+
 function Item({
   to,
   active,
   count,
   icon,
+  keys,
   children,
 }: {
   to: string;
   active?: boolean;
   count?: number;
   icon: ReactNode;
+  /** the key that goes here, named on hover */
+  keys?: string;
   children: ReactNode;
 }) {
   return (
@@ -50,12 +79,17 @@ function Item({
       href={to}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pr-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        "group/item mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pr-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
         active && "border-border/60 bg-background text-ink shadow-xs",
+        /* on the window's ground the page colour wouldn't show; the rail's
+           fill alone marks the page there */
+        active &&
+          "in-data-[ground=window]:border-transparent in-data-[ground=window]:bg-raised in-data-[ground=window]:shadow-none",
       )}
     >
       <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
+      <KeyHint keys={keys} />
       {count ? (
         <span className="grid h-4 min-w-4 place-items-center rounded-full bg-brand px-1 font-mono text-[10px] leading-none text-brand-foreground">
           {count}
@@ -83,7 +117,9 @@ export function NavPanel({
   const pinned = usePinnedSessionList();
   const recent = useRecentSessions(RECENT);
   const recentCandidates = useRecentCandidates();
-  const recentFiltered = useListViews((views) => hasFilter(views.recentFilter));
+  const recentFiltered = useListViews(
+    (views) => !sameFilter(views.recentFilter, recentDefault),
+  );
   const homeDid = useHomeDid();
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
@@ -115,49 +151,57 @@ export function NavPanel({
   return (
     <>
       {selected ? (
-        <a
-          href={href({
-            name: "agent",
-            nodeDid: selected.nodeDid,
-            section: "agent",
-          })}
-          aria-current={selectedCurrent ? "page" : undefined}
-          title={`${selected.node.displayName ?? selected.label} · ${selected.nodeDid}`}
-          data-testid="working-node"
+        /* the node goes to its page; the caret beside it switches node */
+        <div
           className={cn(
-            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
+            "mr-3 ml-[14px] flex items-center gap-1",
             railAligned ? "mb-1" : "mb-2",
-            selectedCurrent && "text-ink",
           )}
         >
-          <span
+          <a
+            href={href({
+              name: "agent",
+              nodeDid: selected.nodeDid,
+              section: "agent",
+            })}
+            aria-current={selectedCurrent ? "page" : undefined}
+            title={`${selected.node.displayName ?? selected.label} · ${selected.nodeDid}`}
+            data-testid="working-node"
             className={cn(
-              "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-raised transition-shadow group-hover:ring-muted-foreground",
-              selectedCurrent && "ring-2 ring-ink",
+              "group flex h-9 min-w-0 flex-1 items-center gap-3 rounded-lg text-sm transition-colors",
+              selectedCurrent && "text-ink",
             )}
           >
-            <NodeAvatar
-              name={selected.node.displayName ?? selected.label}
-              className="size-7"
-            />
             <span
               className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-raised",
-                online ? "bg-brand" : "bg-border",
+                "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
+                selectedCurrent && "ring-2 ring-ink",
               )}
-              aria-hidden="true"
-            />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-heading font-medium text-heading">
-              {selected.node.displayName ?? selected.label}
+            >
+              <NodeAvatar
+                name={selected.node.displayName ?? selected.label}
+                className="size-7"
+              />
+              <span
+                className={cn(
+                  "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
+                  online ? "bg-brand" : "bg-border",
+                )}
+                aria-hidden="true"
+              />
             </span>
-            <span className="block text-xs text-muted-foreground">
-              {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"} ·{" "}
-              {selected.nodeDid.slice(-8)}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-heading font-medium text-heading">
+                {selected.node.displayName ?? selected.label}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"} ·{" "}
+                {selected.nodeDid.slice(-8)}
+              </span>
             </span>
-          </span>
-        </a>
+          </a>
+          <NodeSwitcher route={route} current={selected.nodeDid} />
+        </div>
       ) : (
         <a
           href={href({ name: "nodes" })}
@@ -181,6 +225,7 @@ export function NavPanel({
       <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
       <Item
         to={href({ name: "session", sessionId: null })}
+        keys={PAGE_KEYS.newSession}
         active={route.name === "session" && route.sessionId === null}
         icon={<Plus className="size-4" />}
       >
@@ -188,6 +233,7 @@ export function NavPanel({
       </Item>
       <Item
         to={href({ name: "mailbox" })}
+        keys={MAILBOX_KEYS}
         active={route.name === "mailbox"}
         count={mailboxCount}
         icon={<Inbox className="size-4" />}
@@ -196,6 +242,7 @@ export function NavPanel({
       </Item>
       <Item
         to={href({ name: "sessions" })}
+        keys={PAGE_KEYS.sessions}
         active={
           route.name === "sessions" ||
           route.name === "sessionsUnder" ||
@@ -222,7 +269,7 @@ export function NavPanel({
         <>
           <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
             <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-              Recent sessions
+              Recent
             </p>
             <RecentFilter sessions={recentCandidates} />
           </div>
@@ -238,9 +285,9 @@ export function NavPanel({
                 <button
                   type="button"
                   className="cursor-pointer underline hover:text-foreground"
-                  onClick={() => listViews.setRecentFilter(emptyFilter)}
+                  onClick={() => listViews.setRecentFilter(recentDefault)}
                 >
-                  Clear filters
+                  Reset filters
                 </button>
               </p>
             )}
@@ -263,6 +310,7 @@ export function NavPanel({
         {footer.map(contributed)}
         <Item
           to={href({ name: "nodes" })}
+          keys={PAGE_KEYS.nodes}
           active={route.name === "nodes" || route.name === "agents"}
           count={nodeCount}
           icon={<Waypoints className="size-4" />}
@@ -291,6 +339,7 @@ export function RailFlyout({
   const [open, setOpen] = useState(false);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const timer = useRef<number | null>(null);
+  const pointerInside = useRef(false);
   const later = (next: boolean, ms: number) => {
     if (timer.current) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setOpen(next), ms);
@@ -308,17 +357,28 @@ export function RailFlyout({
     <div
       ref={setPortal}
       className="relative h-full"
-      onPointerEnter={(e) =>
-        hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)
-      }
-      onPointerLeave={() => hover && later(false, CLOSE_AFTER)}
+      onPointerEnter={(e) => {
+        pointerInside.current = true;
+        if (hover && e.pointerType === "mouse") later(true, OPEN_AFTER);
+      }}
+      onPointerLeave={() => {
+        pointerInside.current = false;
+        if (hover) later(false, CLOSE_AFTER);
+      }}
       onPointerDown={() => {
         if (timer.current) window.clearTimeout(timer.current);
       }}
       onPointerUp={(e) => hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)}
       onFocus={(e) => hover && e.target.matches(":focus-visible") && later(true, 0)}
       onBlur={(e) => {
-        if (hover && !e.currentTarget.contains(e.relatedTarget as Node | null))
+        /* focus leaving closes it for the keyboard; a page that focuses its
+           own field, as a session's composer does, mustn't close it under
+           the pointer */
+        if (
+          hover &&
+          !pointerInside.current &&
+          !e.currentTarget.contains(e.relatedTarget as Node | null)
+        )
           later(false, 0);
       }}
       onKeyDown={(e) => hover && e.key === "Escape" && setOpen(false)}
@@ -330,13 +390,15 @@ export function RailFlyout({
 
         <div
           aria-hidden={!shown}
+          data-ground={hover ? "raised" : "window"}
           className={cn(
-            "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
+            "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden pb-2",
             "left-1.5 pt-3.5",
-            "rounded-2xl border border-border/60",
+            /* floating over the page it is a surface of its own; always there,
+               it is part of the window, on the window's ground */
             hover
-              ? "z-30 shadow-lg transition-opacity duration-200 ease-out"
-              : "shadow-xs",
+              ? "z-30 rounded-2xl border border-border/60 bg-(--nav-ground) shadow-lg transition-opacity duration-200 ease-out [--nav-ground:var(--color-raised)] dark:[--nav-ground:color-mix(in_oklab,var(--color-raised),var(--color-surface))]"
+              : "[--nav-ground:var(--color-background)]",
             hover &&
               /* a fade, not a slide: its icons sit over the rail's and must
                  not move while it opens or closes */
@@ -346,7 +408,7 @@ export function RailFlyout({
           {/* the panel keeps its margin from the window's edge, and its
               content moves left by the rest, so each icon sits where the
               rail's does */}
-          <div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-2">
+          <div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-1">
             <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
           </div>
         </div>
@@ -362,24 +424,37 @@ function SessionLink({
   session: SessionSummary;
   current: string | null;
 }) {
-  return (
-    <li>
-      <a
-        href={href({ name: "session", sessionId: c.sessionId, nodeDid: c.nodeDid })}
-        aria-current={current === c.sessionId ? "page" : undefined}
-        className={cn(
-          "flex h-8 items-center gap-2.5 rounded-lg px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-          current === c.sessionId && "text-foreground",
+  const starter = useFleet((s) => (c.startedBy ? parentOf(s, c) : null));
+  /* a sub-session, shown in a list ordered by time: marked, not nested */
+  const startedBy = c.startedBy
+    ? `Started by ${starter ? (starter.title ?? "Untitled session") : "another session"}`
+    : null;
+  const link = (
+    <a
+      href={href({ name: "session", sessionId: c.sessionId, nodeDid: c.nodeDid })}
+      aria-current={current === c.sessionId ? "page" : undefined}
+      className={cn(
+        "flex h-8 items-center gap-2.5 rounded-lg px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        current === c.sessionId && "text-foreground",
+      )}
+    >
+      <ListedSessionStatus session={c} />
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        {startedBy && (
+          <CornerDownRight
+            className="size-3 shrink-0 text-muted-foreground/70"
+            role="img"
+            aria-label={startedBy}
+          />
         )}
-      >
-        <ListedSessionStatus session={c} />
-        <span className="min-w-0 flex-1 truncate">{c.title ?? "Untitled session"}</span>
-        {c.unreadableReason && (
-          <Lock className="size-3 shrink-0" role="img" aria-label={c.unreadableReason}>
-            <title>{c.unreadableReason}</title>
-          </Lock>
-        )}
-      </a>
-    </li>
+        <span className="min-w-0 truncate">{c.title ?? "Untitled session"}</span>
+      </span>
+      {c.unreadableReason && (
+        <Lock className="size-3 shrink-0" role="img" aria-label={c.unreadableReason}>
+          <title>{c.unreadableReason}</title>
+        </Lock>
+      )}
+    </a>
   );
+  return <li>{startedBy ? <Hint label={startedBy}>{link}</Hint> : link}</li>;
 }

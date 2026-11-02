@@ -49,6 +49,7 @@ import type { SessionContextView } from "@source-inc/gents-desktop-client/genera
 import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
+import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
 
 const NODE_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_AGENT_ID = "default";
@@ -159,6 +160,346 @@ function dayItems(): RenderedTimelineItem[] {
   ];
 }
 
+/* turns the person did not type: a message from another session, a run
+   of finished background calls and a scheduled run */
+function automatedInputItems(): RenderedTimelineItem[] {
+  const durable = (itemKey: string, sequence: number, timestamp: string) => ({
+    kind: "automatedInput" as const,
+    itemKey,
+    requestId: `request-${itemKey}`,
+    sequence,
+    timestamp,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+  });
+  const completion = (id: string, tool: string, status: string, result: string) =>
+    `<tool-completion tool_call_id="${id}" tool_name="${tool}" status="${status}">\n  <result>${result}</result>\n</tool-completion>`;
+  const command = (itemKey: string, toolCallId: string, text: string) => ({
+    itemKey,
+    toolName: "bash",
+    toolCallId,
+    statusKind: "success",
+    awaitMode: "background",
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command" as const,
+      command: text,
+      exitCode: 0,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: null,
+      executionMode: "read_only",
+      networkMode: "disabled",
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "auto-user",
+      requestId: "request-auto-user",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Run the tests and the lints in the background, and ask the reviewer.",
+      timestamp: "2026-06-03T14:06:00Z",
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "auto-tools",
+      messageSequence: 3,
+      tools: [
+        command("auto-test", "call-auto-test", "cargo test -p gents"),
+        command("auto-lint", "call-auto-lint", "make lint"),
+        {
+          itemKey: "auto-worker",
+          toolName: "agent_new",
+          toolCallId: "call-auto-worker",
+          requestId: "request-auto-user",
+          statusKind: "success",
+          awaitMode: "background",
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+          presentation: {
+            kind: "agent" as const,
+            action: "start",
+            name: "ops",
+            sessionId: "session-worker",
+            description: "Profile the slow parser path.",
+            output: "Session started.",
+          },
+        },
+      ],
+    },
+    harnessAssistantItem({
+      itemKey: "auto-reply",
+      sequence: 4,
+      content: "Both are running in the background; I asked the reviewer too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:06:30Z",
+    }),
+    {
+      ...durable("auto-message", 5, "2026-06-03T14:08:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: "session-reviewer",
+        senderRequestId: "request-reviewer",
+        displayBody:
+          "The parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+      },
+      content:
+        "[message agent:default session:session-reviewer node:did:key:z6MkHarness · at:2026-06-03T14:08:00Z · cause:request-reviewer]\n\nThe parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-message-reply",
+      sequence: 6,
+      content: "Thanks — added the early return.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:08:30Z",
+    }),
+    {
+      ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-test",
+        "bash",
+        "completed",
+        "test result: ok. 412 passed; 0 failed",
+      ),
+    },
+    {
+      ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-lint",
+        "bash",
+        "failed",
+        "error: unused import: `HashMap`",
+      ),
+    },
+    {
+      ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-worker",
+        "agent_new",
+        "completed",
+        "The slow path was a quadratic scan; profile attached.",
+      ),
+    },
+    {
+      ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-reply",
+      sequence: 11,
+      content: "Tests pass; lint flagged an unused import, which I removed.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:10:30Z",
+    }),
+    {
+      ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion("call-auto-other", "spawn_process", "completed", "done"),
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-single-reply",
+      sequence: 13,
+      content: "The validation suite finished too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:11:30Z",
+    }),
+    {
+      ...durable("auto-routed", 14, "2026-06-03T14:12:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: null,
+        senderRequestId: "request-worker-note",
+      },
+      content: `[message agent:ops session:session-worker node:${
+        NODE_DID.length > 20
+          ? `${NODE_DID.slice(0, 16)}..${NODE_DID.slice(-4)}`
+          : NODE_DID
+      } · at:2026-06-03T14:12:00Z · cause:request-worker-note]\n\nI also left a flame graph in \`target/profile.svg\`.`,
+    },
+    {
+      ...durable("auto-remote", 15, "2026-06-03T14:13:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: "did:key:z6MkSomeOtherNodeEntirely",
+        senderSessionId: null,
+        senderRequestId: null,
+      },
+      content: "A build on the release node is waiting for review.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-routed-reply",
+      sequence: 16,
+      content: "Noted both.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:13:30Z",
+    }),
+    {
+      ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    {
+      ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-note-reply",
+      sequence: 19,
+      content: "Checked the preview.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:20:30Z",
+    }),
+    {
+      ...durable("auto-schedule", 20, "2026-06-04T07:00:00Z"),
+      origin: {
+        kind: "trigger" as const,
+        triggerId: "nightly-report",
+        triggerKind: "schedule",
+      },
+      content: "Write the nightly report: what changed, what failed, what is next.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-schedule-reply",
+      sequence: 21,
+      content: "Nightly report: the parser fix landed and every check passes.",
+      reasoning: null,
+      timestamp: "2026-06-04T07:01:00Z",
+    }),
+    {
+      ...durable("auto-goal", 22, "2026-06-04T07:02:00Z"),
+      origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
+      content: "You are running under the durable goal controller. Continue the goal.",
+    },
+  ];
+}
+
+/* commands left running in the background, and ones that have ended each way */
+function backgroundItems(): RenderedTimelineItem[] {
+  const ago = (secs: number) => new Date(Date.now() - secs * 1000).toISOString();
+  const run = (
+    id: string,
+    command: string,
+    statusKind: string,
+    times: { started: number; ended?: number },
+    result: Partial<
+      Extract<RenderedToolCallView["presentation"], { kind: "command" }>
+    > = {},
+    tail: string | null = null,
+  ): RenderedToolCallView => ({
+    itemKey: `background-${id}`,
+    toolName: "bash",
+    statusKind,
+    requestId: "request-background",
+    toolCallId: `call-background-${id}`,
+    toolCallDocId: `doc-background-${id}`,
+    awaitMode: "background",
+    startedAt: ago(times.started),
+    completedAt: times.ended === undefined ? null : ago(times.ended),
+    partialOutputTail: tail,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command",
+      command,
+      exitCode: null,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: "~/src/gents",
+      executionMode: null,
+      networkMode: null,
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+      ...result,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "background-user",
+      requestId: "request-background",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Start the dev server and run the checks in the background.",
+      timestamp: ago(4_000),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "background-tools",
+      messageSequence: 3,
+      tools: [
+        run(
+          "build",
+          "cargo build --release",
+          "success",
+          { started: 4_000, ended: 3_748 },
+          { durationMs: 252_000, exitCode: 0, stdout: "Finished release" },
+        ),
+        run(
+          "e2e",
+          "npm run e2e",
+          "failed",
+          { started: 4_000, ended: 3_700 },
+          { durationMs: 300_000, timedOut: true },
+        ),
+        run(
+          "lint",
+          "pnpm lint --max-warnings 0",
+          "failed",
+          { started: 330, ended: 300 },
+          { durationMs: 30_000, failed: true },
+        ),
+        run(
+          "test",
+          "cargo test -p gents --lib",
+          "error",
+          { started: 158, ended: 120 },
+          {
+            durationMs: 38_000,
+            exitCode: 1,
+            failed: true,
+            stdout: "running 412 tests\ntest lifecycle::claims ... ok",
+            stderr: "test lifecycle::persistence ... FAILED",
+          },
+        ),
+        run("tail", "tail -f logs/dev.log", "cancelled", { started: 32, ended: 20 }),
+        run(
+          "watch",
+          "cargo watch -x check",
+          "running",
+          { started: 372 },
+          {},
+          "[Running 'cargo check']\n    Checking gents v0.7.0\n    Finished dev",
+        ),
+        run(
+          "dev",
+          "npm run dev -- --host 127.0.0.1 --port 5173",
+          "running",
+          { started: 42 },
+          {},
+          "VITE ready in 412 ms\n\n  ➜  Local:   http://127.0.0.1:5173/",
+        ),
+      ],
+    },
+  ];
+}
+
 function harnessAssistantItem(
   item: Omit<
     Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
@@ -192,7 +533,9 @@ export type DesktopUiHarnessScenario =
   | "sync-offline"
   | "storage-recovery"
   | "sync-failed"
-  | "days";
+  | "days"
+  | "automated-inputs"
+  | "background";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -734,6 +1077,8 @@ export function createDesktopUiHarness(
           ]
         : []),
       ...(scenario === "days" ? dayItems() : []),
+      ...(scenario === "automated-inputs" ? automatedInputItems() : []),
+      ...(scenario === "background" ? backgroundItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -884,6 +1229,44 @@ export function createDesktopUiHarness(
       inferenceBackends: [],
       inferenceProfiles: [],
     };
+  }
+  if (scenario === "automated-inputs") {
+    sessions.set("session-worker", {
+      sessionId: "session-worker",
+      nodeDid: NODE_DID,
+      agentId: "ops",
+      title: "slow worker (ops)",
+      previewText: "The slow path was a quadratic scan.",
+      status: "active",
+      turnState: "completed",
+      latestRequestId: "request-worker",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      latestRequestOutcome: null,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+      timelineItems: [],
+    });
+    sessions.set("session-reviewer", {
+      sessionId: "session-reviewer",
+      nodeDid: NODE_DID,
+      agentId: DEFAULT_AGENT_ID,
+      title: "Review the parser change",
+      previewText: "The parser change looks right.",
+      status: "active",
+      turnState: "completed",
+      latestRequestId: "request-reviewer",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      latestRequestOutcome: null,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+      timelineItems: [],
+    });
   }
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
@@ -1397,6 +1780,10 @@ export function createDesktopUiHarness(
     },
     async searchPacks() {
       return { packs: [], has_more: false };
+    },
+    async packInfo(pack: string) {
+      const [namespace, name] = pack.split("/");
+      return { namespace, name, versions: [] };
     },
     async installPack() {},
     async updatePack() {},
@@ -3085,7 +3472,23 @@ export function createDesktopUiHarness(
         sent: [],
         received: [],
         senders: [],
-        calls: [],
+        calls:
+          scenario === "automated-inputs" && request.sessionId === "session-intro"
+            ? [
+                {
+                  requestId: "request-auto-user",
+                  toolCallId: "call-auto-worker",
+                  caused: {
+                    requestId: "request-worker",
+                    nodeDid: NODE_DID,
+                    sessionId: "session-worker",
+                    requesterDid: null,
+                    lifecycleState: "completed",
+                    createdAt: null,
+                  },
+                },
+              ]
+            : [],
       };
       return view;
     },
@@ -4184,6 +4587,8 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "storage-recovery":
     case "sync-failed":
     case "days":
+    case "automated-inputs":
+    case "background":
       return value;
     default:
       return "default";

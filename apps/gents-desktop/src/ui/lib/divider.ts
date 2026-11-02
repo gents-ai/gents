@@ -199,6 +199,11 @@ export function useDivider({
     atEnd.current = false;
     settle(clampOpen(rest.current));
   }, [settle, clampOpen]);
+  /* the same end a drag past the pane's minimum snaps to */
+  const hidePane = useCallback(() => {
+    atEnd.current = true;
+    settle(end);
+  }, [settle, end]);
 
   return {
     pos,
@@ -211,6 +216,7 @@ export function useDivider({
     paneHidden: atEnd.current && !dragging && !settling && pos >= end - 0.5,
     toEnd: end > max ? Math.max(0, Math.min(1, (pos - max) / (end - max))) : 0,
     showPane,
+    hidePane,
     jumpClosed,
     handleProps: {
       role: "separator" as const,

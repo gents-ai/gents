@@ -15,7 +15,7 @@ import {
   TagsRow,
 } from "./editors";
 import { newId, useDraft } from "./draft";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { Group } from "./rows";
 import {
   actionInWords,
@@ -266,6 +266,7 @@ export function TriggerEditor({
             ...deployment.tasks.map((t) => ({
               value: t.taskId,
               label: t.name ?? t.taskId,
+              pack: packOrigin(t.tags),
             })),
             ...(pending.task
               ? [
@@ -310,6 +311,7 @@ export function TriggerEditor({
               ...deployment.schedules.map((s) => ({
                 value: s.schedule_id,
                 label: s.display_name ?? cadenceInWords(s),
+                pack: packOrigin(s.tags),
               })),
               ...(pending.schedule
                 ? [
@@ -335,6 +337,7 @@ export function TriggerEditor({
               ...deployment.eventSources.map((s) => ({
                 value: s.event_source_id,
                 label: s.display_name ?? eventInWords(s),
+                pack: packOrigin(s.tags),
               })),
               ...(pending.event
                 ? [

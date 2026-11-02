@@ -168,6 +168,35 @@ for (const rest of ["remembered", "widest"] as const) {
   });
 }
 
+test("Show panel with nothing open shows the panels to open, and opens the one picked", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Show panel" }).click();
+
+  const dock = page.getByTestId("dock");
+  await expect(dock).toHaveAccessibleName("Panels");
+  await expect(dock.getByRole("button")).toHaveText([
+    "Started sessions",
+    "Background",
+    "Changes",
+  ]);
+  await dock.getByRole("button", { name: "Changes" }).click();
+  await expect(
+    page.getByRole("tablist", { name: "Panels" }).getByRole("tab", { name: "Changes" }),
+  ).toHaveAttribute("aria-selected", "true");
+
+  /* the last tab closed closes the dock, and the menu offers it again */
+  await page.getByRole("tab", { name: "Changes" }).press("Delete");
+  await expect(dock).toHaveCount(0);
+  await page.getByRole("button", { name: "More" }).first().click();
+  await expect(page.getByRole("menuitem", { name: "Show panel" })).toBeVisible();
+});
+
 test("the dock's + opens a panel that isn't open yet, and stays in view when tabs overflow", async ({
   page,
 }) => {
@@ -272,4 +301,30 @@ test("the add-panel trigger stays fixed while its dock expands during a press", 
   await expect(
     page.getByRole("tab", { name: "Background", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
+});
+
+test("the dock's expand button fills the window with the panel and gives the session back", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "webkit-desktop", "one engine");
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
+
+  const dock = page.getByTestId("dock");
+  const narrow = (await dock.boundingBox())!.width;
+  await page.getByRole("button", { name: "Expand panel" }).click();
+  await expect(page.getByTitle("Show the session")).toBeVisible();
+  await expect
+    .poll(async () => (await dock.boundingBox())!.width)
+    .toBeGreaterThan(1500 - 56 - 40);
+
+  await page.getByRole("button", { name: "Restore panel" }).click();
+  await expect(page.getByRole("button", { name: "Expand panel" })).toBeVisible();
+  await expect
+    .poll(async () => Math.round((await dock.boundingBox())!.width))
+    .toBe(Math.round(narrow));
 });

@@ -11,8 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, Copy } from "lucide-react";
-import { toast } from "sonner";
+import { Copy } from "lucide-react";
 import type {
   DerivedCancelCauseView,
   DesktopSessionSnapshot,
@@ -22,6 +21,7 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
+import { formatMessageTime } from "@source-inc/gents-desktop-ui";
 import { SentText } from "./SkillChips";
 import { writtenText } from "@/lib/skillLines";
 import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
@@ -32,7 +32,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@gents/ui/components/collapsible";
-import { Hint } from "./Hint";
 
 import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
@@ -53,6 +52,8 @@ import {
 import { type Workers } from "./workers";
 import {
   AutomatedInput,
+  BackgroundResults,
+  oneLine,
   UserInputWithState,
   pendingInputState,
   SentContext,
@@ -61,12 +62,19 @@ import {
 import { type ParentWork } from "./parentWork";
 import { useEditInBranch } from "./session/editInBranch";
 import { CompactionMarker, DayMarker, dayOpenings } from "./TranscriptMarker";
+import { Hint } from "./Hint";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
-import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
-import { useCopied } from "@/lib/clipboard";
+import {
+  type BackgroundResult,
+  groupTranscript,
+  type TranscriptEntry,
+} from "./transcript-groups";
+import { copyText } from "@/lib/clipboard";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
+import { duration } from "@/lib/duration";
+import { LONG_TURN_MS, turnsWorked } from "@/lib/turnWorked";
 import { TurnChanges } from "./TurnChanges";
 import { toastFailure } from "@/lib/failure";
 import { sessionViews } from "@/app/sessionViews";
@@ -98,10 +106,7 @@ function copyActions(text: string | null | undefined) {
     {
       label: "Copy",
       icon: <Copy />,
-      onClick: () => {
-        void navigator.clipboard?.writeText(text ?? "");
-        toast("Copied");
-      },
+      onClick: () => copyText(text ?? ""),
     },
   ];
 }
@@ -159,6 +164,24 @@ const ParentContext = createContext<ParentWork | null>(null);
    what led up to it */
 const PLACE_OFFSET = 96;
 
+/* when a message was sent, beside its actions: the time, with the date
+   when it isn't today, and the full date and time on hover, with how long
+   its turn worked; a long turn says that beside the time too */
+function sentAt(at: string | null | undefined, worked?: number) {
+  const label = formatMessageTime(at);
+  if (!label) return undefined;
+  const full = new Date(at!).toLocaleString();
+  const took = worked === undefined ? null : `Worked for ${duration(worked)}`;
+  return (
+    <>
+      <Hint label={took ? `${full} · ${took}` : full}>
+        <time dateTime={at!}>{label}</time>
+      </Hint>
+      {took && worked! > LONG_TURN_MS && <span> · {took}</span>}
+    </>
+  );
+}
+
 function OwnInput({
   item,
   state,
@@ -184,6 +207,7 @@ function OwnInput({
                   ...(branch ? [branch] : []),
                 ]
           }
+          meta={item.kind === "userMessage" ? sentAt(item.timestamp) : undefined}
         />
       )}
       <SentAttachments
@@ -229,19 +253,27 @@ function ModelInputReduction({
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
-  final = false,
+  worked,
+  background,
+  workers,
 }: {
   item: RenderedTimelineItem;
-  final?: boolean;
+  /** how long the turn this item ends worked, in milliseconds */
+  worked?: number;
+  background?: BackgroundResult[];
+  workers?: Workers;
 }) {
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
     case "automatedInput":
+      if (background)
+        return <BackgroundResults results={background} workers={workers} />;
       return (
         <AutomatedInput
           origin={item.origin}
           content={item.content}
           reconstruction={item.reconstruction}
+          stateKey={item.itemKey}
         />
       );
     case "userMessage":
@@ -252,7 +284,12 @@ const TranscriptItem = memo(function TranscriptItem({
           : null;
       if (item.kind === "pendingUserTurn" && item.origin) {
         return (
-          <AutomatedInput origin={item.origin} content={item.content} state={state} />
+          <AutomatedInput
+            origin={item.origin}
+            content={item.content}
+            state={state}
+            stateKey={item.itemKey}
+          />
         );
       }
       const sender = parentWork?.sentBy(item.requestId) ?? null;
@@ -304,7 +341,7 @@ const TranscriptItem = memo(function TranscriptItem({
     }
     case "assistantMessage":
     case "liveAssistant":
-      return <Reply item={item} final={final} />;
+      return <Reply item={item} worked={worked} />;
     case "toolGroup":
       return null;
     case "requestContextReductionSummary":
@@ -374,10 +411,10 @@ function StoppedNotice({
 
 function Reply({
   item,
-  final,
+  worked,
 }: {
   item: Extract<RenderedTimelineItem, { kind: "assistantMessage" | "liveAssistant" }>;
-  final: boolean;
+  worked?: number;
 }) {
   const live = item.kind === "liveAssistant";
   return (
@@ -385,10 +422,11 @@ function Reply({
       <AssistantMessage
         className={item.content ? "py-4" : undefined}
         actions={
-          !live && item.content && !final
+          !live && item.content
             ? copyActions(writtenText(item.content ?? "", []))
             : false
         }
+        meta={!live && item.content ? sentAt(item.timestamp, worked) : undefined}
       >
         {readableReasoning(item.reasoning) ? (
           <Reasoning
@@ -402,7 +440,6 @@ function Reply({
         ) : null}
         {item.content ? <ReplyText content={item.content} live={live} /> : null}
       </AssistantMessage>
-      {final && item.content ? <ResponseActions text={item.content} /> : null}
     </div>
   );
 }
@@ -413,46 +450,27 @@ function ReplyText({ content, live }: { content: string; live: boolean }) {
   return <StreamText text={content} directives />;
 }
 
-function ResponseActions({ text }: { text: string }) {
-  const { copied, copy } = useCopied();
-  return (
-    <div
-      className={cn(
-        "-mt-1 flex items-center gap-1 px-1 transition-opacity duration-150 motion-reduce:transition-none",
-        !copied &&
-          "sm:opacity-0 sm:group-hover/response:opacity-100 sm:focus-within:opacity-100",
-      )}
-      data-testid="response-actions"
-    >
-      <Hint label={copied ? "Copied" : "Copy response"}>
-        <Button
-          variant="quiet"
-          size="icon-xs"
-          aria-label="Copy response"
-          onClick={() => copy(text)}
-        >
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-        </Button>
-      </Hint>
-    </div>
-  );
-}
-
 type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };
 
 const ItemRow = memo(function ItemRow({
   rowKey,
   item,
-  final,
+  background,
+  workers,
   changes,
+  worked,
   day,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
   item: RenderedTimelineItem;
-  final: boolean;
+  background?: BackgroundResult[];
+  /** the sessions this one's calls reached, for background results */
+  workers?: Workers;
   /** the files the turn this row ends changed, in its session */
   changes?: ItemChanges;
+  /** how long the turn this row ends worked, in milliseconds */
+  worked?: number;
   /** the day this row opens, when it is the first of its day */
   day: number | null;
 }) {
@@ -469,7 +487,12 @@ const ItemRow = memo(function ItemRow({
           <DayMarker day={day} />
         </div>
       )}
-      <TranscriptItem item={item} final={final} />
+      <TranscriptItem
+        item={item}
+        worked={worked}
+        background={background}
+        workers={workers}
+      />
       {changes && (
         <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
       )}
@@ -526,9 +549,11 @@ function shapeOf(entry: TranscriptEntry, changedFiles = 0): RowShape {
     return { kind: "group", open: !entry.settled, steps: entry.members.length };
   const item = entry.item;
   switch (item.kind) {
+    case "automatedInput":
+      if (oneLine(item.origin)) return { kind: "other" };
+      return { kind: "user", text: item.content ?? "" };
     case "userMessage":
     case "pendingUserTurn":
-    case "automatedInput":
       return {
         kind: "user",
         text: item.content ?? "",
@@ -693,6 +718,10 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     keptChanges.current = next;
     return next;
   }, [entries, finalKeys, startLoaded, nodeDid, sessionKey]);
+  const worked = useMemo(
+    () => turnsWorked(entries, finalKeys, startLoaded),
+    [entries, finalKeys, startLoaded],
+  );
   const groupState = useGroupState(sessionKey);
   const dayOpens = useMemo(
     () =>
@@ -823,8 +852,10 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     if (!asked || entries.length === 0) return;
     const read = readFor === asked.id;
     const byItem = asked.itemKey
-      ? entries.find(
-          (entry) => entry.kind === "item" && entry.item.itemKey === asked.itemKey,
+      ? entries.find((entry) =>
+          entry.kind === "item"
+            ? entry.item.itemKey === asked.itemKey
+            : entry.members.some((member) => member.key === asked.itemKey),
         )
       : undefined;
     const byMessage =
@@ -939,8 +970,10 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                       <ItemRow
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
-                        final={finalKeys.has(entry.key)}
+                        background={entry.background}
+                        workers={entry.background && workers}
                         changes={changes.get(entry.key)}
+                        worked={worked.get(entry.key)}
                         day={dayOpens.get(entry.key) ?? null}
                       />
                     ) : (

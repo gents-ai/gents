@@ -101,13 +101,14 @@ test.describe("half-screen window", () => {
         .getByRole("link", { name: /^Ops\b/ })
         .first()
         .click();
+      await page.getByRole("button", { name: "Edit" }).click();
       const name = page.getByRole("textbox", { name: "Display name" });
       await expectInsideViewport(page, name);
       await expectNoPageHorizontalOverflow(page);
 
       await page.getByRole("button", { name: "Menu" }).click();
       await page.getByRole("link", { name: "Settings" }).click();
-      await expectInsideViewport(page, page.getByRole("combobox", { name: "Theme" }));
+      await expectInsideViewport(page, page.getByRole("group", { name: "Theme" }));
     });
   }
 
@@ -207,5 +208,70 @@ test.describe("nav modes", () => {
     }
     expect(places.expanded!.x).toBeCloseTo(places.hover!.x, 0);
     expect(places.collapsed!.x).toBeCloseTo(places.hover!.x, 0);
+  });
+
+  test("an expanded nav names a row's key only once the pointer rests on it", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    await page.evaluate(() =>
+      localStorage.setItem(
+        "gents-preferences",
+        JSON.stringify({ state: { nav: "expanded" }, version: 1 }),
+      ),
+    );
+    await page.reload();
+    const row = page.locator("[data-ground=window] a", { hasText: "Mailbox" }).first();
+    const hint = row.locator("span[aria-hidden].font-mono");
+    const opacity = () => hint.evaluate((el) => getComputedStyle(el).opacity);
+    expect(await opacity()).toBe("0");
+    await row.hover();
+    /* a sweep down the nav passes before it shows */
+    await page.waitForTimeout(150);
+    expect(await opacity()).toBe("0");
+    await expect.poll(opacity).toBe("1");
+  });
+
+  test("an expanded nav holds search and history by the mark", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    const history = page.getByTestId("history-nav");
+    const placed: Record<string, { history: Box; pane: Box }> = {};
+    for (const nav of ["hover", "expanded"]) {
+      await page.evaluate(
+        (mode) =>
+          localStorage.setItem(
+            "gents-preferences",
+            JSON.stringify({ state: { nav: mode }, version: 1 }),
+          ),
+        nav,
+      );
+      await page.reload();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      await expect(history).toHaveCount(1);
+      placed[nav] = {
+        history: await boxOf(history),
+        pane: await boxOf(page.getByTestId("pane")),
+      };
+    }
+    /* over the expanded nav, inside its column; past the rail otherwise */
+    expect(placed.expanded!.history.x + placed.expanded!.history.width).toBeLessThan(
+      placed.expanded!.pane.x,
+    );
+    expect(placed.hover!.history.x).toBeGreaterThanOrEqual(placed.hover!.pane.x);
+
+    /* on the window's ground the current page is marked by a fill alone */
+    const current = page
+      .locator("[data-ground=window]")
+      .locator("a[aria-current=page]")
+      .first();
+    await expect(current).toBeVisible();
+    const look = await current.evaluate((a) => {
+      const style = getComputedStyle(a);
+      return { border: style.borderTopColor, fill: style.backgroundColor };
+    });
+    expect(look.border).toBe("rgba(0, 0, 0, 0)");
+    expect(look.fill).not.toBe("rgba(0, 0, 0, 0)");
   });
 });

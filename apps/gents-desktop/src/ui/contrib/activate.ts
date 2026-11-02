@@ -91,6 +91,7 @@ export function activateUxPlugin(
           },
           declared: options.declared,
           listing: options.listing,
+          name: record.name,
         }),
       );
     } catch (error) {

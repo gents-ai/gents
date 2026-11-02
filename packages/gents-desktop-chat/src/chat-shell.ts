@@ -210,13 +210,13 @@ function hintFor(reason: ChatBlockedReason) {
     case "composerEmpty":
       return "Type a message to send";
     case "submittingRequest":
-      return "Submitting request";
+      return "Still sending your last message. Try again in a moment.";
     case "waitingForRequestObservation":
-      return "Waiting for request observation";
+      return "Your last message is still on its way. Try again in a moment.";
     case "sessionMissingFromSnapshot":
-      return "Session missing from snapshot";
+      return "This session is still loading. Try again in a moment.";
     case "inconsistentTurnObservation":
-      return "Waiting for consistent turn observation";
+      return "Still syncing this session. Try again in a moment.";
     case "sessionNotOwned":
       return "Read-only";
   }

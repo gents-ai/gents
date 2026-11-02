@@ -6,7 +6,7 @@ import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
 import { Kbd } from "@gents/ui/components/kbd";
-import { MAILBOX_KEYS } from "@/screens/Shortcuts";
+import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { TOOLTIP_KBD } from "@/screens/Hint";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
@@ -87,7 +87,8 @@ function RailNode({ route }: { route: Route }) {
         aria-current={route.name === "agent" ? "page" : undefined}
         className={cn(
           "relative mb-2 block size-7 rounded-full ring-1 ring-border ring-offset-2 ring-offset-background transition-shadow hover:ring-muted-foreground",
-          route.name === "agent" && "ring-2 ring-ink",
+          /* the node's own pages and the list of nodes are both its place */
+          (route.name === "agent" || route.name === "nodes") && "ring-2 ring-ink",
         )}
       >
         <NodeAvatar name={nodeName ?? "Node"} className="size-7" />
@@ -147,11 +148,12 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
   };
   return (
     /* the flyout and the pinned panel start their node at this height */
-    <nav className="flex h-full flex-col items-center gap-2 pt-[23px]">
+    <nav className="flex h-full flex-col items-center gap-1 pt-[23px]">
       <RailNode route={route} />
       <div className="mb-1 h-px w-5 bg-border" />
       <RailItem
         label="New session"
+        keys={PAGE_KEYS.newSession}
         to={{ name: "session", sessionId: null }}
         active={route.name === "session" && route.sessionId === null}
       >
@@ -168,6 +170,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       </RailItem>
       <RailItem
         label="Sessions"
+        keys={PAGE_KEYS.sessions}
         to={{ name: "sessions" }}
         active={
           route.name === "sessions" ||
@@ -185,6 +188,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
         {footer.map(contributed)}
         <RailItem
           label="Nodes"
+          keys={PAGE_KEYS.nodes}
           to={{ name: "nodes" }}
           active={route.name === "nodes" || route.name === "agents"}
         >

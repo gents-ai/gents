@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Columns2, MessageSquare, Plus, X } from "lucide-react";
+import { Columns2, Maximize2, MessageSquare, Minimize2, Plus, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -28,26 +28,36 @@ export function Dock({
   routeName: string;
   placement?: Placement;
 }) {
-  const { dock, closeDock } = useDockFor(dockScopeOf(routeName, sessionId));
+  const { dock, closeDock, openSurface } = useDockFor(
+    dockScopeOf(routeName, sessionId),
+  );
   const view = dockView(dock, routeName, useSurfaces(), placement);
   const last = useRef(view.active);
   if (view.shown && view.active) last.current = view.active;
+  const empty = view.shown && !view.active;
   const active = view.shown ? view.active : placement === "dock" ? last.current : null;
-  if (!active) return null;
-  const Body = active.render;
+  if (!active && !empty) return null;
+  const body = active ? (
+    <active.render placement={placement} sessionId={sessionId} />
+  ) : (
+    <OpenAPanel
+      available={view.available}
+      onOpen={openSurface}
+      titled={placement === "dock"}
+    />
+  );
   if (placement === "sheet") {
-    const Icon = active.icon;
+    const Icon = active?.icon;
+    const title = active?.title ?? "Panels";
     return (
       <aside
         data-testid="dock"
-        aria-label={active.title}
+        aria-label={title}
         className="flex h-full min-h-0 flex-col"
       >
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 px-4">
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {active.title}
-          </span>
+          {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" />}
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
           <PanelMenu routeName={routeName} />
           <Button
             variant="ghost"
@@ -58,9 +68,7 @@ export function Dock({
             <X />
           </Button>
         </div>
-        <div className="min-h-0 flex-1">
-          <Body placement={placement} sessionId={sessionId} />
-        </div>
+        <div className="min-h-0 flex-1">{body}</div>
       </aside>
     );
   }
@@ -68,14 +76,46 @@ export function Dock({
     <aside
       data-testid="dock"
       id={DOCK_PANEL_ID}
-      role="tabpanel"
-      aria-labelledby={dockTabId(active.id)}
+      {...(active
+        ? { role: "tabpanel", "aria-labelledby": dockTabId(active.id) }
+        : { "aria-label": "Panels" })}
       className="flex h-full min-h-0 flex-col rounded-2xl border border-border/60 bg-background"
     >
-      <div className="min-h-0 flex-1">
-        <Body placement={placement} sessionId={sessionId} />
-      </div>
+      <div className="min-h-0 flex-1">{body}</div>
     </aside>
+  );
+}
+
+/* an open dock with no tab on this page: the panels it can show; the
+   phone sheet's header already names them */
+function OpenAPanel({
+  available,
+  onOpen,
+  titled,
+}: {
+  available: readonly Surface[];
+  onOpen: (id: string) => void;
+  titled: boolean;
+}) {
+  return (
+    <div className="flex h-full min-h-0 overflow-y-auto p-4">
+      <div className="m-auto grid w-full max-w-80 gap-3">
+        {titled && <h2 className="px-1 text-xs text-muted-foreground">Panels</h2>}
+        <div className="grid gap-1.5">
+          {available.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => onOpen(s.id)}
+              className="flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border border-border/60 px-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none"
+            >
+              <s.icon className="size-4 shrink-0" />
+              <span className="truncate">{s.title}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -83,10 +123,15 @@ export function DockTabs({
   sessionId,
   routeName,
   paneTab = null,
+  expanded = false,
+  onExpand,
 }: {
   sessionId: string | null;
   routeName: string;
   paneTab?: { onShow: () => void; progress: number } | null;
+  /** the panel fills the window, the session behind its tab */
+  expanded?: boolean;
+  onExpand?: () => void;
 }) {
   const { dock, activate, moveTab, closeTab, closeDock, openSurface } = useDockFor(
     dockScopeOf(routeName, sessionId),
@@ -161,7 +206,7 @@ export function DockTabs({
   useLayoutEffect(() => {
     if (sessionTab.current) setTabWidth(sessionTab.current.offsetWidth);
   }, [paneTitle, paneTab !== null]);
-  if (!view.shown || !view.active) return null;
+  if (!view.shown) return null;
   return (
     <div
       data-testid="dock-tabs"
@@ -194,6 +239,9 @@ export function DockTabs({
           role="tablist"
           aria-label="Panels"
           ref={reorder.container}
+          onDoubleClick={(e) => {
+            if (e.target === e.currentTarget) onExpand?.();
+          }}
           data-cut={cut || undefined}
           className={cn(
             "flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
@@ -202,7 +250,7 @@ export function DockTabs({
           )}
         >
           {view.tabs.map((s, index) => {
-            const active = s.id === view.active!.id;
+            const active = s.id === view.active?.id;
             return (
               <div
                 key={s.id}
@@ -238,8 +286,11 @@ export function DockTabs({
                   className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
                 >
                   <s.icon className="size-4 shrink-0" />
-                  <span className={cn("truncate", active && "font-medium")}>
-                    {s.title}
+                  <span
+                    title={s.tab ? s.title : undefined}
+                    className={cn("truncate", active && "font-medium")}
+                  >
+                    {s.tab ?? s.title}
                   </span>
                   <TabBadge surface={s} sessionId={sessionId} />
                 </button>
@@ -264,6 +315,20 @@ export function DockTabs({
         </div>
         <AddTab available={view.available} onOpen={openSurface} />
       </div>
+      {onExpand && (
+        <Hint label={expanded ? "Restore panel" : "Expand panel"}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={expanded ? "Restore panel" : "Expand panel"}
+            aria-pressed={expanded}
+            className="ml-1 shrink-0"
+            onClick={onExpand}
+          >
+            {expanded ? <Minimize2 /> : <Maximize2 />}
+          </Button>
+        </Hint>
+      )}
       <Hint label="Hide panel">
         <Button
           variant="ghost"
