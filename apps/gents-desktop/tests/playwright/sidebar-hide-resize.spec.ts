@@ -94,4 +94,20 @@ test.describe("the sidebar", () => {
     );
     expect(saved.nav).toBe("collapsed");
   });
+
+  test("its toggle's context menu chooses how it shows", async ({ page }) => {
+    await withNav(page, { nav: "expanded" });
+    const choose = async (name: string) => {
+      await page
+        .getByRole("button", { name: /(Hide|Show) sidebar/ })
+        .click({ button: "right" });
+      await page.getByRole("menuitemradio", { name }).click();
+    };
+    await choose("Icons only");
+    await expect.poll(() => paneX(page)).toBeLessThan(80);
+    await choose("Hidden");
+    await expect.poll(() => paneX(page)).toBeLessThan(20);
+    await choose("Always open");
+    await expect.poll(() => paneX(page)).toBeGreaterThan(200);
+  });
 });

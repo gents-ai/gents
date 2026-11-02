@@ -8,6 +8,9 @@ import { applyTheme, systemTheme, type Theme, type ThemePreference } from "./the
 import { ZOOM_STEPS } from "./lib/zoom";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
+/** How the sidebar shows: one of the nav's modes, or hidden altogether
+    (kept apart from the mode, which it returns to when shown again). */
+export type SidebarMode = NavMode | "hidden";
 
 /** The expanded sidebar's width, in pixels: dragged between these, and
     reset to `initial`. */
@@ -179,6 +182,12 @@ export const preferences = {
   toggleNavHidden() {
     store.setState({ navHidden: !store.getState().navHidden });
   },
+  /** one of the nav's modes, which shows the sidebar again, or hidden */
+  setSidebarMode(mode: SidebarMode) {
+    store.setState(
+      mode === "hidden" ? { navHidden: true } : { nav: mode, navHidden: false },
+    );
+  },
   setNavWidth(width: number) {
     store.setState({
       navWidth: Math.round(Math.min(NAV_WIDTH.max, Math.max(NAV_WIDTH.min, width))),
@@ -260,6 +269,8 @@ export const useTheme = (): Theme => {
 export const useThemePreference = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
 export const useNavHidden = () => usePreferences((p) => p.navHidden);
+export const useSidebarMode = (): SidebarMode =>
+  usePreferences((p) => (p.navHidden ? "hidden" : p.nav));
 export const useNavWidth = () => usePreferences((p) => p.navWidth);
 export const zoomLevel = () => store.getState().zoom;
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);

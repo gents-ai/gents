@@ -5,12 +5,12 @@ import {
   setProductTelemetry,
   type ProductTelemetryStatus,
 } from "../../../lib/nativeShell";
-import type { FollowUp, NavMode, SentTurnPlacement } from "@/preferences";
+import type { FollowUp, SentTurnPlacement, SidebarMode } from "@/preferences";
 import {
   preferences,
   useFlag,
   useFollowUp,
-  useNavMode,
+  useSidebarMode,
   useSentTurnPlacement,
   useThemePreference,
 } from "@/preferences";
@@ -20,6 +20,7 @@ import { ToggleGroup, ToggleGroupItem } from "@gents/ui/components/toggle-group"
 import { Hint } from "../Hint";
 import { Button } from "@gents/ui/components/button";
 import { openCustomizeNav } from "@/app/CustomizeNav";
+import { SIDEBAR_MODES } from "@/app/sidebarModes";
 import { ChoiceRow } from "../agent/editors";
 import { Group, Row } from "../agent/rows";
 
@@ -59,7 +60,7 @@ function ThemeChoice({ value }: { value: ThemePreference }) {
 
 export function GeneralPanel() {
   const theme = useThemePreference();
-  const nav = useNavMode();
+  const sidebar = useSidebarMode();
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
   const customizableNav = useFlag("customize-nav");
@@ -85,15 +86,11 @@ export function GeneralPanel() {
         </Row>
         <ChoiceRow
           id="settings-nav"
-          label="Side nav"
-          description="How the navigation panel next to the rail shows on a wide window."
-          value={nav}
-          onChange={(v) => preferences.setNav(v as NavMode)}
-          items={[
-            { value: "hover", label: "Open on hover" },
-            { value: "expanded", label: "Always open" },
-            { value: "collapsed", label: "Icons only" },
-          ]}
+          label="Sidebar"
+          description="How the sidebar shows on a wide window."
+          value={sidebar}
+          onChange={(v) => preferences.setSidebarMode(v as SidebarMode)}
+          items={SIDEBAR_MODES}
         />
         {customizableNav && (
           <Row

@@ -2,6 +2,11 @@ import type { ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Menu, PanelLeft, Search } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@gents/ui/components/context-menu";
+import {
   Sheet,
   SheetContent,
   SheetTitle,
@@ -17,6 +22,7 @@ import { preferences } from "@/preferences";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { DockTabs } from "./Dock";
 import { MarkLink } from "./Mark";
+import { SidebarModeItems } from "./sidebarModes";
 import { NavPanel } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
 import type { ShellLayout } from "./useShellLayout";
@@ -61,19 +67,30 @@ function HistoryNav({ history }: { history: History }) {
    sidebar is brought back */
 function SidebarToggle({ hidden }: { hidden: boolean }) {
   const label = hidden ? "Show sidebar" : "Hide sidebar";
+  /* a click shows or hides it; its context menu (a right-click, or a long
+     press) chooses how it shows */
   return (
-    <Hint label={label} keys={SIDEBAR_KEYS}>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={label}
-        aria-pressed={!hidden}
-        className="shrink-0"
-        onClick={preferences.toggleNavHidden}
-      >
-        <PanelLeft />
-      </Button>
-    </Hint>
+    <ContextMenu>
+      <Hint label={label} keys={SIDEBAR_KEYS}>
+        <ContextMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={label}
+              aria-pressed={!hidden}
+              className="shrink-0"
+              onClick={preferences.toggleNavHidden}
+            />
+          }
+        >
+          <PanelLeft />
+        </ContextMenuTrigger>
+      </Hint>
+      <ContextMenuContent className="min-w-44">
+        <SidebarModeItems />
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

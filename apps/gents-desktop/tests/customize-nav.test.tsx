@@ -27,6 +27,7 @@ import {
   DEFAULT_NAV_LAYOUT,
   preferences,
   useNavLayout,
+  useNavHidden,
   useNavMode,
   restorePreferences,
   resetPreferences,
@@ -272,10 +273,11 @@ describe("the expanded nav's sections", () => {
   });
 });
 
-describe("the nav's context menu", () => {
-  it("sets how the side nav shows from its submenu, and opens the sheet", async () => {
+describe("the sidebar's context menu", () => {
+  it("sets how the sidebar shows from its submenu, and opens the sheet", async () => {
     withFlags({ "customize-nav": true });
     const mode = renderHook(() => useNavMode());
+    const hidden = renderHook(() => useNavHidden());
     renderIn(
       testApp({ deployments: [node()] }),
       <>
@@ -286,7 +288,7 @@ describe("the nav's context menu", () => {
     fireEvent.contextMenu(screen.getByTestId("nav"));
     /* the modes sit a level down; the keyboard opens it once, where a
        pointer both hovers it open and clicks it, which can close it again */
-    screen.getByRole("menuitem", { name: "Side nav" }).focus();
+    screen.getByRole("menuitem", { name: "Sidebar" }).focus();
     await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");
     expect(
       await screen.findByRole("menuitemradio", { name: "Open on hover" }),
@@ -294,19 +296,27 @@ describe("the nav's context menu", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Always open" }));
     expect(mode.result.current).toBe("expanded");
 
+    /* Hidden is one of its choices too */
+    fireEvent.contextMenu(screen.getByTestId("nav"));
+    screen.getByRole("menuitem", { name: "Sidebar" }).focus();
+    await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Hidden" }));
+    expect(hidden.result.current).toBe(true);
+
     fireEvent.contextMenu(screen.getByTestId("nav"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Customize…" }));
     expect(screen.getByTestId("customize-nav")).toBeInTheDocument();
   });
 
-  it("is not there while the flag is off", () => {
+  it("offers how the sidebar shows, and Customize only while the flag is on", () => {
     withFlags({ "customize-nav": false });
     renderIn(
       testApp({ deployments: [node()] }),
       <NavMenu render={<nav data-testid="nav" />}>nav</NavMenu>,
     );
     fireEvent.contextMenu(screen.getByTestId("nav"));
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Sidebar" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Customize…" })).toBeNull();
   });
 });
 
