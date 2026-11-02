@@ -199,6 +199,17 @@ theorem continuation_preserves_directory (parent : RequestInput) (queue : Reques
     (goal : Option GoalContinuationInput) (parentDocId : String) :
     (continuationInput parent queue goal parentDocId).cwd = parent.cwd := rfl
 
+/-- A directory is a host-local observation. The destination still validates
+an inherited same-node directory through its existing admission policy. -/
+def agentNewCwd (parent : RequestInput) (sameNode : Bool) : Option String :=
+  if sameNode then parent.cwd else none
+
+theorem agent_new_local_inherits_cwd (parent : RequestInput) :
+    agentNewCwd parent true = parent.cwd := rfl
+
+theorem agent_new_remote_does_not_carry_cwd (parent : RequestInput) :
+    agentNewCwd parent false = none := rfl
+
 theorem continuation_does_not_replay_creation (parent : RequestInput) (queue : RequestQueue)
     (goal : Option GoalContinuationInput) (parentDocId : String) :
     (continuationInput parent queue goal parentDocId).initialTitle = none := rfl

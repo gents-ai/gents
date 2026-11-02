@@ -128,6 +128,11 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    /// The destination validates an inherited directory using its existing policy.
+    pub fn agent_new_cwd(&self, same_node: bool) -> Option<String> {
+        same_node.then(|| self.cwd.clone()).flatten()
+    }
+
     /// The serving runtime must advertise support before a client publishes
     /// typed captures. This observation grants no request or workspace authority.
     pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
