@@ -112,10 +112,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "tracked_transaction_finality_distinguishes_rejection_from_lost_receipt",
         },
         ConformanceConsumer::RustTest {
-            id: "inference::backends::registry::claude_platform_tests::generated_claude_platform_cases_match_the_lean_owner",
+            id: "documents::claude_platform_tests::generated_claude_platform_cases_match_the_lean_owner",
             package: "gents",
-            source_path: "crates/gents/src/inference/backends/registry/claude_platform_tests.rs",
-            module_path: "inference::backends::registry::claude_platform_tests",
+            source_path: "crates/gents/src/documents/claude_platform_tests.rs",
+            module_path: "documents::claude_platform_tests",
             function: "generated_claude_platform_cases_match_the_lean_owner",
         },
         ConformanceConsumer::RustTest {

@@ -912,7 +912,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "claude_platform_cases"
       "ClaudePlatformCases"
-      "document_config::claude_platform_tests::generated_claude_platform_cases_match_the_lean_owner")
+      "documents::claude_platform_tests::generated_claude_platform_cases_match_the_lean_owner")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "catalog_refresh_cases"
