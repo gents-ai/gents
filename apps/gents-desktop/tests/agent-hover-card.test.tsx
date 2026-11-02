@@ -67,6 +67,15 @@ describe("a node's hover card", () => {
     expect(logos.querySelectorAll("img")).toHaveLength(2);
   });
 
+  it("draws the node's saved portrait", async () => {
+    cardFor("did:key:remote", {
+      nodeConfig: { node_did: "did:key:remote", avatar: "12" },
+    });
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByText("Agents", {}, { timeout: 2000 });
+    expect(document.querySelector('img[src="/avatars/12.png"]')).not.toBeNull();
+  });
+
   it("says None when a node has no inference", async () => {
     cardFor("did:key:remote", { inferenceBackends: [] });
     await userEvent.hover(screen.getByRole("button", { name: "avatar" }));

@@ -6,7 +6,7 @@ import { href, navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
 import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { useApp } from "./AppContext";
 import { NodeActivity } from "./NodeActivity";
 import { switchedRoute } from "./NodeSwitcher";
@@ -55,7 +55,7 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
                 {/* in the slot a session's status takes, so every title in
                     the nav starts on one line */}
                 <span className="relative grid size-4 shrink-0 place-items-center">
-                  <NodeAvatar name={name} className="size-4" />
+                  <NodeAvatar name={name} {...nodeAvatarOf(node)} className="size-4" />
                   <span
                     aria-hidden
                     className={cn(

@@ -195,6 +195,7 @@ function useEntries(): SearchEntry[] {
       nodes: nodes.map((n) => ({
         nodeDid: n.nodeDid,
         name: nodeName(n.nodeDid),
+        avatar: n.nodeConfig?.avatar ?? null,
         place: isLocalNode(n, homeDid) ? "Local" : "Remote",
         offline: !n.dialSucceeded,
       })),
@@ -497,7 +498,14 @@ function EntryIcon({ entry: e }: { entry: SearchEntry }) {
   }
   if (e.kind === "agent") return <Workflow className={box} />;
   if (e.kind === "node")
-    return <NodeAvatar name={e.name} className="size-4 shrink-0" />;
+    return (
+      <NodeAvatar
+        name={e.name}
+        avatar={e.avatar}
+        rollId={e.nodeDid}
+        className="size-4 shrink-0"
+      />
+    );
   const Icon = e.icon;
   return <Icon className={box} />;
 }

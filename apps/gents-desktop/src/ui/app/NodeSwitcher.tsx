@@ -19,7 +19,7 @@ import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { NodeActivity } from "./NodeActivity";
 
 /** Where switching to `nodeDid` leads from `route`: the same page on the
@@ -102,7 +102,11 @@ export function NodeSwitcher({
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-2.5">
                       <span className="relative shrink-0">
-                        <NodeAvatar name={name} className="size-6" />
+                        <NodeAvatar
+                          name={name}
+                          {...nodeAvatarOf(node)}
+                          className="size-6"
+                        />
                         <span
                           aria-hidden
                           className={cn(
