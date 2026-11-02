@@ -227,8 +227,11 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
             >= gents_migration::DEFAULT_BASELINE.len(),
         "expected full baseline coverage, got {report1:?}"
     );
-    assert_eq!(report1.steps_applied, gents_migration::DEFAULT_STEPS.len());
-    if gents_migration::DEFAULT_STEPS.is_empty() {
+    assert_eq!(
+        report1.steps_applied,
+        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
+    );
+    if gents_migration::DEFAULT_STEPS.is_empty() && common::fresh_canonical_steps() == 0 {
         assert_eq!(
             report1.materialization.collections_attempted, 0,
             "a chain-free baseline has no old document versions to materialize"
@@ -241,7 +244,7 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
     assert_eq!(report2.steps_applied, 0);
     assert_eq!(
         report2.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len()
+        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
     );
     assert!(
         report2.baseline_already_present >= gents_migration::DEFAULT_BASELINE.len()
@@ -330,7 +333,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert_eq!(rerun.steps_applied, 0, "re-run applied steps: {rerun:?}");
     assert_eq!(
         rerun.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len()
+        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
     );
     let cv = node
         .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)

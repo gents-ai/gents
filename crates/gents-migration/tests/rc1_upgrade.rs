@@ -33,7 +33,7 @@ async fn applied_pairing_generation_upgrade_preserves_routes_without_granting_au
         .expect("created route identity")
         .to_owned();
     let report = ensure_migrations(node.as_ref()).await.unwrap();
-    assert_eq!(report.steps_applied, 1);
+    assert_eq!(report.steps_applied, 1 + common::fresh_canonical_steps());
     let after = node.get_collection("PeerPairingApplied").unwrap().unwrap();
     assert_eq!(
         after.version_id,
@@ -129,7 +129,7 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
             .to_owned()
     });
     let report = ensure_migrations(node.as_ref()).await.unwrap();
-    assert_eq!(report.steps_applied, 3);
+    assert_eq!(report.steps_applied, 3 + common::fresh_canonical_steps());
     for (name, previous) in names.into_iter().zip(before) {
         let current = node.get_collection(name).unwrap().unwrap();
         for field in previous.fields {
@@ -165,7 +165,10 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
     assert_eq!(data["AgentToolCall"][0]["status"], "completed");
     let rerun = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(rerun.steps_applied, 0);
-    assert_eq!(rerun.steps_already_current, 3);
+    assert_eq!(
+        rerun.steps_already_current,
+        3 + common::fresh_canonical_steps()
+    );
     node.shutdown().await;
 }
 
@@ -253,7 +256,10 @@ async fn apply_collections_declare_updated_at_without_moving_fields() {
         before.push(node.get_collection(name).unwrap().unwrap());
     }
     let report = ensure_migrations(node.as_ref()).await.unwrap();
-    assert_eq!(report.steps_applied, collections.len());
+    assert_eq!(
+        report.steps_applied,
+        collections.len() + common::fresh_canonical_steps()
+    );
     for ((name, _, key, target), previous) in collections.into_iter().zip(before) {
         let current = node.get_collection(name).unwrap().unwrap();
         assert_eq!(current.version_id, target, "{name}");

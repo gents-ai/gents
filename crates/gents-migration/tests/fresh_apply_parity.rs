@@ -1,5 +1,7 @@
-//! Guard for #1123/#1125: client-authored collections MUST remain fresh-apply
-//! compatible. `EmbeddedNode::add_collection` here and a paired client's FFI both
+//! Guard for #1123/#1125: client-authored collections MUST remain client-apply
+//! compatible. Since the RC0 upgrade (one canonical lineage, `canonical_schema_plan`), a
+//! collection changed after v1.0.0-rc0 is applied as its rc0 root plus the same patches an
+//! upgraded store takes, and a client must replay that plan; the rest fresh-apply their SDL. `EmbeddedNode::add_collection` here and a paired client's FFI both
 //! ingest SDL into an empty store and converge on the same collection-creation
 //! path in the pinned defradb, so the genesis CIDs minted here stand in for
 //! what a phone mints. The two apply paths seed their SDL parsers with
@@ -8,7 +10,7 @@
 //! CID embeds the target collection's identity, making genesis CIDs depend on
 //! the co-registered set.
 
-use gents_migration::{ensure_migrations, CLIENT_AUTHORED_COLLECTIONS};
+use gents_migration::{canonical_schema_plan, ensure_migrations, CLIENT_AUTHORED_COLLECTIONS};
 
 mod common;
 use common::fresh_node;
@@ -74,10 +76,30 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
     let client_arm = async {
         let client = fresh_node().await;
         for &name in CLIENT_AUTHORED_COLLECTIONS {
+            // A collection changed since v1.0.0-rc0 is canonical on its rc0 root plus the
+            // patches an upgraded rc0 store takes; a client replays the same plan.
+            let Some(plan) = canonical_schema_plan(name).unwrap() else {
+                client
+                    .add_collection(current_sdl(name))
+                    .await
+                    .unwrap_or_else(|error| panic!("client fresh-apply {name}: {error}"));
+                continue;
+            };
             client
-                .add_collection(current_sdl(name))
+                .add_collection(plan.root_sdl)
                 .await
-                .unwrap_or_else(|error| panic!("client fresh-apply {name}: {error}"));
+                .unwrap_or_else(|error| panic!("client root-apply {name}: {error}"));
+            let root = client.get_collection(name).unwrap().unwrap();
+            assert_eq!(root.version_id, plan.root_version, "{name} root");
+            for patch in &plan.patches {
+                let patched = client.patch_collection(name, patch).await.unwrap();
+                client
+                    .set_active_collection_version(&patched.version_id)
+                    .await
+                    .unwrap();
+            }
+            let active = client.get_collection(name).unwrap().unwrap();
+            assert_eq!(active.version_id, plan.version, "{name} replay");
         }
         client
     };

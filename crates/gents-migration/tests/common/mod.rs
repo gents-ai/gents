@@ -45,3 +45,14 @@ pub async fn fresh_node() -> Arc<EmbeddedNode> {
     std::mem::forget(dir);
     Arc::new(node)
 }
+
+/// Versioned steps a fresh store takes to reach the canonical versions of collections
+/// changed since v1.0.0-rc0 (their rc0 root plus the patches an upgraded store takes).
+#[allow(dead_code)]
+pub fn fresh_canonical_steps() -> usize {
+    gents_migration::DEFAULT_BASELINE
+        .iter()
+        .filter_map(|entry| gents_migration::canonical_schema_plan(entry.name).unwrap())
+        .map(|plan| plan.patches.len())
+        .sum()
+}

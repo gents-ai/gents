@@ -1,0 +1,14 @@
+type AgentMessage @branchable @index(fields: ["node_did", "session_id", "sequence"], unique: true) {
+    message_key: String @index @immutable
+    session_id: String @index @immutable
+    node_did: String @index @immutable
+    requester_did: String @index @immutable
+    request_doc_id: String @index @immutable
+    publication: JSON @immutable
+    outcome: String @immutable
+    sequence: Int @index @immutable
+    role: String @immutable
+    native_id: String @immutable
+    blocks: JSON @immutable
+    created_at: String @index @immutable
+}

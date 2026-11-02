@@ -67,6 +67,43 @@ const BACKEND_PLATFORM_FROM_PATCHED: &str =
     "bafyreickxk6jgbbg74hxamckiaeoh323zwr3bdojam5oze4eywnhrryxre";
 const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/Fields/-","value":{"Name":"claude_platform","Kind":"JSON"}}]"#;
 
+const NODE_RC0_ROOT: &str = "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby";
+
+/// One canonical lineage per collection. DefraDB derives a patched version ID from the
+/// version it patches, so an rc0 store patched to the current SDL and a fresh store that
+/// registers the current SDL directly can never share a version ID, and stores on different
+/// versions cannot merge each other's blocks. A fresh store therefore registers the
+/// v1.0.0-rc0 SDL of these collections and replays the same versioned patches an upgraded rc0
+/// store receives, landing on the same version ID.
+///
+/// When a change adds a versioned step on top of a collection's rc0 pin, add the collection
+/// here with its rc0 SDL vendored under `schemas/rc0/` (copied from tag v1.0.0-rc0).
+/// `tests/rc0_lineage_parity.rs` fails until it is.
+pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[
+    (
+        "AgentMessage",
+        include_str!("../schemas/rc0/agent_message.graphql"),
+        MESSAGE_ROOT,
+    ),
+    (
+        "InferenceBackend",
+        include_str!("../schemas/rc0/inference_backend.graphql"),
+        BACKEND_FRESHNESS_FRESH,
+    ),
+    (
+        "Node",
+        include_str!("../schemas/rc0/node.graphql"),
+        NODE_RC0_ROOT,
+    ),
+];
+
+fn canonical_root(name: &str) -> Option<&'static str> {
+    CANONICAL_ROOTS
+        .iter()
+        .find(|(collection, _, _)| *collection == name)
+        .map(|(_, _, root)| *root)
+}
+
 fn session_before_starter(version: &str) -> &str {
     match version {
         SESSION_STARTER_CURRENT => SESSION_PRE_STARTER,
@@ -120,6 +157,20 @@ pub(crate) fn include_existing_by_version(
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
+    for (name, sdl, root) in CANONICAL_ROOTS {
+        if get_version(name)?.is_some() {
+            continue;
+        }
+        if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == *name) {
+            entry.sdl = sdl;
+            entry.expected_version = Some(root);
+        }
+    }
+    // A collection the store lacks is registered at its canonical root above, so it takes
+    // the same steps an rc0 store holding that root takes.
+    let get_version = &|name: &str| -> Result<Option<String>> {
+        Ok(get_version(name)?.or_else(|| canonical_root(name).map(str::to_owned)))
+    };
     for (name, root, target, id, patch, fields) in [
         (
             "InferenceBackend",

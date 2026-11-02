@@ -5,12 +5,12 @@ use defra_node::EmbeddedNode;
 use crate::store::config_client::ConfigClientError;
 
 pub use gents_migration::{
-    check_migration_compatibility, ensure_migrations, ensure_migrations_arc,
+    canonical_versions, check_migration_compatibility, ensure_migrations, ensure_migrations_arc,
     ensure_migrations_dynamic, ensure_migrations_with_registry, fixture_lens_wasm,
-    predict_transform_id, BaselineCollection, BaselineCollectionOwned, CollectionExpectation,
-    DynamicRegistry, Error as MigrationError, LensSpec, LensSpecOwned, MaterializationStats,
-    MigrationReport, MigrationStep, MigrationStepOwned, Registry, DEFAULT_BASELINE,
-    DEFAULT_REGISTRY, DEFAULT_STEPS,
+    non_canonical_lineages, non_canonical_store_lineages, predict_transform_id, BaselineCollection,
+    BaselineCollectionOwned, CollectionExpectation, DynamicRegistry, Error as MigrationError,
+    LensSpec, LensSpecOwned, LineageMismatch, MaterializationStats, MigrationReport, MigrationStep,
+    MigrationStepOwned, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
 };
 
 #[derive(Debug, thiserror::Error)]
