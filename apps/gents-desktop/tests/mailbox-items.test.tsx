@@ -18,6 +18,7 @@ import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 import { MailboxStack, openInStack } from "../src/ui/screens/MailboxStack";
 import { mailboxSeen } from "../src/ui/app/mailboxSeen";
 import { listViews } from "../src/ui/app/listViews";
+import { IS_MAC } from "../src/ui/screens/shortcutKeys";
 import { node, testApp, withApp } from "./app-fixture";
 
 vi.mock("../src/ui/screens/HoverCards", () => ({
@@ -300,8 +301,7 @@ describe("an opened item", () => {
     renderMailbox(app, { name: "session", sessionId: "session-1" });
     fireEvent.keyDown(window, {
       key: "M",
-      code: "KeyM",
-      metaKey: true,
+      [IS_MAC ? "metaKey" : "ctrlKey"]: true,
       shiftKey: true,
     });
     expect(within(dialog()).getByText("1 of 2")).toBeVisible();
@@ -369,8 +369,7 @@ describe("an opened item", () => {
     expect(screen.queryByTestId("mailbox-dialog")).toBeNull();
     fireEvent.keyDown(window, {
       key: "M",
-      code: "KeyM",
-      metaKey: true,
+      [IS_MAC ? "metaKey" : "ctrlKey"]: true,
       shiftKey: true,
     });
     expect(
@@ -378,8 +377,7 @@ describe("an opened item", () => {
     ).toBeVisible();
     fireEvent.keyDown(window, {
       key: "M",
-      code: "KeyM",
-      metaKey: true,
+      [IS_MAC ? "metaKey" : "ctrlKey"]: true,
       shiftKey: true,
     });
     expect(screen.queryByTestId("mailbox-dialog")).toBeNull();

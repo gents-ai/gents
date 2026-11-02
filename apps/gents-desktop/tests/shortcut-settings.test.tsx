@@ -19,6 +19,7 @@ it("opens Settings on ⌘, in the desktop app", async () => {
   const { Shortcuts } = await import("../src/ui/screens/Shortcuts");
   const { renderIn, testApp } = await import("./app-fixture");
   renderIn(testApp(), <Shortcuts />);
-  fireEvent.keyDown(window, { key: ",", metaKey: true });
+  const { IS_MAC } = await import("../src/ui/screens/shortcutKeys");
+  fireEvent.keyDown(window, { key: ",", [IS_MAC ? "metaKey" : "ctrlKey"]: true });
   expect(navigate).toHaveBeenCalledWith({ name: "settings" });
 }, 20_000);
