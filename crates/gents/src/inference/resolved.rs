@@ -482,11 +482,6 @@ pub fn backend_catalog<'a>(
         .auth
         .uses_node_oauth()
         .then_some(backend.node_did.as_str());
-    let credential_scope = matches!(
-        backend.auth,
-        crate::documents::BackendAuth::NodeOAuth { .. }
-    )
-    .then_some(backend.node_did.as_str());
     Ok(observation
         .filter(|observation| observation.backend_id == backend.backend_id)
         .map(|observation| observation.catalog_for(credential_scope))

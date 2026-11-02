@@ -82,7 +82,10 @@ impl BackendClient {
             Self::XaiGrokResponses(client) => client.post("/responses")?,
             Self::ClaudeSubscription(_) => return claude_subscription_replay_issuer(),
             Self::AnthropicApiKey(client) => {
-                return messages_replay_issuer(self.provider_family(), client.route.uri.parse()?)
+                return messages_replay_issuer(
+                    self.provider_family(),
+                    client.route.issuer_uri()?.parse()?,
+                )
             }
         }
         .body(())?;
