@@ -245,6 +245,16 @@ fn captured_native_documents_and_provider_parts_match_the_model() {
             case["expected_has_authored_input"].as_bool().unwrap(),
             "{name}: user input presence"
         );
+        let authored = gents_protocol::request_input::AuthoredRequestInput {
+            selected_skill_ids: input.selected_skill_ids.clone(),
+            captured_context: input.captured_context.clone(),
+            attachments: input.attachments.clone(),
+        };
+        assert_eq!(
+            authored.has_authored_input(case["authored_text"].as_str().unwrap()),
+            case["expected_has_authored_input"].as_bool().unwrap(),
+            "{name}: replacement input presence"
+        );
         let native = input
             .authored_message(case["authored_text"].as_str().unwrap())
             .unwrap();
