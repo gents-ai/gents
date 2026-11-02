@@ -8,9 +8,15 @@ use serde_json::Value;
 /// Key of the provider request id inside a stored `publication` (see [`TranscriptMessage`]).
 pub const NATIVE_REQUEST_ID_KEY: &str = "native_request_id";
 
-/// The stored `AgentMessage` document. Its fields are exactly the v1.0.0-rc0 `AgentMessage`
-/// schema, plus a top-level `native_request_id` read (never written) from rows a store
-/// created by v1.0.0-rc1 holds.
+/// Whether a stored `publication` carries [`NATIVE_REQUEST_ID_KEY`]. Off: at v1.0.0-rc0
+/// `MessagePublication` (and `TranscriptMessage`) refuse unknown keys, so an rc0-era reader (a
+/// node not yet upgraded, a client built on rc0's protocol) could not decode any message that
+/// carried it. This release reads the key either way; turn this on once no rc0-era reader
+/// remains. Enforced here, at the one place a publication is encoded, so no writer can bypass
+/// it.
+pub const PERSIST_NATIVE_REQUEST_ID: bool = false;
+
+/// The stored `AgentMessage` document: exactly the v1.0.0-rc0 `AgentMessage` schema.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TranscriptMessageWire {
@@ -27,8 +33,6 @@ pub(super) struct TranscriptMessageWire {
     role: MessageRole,
     #[serde(default)]
     native_id: Option<String>,
-    #[serde(default)]
-    native_request_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_blocks")]
     blocks: Vec<MessageBlock>,
     created_at: String,
@@ -38,15 +42,7 @@ impl TryFrom<TranscriptMessageWire> for TranscriptMessage {
     type Error = String;
 
     fn try_from(wire: TranscriptMessageWire) -> Result<Self, Self::Error> {
-        let native_request_id = match (wire.publication.native_request_id, wire.native_request_id) {
-            (Some(nested), Some(column)) if nested != column => {
-                return Err(format!(
-                    "AgentMessage carries two provider request ids ({nested} in publication, \
-                     {column} as a field)"
-                ));
-            }
-            (nested, column) => nested.or(column),
-        };
+        let native_request_id = wire.publication.native_request_id;
         Ok(Self {
             message_key: wire.message_key,
             session_id: wire.session_id,
@@ -86,9 +82,12 @@ impl Serialize for TranscriptMessage {
             blocks: &'a [MessageBlock],
             created_at: &'a str,
         }
-        let publication =
-            StoredPublication::encode(&self.publication, self.native_request_id.as_deref())
-                .map_err(serde::ser::Error::custom)?;
+        let publication = StoredPublication::encode(
+            &self.publication,
+            self.native_request_id.as_deref(),
+            PERSIST_NATIVE_REQUEST_ID,
+        )
+        .map_err(serde::ser::Error::custom)?;
         Stored {
             message_key: &self.message_key,
             session_id: &self.session_id,
@@ -107,8 +106,8 @@ impl Serialize for TranscriptMessage {
     }
 }
 
-/// A stored `publication`: the tagged [`MessagePublication`] object, optionally carrying
-/// [`NATIVE_REQUEST_ID_KEY`].
+/// A stored `publication`: the tagged [`MessagePublication`] object, carrying
+/// [`NATIVE_REQUEST_ID_KEY`] only when [`PERSIST_NATIVE_REQUEST_ID`] is on.
 struct StoredPublication {
     publication: MessagePublication,
     native_request_id: Option<String>,
@@ -118,9 +117,10 @@ impl StoredPublication {
     fn encode(
         publication: &MessagePublication,
         native_request_id: Option<&str>,
+        persist_request_id: bool,
     ) -> serde_json::Result<Value> {
         let mut value = serde_json::to_value(publication)?;
-        if let Some(id) = native_request_id {
+        if let Some(id) = native_request_id.filter(|_| persist_request_id) {
             value
                 .as_object_mut()
                 .ok_or_else(|| {
@@ -352,53 +352,87 @@ mod stored_message_tests {
         }
     }
 
+    /// `AgentMessage` exactly as v1.0.0-rc0's `TranscriptMessage` decoded it (689d75369
+    /// `gents-protocol/src/output.rs`): these fields, `deny_unknown_fields`, and a
+    /// `publication` that is rc0's `MessagePublication` (unchanged since, and also
+    /// `deny_unknown_fields`). The blocks column is rc0's reference-table JSON, kept opaque.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Rc0TranscriptMessage {
+        message_key: String,
+        session_id: String,
+        node_did: String,
+        #[serde(default)]
+        requester_did: Option<String>,
+        #[serde(default)]
+        request_doc_id: Option<String>,
+        publication: MessagePublication,
+        outcome: OutputOutcome,
+        sequence: u32,
+        role: MessageRole,
+        #[serde(default)]
+        native_id: Option<String>,
+        #[serde(default)]
+        blocks: Option<Value>,
+        created_at: String,
+    }
+
+    fn row_for(message: &TranscriptMessage, persist: bool) -> Value {
+        let mut row = serde_json::to_value(message).unwrap();
+        row["publication"] = StoredPublication::encode(
+            &message.publication,
+            message.native_request_id.as_deref(),
+            persist,
+        )
+        .unwrap();
+        row
+    }
+
     #[test]
-    fn request_id_travels_inside_the_publication_and_the_rc0_fields_stay_exact() {
-        let row = serde_json::to_value(message(Some("req_1"))).unwrap();
-        let keys: Vec<&str> = row
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        assert!(!keys.contains(&NATIVE_REQUEST_ID_KEY), "{row}");
+    fn an_rc0_reader_decodes_every_message_this_build_writes() {
+        assert!(
+            !PERSIST_NATIVE_REQUEST_ID,
+            "persisting the request id makes rc0-era readers refuse every reply that carries \
+             one; update this test and the runbook when an rc0-era reader no longer exists"
+        );
+        for written in [message(Some("req_1")), message(None)] {
+            let row = serde_json::to_value(&written).unwrap();
+            assert!(
+                row["publication"].get(NATIVE_REQUEST_ID_KEY).is_none(),
+                "{row}"
+            );
+            assert!(row.get(NATIVE_REQUEST_ID_KEY).is_none(), "{row}");
+            serde_json::from_value::<Rc0TranscriptMessage>(row.clone())
+                .unwrap_or_else(|error| panic!("rc0 reader refused {row}: {error}"));
+            let back: TranscriptMessage = serde_json::from_value(row).unwrap();
+            assert_eq!(back, message(None));
+        }
+    }
+
+    #[test]
+    fn persisting_the_request_id_nests_it_and_an_rc0_reader_refuses_it() {
+        let row = row_for(&message(Some("req_1")), true);
+        assert!(row.get(NATIVE_REQUEST_ID_KEY).is_none(), "{row}");
         assert_eq!(
             row["publication"],
             serde_json::json!({"kind": "request_execution", "execution_generation": "generation",
                 "native_request_id": "req_1"})
         );
+        // Why the gate is off while rc0-era readers remain.
+        assert!(serde_json::from_value::<Rc0TranscriptMessage>(row.clone()).is_err());
+        // This build reads it back.
         let back: TranscriptMessage = serde_json::from_value(row).unwrap();
         assert_eq!(back, message(Some("req_1")));
-
-        let without = serde_json::to_value(message(None)).unwrap();
-        assert!(without["publication"].get(NATIVE_REQUEST_ID_KEY).is_none());
-        assert_eq!(
-            serde_json::from_value::<TranscriptMessage>(without).unwrap(),
-            message(None)
-        );
+        // Without an id there is nothing to nest, whatever the gate.
+        let row = row_for(&message(None), true);
+        assert!(row["publication"].get(NATIVE_REQUEST_ID_KEY).is_none());
+        serde_json::from_value::<Rc0TranscriptMessage>(row).unwrap();
     }
 
     #[test]
-    fn rc1_column_is_read_and_conflicts_or_garbage_are_refused() {
-        let mut rc1 = serde_json::to_value(message(None)).unwrap();
-        rc1["native_request_id"] = "req_1".into();
-        assert_eq!(
-            serde_json::from_value::<TranscriptMessage>(rc1.clone()).unwrap(),
-            message(Some("req_1"))
-        );
-
-        let mut both = rc1.clone();
-        both["publication"][NATIVE_REQUEST_ID_KEY] = "req_2".into();
-        assert!(serde_json::from_value::<TranscriptMessage>(both).is_err());
-
-        let mut agreeing = rc1;
-        agreeing["publication"][NATIVE_REQUEST_ID_KEY] = "req_1".into();
-        assert_eq!(
-            serde_json::from_value::<TranscriptMessage>(agreeing).unwrap(),
-            message(Some("req_1"))
-        );
-
-        let mut number = serde_json::to_value(message(None)).unwrap();
+    fn malformed_or_unknown_keys_are_refused() {
+        let mut number = row_for(&message(None), true);
         number["publication"][NATIVE_REQUEST_ID_KEY] = 7.into();
         assert!(serde_json::from_value::<TranscriptMessage>(number).is_err());
 
@@ -409,7 +443,8 @@ mod stored_message_tests {
             .as_object_mut()
             .unwrap()
             .remove("surprise");
-        unknown["surprise"] = true.into();
+        // A top-level request id (v1.0.0-rc1's column) is no field of this schema.
+        unknown[NATIVE_REQUEST_ID_KEY] = "req_1".into();
         assert!(serde_json::from_value::<TranscriptMessage>(unknown).is_err());
     }
 }

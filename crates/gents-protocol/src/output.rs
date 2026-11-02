@@ -296,9 +296,9 @@ pub enum TerminalOutput {
 /// payloads only for referenced blocks.
 ///
 /// Stored form: `AgentMessage` is client-authored, so its schema stays the v1.0.0-rc0 one
-/// (#1123/#1125) and `native_request_id` has no column. It travels as a
-/// `native_request_id` key inside the `publication` JSON (see [`storage`]); a top-level
-/// `native_request_id`, as a store created by v1.0.0-rc1 wrote it, is still read.
+/// (#1123/#1125) and `native_request_id` has no column. It is read from a
+/// `native_request_id` key inside the `publication` JSON, and written there only when
+/// [`storage::PERSIST_NATIVE_REQUEST_ID`] is on (it is off; see there).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(try_from = "storage::TranscriptMessageWire")]
 pub struct TranscriptMessage {
