@@ -21,6 +21,7 @@ import { Hint } from "../Hint";
 import { Button } from "@gents/ui/components/button";
 import { openCustomizeNav } from "@/app/CustomizeNav";
 import { SIDEBAR_MODES } from "@/app/sidebarModes";
+import { sidebar } from "@/app/sidebarChange";
 import { ChoiceRow } from "../agent/editors";
 import { Group, Row } from "../agent/rows";
 
@@ -60,7 +61,7 @@ function ThemeChoice({ value }: { value: ThemePreference }) {
 
 export function GeneralPanel() {
   const theme = useThemePreference();
-  const sidebar = useSidebarMode();
+  const sidebarShown = useSidebarMode();
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
   const customizableNav = useFlag("customize-nav");
@@ -88,8 +89,8 @@ export function GeneralPanel() {
           id="settings-nav"
           label="Sidebar"
           description="How the sidebar shows on a wide window."
-          value={sidebar}
-          onChange={(v) => preferences.setSidebarMode(v as SidebarMode)}
+          value={sidebarShown}
+          onChange={(v) => sidebar.setMode(v as SidebarMode)}
           items={SIDEBAR_MODES}
         />
         {customizableNav && (

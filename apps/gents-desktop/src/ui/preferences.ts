@@ -273,6 +273,11 @@ export const useSidebarMode = (): SidebarMode =>
   usePreferences((p) => (p.navHidden ? "hidden" : p.nav));
 export const useNavWidth = () => usePreferences((p) => p.navWidth);
 export const zoomLevel = () => store.getState().zoom;
+/** how the sidebar shows now, outside React */
+export const sidebarMode = (): SidebarMode => {
+  const { nav, navHidden } = store.getState();
+  return navHidden ? "hidden" : nav;
+};
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
 export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);

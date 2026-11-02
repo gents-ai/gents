@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
 
 import { NAV_WIDTH, preferences } from "@/preferences";
+import { sidebar } from "./sidebarChange";
 
 /** the rail's column, which a sidebar dragged narrow enough gives way to */
 export const RAIL_WIDTH = 56;
@@ -50,6 +51,7 @@ export function useNavResize(width: number, most: number, onRail: boolean) {
     if (!d) return;
     drag.current = null;
     delete document.documentElement.dataset.dragging;
+    /* the drag already draws the mode it lets go in, so this isn't morphed */
     if (collapsingRef.current) {
       if (!d.fromRail) preferences.setNav("collapsed");
     } else {
@@ -63,12 +65,12 @@ export function useNavResize(width: number, most: number, onRail: boolean) {
     if (onRail) {
       if (e.key !== "ArrowRight") return;
       e.preventDefault();
-      preferences.setNav("expanded");
+      sidebar.setNav("expanded");
       return;
     }
     if (e.key === "ArrowLeft" && shown <= NAV_WIDTH.min) {
       e.preventDefault();
-      preferences.setNav("collapsed");
+      sidebar.setNav("collapsed");
       return;
     }
     const to =
@@ -104,7 +106,7 @@ export function useNavResize(width: number, most: number, onRail: boolean) {
       onKeyDown,
       onDoubleClick: () => {
         preferences.setNavWidth(NAV_WIDTH.initial);
-        if (onRail) preferences.setNav("expanded");
+        if (onRail) sidebar.setNav("expanded");
       },
     },
   };

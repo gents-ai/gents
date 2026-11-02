@@ -2,6 +2,7 @@ import { createContext } from "react";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, CornerDownRight, Lock, Waypoints } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
+import { MorphProvider, stillMorph, useMorph } from "@/lib/morph";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { isLocalNode } from "@/lib/firstRun";
 import { href, type Route } from "@/lib/router";
@@ -33,6 +34,7 @@ import { NavScroll } from "./NavScroll";
 import { NavMailbox } from "./NavMailbox";
 import { NavNodes } from "./NavNodes";
 import { ContribBoundary } from "@/contrib/react/boundary";
+import { ICON_PART } from "./sidebarChange";
 import {
   useMailboxCount,
   useNodeCount,
@@ -63,6 +65,7 @@ export function KeyHint({ keys }: { keys?: string }) {
 }
 
 function Item({
+  id,
   to,
   active,
   count,
@@ -71,6 +74,7 @@ function Item({
   command,
   children,
 }: {
+  id: string;
   to: string;
   active?: boolean;
   /** what waits for the person here, in the brand badge */
@@ -82,6 +86,7 @@ function Item({
   command?: string;
   children: ReactNode;
 }) {
+  const { part } = useMorph();
   const keys = useKeysHint(command ?? "");
   return (
     <a
@@ -96,7 +101,11 @@ function Item({
           "in-data-[ground=window]:border-transparent in-data-[ground=window]:bg-raised in-data-[ground=window]:shadow-none",
       )}
     >
-      <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
+      <span className="grid size-[30px] shrink-0 place-items-center">
+        <span ref={part(`icon:${id}`)} className={ICON_PART}>
+          {icon}
+        </span>
+      </span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       <KeyHint keys={keys} />
       {tally ? (
@@ -118,14 +127,20 @@ export function NavPanel({
   settings,
   syncRow,
   railAligned = false,
+  morphIcons = false,
 }: {
   route: Route;
   settings: ReactNode;
   syncRow: boolean;
+  /** its icons morph to and from the rail's as the sidebar's mode changes:
+      only while it is the sidebar, never beside a rail that holds them */
+  morphIcons?: boolean;
   /** beside the rail, over it or pinned in its place: each row's icon
       sits at the rail's height for it */
   railAligned?: boolean;
 }) {
+  const shellMorph = useMorph();
+  const { part } = morphIcons ? shellMorph : stillMorph;
   const online = useOnline();
   const mailboxCount = useMailboxCount();
   const pinned = usePinnedSessionList();
@@ -156,6 +171,7 @@ export function NavPanel({
     const drawn = (
       <Item
         key={item.id}
+        id={item.id}
         to={href(to)}
         command={item.command}
         active={active}
@@ -252,7 +268,7 @@ export function NavPanel({
   const selectedCurrent =
     selected !== null && route.name === "agent" && route.nodeDid === selected.nodeDid;
   return (
-    <>
+    <MorphProvider value={morphIcons ? shellMorph : stillMorph}>
       {selected ? (
         /* the node goes to its page; the caret beside it switches node */
         <div
@@ -276,8 +292,9 @@ export function NavPanel({
             )}
           >
             <span
+              ref={part("icon:node")}
               className={cn(
-                "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
+                "relative block size-7 shrink-0 rounded-full ring-1 ring-border [view-transition-class:morph-icon] ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
                 selectedCurrent && "ring-2 ring-ink",
               )}
             >
@@ -366,7 +383,7 @@ export function NavPanel({
         {footer.rows.map(drawRow)}
         {settings}
       </div>
-    </>
+    </MorphProvider>
   );
 }
 
@@ -467,7 +484,13 @@ export function RailFlyout({
           <NavMenu
             render={<div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-1" />}
           >
-            <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
+            <NavPanel
+              route={route}
+              settings={settings}
+              syncRow={!hover}
+              railAligned
+              morphIcons={mode === "expanded" && !peek}
+            />
           </NavMenu>
         </div>
       </PortalContainerProvider>

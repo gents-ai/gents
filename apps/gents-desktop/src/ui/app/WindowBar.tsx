@@ -13,12 +13,12 @@ import {
   SheetTrigger,
 } from "@gents/ui/components/sheet";
 import { cn } from "@gents/ui/lib/utils";
+import { sidebar } from "./sidebarChange";
 import type { History, Route } from "@/lib/router";
 import { useSyncHealth } from "@/hooks/useClient";
 import { Hint } from "@/screens/Hint";
 import { openSearch, SearchButton } from "@/screens/SearchPalette";
 import { SIDEBAR_KEYS } from "@/screens/shortcutKeys";
-import { preferences } from "@/preferences";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { DockTabs } from "./Dock";
 import { MarkLink } from "./Mark";
@@ -80,7 +80,7 @@ function SidebarToggle({ hidden }: { hidden: boolean }) {
               aria-label={label}
               aria-pressed={!hidden}
               className="shrink-0"
-              onClick={preferences.toggleNavHidden}
+              onClick={sidebar.toggleHidden}
             />
           }
         >

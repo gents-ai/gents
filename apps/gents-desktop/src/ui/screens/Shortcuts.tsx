@@ -11,7 +11,7 @@ import { currentRoute, navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
 import { ArrowLeftRight, BellDot, History, PanelLeft } from "lucide-react";
-import { preferences } from "@/preferences";
+import { sidebar } from "@/app/sidebarChange";
 import { useApp } from "@/app/AppContext";
 import { switchToNode } from "@/app/NodeSwitcher";
 import { previousNode } from "../../hooks/activeNode";
@@ -204,7 +204,7 @@ export function Shortcuts() {
       other: { key: "s", mod: true, shift: true },
     },
     icon: PanelLeft,
-    run: () => preferences.toggleNavHidden(),
+    run: () => sidebar.toggleHidden(),
   });
   useCommand({
     id: "help.shortcuts",

@@ -17,6 +17,54 @@
   inset: 0 0 auto 0;
   animation-duration: 240ms;
 }
+/* The shell's columns as the sidebar changes how it shows (sidebarChange.ts):
+   each box moves and resizes while its old and new pictures cross-fade at
+   their own size from its top left, so text never stretches; icons move on
+   their own between the rail and the expanded sidebar. The page shows only
+   its new picture, which moves with its box: two pictures of a page laid
+   out at different widths would show every line twice. A sidebar hidden or
+   shown slides off or in at the window's left edge. A fade to transparent
+   inside the page is drawn in sRGB (bg-linear-to-b/srgb): WebKit draws an
+   oklab one dark in a transition's picture. */
+::view-transition-group(.morph-column),
+::view-transition-group(.morph-icon) {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+::view-transition-image-pair(.morph-column) {
+  overflow: clip;
+}
+::view-transition-old(.morph-column),
+::view-transition-new(.morph-column) {
+  width: auto;
+  height: auto;
+  inset: 0 auto auto 0;
+  animation-duration: 240ms;
+}
+::view-transition-old(.morph-pane) {
+  animation: none;
+  opacity: 0;
+}
+::view-transition-new(.morph-pane) {
+  animation: none;
+}
+::view-transition-old(.morph-sidebar):only-child {
+  animation: 240ms cubic-bezier(0.2, 0, 0, 1) both morph-slide-out;
+}
+::view-transition-new(.morph-sidebar):only-child {
+  animation: 240ms cubic-bezier(0.2, 0, 0, 1) both morph-slide-in;
+}
+@keyframes morph-slide-out {
+  to {
+    transform: translateX(-100%);
+  }
+}
+@keyframes morph-slide-in {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
 /* the rest of the page is never captured and keeps drawing live: a captured
    page is a flat image that drops a dialog backdrop's dim and blur in the
    desktop app's WebKit until the transition ends. Unconditional, since a

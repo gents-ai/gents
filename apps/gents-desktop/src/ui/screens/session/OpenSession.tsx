@@ -161,7 +161,7 @@ export function OpenSession() {
           aria-hidden="true"
           data-testid="transcript-top-fade"
           className={cn(
-            "pointer-events-none absolute inset-x-0 top-0 z-20 h-8 bg-gradient-to-b from-background to-transparent transition-opacity duration-200",
+            "pointer-events-none absolute inset-x-0 top-0 z-20 h-8 bg-linear-to-b/srgb from-background to-transparent transition-opacity duration-200",
             condensed ? "opacity-100" : "opacity-0",
           )}
         />

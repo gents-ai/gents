@@ -3,6 +3,7 @@ import { CircleAlert, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import type { History, Route } from "@/lib/router";
+import { MorphProvider, useMorphCard } from "@/lib/morph";
 import "@/screens/surfaces";
 import { useApp } from "./AppContext";
 import { PaneBarSlotContext } from "./PaneBar";
@@ -11,6 +12,7 @@ import { Rail } from "./Rail";
 import { RailFlyout } from "./RailFlyout";
 import { SettingsLink } from "./SettingsLink";
 import { PanelPicker, usePanelCommands } from "./panelCommands";
+import { useSidebarMorph } from "./sidebarChange";
 import { DockColumn, DockSheet } from "./ShellDock";
 import { SwipeHandles } from "./SwipeHandles";
 import { useShellLayout, type ShellLayout } from "./useShellLayout";
@@ -142,70 +144,83 @@ export function AppShell({
   const settings = (variant: "rail" | "row") => (
     <SettingsLink variant={variant} route={route} />
   );
+  /* a change of how the sidebar shows moves its column, the icons in it
+     and the page together */
+  const shell = useMorphCard();
+  useSidebarMorph(shell.morph);
   return (
-    <PaneBarSlotContext.Provider value={paneBar}>
-      <div
-        className="viewport-frame grid min-h-0 overflow-hidden bg-background text-foreground"
-        ref={shellRef}
-        data-testid="app-shell"
-        data-resize-container=""
-        style={{ gridTemplateColumns: columns, gridTemplateRows: "auto minmax(0,1fr)" }}
-      >
-        <WindowBar
-          route={route}
-          history={history}
-          layout={layout}
-          settings={settings("row")}
-          onPaneBar={setPaneBar}
-        />
-        {wide && !navHidden && (
-          <div className="relative col-start-1 row-start-2 min-h-0">
-            <RailFlyout
+    <MorphProvider value={shell}>
+      <PaneBarSlotContext.Provider value={paneBar}>
+        <div
+          className="viewport-frame grid min-h-0 overflow-hidden bg-background text-foreground"
+          ref={shellRef}
+          data-testid="app-shell"
+          data-resize-container=""
+          style={{
+            gridTemplateColumns: columns,
+            gridTemplateRows: "auto minmax(0,1fr)",
+          }}
+        >
+          <WindowBar
+            route={route}
+            history={history}
+            layout={layout}
+            settings={settings("row")}
+            onPaneBar={setPaneBar}
+          />
+          {wide && !navHidden && (
+            <div
+              ref={shell.part("sidebar")}
+              className="relative col-start-1 row-start-2 min-h-0 [view-transition-class:morph-column_morph-sidebar]"
+            >
+              <RailFlyout
+                route={route}
+                mode={drawnNav}
+                width={layout.navResize.width}
+                settings={settings("row")}
+              >
+                <Rail route={route} settings={settings("rail")} />
+              </RailFlyout>
+              <NavResizeHandle layout={layout} />
+            </div>
+          )}
+          {navHidden && (
+            <SidebarPeek
               route={route}
-              mode={drawnNav}
               width={layout.navResize.width}
               settings={settings("row")}
-            >
-              <Rail route={route} settings={settings("rail")} />
-            </RailFlyout>
-            <NavResizeHandle layout={layout} />
-          </div>
-        )}
-        {navHidden && (
-          <SidebarPeek
-            route={route}
-            width={layout.navResize.width}
-            settings={settings("row")}
-          />
-        )}
-        <section
-          className={cn(
-            "flex min-h-0 min-w-0 flex-col",
-            "md:col-start-2 md:row-start-2 md:mt-2 md:mr-2 md:mb-2 md:overflow-hidden md:rounded-2xl md:border md:border-border/60",
-            navHidden && "md:ml-2",
+            />
           )}
-          data-testid="pane"
-        >
-          <main
-            className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            style={
-              paneWidth !== null
-                ? { width: Math.max(360, paneWidth - paneInset) }
-                : docked && dockVisible && paneCol - 8 < 360
-                  ? { width: 360 }
-                  : undefined
-            }
+          <section
+            ref={shell.part("pane")}
+            className={cn(
+              "flex min-h-0 min-w-0 flex-col [view-transition-class:morph-column_morph-pane]",
+              "md:col-start-2 md:row-start-2 md:mt-2 md:mr-2 md:mb-2 md:overflow-hidden md:rounded-2xl md:border md:border-border/60",
+              navHidden && "md:ml-2",
+            )}
+            data-testid="pane"
           >
-            <SwipeHandles />
-            <ErrorBanner />
-            {children}
-          </main>
-        </section>
-        {docked && <DockColumn route={route} layout={layout} />}
-        <DockSheet route={route} layout={layout} />
-        <CustomizeNavDialog />
-        <PanelPicker route={route} />
-      </div>
-    </PaneBarSlotContext.Provider>
+            <main
+              className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+              style={
+                paneWidth !== null
+                  ? { width: Math.max(360, paneWidth - paneInset) }
+                  : docked && dockVisible && paneCol - 8 < 360
+                    ? { width: 360 }
+                    : undefined
+              }
+            >
+              <SwipeHandles />
+              <ErrorBanner />
+              {children}
+            </main>
+          </section>
+          {docked && <DockColumn route={route} layout={layout} />}
+          <DockSheet route={route} layout={layout} />
+          <CustomizeNavDialog />
+          <PanelPicker route={route} />
+        </div>
+      </PaneBarSlotContext.Provider>
+    </MorphProvider>
   );
 }
