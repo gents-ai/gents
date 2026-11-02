@@ -370,13 +370,20 @@ export const FlyoutOpenContext = createContext(false);
 export function RailFlyout({
   route,
   mode = "hover",
+  width,
+  peek = false,
   settings,
   children,
 }: {
   route: Route;
   mode?: NavMode;
+  /** the expanded sidebar's column, which the panel fills short of its margins */
+  width?: number;
+  /** drawn over the page from a hidden sidebar's edge: the panel alone,
+      floating as the hover panel does, without the rail */
+  peek?: boolean;
   settings: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
@@ -393,8 +400,9 @@ export function RailFlyout({
     [],
   );
   if (mode === "collapsed") return <>{children}</>;
-  const shown = mode === "expanded" || open;
-  const hover = mode === "hover";
+  const hover = mode === "hover" && !peek;
+  const shown = mode === "expanded" || open || peek;
+  const floating = hover || peek;
   return (
     <div
       ref={setPortal}
@@ -432,13 +440,13 @@ export function RailFlyout({
 
         <div
           aria-hidden={!shown}
-          data-ground={hover ? "raised" : "window"}
+          data-ground={floating ? "raised" : "window"}
           className={cn(
             "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden pb-2",
             "left-1.5 pt-3.5",
             /* floating over the page it is a surface of its own; always there,
                it is part of the window, on the window's ground */
-            hover
+            floating
               ? "z-30 rounded-2xl border border-border/60 bg-(--nav-ground) shadow-lg transition-opacity duration-200 ease-out [--nav-ground:var(--color-raised)] dark:[--nav-ground:color-mix(in_oklab,var(--color-raised),var(--color-surface))]"
               : "[--nav-ground:var(--color-background)]",
             hover &&
@@ -446,6 +454,7 @@ export function RailFlyout({
                  not move while it opens or closes */
               (open ? "opacity-100" : "pointer-events-none opacity-0"),
           )}
+          style={mode === "expanded" && width ? { width: width - 16 } : undefined}
         >
           {/* the panel keeps its margin from the window's edge, and its
               content moves left by the rest, so each icon sits where the

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Menu, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, Menu, PanelLeft, Search } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
   Sheet,
@@ -12,6 +12,8 @@ import type { History, Route } from "@/lib/router";
 import { useSyncHealth } from "@/hooks/useClient";
 import { Hint } from "@/screens/Hint";
 import { openSearch, SearchButton } from "@/screens/SearchPalette";
+import { SIDEBAR_KEYS } from "@/screens/shortcutKeys";
+import { preferences } from "@/preferences";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { DockTabs } from "./Dock";
 import { MarkLink } from "./Mark";
@@ -51,6 +53,26 @@ function HistoryNav({ history }: { history: History }) {
         </Button>
       </Hint>
     </div>
+  );
+}
+
+/* at the sidebar's edge, by the window's own controls, where a hidden
+   sidebar is brought back */
+function SidebarToggle({ hidden }: { hidden: boolean }) {
+  const label = hidden ? "Show sidebar" : "Hide sidebar";
+  return (
+    <Hint label={label} keys={SIDEBAR_KEYS}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={label}
+        aria-pressed={!hidden}
+        className="shrink-0"
+        onClick={preferences.toggleNavHidden}
+      >
+        <PanelLeft />
+      </Button>
+    </Hint>
   );
 }
 
@@ -113,10 +135,10 @@ export function WindowBar({
   settings: ReactNode;
   onPaneBar: (slot: HTMLElement | null) => void;
 }) {
-  const { columns, wide, docked, dockOpen, divider, shownNav } = layout;
+  const { columns, wide, docked, dockOpen, divider, shownNav, navHidden } = layout;
   /* an expanded nav's column has room for the page's own controls, so they
      sit over it, by the mark, rather than out past its edge */
-  const navHoldsHistory = wide && shownNav === "expanded";
+  const navHoldsHistory = wide && shownNav === "expanded" && !navHidden;
   const syncHealth = useSyncHealth();
   const drag = headerIsWindowBar() ? "" : undefined;
   const windows = isWindowsTauriShell();
@@ -130,13 +152,20 @@ export function WindowBar({
       data-testid="window-bar"
     >
       {wide && (
-        <div className="flex items-center" data-tauri-drag-region={drag}>
-          <div
-            className="flex w-14 shrink-0 justify-center"
-            data-tauri-drag-region={drag}
-          >
-            <MarkLink current={onNodes} />
-          </div>
+        /* a hidden sidebar's column is empty but kept, so the bar's cells
+           stay over their columns */
+        <div
+          className="flex min-w-0 items-center overflow-hidden"
+          data-tauri-drag-region={drag}
+        >
+          {!navHidden && (
+            <div
+              className="flex w-14 shrink-0 justify-center"
+              data-tauri-drag-region={drag}
+            >
+              <MarkLink current={onNodes} />
+            </div>
+          )}
           {navHoldsHistory && history && <HistoryNav history={history} />}
         </div>
       )}
@@ -151,6 +180,7 @@ export function WindowBar({
         data-tauri-drag-region={drag}
       >
         <NavSheet route={route} settings={settings} />
+        {wide && <SidebarToggle hidden={navHidden} />}
         <MarkLink className="md:hidden" current={onNodes} />
         {history && !navHoldsHistory && <HistoryNav history={history} />}
         <ActiveNodeLabel />

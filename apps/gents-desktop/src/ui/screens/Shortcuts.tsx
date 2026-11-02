@@ -10,7 +10,8 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { currentRoute, navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
-import { ArrowLeftRight, BellDot, History } from "lucide-react";
+import { ArrowLeftRight, BellDot, History, PanelLeft } from "lucide-react";
+import { preferences } from "@/preferences";
 import { useApp } from "@/app/AppContext";
 import { switchToNode } from "@/app/NodeSwitcher";
 import { previousNode } from "../../hooks/activeNode";
@@ -193,6 +194,17 @@ export function Shortcuts() {
     notInFields: !IS_MAC,
     when: () => transcriptScroller() !== null,
     run: () => step(1),
+  });
+  useCommand({
+    id: "sidebar.toggle",
+    title: "Show or hide the sidebar",
+    group: "Pages",
+    keys: {
+      mac: { key: "s", mod: true, ctrl: true },
+      other: { key: "s", mod: true, shift: true },
+    },
+    icon: PanelLeft,
+    run: () => preferences.toggleNavHidden(),
   });
   useCommand({
     id: "help.shortcuts",

@@ -16,6 +16,8 @@ import { onZoomKeys, stepZoom, zoomKey } from "../src/ui/lib/zoom";
 const defaults: Preferences = {
   theme: "light",
   nav: "hover",
+  navHidden: false,
+  navWidth: 304,
   zoom: 1,
   sentTurn: "follow",
   followUp: "steer",
@@ -31,6 +33,8 @@ describe("preferences read back from storage", () => {
     expect(restorePreferences({ theme: "dark", nav: "collapsed" }, defaults)).toEqual({
       theme: "dark",
       nav: "collapsed",
+      navHidden: false,
+      navWidth: 304,
       zoom: 1,
       sentTurn: "follow",
       followUp: "steer",
@@ -44,6 +48,14 @@ describe("preferences read back from storage", () => {
     expect(restorePreferences({ sentTurn: "top" }, defaults).sentTurn).toBe("follow");
     expect(restorePreferences({ followUp: "queue" }, defaults).followUp).toBe("queue");
     expect(restorePreferences({ followUp: "later" }, defaults).followUp).toBe("steer");
+  });
+
+  it("keeps a hidden sidebar, and a width only within the sidebar's range", () => {
+    expect(restorePreferences({ navHidden: true }, defaults).navHidden).toBe(true);
+    expect(restorePreferences({ navHidden: "yes" }, defaults).navHidden).toBe(false);
+    expect(restorePreferences({ navWidth: 360.4 }, defaults).navWidth).toBe(360);
+    expect(restorePreferences({ navWidth: 120 }, defaults).navWidth).toBe(304);
+    expect(restorePreferences({ navWidth: 900 }, defaults).navWidth).toBe(304);
   });
 
   it("keeps the pinned sessions' keys, and only those", () => {

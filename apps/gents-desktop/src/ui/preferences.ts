@@ -9,6 +9,10 @@ import { ZOOM_STEPS } from "./lib/zoom";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
 
+/** The expanded sidebar's width, in pixels: dragged between these, and
+    reset to `initial`. */
+export const NAV_WIDTH = { min: 220, max: 420, initial: 304 } as const;
+
 /** Where a message the person sends settles: the view keeps following the
     foot as the reply grows, or the message is kept near the top of the view
     with the reply filling in beneath it. */
@@ -21,6 +25,11 @@ export type FollowUp = "steer" | "queue";
 export type Preferences = {
   theme: ThemePreference;
   nav: NavMode;
+  /** the rail and sidebar put away entirely on a wide window, whatever
+      `nav` is; the phone's menu is unaffected */
+  navHidden: boolean;
+  /** the expanded sidebar's width on this device */
+  navWidth: number;
   zoom: number;
   sentTurn: SentTurnPlacement;
   followUp: FollowUp;
@@ -60,6 +69,8 @@ const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
 const initial = (): Preferences => ({
   theme: "system",
   nav: "hover",
+  navHidden: false,
+  navWidth: NAV_WIDTH.initial,
   zoom: 1,
   sentTurn: "anchor",
   followUp: "steer",
@@ -121,6 +132,14 @@ export function restorePreferences(
       typeof saved.nav === "string" && NAV_MODES.includes(saved.nav)
         ? (saved.nav as NavMode)
         : defaults.nav,
+    navHidden:
+      typeof saved.navHidden === "boolean" ? saved.navHidden : defaults.navHidden,
+    navWidth:
+      typeof saved.navWidth === "number" &&
+      saved.navWidth >= NAV_WIDTH.min &&
+      saved.navWidth <= NAV_WIDTH.max
+        ? Math.round(saved.navWidth)
+        : defaults.navWidth,
     zoom: (ZOOM_STEPS as readonly unknown[]).includes(saved.zoom)
       ? (saved.zoom as number)
       : defaults.zoom,
@@ -156,6 +175,14 @@ export const preferences = {
   },
   setNav(nav: NavMode) {
     store.setState({ nav });
+  },
+  toggleNavHidden() {
+    store.setState({ navHidden: !store.getState().navHidden });
+  },
+  setNavWidth(width: number) {
+    store.setState({
+      navWidth: Math.round(Math.min(NAV_WIDTH.max, Math.max(NAV_WIDTH.min, width))),
+    });
   },
   setZoom(zoom: number) {
     store.setState({ zoom });
@@ -232,6 +259,8 @@ export const useTheme = (): Theme => {
 };
 export const useThemePreference = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
+export const useNavHidden = () => usePreferences((p) => p.navHidden);
+export const useNavWidth = () => usePreferences((p) => p.navWidth);
 export const zoomLevel = () => store.getState().zoom;
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
