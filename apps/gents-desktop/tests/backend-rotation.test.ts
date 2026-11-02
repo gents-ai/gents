@@ -97,6 +97,50 @@ describe("a field save and the account pool", () => {
   });
 });
 
+describe("a field save and credentials the editor has no field for", () => {
+  it("keeps a cloud backend's credentials when nothing about them was chosen", () => {
+    for (const authKind of ["aws_credentials", "google_credentials"])
+      expect(
+        authChange(
+          backend(authKind),
+          "ClaudeBedrock",
+          fields("ClaudeBedrock"),
+          isSubscriptionKind,
+        ),
+      ).toBeUndefined();
+  });
+
+  it("keeps a gateway backend's sign-in", () => {
+    expect(
+      authChange(
+        backend("node_oauth"),
+        "ClaudeGateway",
+        fields("ClaudeGateway"),
+        isSubscriptionKind,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("still writes a key typed for it, and clears a cleared variable", () => {
+    expect(
+      authChange(
+        backend("aws_credentials"),
+        "ClaudeBedrock",
+        { ...fields("ClaudeBedrock"), apiKey: "sk-x" },
+        isSubscriptionKind,
+      ),
+    ).toEqual({ kind: "api_key", key: "sk-x" });
+    expect(
+      authChange(
+        { authKind: "environment", accountRef: null, apiKeyConfigured: false },
+        "OpenAiCompatible",
+        fields("OpenAiCompatible"),
+        isSubscriptionKind,
+      ),
+    ).toEqual({ kind: "unauthenticated" });
+  });
+});
+
 describe("the account pool view", () => {
   const account = (credentialId: string, fieldsOf: object = {}) => ({
     credentialId,

@@ -21,6 +21,17 @@ export function poolAccounts(
   return accounts.filter((a) => a.provider === provider && a.enabled && !a.pendingSave);
 }
 
+/* stored credentials the editor has no field for (cloud credentials, and a
+   sign-in on a provider that isn't one of the app's subscriptions, such as a
+   gateway's): a save of other fields keeps them, since none of the editor's
+   choices was made */
+const KEPT_AUTH = new Set([
+  "aws_credentials",
+  "google_credentials",
+  "node_oauth",
+  "node_oauth_pool",
+]);
+
 /**
  * The `auth` a field save sends, or `undefined` to leave it as stored. A pool is
  * set only through its own control, so editing another field never rewrites it.
@@ -41,6 +52,8 @@ export function authChange(
   if (next.apiKey.trim()) return { kind: "api_key", key: next.apiKey };
   if (next.apiKeyEnvVar.trim())
     return { kind: "environment", variable: next.apiKeyEnvVar.trim() };
+  if (next.providerKind === savedKind && KEPT_AUTH.has(backend.authKind ?? ""))
+    return undefined;
   if (!backend.apiKeyConfigured || subscription(savedKind))
     return { kind: "unauthenticated" };
   return undefined;
