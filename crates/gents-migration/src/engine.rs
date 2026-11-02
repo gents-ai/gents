@@ -825,14 +825,19 @@ pub struct LineageMismatch {
 
 impl std::fmt::Display for LineageMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let origin = if is_known_off_lineage(&self.collection, &self.active) {
+            "A pre-release build (v1.0.0-rc1, or an RC2 build before the canonical lineage) \
+             created or upgraded it with a schema this release does not use."
+        } else {
+            "It was created or upgraded by a build whose schema this release does not use."
+        };
         write!(
             f,
             "{} is on a non-canonical schema lineage (active {}, canonical {}): this store \
-             cannot sync {} with peers or apps on the canonical lineage. v1.0.0-rc1 created or \
-             upgraded it with a schema this release does not use. Re-create it from this \
-             release: for a node, move its home aside and run `gents init` with the same \
-             identity key (`--key-path`), then re-enroll; for the desktop app, reset its local \
-             data. Data only this store holds is not carried over. See \
+             cannot sync {} with peers or apps on the canonical lineage. {origin} Re-create it \
+             from this release: for a node, move its home aside and run `gents init` with the \
+             same identity key (`--key-path`), then re-enroll; for the desktop app, reset its \
+             local data. Data only this store holds is not carried over. See \
              docs/upgrade-from-rc0.md",
             self.collection, self.active, self.canonical, self.collection
         )
