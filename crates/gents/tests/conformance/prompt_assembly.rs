@@ -1296,8 +1296,10 @@ fn claude_request(
     rig::completion::CompletionRequest {
         model: None,
         preamble: preamble.map(str::to_string),
-        chat_history: rig::OneOrMany::many(gents::llm::rig_compat::to_rig_messages(history))
-            .expect("at least one history row"),
+        chat_history: rig::OneOrMany::many(gents::inference::llm::rig_compat::to_rig_messages(
+            history,
+        ))
+        .expect("at least one history row"),
         documents: Vec::new(),
         tools,
         temperature: None,
@@ -1313,7 +1315,7 @@ fn native_messages_body(history: &[Message]) -> Result<serde_json::Value, Messag
     if history.is_empty() {
         return Ok(serde_json::json!({"messages": []}));
     }
-    gents::claude_messages::build_messages_body(
+    gents::inference::clients::claude_messages::build_messages_body(
         "claude-sonnet-5",
         &claude_request(None, history, Vec::new()),
     )
