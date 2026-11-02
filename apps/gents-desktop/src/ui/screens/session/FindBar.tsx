@@ -263,7 +263,7 @@ export function FindBar({
         role="search"
         aria-label="Find in session"
         data-testid="find-bar"
-        className="absolute top-0 right-0 grid w-full max-w-sm gap-1 rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+        className="absolute top-0 right-0 grid w-full max-w-sm gap-1 rounded-xl border border-border bg-background p-1 text-foreground shadow-lg"
       >
         <div className="flex min-w-0 items-center gap-1">
           <input
