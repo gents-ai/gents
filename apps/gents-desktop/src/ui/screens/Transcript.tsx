@@ -25,6 +25,7 @@ import { formatMessageTime } from "@source-inc/gents-desktop-ui";
 import { SentText } from "./SkillChips";
 import { writtenText } from "@/lib/skillLines";
 import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
+import { FindBar } from "./session/FindBar";
 import { useHeldRows } from "@/lib/useHeldRows";
 import { sequenceOf } from "@/lib/transcriptRows";
 import {
@@ -944,6 +945,19 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       className="mt-6 grid grid-cols-[minmax(0,1fr)] [--step-scroll-inset:56]"
       data-testid="transcript-panel"
     >
+      <FindBar
+        scroller={scroller}
+        sessionKey={sessionKey}
+        entries={entries}
+        keyOf={entryKey}
+        goTo={list.goTo}
+        opener={groupState}
+        older={{
+          more: rows.olderBefore !== null,
+          loading: rows.loading === "older",
+          load: rows.loadOlder,
+        }}
+      />
       {rows.olderBefore !== null && (
         <div
           role="status"

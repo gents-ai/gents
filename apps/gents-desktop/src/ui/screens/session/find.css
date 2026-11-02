@@ -1,0 +1,8 @@
+/* a find's matches over the transcript's drawn text (FindBar.tsx) */
+::highlight(find) {
+  background-color: color-mix(in oklab, var(--color-yellow) 35%, transparent);
+}
+::highlight(find-current) {
+  background-color: var(--color-yellow);
+  color: var(--color-black);
+}
