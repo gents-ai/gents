@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
@@ -7,7 +7,14 @@ import type { ReaderPlace } from "@/lib/transcriptList";
 import { SEARCH_FIELD } from "@/lib/textAssist";
 import { commandKey } from "../shortcutKeys";
 import type { TranscriptEntry } from "../transcript-groups";
-import { closeFind, findBar, findMatches, openFind, type FindMatch } from "./find";
+import {
+  closeFind,
+  findBar,
+  openFind,
+  startFind,
+  type FindMatch,
+  type Found,
+} from "./find";
 
 /** what the find bar opens a match's step, group or reasoning with */
 type Opener = {
@@ -19,6 +26,7 @@ type Opener = {
 /* where a match's line is held in the view, from its top */
 const MATCH_LINE = 96;
 const TYPING_MS = 120;
+const NOTHING: Found = { matches: [], more: false, done: true };
 
 const supported = () => typeof CSS !== "undefined" && "highlights" in CSS;
 
@@ -66,12 +74,25 @@ export function FindBar({
   keyOf: (entry: TranscriptEntry) => string;
   goTo: (place: ReaderPlace) => void;
   opener: Opener;
-  older: { more: boolean; loading: boolean; load: () => void };
+  /** the session's older pages: whether any are unread, reading one, and
+      how many messages are read of all, when that is known */
+  older: {
+    more: boolean;
+    loading: boolean;
+    load: () => void;
+    messages: { loaded: number; total: number } | null;
+  };
 }) {
   const { open, focus } = useStore(findBar);
   const [text, setText] = useState("");
   const [query, setQuery] = useState("");
-  const [at, setAt] = useState(0);
+  /* the current match, by its row and place in it, so matches found later
+     around it leave it where it is */
+  const [pick, setPick] = useState<{
+    query: string;
+    rowKey: string;
+    nth: number;
+  } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
   const shown = useRef<FindMatch | null>(null);
@@ -80,14 +101,35 @@ export function FindBar({
     const timer = window.setTimeout(() => setQuery(text), TYPING_MS);
     return () => window.clearTimeout(timer);
   }, [text]);
-  const matches = useMemo(
-    () => (open ? findMatches(entries, keyOf, query) : []),
+  const [found, setFound] = useState<Found>(NOTHING);
+  useEffect(
+    () => (open ? startFind(entries, keyOf, query, setFound) : setFound(NOTHING)),
     [open, entries, keyOf, query],
   );
-  const current = matches.length ? matches[Math.min(at, matches.length - 1)]! : null;
+  const { matches, more, done } = found;
+  const at =
+    pick && pick.query === query
+      ? matches.findIndex((m) => m.rowKey === pick.rowKey && m.nth === pick.nth)
+      : -1;
+  const current = at === -1 ? null : matches[at]!;
+
+  /* Search all: the older pages, read one at a time through the same reads
+     scrolling up makes, until the session's start or Stop; never begun by
+     typing */
+  const [all, setAll] = useState(false);
+  const { more: moreOlder, loading: reading, load } = older;
+  useEffect(() => {
+    if (!all) return;
+    if (!moreOlder) setAll(false);
+    else if (!reading) load();
+  }, [all, moreOlder, reading, load]);
+  useEffect(() => {
+    if (!open) setAll(false);
+  }, [open]);
 
   /* another session closes the bar */
   useEffect(() => {
+    setAll(false);
     closeFind();
     setText("");
     setQuery("");
@@ -108,27 +150,29 @@ export function FindBar({
     if (back?.isConnected) back.focus();
   };
 
+  const choose = (match: FindMatch) =>
+    setPick({ query, rowKey: match.rowKey, nth: match.nth });
   const step = (way: 1 | -1) => {
     if (!matches.length) return;
-    setAt(
-      (i) => (Math.min(i, matches.length - 1) + way + matches.length) % matches.length,
-    );
+    const from = at === -1 ? (way === 1 ? -1 : 0) : at;
+    choose(matches[(from + way + matches.length) % matches.length]!);
   };
 
-  /* a new query starts from the first match at or below the top of the view */
+  /* a new query starts from the first match at or below the top of the
+     view; a current match that is gone starts it again once all is found */
   useEffect(() => {
-    if (!matches.length || !scroller) return setAt(0);
-    const list = scroller.querySelector("[data-transcript-list]");
-    const top = scroller.getBoundingClientRect().top;
+    if (!matches.length || (pick?.query === query && (at !== -1 || !done))) return;
+    const list = scroller?.querySelector("[data-transcript-list]");
+    const top = scroller?.getBoundingClientRect().top ?? 0;
     const drawn = [...(list?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [])]
       .filter((row) => row.getBoundingClientRect().bottom > top)
       .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
     const order = new Map(entries.map((entry, index) => [keyOf(entry), index]));
     const from = drawn ? (order.get(drawn.dataset.rowKey!) ?? 0) : 0;
-    const first = matches.findIndex((m) => (order.get(m.rowKey) ?? 0) >= from);
-    setAt(first === -1 ? 0 : first);
+    const first = matches.find((m) => (order.get(m.rowKey) ?? 0) >= from);
+    choose(first ?? matches[matches.length - 1]!);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, matches, done]);
 
   /* the current match: what holds it is opened, and its row brought into
      view; once drawn, its line is held where the reader looks */
@@ -208,9 +252,11 @@ export function FindBar({
   if (!open) return null;
   const count = !query.trim()
     ? null
-    : matches.length
-      ? `${Math.min(at, matches.length - 1) + 1} of ${matches.length}`
-      : "No matches in the loaded messages";
+    : !done && !matches.length
+      ? "Finding…"
+      : matches.length
+        ? `${at + 1} of ${matches.length}${more ? "+" : ""}`
+        : "No matches in the loaded messages";
   return (
     <div className="sticky top-2 z-20 h-0">
       <div
@@ -278,16 +324,22 @@ export function FindBar({
             <X />
           </Button>
         </div>
-        {older.more && (
-          <p className="px-2 pb-1 text-xs text-muted-foreground">
-            Searching loaded messages ·{" "}
+        {(older.more || all) && (
+          <p className="flex min-w-0 items-center gap-1 px-2 pb-1 text-xs text-muted-foreground">
+            <span className="min-w-0 truncate" aria-live="polite">
+              {!all
+                ? "Searching loaded messages"
+                : older.messages
+                  ? `Searched ${older.messages.loaded} of ${older.messages.total} messages`
+                  : "Searching older messages…"}
+            </span>
+            ·
             <button
               type="button"
-              className="underline underline-offset-2 hover:text-foreground disabled:no-underline"
-              disabled={older.loading}
-              onClick={older.load}
+              className="shrink-0 underline underline-offset-2 hover:text-foreground"
+              onClick={() => setAll(!all)}
             >
-              {older.loading ? "Loading older…" : "Load older"}
+              {all ? "Stop" : "Search all"}
             </button>
           </p>
         )}

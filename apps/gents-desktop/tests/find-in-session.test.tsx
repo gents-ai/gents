@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -46,13 +47,21 @@ afterEach(() => act(() => closeFind()));
 
 describe("finding in a session", () => {
   it("finds every occurrence in the rows' data, with what opens it", () => {
-    const found = findMatches(entries, keyOf, "SNAKE");
+    const { matches: found, more } = findMatches(entries, keyOf, "SNAKE");
+    expect(more).toBe(false);
     expect(found.map((m) => m.rowKey)).toEqual(["u1", "g1", "g1", "a1", "a1"]);
     /* the output is drawn once its step opens; the thought, once its reasoning does */
     expect(found[1]).toMatchObject({ group: { key: "g1", step: "t1" } });
     expect(found[2]).toMatchObject({ group: { key: "g1" }, reasoning: "a0" });
     expect(found.map((m) => m.nth)).toEqual([0, 0, 1, 0, 1]);
-    expect(findMatches(entries, keyOf, "  ")).toEqual([]);
+    expect(findMatches(entries, keyOf, "  ").matches).toEqual([]);
+    /* past the limit: the newest ones, and more */
+    const capped = findMatches(entries, keyOf, "snake", 2);
+    expect(capped.more).toBe(true);
+    expect(capped.matches.map((m) => [m.rowKey, m.nth])).toEqual([
+      ["a1", 0],
+      ["a1", 1],
+    ]);
   });
 
   it("opens on its key, counts, steps both ways around, and closes with Escape", async () => {
@@ -69,7 +78,7 @@ describe("finding in a session", () => {
           keyOf={keyOf}
           goTo={goTo}
           opener={opener}
-          older={{ more: false, loading: false, load: () => {} }}
+          older={{ more: false, loading: false, load: () => {}, messages: null }}
         />
       </>,
     );
@@ -105,22 +114,79 @@ describe("finding in a session", () => {
     vi.useRealTimers();
   });
 
-  it("says it searched only the loaded messages, and loads older ones", () => {
-    const load = vi.fn();
-    render(
-      <FindBar
-        scroller={null}
-        sessionKey="s1"
-        entries={entries}
-        keyOf={keyOf}
-        goTo={() => {}}
-        opener={{ setFolded() {}, setOpenStep() {}, setReasoning() {} }}
-        older={{ more: true, loading: false, load }}
-      />,
-    );
+  it("searches all: reads the older pages one at a time, counts them, and stops", () => {
+    vi.useFakeTimers();
+    /* three pages of two messages; only the newest is read at first */
+    const pages = [
+      [
+        userMessage({
+          itemKey: "o1",
+          sequence: 0,
+          content: "The oldest note says lizard.",
+        }),
+        assistantMessage({ itemKey: "o2", sequence: 1, content: "Noted." }),
+      ],
+      [
+        userMessage({ itemKey: "m1", sequence: 2, content: "Middle." }),
+        assistantMessage({ itemKey: "m2", sequence: 3, content: "Still middle." }),
+      ],
+      [
+        userMessage({ itemKey: "n1", sequence: 4, content: "Newest." }),
+        assistantMessage({ itemKey: "n2", sequence: 5, content: "A lizard again." }),
+      ],
+    ];
+    const reads = vi.fn();
+    function Session() {
+      const [from, setFrom] = useState(2);
+      const [loading, setLoading] = useState(false);
+      const shown = groupTranscript(pages.slice(from).flat());
+      return (
+        <FindBar
+          scroller={null}
+          sessionKey="s1"
+          entries={shown}
+          keyOf={keyOf}
+          goTo={() => {}}
+          opener={{ setFolded() {}, setOpenStep() {}, setReasoning() {} }}
+          older={{
+            more: from > 0,
+            loading,
+            load: () => {
+              reads();
+              setLoading(true);
+              setTimeout(() => {
+                setFrom((f) => f - 1);
+                setLoading(false);
+              }, 100);
+            },
+            messages: { loaded: (3 - from) * 2, total: 6 },
+          }}
+        />
+      );
+    }
+    render(<Session />);
     act(() => openFind());
-    expect(screen.getByText(/Searching loaded messages/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
-    expect(load).toHaveBeenCalled();
+    const field = screen.getByRole("textbox", { name: "Find in session" });
+    fireEvent.change(field, { target: { value: "lizard" } });
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+    expect(screen.getByText("Searching loaded messages")).toBeInTheDocument();
+    expect(reads).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Search all" }));
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Searched 2 of 6 messages")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.getByText("Searched 4 of 6 messages")).toBeInTheDocument();
+    expect(reads).toHaveBeenCalledTimes(2);
+
+    /* Stop leaves the page being read to land, and reads no more */
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(reads).toHaveBeenCalledTimes(2);
+    /* that page held the oldest match: stepping reaches it */
+    expect(screen.getByText(/of 2$/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Search all" })).toBeNull();
+    vi.useRealTimers();
   });
 });

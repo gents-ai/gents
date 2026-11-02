@@ -61,3 +61,70 @@ test("finds in a long session, steps to each match's row, and closes", async ({
   await expect(page.getByTestId("find-bar")).toHaveCount(0);
   expect(await page.evaluate(() => CSS.highlights.has("find"))).toBe(false);
 });
+
+test("Search all reads the older pages and steps to a match only the oldest holds", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  test.slow();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  const panel = page.getByTestId("transcript-panel");
+  await panel.getByText("stream-start", { exact: false }).last().waitFor();
+
+  await page.keyboard.press("ControlOrMeta+f");
+  const bar = page.getByTestId("find-bar");
+  const field = page.getByRole("textbox", { name: "Find in session" });
+  await field.fill("fixture row 0:");
+  const count = bar.getByRole("status");
+  await expect(count).toHaveText("No matches in the loaded messages");
+  await expect(bar.getByText("Searching loaded messages")).toBeVisible();
+
+  /* the reader's place holds while pages arrive above it: the first row
+     below the top of the view, and where it is; none between frames */
+  const top = () =>
+    page.evaluate(() => {
+      const scroller = document
+        .querySelector('[data-testid="transcript-panel"]')!
+        .closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+      const line = scroller.getBoundingClientRect().top + 120;
+      const row = [...scroller.querySelectorAll<HTMLElement>("[data-row-key]")].find(
+        (r) => r.getBoundingClientRect().bottom > line,
+      );
+      return row
+        ? { key: row.dataset.rowKey, y: Math.round(row.getBoundingClientRect().top) }
+        : null;
+    });
+  await page.evaluate(() =>
+    window.__GENTS_MOBILE_PERFORMANCE__!.setOlderPageDelay(400),
+  );
+  await expect.poll(top).not.toBeNull();
+  const before = (await top())!;
+  await bar.getByRole("button", { name: "Search all" }).click();
+  const progress = bar.getByText(/^Searched \d+ of \d+ messages$/);
+  await expect(progress).toBeVisible();
+  const first = await progress.textContent();
+  await expect(progress).not.toHaveText(first!);
+  /* pages have landed above, and the row the reader was at hasn't moved */
+  await expect
+    .poll(
+      async () => {
+        const during = await top();
+        return (
+          !!during && during.key === before.key && Math.abs(during.y - before.y) <= 2
+        );
+      },
+      { timeout: 2_000 },
+    )
+    .toBe(true);
+  await expect(count).toHaveText("1 of 1", { timeout: 30_000 });
+  await expect(bar.getByRole("button", { name: "Search all" })).toHaveCount(0);
+
+  await expect.poll(async () => (await current(page))?.inView).toBe(true);
+  /* the first message's row */
+  expect((await current(page))!.key).toContain("large-request-0");
+});

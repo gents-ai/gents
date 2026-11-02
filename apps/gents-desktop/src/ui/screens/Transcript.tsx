@@ -772,6 +772,18 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     [entries, indexOf],
   );
 
+  /* how many of the session's messages are read: they are numbered from
+     0, and the oldest read is where the older pages begin */
+  const messagesRead = useMemo(() => {
+    if (rows.olderBefore === null) return null;
+    let newest: number | null = null;
+    for (let i = entries.length - 1; i >= 0 && newest === null; i -= 1)
+      newest = entrySequence(entries[i], sequences);
+    return newest === null
+      ? null
+      : { loaded: newest + 1 - rows.olderBefore, total: newest + 1 };
+  }, [entries, sequences, rows.olderBefore]);
+
   /* opening a session returns to where the reader left it: at once when
      that row is drawn, else once the page around its message is read */
   const opening = useMemo(() => {
@@ -956,6 +968,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           more: rows.olderBefore !== null,
           loading: rows.loading === "older",
           load: rows.loadOlder,
+          messages: messagesRead,
         }}
       />
       {rows.olderBefore !== null && (
