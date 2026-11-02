@@ -467,9 +467,24 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     manifest["version"] = "1.1.0".into();
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (bytes, _) = crate::pack::archive::pack_dir(&staged).unwrap();
-    crate::pack::store::PackStore::new(home.path())
+    let staged_artifact = crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
+    let mut staged_preview = vec![
+        "pack",
+        "preview",
+        "update",
+        staged_artifact.header.digest.as_str(),
+    ];
+    staged_preview.extend(slot_argv);
+    let preview: Value = serde_json::from_str(
+        &tool
+            .call(json!({"argv": staged_preview}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["committed"], false);
     let listed: Value = serde_json::from_str(
         &tool
             .call(json!({"argv": ["pack", "list"]}).to_string())
