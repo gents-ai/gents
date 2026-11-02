@@ -1,8 +1,9 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { NavNodes } from "@/app/NavNodes";
 import { NavPanel } from "@/app/RailFlyout";
 import { switchedRoute } from "@/app/NodeSwitcher";
 import { bindNavigationGuard } from "@/lib/router";
@@ -43,6 +44,29 @@ describe("switching node", () => {
               updatedAt: "2026-11-01T10:00:00Z",
             },
           ],
+          mailboxItems: ["a", "b"].map((itemId) => ({
+            itemId,
+            itemKey: itemId,
+            requesterDid: "did:key:person",
+            nodeDid: "did:key:z6MkJuno",
+            status: "open",
+            kind: "finished",
+            action: "ack",
+            title: "Done",
+            summary: null,
+            payload: null,
+            sourceKind: "session",
+            sourceId: "juno-1",
+            sessionId: "juno-1",
+            requestId: null,
+            causeDocId: null,
+            targetNodeDid: "did:key:z6MkJuno",
+            targetAgentId: null,
+            expectedCollection: null,
+            parentItemId: null,
+            deadlineAt: null,
+            createdAt: "2026-11-01T10:00:00Z",
+          })),
           node: { ...deployment.node, nodeDid: "did:key:z6MkJuno", displayName: null },
         }),
       ],
@@ -61,14 +85,63 @@ describe("switching node", () => {
     expect(screen.getByText("Local")).toBeVisible();
     expect(screen.getByText("Remote")).toBeVisible();
     expect(juno).toHaveAttribute("aria-checked", "false");
-    /* what it has going on, before switching to it */
-    expect(juno).toHaveTextContent("1 running");
+    /* what it has going on, before switching to it, as marks named in words */
+    expect(
+      within(juno).getByRole("img", { name: "1 running session" }),
+    ).toHaveTextContent("1");
+    expect(
+      within(juno).getByRole("img", { name: "2 mailbox items" }),
+    ).toHaveTextContent("2");
+    /* an idle node shows no marks */
+    const idle = screen.getAllByRole("menuitemradio").filter((item) => item !== juno);
+    expect(idle).not.toHaveLength(0);
+    for (const item of idle)
+      expect(
+        within(item).queryAllByRole("img", { name: /running|mailbox/ }),
+      ).toHaveLength(0);
     await user.click(juno);
     await waitFor(() =>
       expect(app.stores.selection.getState().nodeDid).toBe("did:key:z6MkJuno"),
     );
     /* choosing closes the menu */
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  });
+
+  it("shows the same marks on the sidebar's node rows", () => {
+    renderIn(
+      testApp({
+        deployments: [
+          node(),
+          node({
+            nodeDid: "did:key:z6MkJuno",
+            label: "Juno",
+            source: "enrollment",
+            sessions: [
+              {
+                sessionId: "juno-1",
+                nodeDid: "did:key:z6MkJuno",
+                title: "Busy",
+                turnState: "running",
+                updatedAt: "2026-11-01T10:00:00Z",
+              },
+            ],
+            node: {
+              ...deployment.node,
+              nodeDid: "did:key:z6MkJuno",
+              displayName: null,
+            },
+          }),
+        ],
+        selection: { nodeDid: deployment.nodeDid },
+      }),
+      <TooltipProvider>
+        <NavNodes route={{ name: "mailbox" }} current={deployment.nodeDid} />
+      </TooltipProvider>,
+    );
+    const juno = screen.getByRole("button", { name: /Juno/ });
+    expect(
+      within(juno).getByRole("img", { name: "1 running session" }),
+    ).toHaveTextContent("1");
   });
 
   const twoNodes = () =>
@@ -126,5 +199,19 @@ describe("switching node", () => {
     await waitFor(() =>
       expect(app.stores.selection.getState().nodeDid).toBe("did:key:z6MkJuno"),
     );
+  });
+
+  it("shows the node's card from New session's avatar", async () => {
+    renderIn(
+      twoNodes(),
+      <TooltipProvider>
+        <NewSession />
+      </TooltipProvider>,
+    );
+    const avatar = screen
+      .getByTestId("session-screen")
+      .querySelector(":scope > div > span");
+    await userEvent.hover(avatar!);
+    expect(await screen.findByText("Inference", {}, { timeout: 2000 })).toBeVisible();
   });
 });

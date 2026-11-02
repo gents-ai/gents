@@ -14,12 +14,13 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
-import { activityOf, activityText, useFleet } from "@/hooks/useFleet";
+import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
 import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeActivity } from "./NodeActivity";
 
 /** Where switching to `nodeDid` leads from `route`: the same page on the
     new node where the page belongs to a node, a new session where it
@@ -51,17 +52,6 @@ export function NodeSwitcher({
   const { actions } = useApp();
   const homeDid = useHomeDid();
   const nodes = useFleet(useShallow(fleetNodes));
-  /* what each node has going on, as the Nodes page counts it */
-  const doing = useFleet(
-    useShallow((state) =>
-      Object.fromEntries(
-        fleetNodes(state).map((node) => [
-          node.nodeDid,
-          activityText(activityOf(state, node.nodeDid)),
-        ]),
-      ),
-    ),
-  );
   /* as the Nodes page has them: this machine's first, then the remote ones */
   const groups = [
     { label: "Local", nodes: nodes.filter((n) => isLocalNode(n, homeDid)) },
@@ -122,9 +112,13 @@ export function NodeSwitcher({
                         />
                       </span>
                       <span className="min-w-0 truncate">{name}</span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                        {node.dialSucceeded ? doing[node.nodeDid] : "Offline"}
-                      </span>
+                      {node.dialSucceeded ? (
+                        <NodeActivity nodeDid={node.nodeDid} className="ml-auto" />
+                      ) : (
+                        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                          Offline
+                        </span>
+                      )}
                     </span>
                   </DropdownMenuRadioItem>
                 );

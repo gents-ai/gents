@@ -4,10 +4,11 @@ import { cn } from "@gents/ui/lib/utils";
 import { isLocalNode } from "@/lib/firstRun";
 import { href, navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
-import { activityOf, activityText, useFleet } from "@/hooks/useFleet";
+import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { useApp } from "./AppContext";
+import { NodeActivity } from "./NodeActivity";
 import { switchedRoute } from "./NodeSwitcher";
 
 /** The side nav's Nodes section: every node, this machine's first, each with
@@ -17,16 +18,6 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
   const { actions } = useApp();
   const homeDid = useHomeDid();
   const nodes = useFleet(useShallow(fleetNodes));
-  const doing = useFleet(
-    useShallow((state) =>
-      Object.fromEntries(
-        fleetNodes(state).map((node) => [
-          node.nodeDid,
-          activityText(activityOf(state, node.nodeDid)),
-        ]),
-      ),
-    ),
-  );
   const ordered = [
     ...nodes.filter((n) => isLocalNode(n, homeDid)),
     ...nodes.filter((n) => !isLocalNode(n, homeDid)),
@@ -74,9 +65,11 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
                   />
                 </span>
                 <span className="min-w-0 flex-1 truncate">{name}</span>
-                <span className="shrink-0 tabular-nums">
-                  {node.dialSucceeded ? doing[node.nodeDid] : "Offline"}
-                </span>
+                {node.dialSucceeded ? (
+                  <NodeActivity nodeDid={node.nodeDid} />
+                ) : (
+                  <span className="shrink-0">Offline</span>
+                )}
               </button>
             </li>
           );

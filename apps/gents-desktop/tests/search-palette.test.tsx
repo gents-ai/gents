@@ -286,6 +286,46 @@ describe("the search palette", () => {
     );
   });
 
+  it("names the pack an agent came from, and finds its agents by the pack", () => {
+    const base = node();
+    renderIn(
+      testApp({
+        deployments: [
+          node({
+            agents: [
+              ...base.agents,
+              {
+                ...base.agents[0]!,
+                agentId: "lister",
+                displayName: "Lister",
+                isDefault: false,
+                tags: ["gents:pack:demo-research"],
+              },
+            ],
+          }),
+        ],
+        selection: { nodeDid: NODE },
+      }),
+      <SearchPalette />,
+    );
+    act(() => openSearch());
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "demo-research" },
+    });
+    const agents = options("Agents");
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toContain("Lister");
+    expect(agents[0]).toContain("demo-research");
+    /* the person's own agents name only their node */
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "ops" },
+    });
+    expect(options("Agents")[0]).not.toContain("·");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search" }), {
+      key: "Escape",
+    });
+  });
+
   it("opens from the title bar's Search button", async () => {
     renderIn(
       testApp({ deployments: [node()] }),
