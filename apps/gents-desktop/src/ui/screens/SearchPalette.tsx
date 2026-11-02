@@ -28,6 +28,7 @@ import { currentRoute, navigate, reviewNavigation, type Route } from "@/lib/rout
 import { isLocalNode } from "@/lib/firstRun";
 import { switchedRoute } from "@/app/NodeSwitcher";
 import { NodeAvatar } from "./AgentAvatar";
+import { NodeActivity } from "@/app/NodeActivity";
 import {
   searchEntries,
   searchGroups,
@@ -37,7 +38,7 @@ import {
 import { useApp } from "@/app/AppContext";
 import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { activityOf, activityText, useFleet } from "../hooks/useFleet";
+import { useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
 import { SETTINGS_SECTIONS } from "./settings/sections";
 import { KIND, openItem } from "./MailboxItem";
@@ -193,7 +194,7 @@ function useEntries(): SearchEntry[] {
         nodeDid: n.nodeDid,
         name: nodeName(n.nodeDid),
         place: isLocalNode(n, homeDid) ? "Local" : "Remote",
-        doing: n.dialSucceeded ? activityText(activityOf(fleet, n.nodeDid)) : "Offline",
+        offline: !n.dialSucceeded,
       })),
       agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),
       nodeName,
@@ -470,6 +471,7 @@ function Row({
         {e.title}
         {e.subtitle && <span className="ml-2 text-muted-foreground">{e.subtitle}</span>}
       </span>
+      {e.kind === "node" && <NodeActivity nodeDid={e.nodeDid} />}
       {e.kind === "session" && (
         <NodeAgentStack
           nodeDid={e.session.nodeDid}

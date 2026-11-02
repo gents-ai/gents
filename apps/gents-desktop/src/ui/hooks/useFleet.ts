@@ -65,15 +65,3 @@ export function activityOf(
     waiting: (state.mailboxOf[key] ?? []).filter((m) => m.status === "open").length,
   };
 }
-
-/** The same, in words: "2 running · 1 waiting", or nothing when idle. */
-export const activityText = ({
-  running,
-  waiting,
-}: {
-  running: number;
-  waiting: number;
-}) =>
-  [running && `${running} running`, waiting && `${waiting} waiting`]
-    .filter(Boolean)
-    .join(" · ");
