@@ -374,12 +374,12 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
         .unwrap());
         let mut altered = create.clone();
         altered.input.cwd = Some("/workspace/other".into());
-        assert!(!crate::identity::verify_did_signature(
+        assert!(crate::identity::verify_did_signature(
             &altered.admission.signer_did,
             &altered.signing_payload(),
             &altered.admission.signature
         )
-        .unwrap());
+        .is_err());
     }
     message.admission.node.shutdown().await;
     std::fs::remove_dir_all(&message.admission.path).unwrap();
