@@ -256,7 +256,8 @@ impl DefraSessionHook {
             ),
         };
         if create {
-            plan.sign_agent_creation(&caller.node_did).await?;
+            plan.sign_agent_creation(&caller.node_did, &caller.input)
+                .await?;
         }
         if target.node_did == caller.node_did {
             let max_request_hop =

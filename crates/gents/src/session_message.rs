@@ -316,12 +316,17 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
-    pub(crate) async fn sign_agent_creation(&mut self, node_did: &str) -> Result<()> {
+    pub(crate) async fn sign_agent_creation(
+        &mut self,
+        node_did: &str,
+        parent: &gents_protocol::request_input::RequestInput,
+    ) -> Result<()> {
         let create = match &mut self.write {
             PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
         };
         create.input.session_creation =
             Some(gents_protocol::request_input::SessionCreationIntent::AgentNew);
+        create.input.cwd = parent.agent_new_cwd(create.node_did == node_did);
         let signer = crate::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
         crate::sign_agent_request_create(&signer, create).await
     }
@@ -1213,6 +1218,96 @@ mod hop_tests {
             tool_call_doc_id: "hop-tool-doc".to_owned(),
             correlation: None,
         }
+    }
+
+    #[tokio::test]
+    async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
+        let message = published_session_message(PublishedAdmissionOptions {
+            name: "agent-new-directory".to_owned(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let cause = cause(&message, 0);
+        let parent = gents_protocol::request_input::RequestInput {
+            cwd: Some("/workspace/project".into()),
+            ..Default::default()
+        };
+        for (same_node, with_goal) in [(true, false), (true, true), (false, false)] {
+            let target = SessionMessageTarget {
+                node_did: if same_node {
+                    cause.caller_node_did.clone()
+                } else {
+                    "did:key:remote".into()
+                },
+                agent_id: "worker".into(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+            };
+            let create = crate::lifecycle::build_session_message_request(
+                &cause,
+                &target,
+                "do the work",
+                None,
+                &uuid::Uuid::new_v4().to_string(),
+                None,
+                1,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            let write = if with_goal {
+                PlannedWrite::Goal {
+                    create,
+                    objective: "do the work".into(),
+                    token_budget: None,
+                }
+            } else {
+                PlannedWrite::Request {
+                    create,
+                    delivery: Delivery::Request,
+                }
+            };
+            let mut plan = Plan {
+                session_id: target.session_id,
+                hop: 1,
+                steer_head: None,
+                interrupt_before_publish: false,
+                write,
+            };
+            plan.sign_agent_creation(&cause.caller_node_did, &parent)
+                .await
+                .unwrap();
+            let create = match &plan.write {
+                PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
+            };
+            assert_eq!(
+                create.input.cwd.as_deref(),
+                same_node.then_some("/workspace/project")
+            );
+            assert_eq!(
+                create.input.session_creation,
+                Some(gents_protocol::request_input::SessionCreationIntent::AgentNew)
+            );
+            assert!(crate::identity::verify_did_signature(
+                &create.admission.signer_did,
+                &create.signing_payload(),
+                &create.admission.signature
+            )
+            .unwrap());
+            let mut altered = create.clone();
+            altered.input.cwd = Some("/workspace/other".into());
+            assert!(!crate::identity::verify_did_signature(
+                &altered.admission.signer_did,
+                &altered.signing_payload(),
+                &altered.admission.signature
+            )
+            .unwrap());
+        }
+        message.admission.node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 
     #[tokio::test]
