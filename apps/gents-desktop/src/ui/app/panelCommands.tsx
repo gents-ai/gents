@@ -7,6 +7,7 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { currentRoute, type Route } from "@/lib/router";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { registerCommand, useCommand } from "@/commands/commands";
 import { matchScore, queryWords } from "@/lib/search";
 import { dockTabId } from "./Dock";
@@ -155,11 +156,24 @@ export function usePanelCommands(route: Route, layout: ShellLayout) {
 
 /** A list of every panel the page can show, to open one by name or number. */
 export function PanelPicker({ route }: { route: Route }) {
-  const open = useStore(picker, (s) => s.open);
+  const wanted = useStore(picker, (s) => s.open);
   const input = useRef<HTMLInputElement | null>(null);
+  /* opened from the search palette, it waits for the palette to close:
+     the palette hands focus back as it goes, which would take it from the
+     picker's field */
+  const dialog = useExclusivePopover(closePanelPicker);
+  const { open, onOpenChange } = dialog;
+  useEffect(() => {
+    if (wanted !== open) onOpenChange(wanted);
+  }, [wanted, open, onOpenChange]);
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && closePanelPicker()}>
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={dialog.onOpenChangeComplete}
+    >
       <DialogContent
+        ref={dialog.popupRef}
         initialFocus={input}
         showCloseButton={false}
         aria-modal="true"

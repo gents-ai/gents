@@ -56,6 +56,16 @@ describe("a chord", () => {
     expect(chordText({ key: "j", mod: true, shift: true }, false)).toBe("Ctrl+Shift+J");
     expect(chordText({ key: "ArrowUp", alt: true }, false)).toBe("Alt+↑");
   });
+
+  it("can ask for ⌃ and ⌘ together on a Mac, and only together", () => {
+    const chord = { key: "s", mod: true, ctrl: true };
+    expect(
+      matches(chord, press({ key: "s", metaKey: true, ctrlKey: true }), true),
+    ).toBe(true);
+    expect(matches(chord, press({ key: "s", metaKey: true }), true)).toBe(false);
+    expect(matches(chord, press({ key: "s", ctrlKey: true }), true)).toBe(false);
+    expect(chordText(chord, true)).toBe("⌃⌘S");
+  });
 });
 
 describe("dispatching a key", () => {

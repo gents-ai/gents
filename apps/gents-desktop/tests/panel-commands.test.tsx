@@ -14,7 +14,7 @@ const desktop = (on: boolean) => {
 
 /* after the reset, so the commands, the panel and the app share one module
    graph */
-async function load(route: Route = SESSION) {
+async function load(route: Route = SESSION, withSearch = false) {
   vi.resetModules();
   const router = await import("../src/ui/lib/router");
   vi.spyOn(router, "currentRoute").mockReturnValue(route);
@@ -25,6 +25,7 @@ async function load(route: Route = SESSION) {
   const { CommandKeys } = await import("../src/ui/commands/dispatch");
   const commands = await import("../src/ui/commands/commands");
   const fixture = await import("./app-fixture");
+  const search = await import("../src/ui/screens/SearchPalette");
   surfaces.clearSurfaces();
   workspace.reset();
   for (const [id, title] of [
@@ -49,12 +50,13 @@ async function load(route: Route = SESSION) {
         <input aria-label="Composer" />
         {route.name === "session" && <DockTabs sessionId="a" routeName="session" />}
         <PanelPicker route={route} />
+        {withSearch && <search.SearchPalette />}
         <CommandKeys />
       </>
     );
   }
   fixture.renderIn(fixture.testApp(), <Shell />);
-  return { workspace, divider, surfaces, commands };
+  return { workspace, divider, surfaces, commands, openSearch: search.openSearch };
 }
 
 /* jsdom is not a Mac: the command key is Ctrl, and Alt goes with a number */
@@ -115,6 +117,24 @@ describe("the panel's commands", () => {
       key: "Escape",
     });
     await waitFor(() => expect(screen.queryByTestId("panel-picker")).toBeNull());
+  }, 20_000);
+
+  it("keeps focus in its field when opened from the search palette", async () => {
+    const { workspace, openSearch } = await load(SESSION, true);
+    act(() => workspace.openSurface(SCOPE, "changes"));
+    act(() => openSearch());
+    const query = await screen.findByRole("combobox", { name: "Search" });
+    fireEvent.change(query, { target: { value: "choose a panel" } });
+    fireEvent.keyDown(query, { key: "Enter" });
+    const find = await screen.findByRole("combobox", { name: "Find a panel" });
+    /* the palette, closing, hands focus back; the picker opens after it */
+    await waitFor(() => expect(find).toHaveFocus());
+    await waitFor(() =>
+      expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull(),
+    );
+    expect(find).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "3" });
+    expect(workspace.dock(SCOPE).active).toBe("background");
   }, 20_000);
 
   it("goes straight to a panel by its number", async () => {

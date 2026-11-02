@@ -7,14 +7,18 @@ import {
   DialogTitle,
 } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
-import { navigate } from "@/lib/router";
+import { currentRoute, navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
-import { useSelectedNodeDid } from "@/hooks/useClient";
-import { History } from "lucide-react";
+import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
+import { ArrowLeftRight, BellDot, History } from "lucide-react";
 import { useApp } from "@/app/AppContext";
 import { switchToNode } from "@/app/NodeSwitcher";
 import { previousNode } from "../../hooks/activeNode";
-import { nodeOf } from "../../hooks/fleetStore";
+import { sessionToReturnTo } from "../../hooks/sessionTrail";
+import { seenMarks } from "@/app/sessionViews";
+import { isNew } from "@/lib/seen";
+import { defaultScope, recentInScope, scopeContextOf } from "@/lib/scope";
+import { nodeOf, sessionKeyOf } from "../../hooks/fleetStore";
 import "@/commands/app";
 import {
   keysTextOf,
@@ -52,6 +56,12 @@ const TURN_KEYS = {
   },
 };
 
+/* the session a route shows, if it shows one */
+const openSessionId = () => {
+  const here = currentRoute();
+  return here?.name === "session" ? here.sessionId : null;
+};
+
 const transcriptScroller = () =>
   document.querySelector<HTMLElement>(
     '[data-slot="scroll-area-viewport"][data-following]',
@@ -76,7 +86,29 @@ const step = (by: -1 | 1) => {
     reference that lists every command's keys. */
 export function Shortcuts() {
   const nodeDid = useSelectedNodeDid();
+  const homeDid = useHomeDid();
   const { actions, stores } = useApp();
+  const sessionById = (id: string | null) =>
+    id === null
+      ? null
+      : (Object.values(stores.fleet.getState().sessions).find(
+          (s) => s.sessionId === id,
+        ) ?? null);
+  const goToSession = (s: { sessionId: string; nodeDid: string }) =>
+    navigate({ name: "session", sessionId: s.sessionId, nodeDid: s.nodeDid });
+  /* sessions in the sidebar's scope that finished since they were last on
+     screen here, newest first, other than the one open */
+  const newSessions = () => {
+    const ctx = scopeContextOf(stores.fleet.getState(), nodeDid, homeDid ?? null);
+    const open = openSessionId();
+    const since = seenMarks.since();
+    return recentInScope(defaultScope("recents"), ctx, Infinity).filter(
+      (s) =>
+        !s.archivedAt &&
+        s.sessionId !== open &&
+        isNew(s, seenMarks.of(sessionKeyOf(s)), since),
+    );
+  };
   const listed = (did: string) => nodeOf(stores.fleet.getState(), did) !== null;
   const [open, setOpen] = useState(false);
   useCommandKeys();
@@ -105,6 +137,32 @@ export function Shortcuts() {
     run: () => {
       const last = previousNode();
       if (last) switchToNode(last, actions.selectNode);
+    },
+  });
+  useCommand({
+    id: "session.previous",
+    title: "Go to previous session",
+    group: "Session",
+    keys: { key: ";", mod: true },
+    desktopOnly: true,
+    icon: ArrowLeftRight,
+    when: () => sessionById(sessionToReturnTo(openSessionId())) !== null,
+    run: () => {
+      const s = sessionById(sessionToReturnTo(openSessionId()));
+      if (s) goToSession(s);
+    },
+  });
+  useCommand({
+    id: "session.next-new",
+    title: "Go to next new session",
+    group: "Session",
+    keys: { key: "a", mod: true, shift: true },
+    desktopOnly: true,
+    icon: BellDot,
+    when: () => newSessions().length > 0,
+    run: () => {
+      const next = newSessions()[0];
+      if (next) goToSession(next);
     },
   });
   useCommand({
