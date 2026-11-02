@@ -96,6 +96,8 @@ impl PackInstaller {
                 "name": coordinate,
                 "version": listing.installed.as_ref().map(|entry| &entry.version),
                 "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
+                "available_version": preferred.map(|entry| &entry.version),
+                "other_stored_versions": listing.other_stored.iter().map(|entry| json!({"version": entry.version, "digest": entry.digest})).collect::<Vec<_>>(),
                 "description": manifest.map(|manifest| &manifest.description),
                 "kind": kind,
                 "artifact_digest": display.map(|entry| &entry.digest),

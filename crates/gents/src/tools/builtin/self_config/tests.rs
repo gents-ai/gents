@@ -201,11 +201,15 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         canonical_struct_fields::<DatastoreTools>().unwrap(),
         "datastore",
     );
-    assert_fields(
-        &shapes["integrations"],
-        canonical_struct_fields::<IntegrationTools>().unwrap(),
-        "integrations",
-    );
+    // `eth_tool_ids` is accepted on read from v1.0.0-rc0 documents and
+    // dropped; help must not offer it, so it is not part of the canonical set.
+    let integration_fields = canonical_struct_fields::<IntegrationTools>()
+        .unwrap()
+        .iter()
+        .copied()
+        .filter(|field| *field != "eth_tool_ids")
+        .collect::<Vec<_>>();
+    assert_fields(&shapes["integrations"], &integration_fields, "integrations");
     assert_fields(
         &shapes["integrations"]["lsp"],
         canonical_struct_fields::<LspTools>().unwrap(),

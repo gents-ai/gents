@@ -14,13 +14,19 @@ manual migration command exists or is needed. Measured on a clone of a real
 
 ## Before you start
 
-- **Upgrade every node and every desktop client in one window.** After the
-  upgrade a node's `InferenceBackend` and `Node` collections are on new schema
-  versions. Peers and desktops still on RC0 cannot merge what upgraded peers
-  write to those, and the desktop refuses to sync with a runtime whose
-  replicated schema differs from its own. Transcripts (`AgentMessage`) and the
-  other client-authored collections keep their RC0 versions, so phones keep
-  working throughout.
+- **Nodes may upgrade one at a time; a desktop upgrades with the node it
+  pairs with.** Tested with two enrolled RC0 nodes upgraded one after the
+  other: config documents synced both ways throughout, a document written while
+  the peer was down arrived once it came back, and after both upgrades the pair
+  advertised identical schema versions with nothing flagged. During the mixed
+  window an RC0 peer does not send its `Node` document; it arrives once that
+  peer upgrades. A desktop is stricter: it refuses to sync with a runtime whose
+  replicated schema differs from its own, so upgrade each desktop together with
+  its node. Transcripts (`AgentMessage`) and the other client-authored
+  collections keep their RC0 versions, so phones keep working throughout.
+- **Stop each node gracefully** (`gents service stop`, not a kill) before
+  replacing its binary. A killed node's peers log replication timeouts on
+  restart; they clear on retry, but a graceful stop avoids them.
 - **Client-authored collections keep their RC0 schema.** Phones and apps
   register `AgentMessage`, `AgentRequest`, `AgentSession` and the other
   client-authored collections from the SDL they were built with, so those never

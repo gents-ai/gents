@@ -93,7 +93,11 @@ fn missing_indexed_request_does_not_fall_back_to_older_or_foreign_rows() {
 fn session_reply_previews_are_cut_on_a_character_boundary() {
     let reply_for = |reply: String| {
         let mut session = indexed_session(None);
-        session.observation.as_mut().expect("observation").reply_preview = Some(reply);
+        session
+            .observation
+            .as_mut()
+            .expect("observation")
+            .reply_preview = Some(reply);
         session_summaries(&[session], &[], "did:test:owner", &[], &[])
             .remove(0)
             .reply_preview
