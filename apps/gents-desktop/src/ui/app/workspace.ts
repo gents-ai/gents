@@ -146,8 +146,9 @@ export const workspace = {
   closeDock(scope: string) {
     change(scope, (dock) => (dock.open ? { ...dock, open: false } : null));
   },
+  /** with no tabs, the dock opens on the panels it can show */
   reopenDock(scope: string) {
-    change(scope, (dock) => (dock.tabs.length > 0 ? { ...dock, open: true } : null));
+    change(scope, (dock) => (dock.open ? null : { ...dock, open: true }));
   },
   reset() {
     store.setState({ docks: {}, visited: [] });

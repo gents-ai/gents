@@ -3,9 +3,9 @@ use defra_node::EmbeddedNode;
 use gents_protocol::session::{AgentSession, SessionArchiveOutcome, SessionArchiveReceipt};
 use std::sync::Arc;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
-use crate::identity::NodeIdentity;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
+use crate::store::identity::NodeIdentity;
 
 const ARCHIVE_REVISION_LIMIT: u64 = i64::MAX as u64;
 
@@ -157,8 +157,9 @@ async fn apply_in_txn(
                     session.archive_revision
                 ))
                 .await?;
-            let documents = crate::graphql::mutation_documents(&response, "update_AgentSession")?
-                .context("session archive response omitted its selected document")?;
+            let documents =
+                crate::store::graphql::mutation_documents(&response, "update_AgentSession")?
+                    .context("session archive response omitted its selected document")?;
             anyhow::ensure!(
                 documents.len() == 1
                     && documents[0]

@@ -9,6 +9,7 @@ use crate::backend_provider::BackendProviderKind;
 use crate::claude_messages_body::{build_messages_body, ADVERTISED_REASONING_EFFORTS_PARAM};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
+use gents_protocol::message::Message;
 
 #[derive(Clone)]
 struct ClaudeCheckpointModel {

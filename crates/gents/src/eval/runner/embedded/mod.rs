@@ -5,7 +5,8 @@ mod live;
 mod live_context;
 pub mod observe;
 
-pub use executor::{provider_reason_from_failure, EmbeddedExecutor};
+pub use executor::outcome::provider_reason_from_failure;
+pub use executor::EmbeddedExecutor;
 pub use home::{boot_runtime, wait_for_runtime_ready, EmbeddedHome, RunningRuntime};
 pub use inspect::{inspect_retained_requests, RetainedRequest};
 pub use observe::{

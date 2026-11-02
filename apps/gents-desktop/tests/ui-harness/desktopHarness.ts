@@ -49,6 +49,7 @@ import type { SessionContextView } from "@source-inc/gents-desktop-client/genera
 import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
+import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
 
 const NODE_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_AGENT_ID = "default";
@@ -92,7 +93,7 @@ function harnessRequestOutcome(
   };
 }
 
-/* a conversation that runs from yesterday into today */
+/* a conversation that runs from yesterday into today, compacted between */
 function dayItems(): RenderedTimelineItem[] {
   const at = (daysAgo: number, hour: number) => {
     const date = new Date();
@@ -119,7 +120,383 @@ function dayItems(): RenderedTimelineItem[] {
       reasoning: null,
       timestamp: at(1, 16),
     }),
-    user(4, "Good morning. Let's fix it and add a test.", at(0, 9)),
+    {
+      kind: "sessionCompaction" as const,
+      itemKey: "day-compaction",
+      sequence: 4,
+      messagesCompacted: 128,
+      originalTokens: 182_400,
+      compactedTokens: 11_900,
+      /* made this morning, as today's first request started: a compaction
+         is drawn by the message it follows, so it opens no day */
+      timestamp: at(0, 8),
+      summary: [
+        "# Continuation checkpoint",
+        "",
+        "## Goal",
+        "",
+        "Fix the flaky parser test and add a regression test.",
+        "",
+        "## Progress",
+        "",
+        "### Done",
+        "",
+        "- Found the race: `parse_header` reads the buffer before the length is set.",
+        "- Moved the length check ahead of the read; the test passes 50 times in a row.",
+        "",
+        "## Next actions",
+        "",
+        "1. Add a regression test for an empty header.",
+        "",
+        "## Files read",
+        "",
+        "- src/parser.rs",
+        "- tests/parser.rs",
+      ].join("\n"),
+      filesRead: ["src/parser.rs", "tests/parser.rs"],
+      filesModified: ["src/parser.rs"],
+    },
+    user(5, "Good morning. Let's fix it and add a test.", at(0, 9)),
+  ];
+}
+
+/* turns the person did not type: a message from another session, a run
+   of finished background calls and a scheduled run */
+function automatedInputItems(): RenderedTimelineItem[] {
+  const durable = (itemKey: string, sequence: number, timestamp: string) => ({
+    kind: "automatedInput" as const,
+    itemKey,
+    requestId: `request-${itemKey}`,
+    sequence,
+    timestamp,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+  });
+  const completion = (id: string, tool: string, status: string, result: string) =>
+    `<tool-completion tool_call_id="${id}" tool_name="${tool}" status="${status}">\n  <result>${result}</result>\n</tool-completion>`;
+  const command = (itemKey: string, toolCallId: string, text: string) => ({
+    itemKey,
+    toolName: "bash",
+    toolCallId,
+    statusKind: "success",
+    awaitMode: "background",
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command" as const,
+      command: text,
+      exitCode: 0,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: null,
+      executionMode: "read_only",
+      networkMode: "disabled",
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "auto-user",
+      requestId: "request-auto-user",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Run the tests and the lints in the background, and ask the reviewer.",
+      timestamp: "2026-06-03T14:06:00Z",
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "auto-tools",
+      messageSequence: 3,
+      tools: [
+        command("auto-test", "call-auto-test", "cargo test -p gents"),
+        command("auto-lint", "call-auto-lint", "make lint"),
+        {
+          itemKey: "auto-worker",
+          toolName: "agent_new",
+          toolCallId: "call-auto-worker",
+          requestId: "request-auto-user",
+          statusKind: "success",
+          awaitMode: "background",
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+          presentation: {
+            kind: "agent" as const,
+            action: "start",
+            name: "ops",
+            sessionId: "session-worker",
+            description: "Profile the slow parser path.",
+            output: "Session started.",
+          },
+        },
+      ],
+    },
+    harnessAssistantItem({
+      itemKey: "auto-reply",
+      sequence: 4,
+      content: "Both are running in the background; I asked the reviewer too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:06:30Z",
+    }),
+    {
+      ...durable("auto-message", 5, "2026-06-03T14:08:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: "session-reviewer",
+        senderRequestId: "request-reviewer",
+        displayBody:
+          "The parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+      },
+      content:
+        "[message agent:default session:session-reviewer node:did:key:z6MkHarness · at:2026-06-03T14:08:00Z · cause:request-reviewer]\n\nThe parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-message-reply",
+      sequence: 6,
+      content: "Thanks — added the early return.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:08:30Z",
+    }),
+    {
+      ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-test",
+        "bash",
+        "completed",
+        "test result: ok. 412 passed; 0 failed",
+      ),
+    },
+    {
+      ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-lint",
+        "bash",
+        "failed",
+        "error: unused import: `HashMap`",
+      ),
+    },
+    {
+      ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion(
+        "call-auto-worker",
+        "agent_new",
+        "completed",
+        "The slow path was a quadratic scan; profile attached.",
+      ),
+    },
+    {
+      ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-reply",
+      sequence: 11,
+      content: "Tests pass; lint flagged an unused import, which I removed.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:10:30Z",
+    }),
+    {
+      ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content: completion("call-auto-other", "spawn_process", "completed", "done"),
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-single-reply",
+      sequence: 13,
+      content: "The validation suite finished too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:11:30Z",
+    }),
+    {
+      ...durable("auto-routed", 14, "2026-06-03T14:12:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: null,
+        senderRequestId: "request-worker-note",
+      },
+      content: `[message agent:ops session:session-worker node:${
+        NODE_DID.length > 20
+          ? `${NODE_DID.slice(0, 16)}..${NODE_DID.slice(-4)}`
+          : NODE_DID
+      } · at:2026-06-03T14:12:00Z · cause:request-worker-note]\n\nI also left a flame graph in \`target/profile.svg\`.`,
+    },
+    {
+      ...durable("auto-remote", 15, "2026-06-03T14:13:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: "did:key:z6MkSomeOtherNodeEntirely",
+        senderSessionId: null,
+        senderRequestId: null,
+      },
+      content: "A build on the release node is waiting for review.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-routed-reply",
+      sequence: 16,
+      content: "Noted both.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:13:30Z",
+    }),
+    {
+      ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    {
+      ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const },
+      content:
+        "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-note-reply",
+      sequence: 19,
+      content: "Checked the preview.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:20:30Z",
+    }),
+    {
+      ...durable("auto-schedule", 20, "2026-06-04T07:00:00Z"),
+      origin: {
+        kind: "trigger" as const,
+        triggerId: "nightly-report",
+        triggerKind: "schedule",
+      },
+      content: "Write the nightly report: what changed, what failed, what is next.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-schedule-reply",
+      sequence: 21,
+      content: "Nightly report: the parser fix landed and every check passes.",
+      reasoning: null,
+      timestamp: "2026-06-04T07:01:00Z",
+    }),
+    {
+      ...durable("auto-goal", 22, "2026-06-04T07:02:00Z"),
+      origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
+      content: "You are running under the durable goal controller. Continue the goal.",
+    },
+  ];
+}
+
+/* commands left running in the background, and ones that have ended each way */
+function backgroundItems(): RenderedTimelineItem[] {
+  const ago = (secs: number) => new Date(Date.now() - secs * 1000).toISOString();
+  const run = (
+    id: string,
+    command: string,
+    statusKind: string,
+    times: { started: number; ended?: number },
+    result: Partial<
+      Extract<RenderedToolCallView["presentation"], { kind: "command" }>
+    > = {},
+    tail: string | null = null,
+  ): RenderedToolCallView => ({
+    itemKey: `background-${id}`,
+    toolName: "bash",
+    statusKind,
+    requestId: "request-background",
+    toolCallId: `call-background-${id}`,
+    toolCallDocId: `doc-background-${id}`,
+    awaitMode: "background",
+    startedAt: ago(times.started),
+    completedAt: times.ended === undefined ? null : ago(times.ended),
+    partialOutputTail: tail,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command",
+      command,
+      exitCode: null,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: "~/src/gents",
+      executionMode: null,
+      networkMode: null,
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+      ...result,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "background-user",
+      requestId: "request-background",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Start the dev server and run the checks in the background.",
+      timestamp: ago(4_000),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "background-tools",
+      messageSequence: 3,
+      tools: [
+        run(
+          "build",
+          "cargo build --release",
+          "success",
+          { started: 4_000, ended: 3_748 },
+          { durationMs: 252_000, exitCode: 0, stdout: "Finished release" },
+        ),
+        run(
+          "e2e",
+          "npm run e2e",
+          "failed",
+          { started: 4_000, ended: 3_700 },
+          { durationMs: 300_000, timedOut: true },
+        ),
+        run(
+          "lint",
+          "pnpm lint --max-warnings 0",
+          "failed",
+          { started: 330, ended: 300 },
+          { durationMs: 30_000, failed: true },
+        ),
+        run(
+          "test",
+          "cargo test -p gents --lib",
+          "error",
+          { started: 158, ended: 120 },
+          {
+            durationMs: 38_000,
+            exitCode: 1,
+            failed: true,
+            stdout: "running 412 tests\ntest lifecycle::claims ... ok",
+            stderr: "test lifecycle::persistence ... FAILED",
+          },
+        ),
+        run("tail", "tail -f logs/dev.log", "cancelled", { started: 32, ended: 20 }),
+        run(
+          "watch",
+          "cargo watch -x check",
+          "running",
+          { started: 372 },
+          {},
+          "[Running 'cargo check']\n    Checking gents v0.7.0\n    Finished dev",
+        ),
+        run(
+          "dev",
+          "npm run dev -- --host 127.0.0.1 --port 5173",
+          "running",
+          { started: 42 },
+          {},
+          "VITE ready in 412 ms\n\n  ➜  Local:   http://127.0.0.1:5173/",
+        ),
+      ],
+    },
   ];
 }
 
@@ -147,6 +524,7 @@ export type DesktopUiHarnessScenario =
   | "backend-unavailable"
   | "mailbox-overflow"
   | "mailbox-question"
+  | "mailbox-many"
   | "long-content"
   | "active-turn"
   | "coding"
@@ -155,11 +533,17 @@ export type DesktopUiHarnessScenario =
   | "sync-offline"
   | "storage-recovery"
   | "sync-failed"
-  | "days";
+  | "days"
+  | "automated-inputs"
+  | "background";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
   sessionIndexCount?: number;
+  /* the large session's message a compaction is marked after */
+  compactionAt?: number;
+  /* list that compaction in the meter but draw no marker for it */
+  compactionUnmarked?: boolean;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -269,7 +653,11 @@ function harnessSequenceOf(item: RenderedTimelineItem): number | null {
     ? (item.messageSequence ?? null)
     : item.kind === "userMessage" ||
         item.kind === "assistantMessage" ||
-        item.kind === "automatedInput"
+        item.kind === "automatedInput" ||
+        /* a rows read carries the context events anchored to its messages,
+           as the bridge attaches them */
+        item.kind === "sessionCompaction" ||
+        item.kind === "requestContextReductionSummary"
       ? (item.sequence ?? null)
       : null;
 }
@@ -412,6 +800,110 @@ export function createDesktopUiHarness(
           parentItemId: null,
           deadlineAt: null,
           createdAt: STARTED_AT,
+        },
+      ],
+    };
+  }
+  if (scenario === "mailbox-many") {
+    const base = {
+      requesterDid: "did:key:desktop-harness",
+      nodeDid: NODE_DID,
+      status: "open",
+      sourceKind: "session",
+      sourceId: "session-intro",
+      sessionId: "session-intro",
+      requestId: null,
+      causeDocId: null,
+      targetNodeDid: NODE_DID,
+      targetAgentId: DEFAULT_AGENT_ID,
+      expectedCollection: null,
+      parentItemId: null,
+      deadlineAt: null,
+    };
+    const at = (minutesAgo: number) =>
+      new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    deployment = {
+      ...deployment,
+      mailboxItems: [
+        {
+          ...base,
+          itemId: "many-colour",
+          itemKey: "many-colour",
+          kind: "ask",
+          action: "start_request",
+          title: "Button colour",
+          summary:
+            "The settings page has a primary **Save** button that is the same grey as the secondary actions, so people miss it. I can restyle it now; the colour is the one choice I can't make for you.",
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Which colour should the button be?",
+            options: [
+              { id: "red", label: "Red" },
+              { id: "blue", label: "Blue" },
+              { id: "green", label: "Green" },
+            ],
+            multi_select: false,
+            allow_free_text: true,
+          }),
+          createdAt: at(4),
+        },
+        {
+          ...base,
+          itemId: "many-workspace",
+          itemKey: "many-workspace",
+          kind: "ask",
+          action: "start_request",
+          title: "Choose a workspace",
+          summary: null,
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Where should this run?",
+            options: [
+              {
+                id: "local",
+                label: "This computer",
+                description: "Uses the folder you picked",
+              },
+              { id: "remote", label: "Remote host" },
+            ],
+            multi_select: true,
+            allow_free_text: true,
+          }),
+          createdAt: at(9),
+        },
+        {
+          ...base,
+          itemId: "many-failed",
+          itemKey: "many-failed",
+          kind: "failed",
+          action: "ack",
+          title: "Nightly build failed",
+          summary:
+            "The build stopped at the test step.\n\n`cargo test -p gents` exited with 101 after 14 minutes.",
+          payload: null,
+          createdAt: at(22),
+        },
+        {
+          ...base,
+          itemId: "many-flag",
+          itemKey: "many-flag",
+          kind: "flag",
+          action: "ack",
+          title: "Disk is nearly full",
+          summary: "The node's data folder has 2 GB left.",
+          payload: null,
+          createdAt: at(41),
+        },
+        {
+          ...base,
+          itemId: "many-finished",
+          itemKey: "many-finished",
+          kind: "finished",
+          action: "ack",
+          title: "Refactor landed",
+          summary: "Split the mailbox card into a row and a dialog.",
+          payload: null,
+          createdAt: at(65),
         },
       ],
     };
@@ -585,6 +1077,8 @@ export function createDesktopUiHarness(
           ]
         : []),
       ...(scenario === "days" ? dayItems() : []),
+      ...(scenario === "automated-inputs" ? automatedInputItems() : []),
+      ...(scenario === "background" ? backgroundItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -736,6 +1230,44 @@ export function createDesktopUiHarness(
       inferenceProfiles: [],
     };
   }
+  if (scenario === "automated-inputs") {
+    sessions.set("session-worker", {
+      sessionId: "session-worker",
+      nodeDid: NODE_DID,
+      agentId: "ops",
+      title: "slow worker (ops)",
+      previewText: "The slow path was a quadratic scan.",
+      status: "active",
+      turnState: "completed",
+      latestRequestId: "request-worker",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      latestRequestOutcome: null,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+      timelineItems: [],
+    });
+    sessions.set("session-reviewer", {
+      sessionId: "session-reviewer",
+      nodeDid: NODE_DID,
+      agentId: DEFAULT_AGENT_ID,
+      title: "Review the parser change",
+      previewText: "The parser change looks right.",
+      status: "active",
+      turnState: "completed",
+      latestRequestId: "request-reviewer",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      latestRequestOutcome: null,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+      timelineItems: [],
+    });
+  }
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
       sessionId: "session-remote",
@@ -775,7 +1307,14 @@ export function createDesktopUiHarness(
     });
   }
   if (scenario === "mobile-performance") {
-    sessions.set("session-large", createLargePerformanceSession());
+    sessions.set(
+      "session-large",
+      createLargePerformanceSession(
+        undefined,
+        options.compactionAt,
+        options.compactionUnmarked,
+      ),
+    );
     for (let index = 2; index < performanceFixture.sessionIndexCount; index += 1) {
       const sessionId = `session-index-${String(index).padStart(3, "0")}`;
       sessions.set(sessionId, {
@@ -819,6 +1358,29 @@ export function createDesktopUiHarness(
       }
     }, 0);
   }
+
+  /* an item filed after the app started, so it reads as new */
+  if (scenario === "mailbox-many")
+    window.setTimeout(() => {
+      deployment = {
+        ...deployment,
+        mailboxItems: [
+          {
+            ...deployment.mailboxItems[0]!,
+            itemId: "many-deploy",
+            itemKey: "many-deploy",
+            kind: "finished",
+            action: "ack",
+            title: "Deploy to staging finished",
+            summary: "All 412 checks passed; staging runs the new build.",
+            payload: null,
+            createdAt: new Date().toISOString(),
+          },
+          ...deployment.mailboxItems,
+        ],
+      };
+      notify("store");
+    }, 2500);
 
   function notifyBurst(reason: string, count: number, responseOnly = false) {
     updateEvents += count;
@@ -1218,6 +1780,10 @@ export function createDesktopUiHarness(
     },
     async searchPacks() {
       return { packs: [], has_more: false };
+    },
+    async packInfo(pack: string) {
+      const [namespace, name] = pack.split("/");
+      return { namespace, name, versions: [] };
     },
     async installPack() {},
     async updatePack() {},
@@ -1867,7 +2433,14 @@ export function createDesktopUiHarness(
       }
       return item;
     },
-    async dismissMailboxItem() {
+    async dismissMailboxItem(itemId) {
+      deployment = {
+        ...deployment,
+        mailboxItems: deployment.mailboxItems.map((item) =>
+          item.itemId === itemId ? { ...item, status: "dismissed" } : item,
+        ),
+      };
+      notify("store");
       return undefined;
     },
     async applyConfigComponents(request) {
@@ -2899,7 +3472,23 @@ export function createDesktopUiHarness(
         sent: [],
         received: [],
         senders: [],
-        calls: [],
+        calls:
+          scenario === "automated-inputs" && request.sessionId === "session-intro"
+            ? [
+                {
+                  requestId: "request-auto-user",
+                  toolCallId: "call-auto-worker",
+                  caused: {
+                    requestId: "request-worker",
+                    nodeDid: NODE_DID,
+                    sessionId: "session-worker",
+                    requesterDid: null,
+                    lifecycleState: "completed",
+                    createdAt: null,
+                  },
+                },
+              ]
+            : [],
       };
       return view;
     },
@@ -3218,7 +3807,7 @@ export function createDesktopUiHarness(
                     requestId,
                     content: "again",
                     selectedSkillIds: [],
-                    lifecycleState: "pending",
+                    lifecycleState: "pending" as const,
                     foldedIntoRequestId: null,
                     origin: null,
                     createdAt: STARTED_AT,
@@ -3465,6 +4054,8 @@ export function createDesktopUiHarness(
 
 function createLargePerformanceSession(
   items: number = MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems,
+  compactionAt?: number,
+  compactionUnmarked = false,
 ): DesktopSessionSnapshot {
   const filler =
     "bounded durable transcript fixture with markdown `code`, stable prose, and comparable byte shape";
@@ -3513,8 +4104,46 @@ function createLargePerformanceSession(
     pendingTurn: null,
     queuedTurns: [],
     foldedInputs: [],
-    context: harnessSessionContext(),
-    timelineItems,
+    context:
+      compactionAt === undefined
+        ? harnessSessionContext()
+        : harnessSessionContext({
+            sessionCompactionCount: 1,
+            compactions: [
+              {
+                compactionKey: "large-compaction",
+                sequence: 1,
+                messagesCompacted: compactionAt + 1,
+                originalTokens: 90_000,
+                compactedTokens: 3_000,
+                createdAt: STARTED_AT,
+                itemKey: "large-compaction",
+                messageSequence: compactionAt,
+              },
+            ],
+          }),
+    timelineItems:
+      compactionAt === undefined || compactionUnmarked
+        ? timelineItems
+        : timelineItems.flatMap<DesktopSessionSnapshot["timelineItems"][number]>(
+            (item) =>
+              "sequence" in item && item.sequence === compactionAt
+                ? [
+                    item,
+                    {
+                      kind: "sessionCompaction" as const,
+                      itemKey: "large-compaction",
+                      sequence: compactionAt,
+                      messagesCompacted: compactionAt + 1,
+                      originalTokens: 90_000,
+                      compactedTokens: 3_000,
+                      timestamp: STARTED_AT,
+                      summary:
+                        "# Continuation checkpoint\n\n## Goal\n\nKeep the large fixture going.",
+                    },
+                  ]
+                : [item],
+          ),
   };
 }
 
@@ -3862,7 +4491,6 @@ function createDeployment(): DeploymentView {
     inferenceExecution: [],
     agentTargets: [],
     datastoreToolSurfaces: [],
-    chainKeyBindings: [],
     mailboxItems: [],
     sessions: [],
   };
@@ -3887,6 +4515,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "offline",
       lastError: "fixture transport unavailable",
       connectedPeerCount: 0,
+      activationErrorCount: 0,
       pendingDagCount: 0,
       persistedPendingDagCount: 0,
       pushRetryMarkerCount: 0,
@@ -3899,6 +4528,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "failed",
       lastError: "database DAG quarantined",
       connectedPeerCount: 1,
+      activationErrorCount: 0,
       pendingDagCount: 1,
       persistedPendingDagCount: 1,
       pushRetryMarkerCount: 0,
@@ -3911,6 +4541,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "healthy",
       lastError: null,
       connectedPeerCount: 1,
+      activationErrorCount: 0,
       pendingDagCount: 0,
       persistedPendingDagCount: 0,
       pushRetryMarkerCount: 0,
@@ -3922,6 +4553,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
     state: "healthy",
     lastError: null,
     connectedPeerCount: 1,
+    activationErrorCount: 0,
     pendingDagCount: 0,
     persistedPendingDagCount: 0,
     pushRetryMarkerCount: 0,
@@ -3945,6 +4577,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "backend-unavailable":
     case "mailbox-overflow":
     case "mailbox-question":
+    case "mailbox-many":
     case "long-content":
     case "active-turn":
     case "coding":
@@ -3954,6 +4587,8 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "storage-recovery":
     case "sync-failed":
     case "days":
+    case "automated-inputs":
+    case "background":
       return value;
     default:
       return "default";

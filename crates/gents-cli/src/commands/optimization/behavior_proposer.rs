@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use gents::optimization::{Proposal, ProposalInput, Proposer};
+use gents::eval::optimization::{Proposal, ProposalInput, Proposer};
 use tokio::sync::Mutex;
 
 use crate::commands::eval::init::draft::json_blocks;

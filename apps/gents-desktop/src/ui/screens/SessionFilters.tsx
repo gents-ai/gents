@@ -68,6 +68,28 @@ export const STATES: Option<SessionState>[] = [
   { value: "finished", label: "Finished", icon: Circle },
 ];
 
+/** The agents a session list can be narrowed to: every agent on the nodes
+    shown, pack agents with no sessions yet among them, then any other agent
+    a session ran with, and any already picked. Both the sessions list and
+    the nav's recent sessions choose from these. */
+export function useAgentChoices(
+  sessions: readonly SessionSummary[],
+  nodeDids: readonly string[],
+  picked: readonly string[],
+  count: (agentId: string) => number,
+) {
+  const fleetNodes = useFleet((state) => state.nodes);
+  const names = new Map<string, string>();
+  for (const did of nodeDids)
+    for (const b of fleetNodes[nodeKeyOf({ nodeDid: did })]?.agents ?? [])
+      if (!names.has(b.agentId)) names.set(b.agentId, b.displayName);
+  for (const c of sessions)
+    if (c.agentId && !names.has(c.agentId))
+      names.set(c.agentId, agentName(c.agentId, fleetNodes[nodeKeyOf(c)] ?? null));
+  for (const id of picked) if (!names.has(id)) names.set(id, id);
+  return [...names].map(([id, name]) => ({ id, name, count: count(id) }));
+}
+
 export const SOURCES: Option<SessionSource>[] = [
   { value: "person", label: "A person", icon: User },
   { value: "task", label: "A task", icon: Play },
@@ -273,20 +295,9 @@ export function SessionFilters({
       countFor("sources", (c) => matchesSource(c, s.value)),
     ]),
   );
-  const fleetNodes = useFleet((state) => state.nodes);
-  const names = new Map<string, string>();
-  for (const did of nodeDids)
-    for (const b of fleetNodes[nodeKeyOf({ nodeDid: did })]?.agents ?? [])
-      if (!names.has(b.agentId)) names.set(b.agentId, b.displayName);
-  for (const c of sessions)
-    if (c.agentId && !names.has(c.agentId))
-      names.set(c.agentId, agentName(c.agentId, fleetNodes[nodeKeyOf(c)] ?? null));
-  for (const id of value.agents) if (!names.has(id)) names.set(id, id);
-  const agents = [...names].map(([id, name]) => ({
-    id,
-    name,
-    count: countFor("agents", (c) => c.agentId === id),
-  }));
+  const agents = useAgentChoices(sessions, nodeDids, value.agents, (id) =>
+    countFor("agents", (c) => c.agentId === id),
+  );
 
   if (sessions.length === 0 && !hasFilter(value)) return null;
 

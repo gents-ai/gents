@@ -21,7 +21,7 @@ import type { OperatorProcessControlRequest } from "@source-inc/gents-desktop-cl
 import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 import type { SessionForkResult } from "@source-inc/gents-desktop-client/generated/SessionForkResult";
 
-import { folderOf, withFolder, writeChatFolders } from "./chatFolders";
+import { sessionFolder, withFolder, writeChatFolders } from "./chatFolders";
 import { chat } from "./chatStore";
 import { nodeOrFirst, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./actionFailure";
@@ -117,6 +117,14 @@ export function createChatActions({
   const chatDelivery = createChatDelivery(api, stores);
 
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
+  const folderFor = (nodeDid: string | null | undefined, sessionId: string | null) =>
+    sessionFolder(
+      stores.chat.getState().folders,
+      stores.fleet.getState(),
+      stores.client.getState().snapshot?.bootstrap?.initNodeDid,
+      nodeDid,
+      sessionId,
+    );
 
   function applyGoalResult(
     result: GoalControlResult,
@@ -242,7 +250,7 @@ export function createChatActions({
     if (!node || (!content.trim() && !attachments.length)) return null;
     const { sessionId: selectedSessionId, mailboxRoute } = store.getState();
     const callerDid = stores.client.getState().snapshot?.client?.clientDid;
-    const cwd = folderOf(stores.chat.getState().folders, selectedSessionId);
+    const cwd = folderFor(node.nodeDid, selectedSessionId);
     const intent = selection.captureIntent(store);
     const reportSendFailure = (message: string) => {
       stores.chat.setState({
@@ -407,7 +415,7 @@ export function createChatActions({
     const intentGeneration = selection.captureIntent(store);
     const { sessionId: selectedSessionId } = store.getState();
     const goalClientDid = stores.client.getState().snapshot?.client?.clientDid;
-    const goalCwd = folderOf(stores.chat.getState().folders, selectedSessionId);
+    const goalCwd = folderFor(node?.nodeDid, selectedSessionId);
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
       nodeDid: node.nodeDid,
@@ -671,8 +679,11 @@ export function createChatActions({
         childSessionId,
       });
       forkDestinations.delete(retained);
-      const folder = folderOf(stores.chat.getState().folders, sessionId);
-      if (folder)
+      const folder = folderFor(nodeDid, sessionId);
+      if (
+        folder !== null ||
+        Object.prototype.hasOwnProperty.call(stores.chat.getState().folders, sessionId)
+      )
         writeChatFolders(stores.chat, (folders) =>
           withFolder(folders, result.sessionId, folder),
         );

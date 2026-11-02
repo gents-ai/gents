@@ -36,5 +36,5 @@ pub struct ToolSurfaceExplanationView {
     pub tools_source: String,
     pub ceiling_source: String,
     pub mcp_services_online: bool,
-    pub surface: gents::tool_surface::ToolSurfaceExplanation,
+    pub surface: gents::tools::surface::ToolSurfaceExplanation,
 }

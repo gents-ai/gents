@@ -11,6 +11,7 @@ import { acceptedChat } from "./chat-delivery-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { loadChatDrafts } from "../src/hooks/chatDrafts";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
+import { MailboxStack } from "../src/ui/screens/MailboxStack";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
 import { selection } from "../src/hooks/selectionStore";
 import { deferred } from "./deferred";
@@ -54,6 +55,23 @@ function item(id = "question"): MailboxItemView {
   };
 }
 const original = { option_ids: ["local"], free_text: "Keep the workspace local" };
+
+/* the mailbox page with its app-wide dialog, and an item opened in it */
+function Mailbox() {
+  return (
+    <>
+      <MailboxScreen />
+      <MailboxStack route={{ name: "mailbox" }} />
+    </>
+  );
+}
+const openItem = (title: string) => {
+  const row = within(screen.getByTestId("mailbox-list"))
+    .getByText(title)
+    .closest('[data-testid="mailbox-item"]') as HTMLElement;
+  fireEvent.click(within(row).getAllByRole("button")[0]!);
+  return screen.getByTestId("mailbox-dialog");
+};
 
 function fixture(items = [item()]) {
   const send = vi
@@ -137,29 +155,27 @@ it("reloads a lost answer, checks without publication and resumes the original c
   expect(loadChatDrafts().chatDrafts[0].result).toEqual(acceptedChat(request));
 });
 
-it("does not mark an unknown delivery as Answer sent or erase the user's choices", async () => {
+it("keeps an answer whose delivery is unknown open, with Check, rather than moving on", async () => {
   const f = fixture();
   f.send.mockImplementationOnce(async (request) => ({
     ...acceptedChat(request),
     outcome: "deliveryUnknown",
   }));
-  render(<MailboxScreen />, { wrapper: withApp(f.app) });
-  fireEvent.click(screen.getByRole("button", { name: "This computer" }));
-  fireEvent.change(screen.getByLabelText("Other"), {
+  render(<Mailbox />, { wrapper: withApp(f.app) });
+  const dialog = openItem("Question question");
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /This computer/ }));
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Something else" }), {
     target: { value: "Keep the workspace local" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await screen.findByText(
-    "Your answer is not confirmed. Use Check answer delivery or Resume saved answer below.",
-  );
-  expect(screen.queryByText("Answer sent to the agent.")).toBeNull();
-  expect(screen.getByLabelText("Other")).toHaveValue("Keep the workspace local");
-  expect(screen.getByRole("button", { name: "This computer" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Check answer delivery" })).toBeEnabled();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send" }));
+  expect(
+    await within(dialog).findByRole("button", { name: "Check answer delivery" }),
+  ).toBeEnabled();
+  expect(
+    within(dialog).getByRole("heading", { name: "Question question" }),
+  ).toBeVisible();
+  expect(within(dialog).queryByRole("button", { name: "Send" })).toBeNull();
+  expect(f.send.mock.calls[0][0].answer).toEqual(original);
 });
 
 it("keeps Check and Resume available after reloading an uncertain question", async () => {
@@ -173,8 +189,9 @@ it("keeps Check and Resume available after reloading an uncertain question", asy
     requestId: request.requestId!,
   });
   reloaded.send.mockImplementationOnce(async (request) => acceptedChat(request));
-  render(<MailboxScreen />, { wrapper: withApp(reloaded.app) });
-  const panel = screen.getByRole("status", { name: "Saved answer" });
+  render(<Mailbox />, { wrapper: withApp(reloaded.app) });
+  const dialog = openItem("Question question");
+  const panel = within(dialog).getByRole("status", { name: "Saved answer" });
   fireEvent.click(within(panel).getByText("Saved answer"));
   expect(within(panel).getByText("This computer", { exact: false })).toHaveTextContent(
     "Keep the workspace local",
@@ -185,16 +202,17 @@ it("keeps Check and Resume available after reloading an uncertain question", asy
   );
   expect(reloaded.send).not.toHaveBeenCalled();
   fireEvent.click(within(panel).getByRole("button", { name: "Resume saved answer" }));
-  await screen.findByText("Answer sent to the agent.");
+  /* confirmed, the dialog moves on: past the only item, it closes */
+  await vi.waitFor(() => expect(screen.queryByTestId("mailbox-dialog")).toBeNull());
   expect(reloaded.send).toHaveBeenCalledExactlyOnceWith(request);
-  expect(screen.queryByRole("button", { name: "This computer" })).toBeNull();
 });
 
 it.each([2, 3])(
   "retains version %i signed source for an optional skip whose delivery is uncertain",
   async (version) => {
+    /* an item of its own: the panel keeps an unsent answer per item */
     const question = {
-      ...item(),
+      ...item("skip"),
       questionHash: "observed-question",
       payload: JSON.stringify({
         ...JSON.parse(item().payload!),
@@ -207,20 +225,20 @@ it.each([2, 3])(
       ...acceptedChat(request),
       outcome: "deliveryUnknown",
     }));
-    render(<MailboxScreen />, { wrapper: withApp(f.app) });
-    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    render(<Mailbox />, { wrapper: withApp(f.app) });
+    const dialog = openItem("Question skip");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Skip" }));
 
-    await screen.findByText(
-      "Your answer is not confirmed. Use Check answer delivery or Resume saved answer below.",
-    );
+    expect(
+      await within(dialog).findByRole("button", { name: "Check answer delivery" }),
+    ).toBeEnabled();
     expect(f.send.mock.calls[0][0].answer).toEqual({
       option_ids: [],
       free_text: null,
       skip: true,
       question_hash: "observed-question",
     });
-    expect(screen.queryByText("Question skipped.")).toBeNull();
-    expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
+    expect(within(dialog).queryByRole("button", { name: "Skip" })).toBeNull();
     expect(JSON.parse(loadChatDrafts().chatDrafts[0].requestJson).answer).toEqual(
       f.send.mock.calls[0][0].answer,
     );
@@ -233,9 +251,11 @@ it("retains confirmed acceptance across reload while the native question is stil
   expect(await f.app.actions.answerMailboxQuestion(item(), original)).toBe(true);
   await vi.waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
   const reloaded = fixture();
-  render(<MailboxScreen />, { wrapper: withApp(reloaded.app) });
-  expect(screen.getByText("Answer sent to the agent.")).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  render(<Mailbox />, { wrapper: withApp(reloaded.app) });
+  const dialog = openItem("Question question");
+  /* answered from here, it is not asked again */
+  expect(within(dialog).queryByTestId("question-panel")).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "Send" })).toBeNull();
   await expect(
     reloaded.app.actions.answerMailboxQuestion(item(), original),
   ).rejects.toThrow("Check the saved answer");

@@ -384,7 +384,7 @@ mod tests {
         };
         use sha2::{Digest, Sha256};
         let script = r#"module.exports = (i) => i.pin ? {effects:{}} : {effects:{spawn:[{slot:"a",attempt:0,target:"wf-read-only",prompt:"p",title:"a"}]}};"#;
-        let run = gents::plugin_job::promote::DynamicRun {
+        let run = gents::tools::background::job::promote::DynamicRun {
             view: JobView {
                 address: "session-1:call_1".into(),
                 row_doc_id: "row-1".into(),
@@ -434,7 +434,7 @@ mod tests {
         // The step-0 fixture runs the script under wasmtime, which blocks.
         let generated = dir.clone();
         tokio::task::spawn_blocking(move || {
-            gents::plugin_job::promote::generate_pack(&generated, "rome", &run)
+            gents::tools::background::job::promote::generate_pack(&generated, "rome", &run)
         })
         .await
         .unwrap()

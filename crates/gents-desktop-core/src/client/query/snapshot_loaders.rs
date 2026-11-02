@@ -20,11 +20,12 @@ pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
     let request_args = snapshot_request_args(node_did);
     let mailbox_node = node_filter(node_did);
     let mailbox_args = format!("(filter: {{ {mailbox_node} status: {{ _eq: \"open\" }} }})");
-    let trigger_fields = gents::config_client::config_projection(gents::Collection::Trigger, None)?
-        .0
-        .join(" ");
+    let trigger_fields =
+        gents::store::config_client::config_projection(gents::Collection::Trigger, None)?
+            .0
+            .join(" ");
     let backend_fields =
-        gents::config_client::config_projection(gents::Collection::InferenceBackend, None)?
+        gents::store::config_client::config_projection(gents::Collection::InferenceBackend, None)?
             .0
             .join(" ");
     Ok(format!("query DesktopSnapshot {{
@@ -51,7 +52,6 @@ pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
       event_sources: EventSource{args} {{ {EVENT_SOURCE_FIELDS} }}
       agent_targets: {AGENT_TARGET_NAME}{args} {{ {AGENT_TARGET_FIELDS} }}
       datastore_tool_surfaces: DatastoreToolSurface{args} {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
-      chain_key_bindings: ChainKeyBinding{args} {{ {CHAIN_KEY_BINDING_FIELDS} }}
     }}"))
 }
 
@@ -126,8 +126,6 @@ pub(super) fn snapshot_rows_with_requests(
     let agent_targets: Vec<AgentTargetDocument> = rows!(AgentTargetDocument, "agent_targets");
     let datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument> =
         rows!(DatastoreToolSurfaceDocument, "datastore_tool_surfaces");
-    let chain_key_bindings: Vec<ChainKeyBindingDocument> =
-        rows!(ChainKeyBindingDocument, "chain_key_bindings");
     let source = |len| scope(len);
     let session_source_node_dids = source(sessions.len());
     let task_source_node_dids = source(tasks.len());
@@ -143,7 +141,6 @@ pub(super) fn snapshot_rows_with_requests(
     let event_source_source_node_dids = source(event_sources.len());
     let agent_target_source_node_dids = source(agent_targets.len());
     let datastore_tool_surface_source_node_dids = source(datastore_tool_surfaces.len());
-    let chain_key_binding_source_node_dids = source(chain_key_bindings.len());
     Ok(ClientStore::from_rows(ClientStoreRows {
         nodes: rows!(Node, "nodes"),
         agents: rows!(Agent, "agents"),
@@ -190,8 +187,6 @@ pub(super) fn snapshot_rows_with_requests(
         agent_target_source_node_dids,
         datastore_tool_surfaces,
         datastore_tool_surface_source_node_dids,
-        chain_key_bindings,
-        chain_key_binding_source_node_dids,
         ..ClientStoreRows::default()
     }))
 }
@@ -464,7 +459,7 @@ pub(super) async fn complete_local_snapshot_requests(
 }
 
 async fn complete_access_snapshot_requests(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     data: &Value,
     node_did: Option<&str>,
 ) -> Result<Vec<AgentRequestRow>> {
@@ -540,7 +535,7 @@ pub(super) fn parse_backend_observation_rows(
     let mut observations = Vec::with_capacity(rows.len());
     let mut observation_sources = Vec::with_capacity(rows.len());
     for (row, source) in rows.into_iter().zip(sources) {
-        match gents::backend_registry::decode_backend_observation(row) {
+        match gents::inference::backends::registry::decode_backend_observation(row) {
             Ok(observation) => {
                 observations.push(observation);
                 observation_sources.push(source);
@@ -697,7 +692,7 @@ pub async fn load_full_snapshot_with_peer_records(
             continue;
         };
         match load_operator_config(
-            &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
+            &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
             &peer.node_did,
         )
         .await
@@ -726,21 +721,21 @@ enum OperatorConfigScope {
 }
 
 async fn load_operator_config(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<ClientStore> {
     load_operator_config_scoped(access, node_did, OperatorConfigScope::Full).await
 }
 
 pub async fn load_inference_configuration(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<ClientStore> {
     load_operator_config_scoped(access, node_did, OperatorConfigScope::Inference).await
 }
 
 async fn load_operator_config_scoped(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     scope: OperatorConfigScope,
 ) -> Result<ClientStore> {
@@ -748,9 +743,9 @@ async fn load_operator_config_scoped(
     let did_filter = format!("filter: {{ node_did: {{ _eq: \"{did}\" }} }}");
     let request_args = snapshot_request_args(Some(node_did));
     let (trigger_fields, _) =
-        gents::config_client::config_projection(gents::Collection::Trigger, None)?;
+        gents::store::config_client::config_projection(gents::Collection::Trigger, None)?;
     let (backend_fields, _) =
-        gents::config_client::config_projection(gents::Collection::InferenceBackend, None)?;
+        gents::store::config_client::config_projection(gents::Collection::InferenceBackend, None)?;
     let trigger_fields = trigger_fields.join(" ");
     let backend_fields = backend_fields.join(" ");
     let common = format!(
@@ -777,7 +772,6 @@ async fn load_operator_config_scoped(
             event_sources: EventSource({did_filter}) {{ {EVENT_SOURCE_FIELDS} }}
             agent_targets: {AGENT_TARGET_NAME}({did_filter}) {{ {AGENT_TARGET_FIELDS} }}
             datastore_tool_surfaces: DatastoreToolSurface({did_filter}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
-            chain_key_bindings: ChainKeyBinding({did_filter}) {{ {CHAIN_KEY_BINDING_FIELDS} }}
             sessions: {AGENT_SESSION_NAME}({did_filter}) {{ {AGENT_SESSION_FIELDS} }}
             requests: {AGENT_REQUEST_NAME}{request_args} {{ {AGENT_REQUEST_FIELDS} }}"
         ),
@@ -877,7 +871,6 @@ fn operator_config_store_from_data_with_requests(
         event_sources: parse_query_rows(data, "event_sources")?,
         agent_targets: parse_query_rows(data, "agent_targets")?,
         datastore_tool_surfaces: parse_query_rows(data, "datastore_tool_surfaces")?,
-        chain_key_bindings: parse_query_rows(data, "chain_key_bindings")?,
         sessions: parse_query_rows(data, "sessions")?,
         requests,
         ..common
@@ -899,7 +892,7 @@ pub async fn load_node_scoped_snapshot_with_peer_records(
         .and_then(|record| identity_interaction.endpoint(record))
     {
         match load_operator_config(
-            &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
+            &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
             node_did,
         )
         .await

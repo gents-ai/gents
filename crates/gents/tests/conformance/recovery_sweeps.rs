@@ -1,7 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
-use gents::plugin_job::admit::{is_stalled, Refusal};
-use gents::plugin_job::recovery::{
+use gents::tools::background::job::admit::{is_stalled, Refusal};
+use gents::tools::background::job::recovery::{
     step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -149,7 +149,7 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
         if case.row.session_stopped {
             assert_eq!(
                 action,
-                TickAction::Kill(gents::plugin_job::control::KillCause::Stop),
+                TickAction::Kill(gents::tools::background::job::control::KillCause::Stop),
                 "{name}"
             );
         }
@@ -313,7 +313,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     seed_expired_execution_tuple(&db.node, &request_doc_id).await;
     insert_inference_call(&db.node, request_id, "running").await;
 
-    let outcome = gents::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
+    let outcome = gents::runtime::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
     let requests = outcome.requests.expect("startup request recovery");
     assert!(
         requests.requests_recovered >= 1,
@@ -345,7 +345,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
         "post-recovery rows must reconstruct zero held slots"
     );
 
-    let second = gents::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
+    let second = gents::runtime::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
     assert_eq!(
         second
             .inference_calls
@@ -392,7 +392,8 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         let _owner =
             own_child_fixture(&db.node, NODE_DID, &doc_id, &request_id, &session_id, true).await;
         insert_inference_call(&db.node, &request_id, initial_call_state).await;
-        let startup = gents::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
+        let startup =
+            gents::runtime::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
         startup.tool_calls.expect("startup tool recovery");
         assert_eq!(
             startup
@@ -409,10 +410,11 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             0
         );
         let registry = gents::BackgroundExecutionRegistry::default();
-        let live =
-            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, NODE_DID, &registry)
-                .await
-                .expect("live periodic recovery");
+        let live = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps(
+            &db.node, NODE_DID, &registry,
+        )
+        .await
+        .expect("live periodic recovery");
         assert!(
             live.iter().all(|run| run.is_noop()),
             "live lease must preserve both rows: {live:?}"
@@ -440,10 +442,11 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             "expire fixture lease: {:?}",
             expired.errors
         );
-        let repaired =
-            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, NODE_DID, &registry)
-                .await
-                .expect("expired periodic recovery");
+        let repaired = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps(
+            &db.node, NODE_DID, &registry,
+        )
+        .await
+        .expect("expired periodic recovery");
         assert!(
             repaired.iter().any(|run| !run.is_noop()),
             "expired pair requires recovery"
@@ -461,10 +464,11 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             "periodic registry must recover the inference row after its parent"
         );
         assert!(!gents::call_state_holds_backend_slot(&call.call_state));
-        let second =
-            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, NODE_DID, &registry)
-                .await
-                .expect("second periodic recovery");
+        let second = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps(
+            &db.node, NODE_DID, &registry,
+        )
+        .await
+        .expect("second periodic recovery");
         assert!(
             second.iter().all(|run| run.is_noop()),
             "recovery must be idempotent: {second:?}"

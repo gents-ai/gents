@@ -20,6 +20,7 @@ const file = (n: number): ChangedFile => ({
       removed: 0,
     },
   ],
+  whole: true,
 });
 
 function Shown({ nodeDid }: { nodeDid: string }) {
@@ -41,6 +42,32 @@ describe("a turn's change card", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(5);
     fireEvent.click(screen.getByRole("button", { name: "2 more files" }));
     expect(screen.getByRole("status")).toHaveTextContent("/p/src/f5.rs");
+  });
+
+  it("counts lines only where they are a file's net change", () => {
+    const twice: ChangedFile = {
+      ...file(2),
+      added: 4,
+      edits: [file(2).edits[0]!, { ...file(2).edits[0]!, toolCallDocId: "c2b" }],
+    };
+    renderRouted(testApp(), { name: "sessions" } as Route, () => (
+      <TurnChanges scope={SCOPE} turn="t" files={[file(1), twice]} />
+    ));
+    const card = screen.getByTestId("turn-changes");
+    expect(screen.getByRole("button", { name: /f1\.rs/ })).toHaveTextContent("+1 −0");
+    expect(screen.getByRole("button", { name: /f2\.rs/ })).toHaveTextContent("2 edits");
+    expect(card.querySelector("header")).not.toHaveTextContent("+");
+  });
+
+  it("marks a turn begun before the loaded rows as partial", () => {
+    const files = [{ ...file(1), whole: false }];
+    renderRouted(testApp(), { name: "sessions" } as Route, () => (
+      <TurnChanges scope={SCOPE} turn="t" files={files} />
+    ));
+    expect(
+      screen.getByTestId("turn-changes").querySelector("header"),
+    ).toHaveTextContent("Partial");
+    expect(screen.getByRole("button", { name: /f1\.rs/ })).not.toHaveTextContent("+1");
   });
 
   it("keeps equal session and turn IDs scoped to their node", () => {

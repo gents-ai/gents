@@ -1,11 +1,4 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   DesktopApiAdapter,
@@ -16,6 +9,7 @@ import type {
 import { createChatActions } from "../src/hooks/chatActions";
 import type { ShellProjection } from "../src/hooks/shellProjection";
 import { PendingTray } from "../src/ui/screens/PendingTray";
+import { renderIn, testApp } from "./app-fixture";
 import { moveDisabled, moveItem } from "./pending-tray-menu";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { shellStores } from "./shell-fixture";
@@ -57,7 +51,8 @@ describe("pending message failed mutations and async controls", () => {
   it("sends a removal fenced on the whole queue, holding the tray until it is answered", async () => {
     const gate = deferred();
     const onEdit = vi.fn().mockReturnValue(gate.promise);
-    const view = render(
+    const view = renderIn(
+      testApp(),
       <PendingTray
         queued={[turn(entry("a")), turn(entry("b"))]}
         queue={[entry("a"), entry("b")]}
@@ -83,7 +78,8 @@ describe("pending message failed mutations and async controls", () => {
   it("leaves the queue as it was when the runtime refuses", async () => {
     let reject!: (error: Error) => void;
     const onEdit = vi.fn(() => new Promise<void>((_, fail) => (reject = fail)));
-    render(
+    renderIn(
+      testApp(),
       <PendingTray
         queued={[turn(entry("a")), turn(entry("b"))]}
         queue={[entry("a"), entry("b")]}
@@ -99,7 +95,8 @@ describe("pending message failed mutations and async controls", () => {
   it("moves from the menu, fenced on the whole queue, in the order the runtime confirms", async () => {
     const gate = deferred();
     const onEdit = vi.fn().mockReturnValue(gate.promise);
-    const view = render(
+    const view = renderIn(
+      testApp(),
       <PendingTray
         queued={[turn(entry("a")), turn(entry("b"))]}
         queue={[entry("a"), entry("b")]}
@@ -131,7 +128,8 @@ describe("pending message failed mutations and async controls", () => {
       .fn()
       .mockRejectedValueOnce(new Error("mutation failed"))
       .mockResolvedValue(undefined);
-    render(
+    renderIn(
+      testApp(),
       <PendingTray
         queued={[turn(entry("a")), turn(entry("b"))]}
         queue={[entry("a"), entry("barrier", null), entry("b")]}

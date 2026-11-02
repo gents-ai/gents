@@ -11,7 +11,7 @@ use std::sync::Arc;
 pub use gents_protocol::job::OnConflict;
 pub use gents_protocol::job::StampedField as Stamp;
 
-use crate::application_write::Observation;
+use crate::plugin::application_write::Observation;
 
 const MAX_WRITES: usize = 100;
 
@@ -298,8 +298,10 @@ pub fn admit_write(
         let applicable = applicable_stamps(&declared, collection_fields);
         admit_write_observation(&WriteObservation {
             in_own_sdl: granted,
-            runtime_or_protected: crate::callback::plugin::writable_output_collection(collection)
-                .is_err(),
+            runtime_or_protected: crate::triggers::callback::plugin::writable_output_collection(
+                collection,
+            )
+            .is_err(),
             actor_is_invoker: true,
             op_granted: data.ops.iter().any(|op| op == op_name(write.op)),
             stamped_supplied_by_guest: write
@@ -316,11 +318,10 @@ pub fn admit_write(
                 }
                 .into(),
                 granted,
-                application: !crate::migration::DEFAULT_REGISTRY
+                application: !crate::store::schema::migration::DEFAULT_REGISTRY
                     .managed_names()
                     .any(|name| name == collection),
-                protected: crate::document_config::PROTECTED_DATASTORE_COLLECTIONS
-                    .contains(&collection),
+                protected: crate::documents::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection),
                 credential: gents_protocol::schemas::is_credential_collection(collection),
                 bounded: targeted,
                 targets: usize::from(targeted),
@@ -400,7 +401,7 @@ pub struct DataCaller {
 #[derive(Clone)]
 enum DataAccess {
     Node(Arc<crate::defra_node::EmbeddedNode>, ::identity::Did),
-    Operator(crate::config_client::ConfigAccess),
+    Operator(crate::store::config_client::ConfigAccess),
 }
 
 impl DataCaller {
@@ -411,7 +412,10 @@ impl DataCaller {
         })
     }
 
-    pub fn operator(access: crate::config_client::ConfigAccess, node_did: &str) -> Result<Self> {
+    pub fn operator(
+        access: crate::store::config_client::ConfigAccess,
+        node_did: &str,
+    ) -> Result<Self> {
         ::identity::Did::new(node_did.to_owned())?;
         Ok(Self {
             access: DataAccess::Operator(access),
@@ -507,12 +511,14 @@ impl Session {
         query: &DataQuery,
         max_output_bytes: usize,
     ) -> Result<Vec<Map<String, Value>>> {
-        use crate::defra_query::{build_paged_query, CollectionScope, DefraQueryParams};
+        use crate::tools::builtin::defra_query::{
+            build_paged_query, CollectionScope, DefraQueryParams,
+        };
         let data = &self.declaration;
         let collection = query.collection.as_str();
         let in_own_sdl = data.collections.iter().any(|c| c == collection);
         let runtime_or_protected =
-            crate::callback::plugin::writable_output_collection(collection).is_err();
+            crate::triggers::callback::plugin::writable_output_collection(collection).is_err();
         let query_granted = data.ops.iter().any(|op| op == "query");
         if !query_admitted(query.limit, in_own_sdl, runtime_or_protected, query_granted) {
             if !in_own_sdl || runtime_or_protected {
@@ -545,14 +551,17 @@ impl Session {
         )?;
         let response = match &self.caller.access {
             DataAccess::Node(node, actor) => {
-                crate::config_client::ConfigAccess::transact_local_readonly(
+                crate::store::config_client::ConfigAccess::transact_local_readonly(
                     node,
                     Some(actor.clone()),
                     "plugin_data_calls.query",
                     |txn| {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
-                            crate::defra_query::validate_filter(txn, collection, filter).await?;
+                            crate::tools::builtin::defra_query::validate_filter(
+                                txn, collection, filter,
+                            )
+                            .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)
                         })
                     },
@@ -564,7 +573,10 @@ impl Session {
                     .transact_readonly("plugin_data_calls.query", |txn| {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
-                            crate::defra_query::validate_filter(txn, collection, filter).await?;
+                            crate::tools::builtin::defra_query::validate_filter(
+                                txn, collection, filter,
+                            )
+                            .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)
                         })
                     })
@@ -650,7 +662,7 @@ mod tests {
             stamped_supplied_by_guest: false,
             invocation,
             applicable: Vec::new(),
-            write: crate::application_write::Observation {
+            write: crate::plugin::application_write::Observation {
                 operation: "create".into(),
                 granted: true,
                 application: true,

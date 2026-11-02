@@ -48,7 +48,7 @@ fn binding(
                 cwd: root.to_owned(),
                 root: root.to_owned(),
                 writable_root: None,
-                policy: crate::toolset::CommandExecutionPolicy::write_capable(),
+                policy: crate::tools::native::CommandExecutionPolicy::write_capable(),
             },
             policy::ApprovalKind::FileMutation => workspace::BindingAction::FileMutation {
                 tool: "write_file".into(),

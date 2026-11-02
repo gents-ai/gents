@@ -54,7 +54,7 @@ fn show_config(pack: &super::PackSource) -> Result<()> {
 pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
     let header = if args.target.starts_with("sha256:") {
         let home = crate::home_state::resolve_home_dir(args.home.as_deref());
-        gents::pack_store::PackStore::new(&home).verify(&args.target)?
+        gents::pack::store::PackStore::new(&home).verify(&args.target)?
     } else {
         let path = std::path::Path::new(&args.target);
         gents::pack::authoring::verify_pack_file(path)?

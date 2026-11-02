@@ -599,7 +599,10 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         .context("consumed steering request")?;
     assert_eq!(active["lifecycle_state"], "completed");
     assert_eq!(consumed["lifecycle_state"], "superseded");
-    assert_eq!(consumed["failure_reason"], gents::lifecycle::FOLDED_REASON);
+    assert_eq!(
+        consumed["failure_reason"],
+        gents::request::lifecycle::FOLDED_REASON
+    );
     assert_eq!(consumed["superseded_by_request_doc_id"], active["_docID"]);
     let captures = graphql_query(&graphql, &format!(r#"{{ RenderedRequest(filter: {{ request_id: {{_in:["{}","{}"]}} }}) {{ request_id request_doc_id }} }}"#, escape_graphql_string(&initial_request_id), escape_graphql_string(&steering_request_id))).await?;
     let captures = captures["data"]["RenderedRequest"]

@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::config_client::{ConfigAccess, ConfigApplyTxn};
-use gents::graphql::escape_graphql_string;
 use gents::session::{
     decode_session_row, load_agent_session_row_in_txn, load_latest_request_in_txn,
     session_scope_filter, AGENT_SESSION_FIELDS,
 };
+use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::graphql::GraphqlTurnState;
 use gents_protocol::session::AgentSession;
 use serde_json::Value;

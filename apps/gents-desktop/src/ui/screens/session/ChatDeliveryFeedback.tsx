@@ -1,5 +1,6 @@
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { useEffect, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { useApp } from "@/app/AppContext";
@@ -12,6 +13,17 @@ import {
   loadChatDrafts,
   type ChatDraft,
 } from "../../../hooks/chatDrafts";
+
+/* sending, and a confirmed delivery, need nothing from the person; a draft
+   that needed them stays in view until it settles */
+function needsAttention(draft: ChatDraft, inFlight: boolean) {
+  const outcome = draft.result?.outcome;
+  return (
+    outcome === "notDelivered" ||
+    outcome === "deliveryUnknown" ||
+    (!draft.result && !inFlight)
+  );
+}
 
 function description(draft: ChatDraft) {
   if (draft.mailbox) return draft.mailbox.summary;
@@ -46,6 +58,7 @@ export function ChatDeliveryFeedback({
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
   const requests = stores.chat.use.chatRequestsInFlight();
+  const shown = useRef(new Set<string>());
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
@@ -64,14 +77,20 @@ export function ChatDeliveryFeedback({
         nodeDid,
         sessionId,
         mailboxItem?.itemId ?? null,
-      ).map((draft) => (
-        <SavedMessage
-          key={draft.requestId}
-          draft={draft}
-          disabled={sending || requests.has(draft.requestId)}
-          submitting={requests.has(draft.requestId)}
-        />
-      ))}
+      )
+        .filter((draft) => {
+          if (needsAttention(draft, requests.has(draft.requestId)))
+            shown.current.add(draft.requestId);
+          return shown.current.has(draft.requestId);
+        })
+        .map((draft) => (
+          <SavedMessage
+            key={draft.requestId}
+            draft={draft}
+            disabled={sending || requests.has(draft.requestId)}
+            submitting={requests.has(draft.requestId)}
+          />
+        ))}
     </>
   );
 }
@@ -154,7 +173,7 @@ function SavedMessage({
     <section
       role="status"
       aria-label={draft.mailbox ? "Saved answer" : "Saved message"}
-      className="mt-2 rounded-xl border border-border p-3 text-xs"
+      className="my-2 rounded-2xl border border-border bg-raised p-3 text-xs shadow-xs"
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="mr-auto text-muted-foreground">
@@ -210,8 +229,14 @@ function SavedMessage({
           error={draft.result?.deliveryError}
         />
       )}
-      <details className="mt-1 text-muted-foreground">
-        <summary>Saved {noun}</summary>
+      <details className="group mt-1 text-muted-foreground">
+        <summary className="flex w-fit cursor-pointer list-none items-center gap-1 select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
+          <ChevronRight
+            aria-hidden
+            className="size-3 transition-transform group-open:rotate-90"
+          />
+          Saved {noun}
+        </summary>
         <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
           {description(draft)}
         </p>

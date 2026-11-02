@@ -1,5 +1,13 @@
-import { act, renderHook, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Toaster } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { selection } from "../src/hooks/selectionStore";
 import { href, type Route } from "../src/ui/lib/router";
@@ -124,8 +132,15 @@ function harness() {
   return { api, app };
 }
 
+/* a node's or agent's name, description and tags open under its header */
+function openIdentity() {
+  const edit = screen.queryByRole("button", { name: "Edit", expanded: false });
+  if (edit) fireEvent.click(edit);
+}
+
 async function replace(label: string, value: string) {
   const user = userEvent.setup();
+  openIdentity();
   const field = screen.getByLabelText(label);
   await user.clear(field);
   await user.type(field, value);
@@ -133,12 +148,21 @@ async function replace(label: string, value: string) {
 }
 
 function expectFields(labels: string[]) {
+  openIdentity();
   for (const label of labels) {
     expect(screen.getAllByText(label, { selector: "label" }).length).toBeGreaterThan(0);
   }
 }
 
 beforeEach(() => vi.clearAllMocks());
+
+/* a limit window's row, found by how full its meter is */
+const usedRow = async (pct: number) => {
+  const meters = await screen.findAllByRole("meter");
+  const meter = meters.find((m) => m.getAttribute("aria-valuenow") === String(pct));
+  if (!meter) throw new Error(`no window at ${pct}%`);
+  return meter.closest("li")!;
+};
 
 describe("configuration panels", () => {
   it.each([
@@ -423,9 +447,8 @@ describe("configuration panels", () => {
     );
     expect(await screen.findByText("person@example.test")).toBeVisible();
     expect(screen.queryByText("private-credential-id")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Subscription", { selector: "[data-slot=badge]" }),
-    ).toBeVisible();
+    /* a subscription's card names its account, not a key */
+    expect(screen.getAllByText("Account")[0]).toBeVisible();
     expect(screen.queryByLabelText("OpenAI wire API")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Connect timeout seconds")).toHaveValue("");
     await userEvent
@@ -556,8 +579,8 @@ describe("configuration panels", () => {
         claudeAccount("cred-2", "acct-2", "second-identity"),
       ]);
       renderIn(app, <InferencePanel deployment={claudeDeployment} />);
-      expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
-      expect(screen.getAllByText(/· disabled$/)).toHaveLength(1);
+      expect(await screen.findAllByText(/· login disabled$/)).toHaveLength(1);
+      expect(screen.getByText(/· label-cred-2$/)).toBeVisible();
       expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
     });
 
@@ -751,20 +774,17 @@ describe("configuration panels", () => {
         const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
         renderIn(app, <InferencePanel deployment={rowsDeployment} />);
-        const claude = "Anthropic / Claude (subscription)";
-        const grok = "Grok (subscription)";
-        const chatgpt = "ChatGPT / Codex (subscription)";
         for (const meta of [
-          `· ${claude} · Personal · signed in`,
-          `· ${claude} · signed in`,
-          `· ${grok} · signed in`,
-          `· ${grok} · disabled`,
-          `· ${chatgpt} · Main · signed in`,
-          `· ${chatgpt} · signed in`,
-          "· OpenRouter · key stored",
+          "· Subscription · Personal",
+          "· Subscription · login disabled",
+          "· Subscription · Main",
+          "· OpenRouter",
           "· OpenRouter · key from OPENROUTER_API_KEY",
         ])
           expect(await screen.findByText(meta)).toBeVisible();
+        /* a usable login says nothing more */
+        expect(screen.getAllByText("· Subscription")).toHaveLength(3);
+        expect(screen.queryByText(/signed in|key stored/)).not.toBeInTheDocument();
         expect(screen.getAllByText("· OpenAI compatible · no key")).toHaveLength(2);
         expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
       });
@@ -774,7 +794,7 @@ describe("configuration panels", () => {
         api.listProviderAccounts.mockResolvedValue(accounts);
         renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
         expect(await screen.findByText("Connected")).toBeVisible();
-        expect(screen.getByText("Personal")).toBeVisible();
+        expect(screen.getAllByText("Personal")[0]).toBeVisible();
         expect(screen.queryByText("Expired")).not.toBeInTheDocument();
         expect(screen.queryByText("Expires")).not.toBeInTheDocument();
         expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
@@ -852,7 +872,7 @@ describe("configuration panels", () => {
           screen.queryByRole("button", { name: "Reconnect" }),
         ).not.toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled();
-        expect(screen.getByText("Personal")).toBeVisible();
+        expect(screen.getAllByText("Personal")[0]).toBeVisible();
       });
 
       it("can cancel a sign-in started from the row", async () => {
@@ -1166,17 +1186,19 @@ describe("configuration panels", () => {
             .mockResolvedValueOnce([view_("claude", { windows: [window("5h", 12)] })]);
           renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
           const user = userEvent.setup();
-          await user.click(await screen.findByRole("button", { name: "Refresh" }));
-          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          await user.click(
+            await screen.findByRole("button", { name: "Refresh usage" }),
+          );
+          expect(await usedRow(12)).toBeVisible();
           await act(async () => land(usage()));
-          expect(screen.getByText(/^12% used/)).toBeVisible();
+          expect(await usedRow(12)).toBeVisible();
         });
 
         it("draws the most-used window on a row and no percent without a window", async () => {
           setup();
           expect(await screen.findByText("5h 81%")).toBeVisible();
           expect(screen.getByText("5h 20%")).toBeVisible();
-          expect(screen.getAllByText(/\d+%$/).map((e) => e.textContent)).toEqual([
+          expect(screen.getAllByText(/^\S+ \d+%$/).map((e) => e.textContent)).toEqual([
             "5h 81%",
             "5h 20%",
           ]);
@@ -1184,23 +1206,18 @@ describe("configuration panels", () => {
 
         it("opens a row with each window's percent, reset, source and age", async () => {
           setup("claude-work");
-          for (const pct of [30, 81, 10])
-            expect(
-              await screen.findByText(
-                new RegExp(
-                  `^${pct}% used · resets in 2h1[23]m \\(.+\\) · from response headers, 3m ago$`,
-                ),
-              ),
-            ).toBeVisible();
+          for (const pct of [30, 81, 10]) {
+            const row = await usedRow(pct);
+            expect(row).toHaveTextContent(/resets in 2h1[23]m/);
+            expect(row.title).toMatch(/^Resets .+ · from response headers, 3m ago$/);
+          }
         });
 
         it("marks a stale window as last known", async () => {
           setup("chatgpt-team");
-          expect(
-            await screen.findByText(
-              /^20% used · .* · from response headers, 1h10m ago · last known$/,
-            ),
-          ).toBeVisible();
+          expect((await usedRow(20)).title).toMatch(
+            / · from response headers, 1h10m ago · last known$/,
+          );
         });
 
         for (const [item, texts] of [
@@ -1212,7 +1229,7 @@ describe("configuration panels", () => {
             setup(item);
             for (const text of texts)
               expect(await screen.findByText(text)).toBeVisible();
-            expect(screen.queryByText(/% used/)).not.toBeInTheDocument();
+            expect(screen.queryByRole("meter")).not.toBeInTheDocument();
           });
 
         it("draws no usage for a disabled account", async () => {
@@ -1220,7 +1237,7 @@ describe("configuration panels", () => {
           expect(await screen.findByText("Disabled")).toBeVisible();
           expect(screen.queryByText(/50%/)).not.toBeInTheDocument();
           expect(
-            screen.queryByRole("button", { name: "Refresh" }),
+            screen.queryByRole("button", { name: "Refresh usage" }),
           ).not.toBeInTheDocument();
         });
 
@@ -1230,18 +1247,20 @@ describe("configuration panels", () => {
           api.readProviderUsage.mockResolvedValueOnce([
             view_("claude", { windows: [window("5h", 12)] }),
           ]);
-          await user.click(screen.getByRole("button", { name: "Refresh" }));
+          await user.click(screen.getByRole("button", { name: "Refresh usage" }));
           expect(api.readProviderUsage).toHaveBeenLastCalledWith(
             deployment.nodeDid,
             true,
             "claude-subscription",
           );
-          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          expect(await usedRow(12)).toBeVisible();
           view.unmount();
 
           const openrouter = setup("openrouter");
           await screen.findByText("no cap on this key");
-          await openrouter.user.click(screen.getByRole("button", { name: "Refresh" }));
+          await openrouter.user.click(
+            screen.getByRole("button", { name: "Refresh usage" }),
+          );
           expect(openrouter.api.readProviderUsage).toHaveBeenLastCalledWith(
             deployment.nodeDid,
             true,
@@ -1373,7 +1392,7 @@ describe("configuration panels", () => {
     expect(await screen.findByText(/disabled/)).toBeVisible();
   });
 
-  it("says off for a switched-off backend whose account is signed in", async () => {
+  it("says nothing of the login for a switched-off backend, its switch says it", async () => {
     const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       { provider: "xai-oauth", enabled: true, credentialId: "signed-in-credential" },
@@ -1393,8 +1412,8 @@ describe("configuration panels", () => {
         }}
       />,
     );
-    expect(await screen.findByText(/· off$/)).toBeVisible();
-    expect(screen.queryByText(/signed in/)).not.toBeInTheDocument();
+    expect(await screen.findByText("· Subscription")).toBeVisible();
+    expect(screen.queryByText(/signed in|· off/)).not.toBeInTheDocument();
   });
 
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {
@@ -1885,6 +1904,7 @@ describe("configuration panels", () => {
     const { api, app } = harness();
     renderIn(app, <AgentsPanel deployment={deployment} agentId="ops" />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Raw" }));
     const prompt = screen.getByLabelText("System prompt");
     await user.clear(prompt);
     await user.type(prompt, "Watch the fleet");
@@ -2209,6 +2229,42 @@ describe("configuration panels", () => {
     expect(api.saveSkillConfig).not.toHaveBeenCalled();
   });
 
+  it("reads a skill's instructions rendered or raw, with who uses it and where it came from", async () => {
+    const user = userEvent.setup();
+    const { api, app } = harness();
+    const withSkill = {
+      ...deployment,
+      contexts: deployment.contexts.map((c) =>
+        c.context_id === "context-a" ? { ...c, skill_ids: ["skill-a"] } : c,
+      ),
+      skills: deployment.skills.map((s) => ({
+        ...s,
+        instructions: "## Steps\n\nRun skill A things.",
+      })),
+    };
+    renderIn(app, <SkillsPanel deployment={withSkill} item="skill-a" />);
+    expect(screen.getByRole("link", { name: "Default" })).toHaveAttribute(
+      "href",
+      href({ ...nodeRoute, section: "agents", item: "default" }),
+    );
+    expect(screen.getByText(/From/)).toHaveTextContent("From Your own");
+
+    expect(screen.getByRole("heading", { name: "Steps" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Instructions" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Raw" }));
+    const field = screen.getByRole("textbox", { name: "Instructions" });
+    await user.clear(field);
+    await user.type(field, "Run skill A");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(api.saveSkillConfig).toHaveBeenCalledWith({
+        document: expect.objectContaining({ instructions: "Run skill A" }),
+      }),
+    );
+  });
+
   it("validates task prompts, goal budgets, hooks, and manual-run args", async () => {
     const { api, app } = harness();
     renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
@@ -2312,7 +2368,7 @@ describe("configuration panels", () => {
     renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
 
     await act(async () => {
-      screen.getByRole("button", { name: "Run task" }).click();
+      screen.getByRole("button", { name: "Run" }).click();
       await Promise.resolve();
     });
     expect(api.runTask).toHaveBeenCalledWith({
@@ -2326,8 +2382,56 @@ describe("configuration panels", () => {
       await pending;
     });
 
-    expect(screen.queryByText("stale-request")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Run task" })).toBeEnabled();
+    expect(screen.queryByText("Running…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  });
+
+  it("runs a task from its header, or asks for args its template names first", async () => {
+    const { api, app } = harness();
+    api.runTask.mockResolvedValue({ requestId: "run-1", sessionId: "session-run" });
+    const withArgs = {
+      ...deployment,
+      tasks: deployment.tasks.map((t) =>
+        t.taskId === "task-a" ? { ...t, promptTemplate: "Check {{host}}" } : t,
+      ),
+    };
+    const view = renderIn(
+      app,
+      <>
+        <Toaster />
+        <TasksPanel deployment={withArgs} item="task-a" />
+      </>,
+    );
+    await act(async () => {
+      screen.getByRole("button", { name: "Run" }).click();
+      await new Promise((r) => requestAnimationFrame(r));
+    });
+    expect(api.runTask).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Args")).toHaveFocus();
+    expect(
+      await screen.findByText("Fill in host under Args to run this task"),
+    ).toBeInTheDocument();
+
+    view.unmount();
+    renderIn(
+      app,
+      <>
+        <Toaster />
+        <TasksPanel deployment={deployment} item="task-a" />
+      </>,
+    );
+    await act(async () => {
+      screen.getByRole("button", { name: "Run" }).click();
+      await Promise.resolve();
+    });
+    expect(api.runTask).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Running…")).toBeVisible();
+    expect(screen.getByText("Running…").closest("a")).toHaveAttribute(
+      "href",
+      expect.stringContaining("session-run"),
+    );
+    expect(await screen.findByText(/ started$/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open session" })).toBeInTheDocument();
   });
 
   it("preserves interval cadence and rejects non-positive intervals", async () => {

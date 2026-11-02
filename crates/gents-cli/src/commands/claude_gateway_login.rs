@@ -26,8 +26,12 @@ pub(crate) async fn claude_gateway_login(args: ClaudeGatewayLoginArgs) -> Result
         &tokens,
         chrono::Utc::now(),
     );
-    let sign_in =
-        gents::oauth_credential::store_sign_in(&access, credential, args.label.as_deref()).await?;
+    let sign_in = gents::inference::auth::credential::store_sign_in(
+        &access,
+        credential,
+        args.label.as_deref(),
+    )
+    .await?;
     if let Some(hint) = sign_in.account_chooser_hint() {
         eprintln!("{hint}");
     }
@@ -38,11 +42,11 @@ pub(crate) async fn claude_gateway_login(args: ClaudeGatewayLoginArgs) -> Result
     Ok(())
 }
 
-fn sign_in_json(sign_in: &gents::oauth_credential::SignIn) -> Value {
+fn sign_in_json(sign_in: &gents::inference::auth::credential::SignIn) -> Value {
     let credential = &sign_in.credential;
     json!({
         "doc_id": sign_in.doc_id,
-        "label": gents::oauth_credential::effective_account_label(credential),
+        "label": gents::inference::auth::credential::effective_account_label(credential),
         "result": sign_in.result,
         "profiles": sign_in.profiles,
         "credential_id": credential.credential_id,

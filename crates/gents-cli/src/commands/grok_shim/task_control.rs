@@ -1,7 +1,9 @@
 //! Stock task-button control, delegated to the runtime's process owner.
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::{graphql::escape_graphql_string, hook::BackgroundExecutionRegistry};
+use gents::{
+    store::graphql::escape_graphql_string, tools::call::hook::BackgroundExecutionRegistry,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -70,7 +72,7 @@ pub(super) async fn kill(
     // not cancel whichever appears first.
     let mut matches = Vec::new();
     for candidate in candidates {
-        let response = gents::graphql::graphql_with_transaction_retry(&node, &format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_call_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+        let response = gents::store::graphql::graphql_with_transaction_retry(&node, &format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_call_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
             escape_graphql_string(&candidate.0), escape_graphql_string(&request.task_id)), "Grok task owner lookup").await?;
         let rows = response
             .data
@@ -92,7 +94,7 @@ pub(super) async fn kill(
     };
     let outcome = if let Some((owner_session, agent, requester)) = scope {
         use gents::CancelBackgroundToolCallOutcome as Outcome;
-        match gents::tool_control::cancel_session_background_process(
+        match gents::tools::call::control::cancel_session_background_process(
             node,
             executions,
             &agent,

@@ -12,6 +12,8 @@ export type SurfaceContext = {
 export type Surface = {
   id: string;
   title: string;
+  /** a shorter name for its tab in the dock, where tabs share one row */
+  tab?: string;
   icon: ComponentType<{ className?: string }>;
   placements: readonly Placement[];
   routes?: readonly string[];

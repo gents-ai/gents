@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
-use crate::document_config::Task;
+use crate::documents::Task;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -72,7 +72,7 @@ pub fn review_task_policy(
         review_task_is_eligible(task, node, task_id, agent),
         "access review requires an enabled policy Task for this agent without execution side effects"
     );
-    let rendered = crate::session_message::render_task_body(task, node, agent, session, None)
+    let rendered = crate::session::message::render_task_body(task, node, agent, session, None)
         .map_err(anyhow::Error::msg)?;
     anyhow::ensure!(
         rendered.goal.is_none() && !rendered.content.trim().is_empty(),

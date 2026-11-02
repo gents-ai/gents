@@ -3,12 +3,12 @@ use crate::support::*;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::adapter_projection::{
+use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::observe::adapter_projection::{
     adapter_projection_eval_jsonl_records, adapter_projection_jsonl_records,
     build_external_adapter_projection,
 };
-use gents::defra_node::{EmbeddedNode, StorageBackend};
-use gents::external_adapter_capture::ExternalAdapterView;
+use gents::observe::external_adapter_capture::ExternalAdapterView;
 use gents::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
@@ -138,11 +138,11 @@ fn external_projection_preserves_mapped_children_without_forging_native_provenan
     validate_adapter_projection_contract(&envelope)?;
     assert_eq!(
         envelope.provenance.source_projection_id,
-        gents::adapter_projection::EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID
+        gents::observe::adapter_projection::EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID
     );
     assert_eq!(
         envelope.provenance.source_version_status,
-        gents::adapter_projection::ProjectionSourceVersionStatus::ExternalAdapterCapture
+        gents::observe::adapter_projection::ProjectionSourceVersionStatus::ExternalAdapterCapture
     );
     assert!(envelope.source_request_doc_id.is_none());
     let projection = serde_json::to_value(&envelope)?;
@@ -202,7 +202,7 @@ fn external_langgraph_projection_preserves_history_graph_tasks_and_redacts_value
     let capture: ExternalAdapterCapture = serde_json::from_value(value)?;
     let envelope = build_external_adapter_projection(&capture, &ProjectionContext::default())?;
     validate_adapter_projection_contract(&envelope)?;
-    let gents::adapter_projection::AdapterProjection::LangGraphStateHistory(projection) =
+    let gents::observe::adapter_projection::AdapterProjection::LangGraphStateHistory(projection) =
         &envelope.output
     else {
         panic!("expected LangGraph projection")

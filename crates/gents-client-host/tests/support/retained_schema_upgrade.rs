@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use futures::StreamExt;
-use gents::store_key::{StoreEncryption, StoreKeyCustodyChoice};
+use gents::store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
 use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
 use serde_json::Value;
 use tokio::process::{Child, Command};

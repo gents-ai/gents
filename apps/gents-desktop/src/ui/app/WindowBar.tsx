@@ -113,11 +113,15 @@ export function WindowBar({
   settings: ReactNode;
   onPaneBar: (slot: HTMLElement | null) => void;
 }) {
-  const { columns, wide, docked, dockOpen, divider } = layout;
+  const { columns, wide, docked, dockOpen, divider, shownNav } = layout;
+  /* an expanded nav's column has room for the page's own controls, so they
+     sit over it, by the mark, rather than out past its edge */
+  const navHoldsHistory = wide && shownNav === "expanded";
   const syncHealth = useSyncHealth();
   const drag = headerIsWindowBar() ? "" : undefined;
   const windows = isWindowsTauriShell();
   const { paneHidden, toEnd } = divider;
+  const onNodes = route.name === "agents" || route.name === "nodes";
   return (
     <header
       className="app-titlebar relative col-span-full row-start-1 grid h-12 min-w-0"
@@ -131,8 +135,9 @@ export function WindowBar({
             className="flex w-14 shrink-0 justify-center"
             data-tauri-drag-region={drag}
           >
-            <MarkLink />
+            <MarkLink current={onNodes} />
           </div>
+          {navHoldsHistory && history && <HistoryNav history={history} />}
         </div>
       )}
       <div
@@ -146,8 +151,8 @@ export function WindowBar({
         data-tauri-drag-region={drag}
       >
         <NavSheet route={route} settings={settings} />
-        <MarkLink className="md:hidden" />
-        {history && <HistoryNav history={history} />}
+        <MarkLink className="md:hidden" current={onNodes} />
+        {history && !navHoldsHistory && <HistoryNav history={history} />}
         <ActiveNodeLabel />
         <div
           ref={onPaneBar}
@@ -169,6 +174,8 @@ export function WindowBar({
               sessionId={route.name === "session" ? route.sessionId : null}
               routeName={route.name}
               paneTab={toEnd > 0 ? { onShow: divider.showPane, progress: toEnd } : null}
+              expanded={toEnd > 0.5}
+              onExpand={toEnd > 0.5 ? divider.showPane : divider.hidePane}
             />
           )}
         </div>

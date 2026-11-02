@@ -30,7 +30,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         SessionTitleSource::Task,
         SessionTitleSource::Placeholder,
     ] {
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.automatic_title",
@@ -59,7 +59,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
             before
         );
     }
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.user_title",
@@ -90,7 +90,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         source: SessionTitleSource::User,
     });
     assert_eq!(renamed, expected);
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.clear_title",
@@ -134,7 +134,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         .await
         .unwrap()
         .unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.generated_title",
@@ -193,7 +193,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         node.add_collection(gents_protocol::schemas::AGENT_SESSION)
             .await
             .unwrap();
-        crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_model_title", |txn| {
+        crate::store::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_model_title", |txn| {
                 let before = before.clone();
                 Box::pin(async move {
                     txn.execute_with_variables(
@@ -205,7 +205,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
             }).await.unwrap();
         let now = model_time(&case["now"]).as_str().unwrap().to_owned();
         let title = case["title"]["text"].as_str();
-        crate::config_client::ConfigAccess::transact_local_write(
+        crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.model_user_title",

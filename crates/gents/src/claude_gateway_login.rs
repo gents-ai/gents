@@ -14,7 +14,7 @@ use gents_claude::gateway::{self, DeviceCode, Endpoints, Poll, Tokens};
 
 pub use gents_claude::gateway::base_url;
 
-use crate::oauth_credential::{
+use crate::inference::auth::credential::{
     oauth_credential_id, OAuthAuthProblem, OAuthCredential, OAuthProduct, RefreshedTokens,
 };
 

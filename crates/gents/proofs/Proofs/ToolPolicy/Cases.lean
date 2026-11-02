@@ -61,10 +61,6 @@ structure SurfaceView where
   queryScopeKind : String
   queryGrants : List WriteGrantView
   queryFields : List String
-  ethQueryMethodsKind : String
-  ethQueryMethodsKeys : List String
-  ethCallToolsKind : String
-  ethCallToolsKeys : List String
   pluginToolsKind : String
   pluginToolsKeys : List String
   deriving Repr
@@ -103,9 +99,6 @@ def knownWriteKeys : List (String × String) :=
 def knownQueryKeys : List (String × String) :=
   [("qt", "coll")]
 
-def knownEthMethods : List String :=
-  ["eth_blockNumber", "eth_call", "eth_chainId"]
-
 def probeQuery : String × String := ("qt", "coll")
 
 def knownSelfConfigCategories : List String :=
@@ -122,11 +115,6 @@ def fieldList (fields : Finset String) : List String :=
 
 def toolScopeKeys {V : Type} : EndpointScope ToolId V → List String
   | .only keys _ => knownToolIds.filter (fun key => decide (key ∈ keys))
-  | .all => []
-  | .none => []
-
-def ethMethodKeys {V : Type} : EndpointScope String V → List String
-  | .only keys _ => knownEthMethods.filter (fun key => decide (key ∈ keys))
   | .all => []
   | .none => []
 
@@ -247,8 +235,6 @@ def surface (file : FileCap) (bash : BashPolicy)
   , backgroundTools := .all
   , writeTools := write
   , queryTools := .all
-  , ethQueryMethods := .none
-  , ethCallTools := .none
   , pluginTools := .none }
 
 def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
@@ -307,10 +293,6 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , queryFields := match s.queryTools.lookup probeQuery with
       | some fields => fieldList fields
       | none => []
-  , ethQueryMethodsKind := scopeKind s.ethQueryMethods
-  , ethQueryMethodsKeys := ethMethodKeys s.ethQueryMethods
-  , ethCallToolsKind := scopeKind s.ethCallTools
-  , ethCallToolsKeys := toolScopeKeys s.ethCallTools
   , pluginToolsKind := scopeKind s.pluginTools
   , pluginToolsKeys := toolScopeKeys s.pluginTools }
 
@@ -464,21 +446,6 @@ def writeAllNoQuery : Surface :=
     writeTools := .all
     queryTools := .none }
 
-def ethMethodsA : EndpointScope String Unit :=
-  unitOnly ["eth_chainId", "eth_blockNumber"].toFinset
-
-def ethMethodsB : EndpointScope String Unit :=
-  unitOnly ["eth_blockNumber", "eth_call"].toFinset
-
-def agentEthA : Surface :=
-  { wideOpen with ethQueryMethods := ethMethodsA }
-
-def ceilingEthB : Surface :=
-  { wideOpen with ethQueryMethods := ethMethodsB }
-
-def runtimeEthAll : Surface :=
-  { wideOpen with ethQueryMethods := .all, ethCallTools := .all }
-
 def agentPluginsAX : Surface :=
   { wideOpen with pluginTools := toolsOnly ["svc-a", "svc-x"] }
 
@@ -534,8 +501,6 @@ def cases : List Case :=
       agentQueryB ceilingQueryA wideOpen "svc-a" probeWrite
   , mkCase "write_all_does_not_grant_query"
       agentQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
-  , mkCase "eth_query_methods_intersect"
-      agentEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
   , mkCase "plugin_tools_intersect"
       agentPluginsAX ceilingPluginsXY runtimePluginsAll "svc-a" probeWrite
   , mkCase "plugin_tools_absent_from_runtime_are_denied"

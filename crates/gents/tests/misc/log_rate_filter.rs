@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use gents::log_rate::{RateLimitConfig, RateLimitFilter, SUMMARY_TARGET};
+use gents::observe::log_rate::{RateLimitConfig, RateLimitFilter, SUMMARY_TARGET};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;

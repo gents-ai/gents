@@ -1,5 +1,5 @@
 use super::*;
-use gents::lifecycle::RequestTerminalOutcome;
+use gents::request::lifecycle::RequestTerminalOutcome;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -56,7 +56,7 @@ async fn ordinary_completion_rejects_claimed_without_execution() {
             )
             .await
             .unwrap(),
-        gents::lifecycle::TerminalizeResult::Lost,
+        gents::request::lifecycle::TerminalizeResult::Lost,
     );
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id)
@@ -182,7 +182,7 @@ async fn admission_rejection_projects_the_failed_turn_into_its_session() {
     .await;
     let persisted = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output failure_reason }} }}"#,
-        gents::graphql::escape_graphql_string(&doc_id),
+        gents::store::graphql::escape_graphql_string(&doc_id),
     )).await;
     assert!(!persisted.has_errors(), "{:?}", persisted.errors);
     let persisted = &persisted.data.as_ref().unwrap()["AgentRequest"][0];
@@ -317,11 +317,11 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 content: "hello", created_at: "{}", request_hop: 0,
                 retry_count: 0, max_retries: 0, caused_by_trigger_id: "conformance-trigger"
             }}) {{ _docID }} }}"#,
-                gents::graphql::escape_graphql_string(&request_id),
-                gents::graphql::escape_graphql_string(NODE_DID),
-                gents::graphql::escape_graphql_string(AGENT_NAME),
-                gents::graphql::escape_graphql_string(&session_id),
-                gents::graphql::escape_graphql_string(&created_at),
+                gents::store::graphql::escape_graphql_string(&request_id),
+                gents::store::graphql::escape_graphql_string(NODE_DID),
+                gents::store::graphql::escape_graphql_string(AGENT_NAME),
+                gents::store::graphql::escape_graphql_string(&session_id),
+                gents::store::graphql::escape_graphql_string(&created_at),
             ))
             .await;
         assert!(!response.has_errors(), "{response:?}");
@@ -359,7 +359,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         }
         "dedupLose" => {
             if case.from == "workspaceBindingPending" {
-                gents::config_client::ConfigAccess::transact_local_write(
+                gents::store::config_client::ConfigAccess::transact_local_write(
                     &db.node,
                     None,
                     "test.supersede_before_workspace_binding",
@@ -508,15 +508,15 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         ),
     }
 
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         &db.node,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ stopped_before_running }} }}"#,
-            gents::graphql::escape_graphql_string(&doc_id)
+            gents::store::graphql::escape_graphql_string(&doc_id)
         ),
         "test.interrupt_evidence",
     ).await.unwrap();
-    let evidence: serde_json::Value = gents::graphql::first_row(&response, "AgentRequest")
+    let evidence: serde_json::Value = gents::store::graphql::first_row(&response, "AgentRequest")
         .unwrap()
         .unwrap();
     let certified = evidence["stopped_before_running"].as_bool() == Some(true);
@@ -1018,7 +1018,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1103,7 +1103,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1165,7 +1165,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1216,7 +1216,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             retry_root_request: lifecycle.request().request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1862,7 +1862,7 @@ async fn create_queue_request(
                 request_hop: 0{input_field}{deadline_field}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let response = node.execute(&mutation).await;
     assert!(

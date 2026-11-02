@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use gents::tool_call_lifecycle::deadline_at_is_expired;
+use gents::tools::call::lifecycle::deadline_at_is_expired;
 pub(crate) use gents_protocol::row::AgentRequestRow as LivenessRequestRow;
 use serde::{Deserialize, Serialize};
 

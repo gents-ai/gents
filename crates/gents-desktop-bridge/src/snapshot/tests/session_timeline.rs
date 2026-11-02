@@ -101,7 +101,10 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
     let pending = snapshot.pending_turn.expect("request-owned steering input");
     assert_eq!(pending.request_doc_id.as_deref(), Some("steering-doc-1"));
     assert_eq!(pending.content, "queued steering text");
-    assert_eq!(pending.lifecycle_state.as_deref(), Some("interrupted"));
+    assert_eq!(
+        pending.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
     assert!(snapshot.messages.is_empty());
 }
 
@@ -502,7 +505,7 @@ fn folded_user_input_stays_visible_when_a_runtime_request_consumes_it() {
             .unwrap(),
         );
         input_request.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        input_request.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        input_request.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
         input_request.superseded_by_request = Some("req-1".into());
         input_request.superseded_by_request_doc_id = Some("req-1".into());
         rows.requests[0].input = Some(
@@ -1075,7 +1078,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
@@ -1115,7 +1118,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
@@ -1151,7 +1154,7 @@ fn local_pending_history_pages_with_durable_anchor_cursor() {
         captured_context: None,
         attachments: None,
         selected_skill_ids: vec![],
-        lifecycle_state: Some("interrupted".into()),
+        lifecycle_state: Some(RequestLifecycleState::Interrupted),
         folded_into_request_id: None,
         origin: None,
         created_at: None,
@@ -1189,7 +1192,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
@@ -1226,6 +1229,9 @@ fn context_events_page_with_their_durable_message_anchor() {
             original_tokens: Some(300),
             compacted_tokens: Some(90),
             timestamp: Some("2026-10-20T11:00:00Z".into()),
+            summary: None,
+            files_read: None,
+            files_modified: None,
         },
         assistant_item("message-2", 2),
     ];
@@ -1388,4 +1394,43 @@ fn a_rows_read_draws_the_rows_the_session_snapshot_draws() {
             RenderedTimelineItem::AssistantMessage { .. },
         ] if prompt == "req-1"
     ));
+}
+
+#[test]
+fn a_compaction_row_carries_its_summary_and_files() {
+    let entry: gents_protocol::row::CompactionEntryRow =
+        serde_json::from_value(serde_json::json!({
+            "compaction_key": "checkpoint-1",
+            "summary": "## Goal\nFix the parser.",
+            "files_read": "[\"src/lib.rs\"]",
+            "files_modified": "not a list",
+            "messages_compacted": 4,
+            "compacted_through_sequence": 1,
+            "original_tokens": 300,
+            "compacted_tokens": 90,
+            "created_at": "2026-10-20T11:00:00Z"
+        }))
+        .expect("compaction entry");
+    let mut items = vec![assistant_item("message-1", 1)];
+    let page = [1_i64].into_iter().collect::<rapidhash::RapidHashSet<_>>();
+    crate::snapshot::session::attach_session_compaction_timeline_events(
+        &mut items,
+        &[entry],
+        &page,
+    );
+    let Some(RenderedTimelineItem::SessionCompaction {
+        summary,
+        files_read,
+        files_modified,
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, RenderedTimelineItem::SessionCompaction { .. }))
+    else {
+        panic!("no compaction row");
+    };
+    assert_eq!(summary.as_deref(), Some("## Goal\nFix the parser."));
+    assert_eq!(files_read.as_deref(), Some(&["src/lib.rs".to_string()][..]));
+    /* a file list the bridge can't read is left out, not shown as text */
+    assert_eq!(files_modified, &None);
 }

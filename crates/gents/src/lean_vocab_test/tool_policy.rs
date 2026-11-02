@@ -61,10 +61,6 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) query_scope_kind: String,
     pub(crate) query_grants: Vec<LeanToolPolicyWriteGrant>,
     pub(crate) query_fields: Vec<String>,
-    pub(crate) eth_query_methods_kind: String,
-    pub(crate) eth_query_methods_keys: Vec<String>,
-    pub(crate) eth_call_tools_kind: String,
-    pub(crate) eth_call_tools_keys: Vec<String>,
     pub(crate) plugin_tools_kind: String,
     pub(crate) plugin_tools_keys: Vec<String>,
 }

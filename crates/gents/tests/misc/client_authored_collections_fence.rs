@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use gents::agent::p2p_reconcile::templates::{resolve_template, Scope, MACHINE_TEMPLATE};
-use gents::agent::p2p_reconcile::{client_route_collections, PairingDirection};
+use gents::runtime::agent::p2p_reconcile::templates::{resolve_template, Scope, MACHINE_TEMPLATE};
+use gents::runtime::agent::p2p_reconcile::{client_route_collections, PairingDirection};
 use gents_migration::CLIENT_AUTHORED_COLLECTIONS;
 
 const CONTROL_PLANE_CLAIM_COLLECTIONS: &[&str] = &[gents_protocol::schemas::PEER_ENDPOINT_NAME];

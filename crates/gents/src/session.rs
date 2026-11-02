@@ -1,12 +1,15 @@
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 mod archive;
 pub mod canonical_rows;
+pub mod mailbox;
+pub mod message;
+pub mod origin;
 pub use archive::{set_session_archived, set_session_archived_on};
 mod compaction_entries;
 mod control;
@@ -31,7 +34,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::import_history_observation;
 
-pub use crate::tool_call_lifecycle::query::{
+pub use crate::tools::call::lifecycle::query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     CanonicalToolCallPresentation,
 };
@@ -73,17 +76,18 @@ pub(crate) use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::count_source_output_queries;
 #[cfg(test)]
-pub(crate) use output::load_canonical_payload_from_node;
-pub(crate) use output::load_canonical_payload_in_txn;
-pub(crate) use output::load_canonical_payload_with_access;
-pub(crate) use output::load_source_rows_in_txn;
-pub use output::{
-    load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
+pub(crate) use output::reader::load_canonical_payload_from_node;
+pub(crate) use output::reader::load_canonical_payload_in_txn;
+pub(crate) use output::reader::load_canonical_payload_with_access;
+pub(crate) use output::reader::load_source_rows_in_txn;
+pub use output::reader::{load_canonical_message, load_canonical_message_from_node};
+pub(crate) use output::reader::{
+    load_canonical_message_in_txn, load_request_headers_in_txn, TxnCanonicalReader,
 };
-pub(crate) use output::{
-    load_canonical_message_in_txn, load_request_headers_in_txn, resolve_canonical_replay_tags,
-    validate_canonical_replay_boundary, CanonicalReplayScope, TxnCanonicalReader,
-};
+pub(crate) use output::replay_request::validate_canonical_replay_boundary;
+pub(crate) use output::replay_tags::resolve_canonical_replay_tags;
+pub use output::CanonicalOutputReadError;
+pub(crate) use output::CanonicalReplayScope;
 pub(crate) use query::session_is_stopped;
 pub(crate) use query::session_stopped_in_txn;
 pub use query::{
