@@ -11,6 +11,7 @@ export type NavMode = "hover" | "expanded" | "collapsed";
 /** How the sidebar shows: one of the nav's modes, or hidden altogether
     (kept apart from the mode, which it returns to when shown again). */
 export type SidebarMode = NavMode | "hidden";
+export type CollapsedNav = Exclude<NavMode, "expanded">;
 
 /** The expanded sidebar's width, in pixels: dragged between these, and
     reset to `initial`. */
@@ -31,6 +32,9 @@ export type Preferences = {
   /** the rail and sidebar put away entirely on a wide window, whatever
       `nav` is; the phone's menu is unaffected */
   navHidden: boolean;
+  /** what the sidebar collapses back to from always open: the person's own
+      pick of open on hover or icons only, never inferred */
+  navCollapsed: CollapsedNav;
   /** the expanded sidebar's width on this device */
   navWidth: number;
   zoom: number;
@@ -73,6 +77,7 @@ const initial = (): Preferences => ({
   theme: "system",
   nav: "hover",
   navHidden: false,
+  navCollapsed: "hover",
   navWidth: NAV_WIDTH.initial,
   zoom: 1,
   sentTurn: "anchor",
@@ -137,6 +142,10 @@ export function restorePreferences(
         : defaults.nav,
     navHidden:
       typeof saved.navHidden === "boolean" ? saved.navHidden : defaults.navHidden,
+    navCollapsed:
+      saved.navCollapsed === "hover" || saved.navCollapsed === "collapsed"
+        ? saved.navCollapsed
+        : defaults.navCollapsed,
     navWidth:
       typeof saved.navWidth === "number" &&
       saved.navWidth >= NAV_WIDTH.min &&
@@ -171,18 +180,25 @@ const store = createStore<Preferences>()(
   }),
 );
 
+const navChoice = (nav: NavMode): Partial<Preferences> =>
+  nav === "expanded" ? { nav } : { nav, navCollapsed: nav };
+
 export const preferences = {
   setTheme(theme: ThemePreference) {
     store.setState({ theme });
     applyTheme(theme);
   },
+  /** a mode chosen; open on hover or icons only is also what the sidebar
+      collapses back to from now on */
   setNav(nav: NavMode) {
-    store.setState({ nav });
+    store.setState(navChoice(nav));
   },
   /** one of the nav's modes, which shows the sidebar again, or hidden */
   setSidebarMode(mode: SidebarMode) {
     store.setState(
-      mode === "hidden" ? { navHidden: true } : { nav: mode, navHidden: false },
+      mode === "hidden"
+        ? { navHidden: true }
+        : { ...navChoice(mode), navHidden: false },
     );
   },
   setNavWidth(width: number) {
@@ -269,6 +285,7 @@ export const useNavHidden = () => usePreferences((p) => p.navHidden);
 export const useSidebarMode = (): SidebarMode =>
   usePreferences((p) => (p.navHidden ? "hidden" : p.nav));
 export const useNavWidth = () => usePreferences((p) => p.navWidth);
+export const collapsedNav = (): CollapsedNav => store.getState().navCollapsed;
 export const zoomLevel = () => store.getState().zoom;
 /** how the sidebar shows now, outside React */
 export const sidebarMode = (): SidebarMode => {

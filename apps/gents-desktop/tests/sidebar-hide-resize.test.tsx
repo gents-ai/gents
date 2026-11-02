@@ -34,22 +34,28 @@ function Handle({ most = Infinity }: { most?: number }) {
 }
 
 describe("the sidebar", () => {
-  it("is expanded or collapsed by its key, and expanded from hidden or hover", () => {
+  it("is expanded, and collapsed back to the person's style, by its key", () => {
     const read = state();
     renderIn(testApp(), <Shortcuts />);
     const press = () =>
       fireEvent.keyDown(window, { key: "S", ctrlKey: true, shiftKey: true });
-    act(() => preferences.setNav("expanded"));
+    /* from the default, open on hover, it expands and comes back to hover */
+    press();
+    expect(read().nav).toBe("expanded");
+    press();
+    expect(read().nav).toBe("hover");
+    /* once icons only is chosen, that is what it collapses back to */
+    act(() => preferences.setSidebarMode("collapsed"));
+    press();
+    expect(read().nav).toBe("expanded");
     press();
     expect(read().nav).toBe("collapsed");
-    press();
-    expect(read().nav).toBe("expanded");
-    act(() => preferences.setNav("hover"));
-    press();
-    expect(read().nav).toBe("expanded");
+    /* hidden is left for always open */
     act(() => preferences.setSidebarMode("hidden"));
     press();
     expect(read()).toMatchObject({ nav: "expanded", navHidden: false });
+    press();
+    expect(read().nav).toBe("collapsed");
   });
 
   it("is named in the shortcuts reference", () => {

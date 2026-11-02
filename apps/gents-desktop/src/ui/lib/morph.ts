@@ -50,7 +50,15 @@ export function useMorphCard(): Morph {
         if (!element) return undefined;
         const shown = parts.current.get(key) ?? new Set<HTMLElement>();
         parts.current.set(key, shown.add(element));
-        return () => void shown.delete(element);
+        return () => {
+          shown.delete(element);
+          /* an element that stops being a part mid-morph (it stays mounted
+             but no longer stands for it) drops its name, or the new state
+             holds it twice and the transition is refused */
+          if (!namedBy.has(element)) return;
+          element.style.removeProperty("view-transition-name");
+          namedBy.delete(element);
+        };
       };
       refs.current.set(key, ref);
     }

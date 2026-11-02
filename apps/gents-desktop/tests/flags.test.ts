@@ -81,6 +81,7 @@ describe("flags read back from storage", () => {
     theme: "light",
     nav: "hover",
     navHidden: false,
+    navCollapsed: "hover",
     navWidth: 304,
     zoom: 1,
     sentTurn: "follow",

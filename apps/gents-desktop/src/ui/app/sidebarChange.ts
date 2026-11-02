@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import {
+  collapsedNav,
   preferences,
   sidebarMode,
   type NavMode,
@@ -42,9 +43,9 @@ export const sidebar = {
   setMode: (mode: SidebarMode) => change(mode, () => preferences.setSidebarMode(mode)),
   setNav: (nav: NavMode) =>
     change(sidebarMode() === "hidden" ? "hidden" : nav, () => preferences.setNav(nav)),
-  /** the toggle's click and its key: open between always open and icons
-      only, and always open from hidden or open on hover; hidden is chosen
-      from the mode menus alone */
+  /** the toggle's click and its key: from always open back to the
+      person's collapsed style (open on hover or icons only), and always
+      open from anything else; hidden is chosen from the mode menus alone */
   toggle: () =>
-    sidebar.setMode(sidebarMode() === "expanded" ? "collapsed" : "expanded"),
+    sidebar.setMode(sidebarMode() === "expanded" ? collapsedNav() : "expanded"),
 };
