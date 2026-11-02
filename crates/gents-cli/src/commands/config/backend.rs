@@ -317,16 +317,16 @@ async fn resolve_backend_discovery_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::oauth_credential::{set_account_enabled, store_sign_in};
+    use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
 
     const DID: &str = "did:key:z6MkTestBackendPool";
     const CLAUDE: &str = "claude-subscription";
 
-    fn claude_sign_in(who: &str) -> gents::oauth_credential::OAuthCredential {
-        gents::claude_oauth::credential_from_login_tokens(
+    fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
+        gents::inference::auth::claude::credential_from_login_tokens(
             DID,
             CLAUDE,
-            &gents::claude_oauth::ClaudeLoginTokens {
+            &gents::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-SECRET-{who}"),
                 expires_in: Some(3600),

@@ -10,7 +10,7 @@ pub(super) fn prepare(
     id: uuid::Uuid,
     args: ServiceUpdateArgs,
 ) -> Result<(Plan, Receipt, File)> {
-    let root = home.join(gents::home::SERVICE_UPDATES_DIR_NAME);
+    let root = home.join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME);
     private_dir(&root)?;
     let submission_lock = super::files::submission_lock(&root.join("submission.lock"))?;
     let directory = operation_dir(&home, id);

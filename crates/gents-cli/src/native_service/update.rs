@@ -34,8 +34,8 @@ where
             return Ok(false);
         }
         let installed = normalize_absolute(&self.definition_executable(&fs::read(path)?)?)?;
-        let root =
-            normalize_absolute(&self.config.home)?.join(gents::home::SERVICE_UPDATES_DIR_NAME);
+        let root = normalize_absolute(&self.config.home)?
+            .join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME);
         let Ok(relative) = installed.strip_prefix(root) else {
             return Ok(false);
         };
@@ -51,7 +51,10 @@ where
     /// Automatic desktop mutations must yield while a native handoff owns its
     /// definition. Expired operations that never acknowledged cannot retire.
     pub fn pending_update(&self) -> Result<Option<uuid::Uuid>> {
-        let root = self.config.home.join(gents::home::SERVICE_UPDATES_DIR_NAME);
+        let root = self
+            .config
+            .home
+            .join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME);
         if !root.is_dir() {
             return Ok(None);
         }
@@ -375,7 +378,7 @@ mod tests {
             let id = uuid::Uuid::new_v4();
             let operation = config
                 .home
-                .join(gents::home::SERVICE_UPDATES_DIR_NAME)
+                .join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME)
                 .join(id.to_string());
             fs::create_dir_all(&operation).unwrap();
             config.executable = operation.join("gents");

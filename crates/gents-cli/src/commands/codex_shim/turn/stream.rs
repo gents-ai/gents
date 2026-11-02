@@ -1213,7 +1213,7 @@ async fn announce_consumed_inputs(
         escape_graphql_string(state.local_requester_did()),
         escape_graphql_string(&current.session_id),
         escape_graphql_string(&current.request_doc_id),
-        escape_graphql_string(gents::lifecycle::FOLDED_REASON),
+        escape_graphql_string(gents::request::lifecycle::FOLDED_REASON),
         superseded = RequestLifecycleState::Superseded.as_str()
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;

@@ -410,7 +410,7 @@ mod tests {
         let peer = "did:key:peer-owner";
         gents::ensure_node(&node, local).await?;
         gents::ensure_node(&node, peer).await?;
-        use gents::config_client::{
+        use gents::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let documents = [local, peer]

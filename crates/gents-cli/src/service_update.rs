@@ -124,7 +124,7 @@ fn service_config(plan: &Plan) -> Result<NativeServiceConfig> {
 }
 
 fn operation_dir(home: &Path, id: uuid::Uuid) -> PathBuf {
-    home.join(gents::home::SERVICE_UPDATES_DIR_NAME)
+    home.join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME)
         .join(id.to_string())
 }
 
@@ -277,7 +277,9 @@ pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
     };
     let _keychain = crate::process_resources::prevent_keychain_prompts(true)?;
     let (identity, state, settings) = tokio::task::spawn_blocking(move || -> Result<_> {
-        gents::storage_backend::reject_legacy_store(&gents::home::default_data_dir(&home))?;
+        gents::store::local::storage_backend::reject_legacy_store(
+            &gents::store::local::home::default_data_dir(&home),
+        )?;
         let config = read_init_config(&home)?.context("home must be initialized")?;
         let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
         let settings = NetworkSettings::read(&home)?;
@@ -290,8 +292,8 @@ pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
     })
     .await??;
     execute::endpoint(&state.graphql, &settings)?;
-    let access = gents::config_client::ConfigAccess::Graphql(
-        gents::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did()),
+    let access = gents::store::config_client::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did()),
     );
     let versions = access
         .collection_versions()
@@ -299,7 +301,7 @@ pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<gents::defra_node::CollectionVersion>, _>>()?;
-    gents::migration::check_migration_compatibility(&versions)?;
+    gents::store::schema::migration::check_migration_compatibility(&versions)?;
     emit(&metadata(true)).await
 }
 

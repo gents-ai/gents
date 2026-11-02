@@ -17,7 +17,7 @@ pub(crate) async fn watch_notices(runtime: gents::Gents, home: PathBuf) {
 }
 
 async fn observe(runtime: &gents::Gents, home: &Path) -> Result<()> {
-    let root = home.join(gents::home::SERVICE_UPDATES_DIR_NAME);
+    let root = home.join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME);
     let copy = root.clone();
     tokio::task::spawn_blocking(move || files::private_dir(&copy)).await??;
     loop {

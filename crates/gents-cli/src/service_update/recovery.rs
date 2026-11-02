@@ -7,7 +7,7 @@ use super::*;
 pub(super) async fn restore_unstarted(
     plan: &Plan,
     phase: Phase,
-    reservation: &mut Option<gents::home::RuntimeStartupReservation>,
+    reservation: &mut Option<gents::store::local::home::RuntimeStartupReservation>,
 ) -> Result<bool> {
     let directory = operation_dir(&plan.home, plan.id);
     let opened = tokio::fs::try_exists(directory.join("startup-attempted.json")).await?
@@ -36,7 +36,7 @@ pub(super) async fn restore_unstarted(
         *reservation = Some(
             tokio::time::timeout(
                 Duration::from_secs(60),
-                gents::home::reserve_runtime_startup(&plan.home),
+                gents::store::local::home::reserve_runtime_startup(&plan.home),
             )
             .await
             .context("replacement startup is still active; no recovery attempted")??,
@@ -45,9 +45,9 @@ pub(super) async fn restore_unstarted(
     if opened || phase == Phase::Retired {
         tokio::time::timeout(
             Duration::from_secs(120),
-            gents::home::wait_for_store_release(
+            gents::store::local::home::wait_for_store_release(
                 &plan.home,
-                &gents::home::default_data_dir(&plan.home),
+                &gents::store::local::home::default_data_dir(&plan.home),
             ),
         )
         .await
@@ -55,7 +55,7 @@ pub(super) async fn restore_unstarted(
     }
     let copy = plan.clone();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let _store = gents::home::lock_home_store(&copy.home)?;
+        let _store = gents::store::local::home::lock_home_store(&copy.home)?;
         let config = service_config(&copy)?;
         let manager = NativeServiceManager::new(config.clone())?;
         let installed = std::fs::read(
