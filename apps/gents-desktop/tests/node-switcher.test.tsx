@@ -200,4 +200,18 @@ describe("switching node", () => {
       expect(app.stores.selection.getState().nodeDid).toBe("did:key:z6MkJuno"),
     );
   });
+
+  it("shows the node's card from New session's avatar", async () => {
+    renderIn(
+      twoNodes(),
+      <TooltipProvider>
+        <NewSession />
+      </TooltipProvider>,
+    );
+    const avatar = screen
+      .getByTestId("session-screen")
+      .querySelector(":scope > div > span");
+    await userEvent.hover(avatar!);
+    expect(await screen.findByText("Inference", {}, { timeout: 2000 })).toBeVisible();
+  });
 });
