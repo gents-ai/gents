@@ -19,6 +19,11 @@ test("a read-only node's pages offer nothing that would change its settings", as
   ).toBeVisible();
   await expect(page.getByText("Display name is required")).toBeHidden();
   await expect(page.getByRole("button", { name: "Save" })).toBeHidden();
+  /* what the node shares of its settings shows as facts, not fields */
+  await expect(page.getByText("Default agent", { exact: true })).toBeVisible();
+  await expect(page.getByText("Maximum request hop", { exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: /Default agent/ })).toHaveCount(0);
+  await expect(page.getByRole("spinbutton")).toHaveCount(0);
 
   /* a narrow window picks sections from a select */
   const section = page.getByRole("combobox", { name: "Section" });

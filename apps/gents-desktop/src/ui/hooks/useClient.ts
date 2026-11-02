@@ -57,8 +57,9 @@ export function useSelectedNode(): NodeView | null {
 
 /** Why a node's settings can't be changed here, or null when they can. A
     node's settings are only editable once the app has read them from its
-    operator endpoint (the save path refuses otherwise); an enrolled remote
-    node's own Node document doesn't reach the app at all. */
+    operator endpoint (the save path refuses otherwise). An enrolled remote
+    node's Node document still reaches the app, so its settings show, read
+    only, once that node replicates it. */
 export function useNodeConfigReadOnly(node: NodeView): string | null {
   const homeDid = useHomeDid();
   const read = useStore(useApp().stores.client, (state) =>

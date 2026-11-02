@@ -6,6 +6,7 @@ import {
   enrollmentActivationMessage,
   type EnrollmentRequestView,
 } from "@source-inc/gents-desktop-client";
+import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import {
   AlertDialog,
@@ -436,6 +437,7 @@ const AgentRow = memo(function AgentRow({
           <span className="truncate font-heading text-base font-medium text-heading">
             {name}
           </span>
+          {d.node.enabled === false && <Badge variant="outline">Disabled</Badge>}
           {!isWorkingNode(d, homeDid) && d.label !== name && (
             <span className="min-w-0 truncate text-xs text-muted-foreground">
               {d.label}
