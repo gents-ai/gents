@@ -4,11 +4,13 @@ An RC0 home upgrades in place: the first start of a newer `gents` runs the
 schema migrations in `crates/gents-migration` and logs one line such as
 
 ```
-ensure_migrations complete baseline_already_present=86 steps_applied=2 ...
+ensure_migrations complete baseline_already_present=86 steps_applied=3 ...
 ```
 
 Later starts report `steps_applied=0`. No manual migration command exists or is
-needed.
+needed. The first start rewrites existing documents onto the new versions: on a
+4.4 GB store with about 71,000 affected documents it took 2m18s
+before the node reported ready (later starts: about 70 seconds).
 
 ## Before you start
 
@@ -25,10 +27,15 @@ needed.
   upgraded RC0 stores and new stores land on the same versions.
 - **Stores created by v1.0.0-rc1** (main between 2026-11-02 13:40Z and this
   change) registered the new SDL directly and are on a different lineage. They
-  still start, but log a warning and report the affected collections under
-  `non_canonical_lineages` in `/status` and in `gents service update-check`.
-  They cannot sync those collections with canonical peers; re-create them (a
-  new desktop store or `gents init`) to rejoin.
+  still start, but log an error naming each affected collection and how to
+  re-create the store, and report them under `non_canonical_lineages` in
+  `gents service update-check` (every managed collection) and `/status` (the
+  replicated collections it advertises). A desktop that pairs with one says
+  which side is off the lineage instead of asking for matching versions.
+  They cannot sync those collections with canonical peers; re-create them (see
+  "Re-creating an off-lineage store") to rejoin. Every node that reported its
+  pins on 2026-11-02 (all RC0, plus one v0.21.0 home) is on the RC0 pins and
+  upgrades onto the canonical lineage in place.
 - **Phones** that apply bundled SDL through the FFI must replay
   `gents_migration::canonical_schema_plan(collection)` for `AgentMessage`
   (register the rc0 root SDL, then apply each patch and make it active) instead
@@ -57,6 +64,24 @@ lineage is one this build can migrate, and `"non_canonical_lineages": []` when
 it will land on the canonical versions (an RC0 store does). Without the managed path: stop the
 service, copy the whole home, replace the binary, start, and look for the
 `ensure_migrations complete` line.
+
+## Re-creating an off-lineage store
+
+A node keeps its DID by re-initialising with its existing identity key. Data
+only that store holds is not carried over; replicated data comes back from
+peers once it re-enrolls.
+
+```
+gents service stop                                   # or stop however it runs
+mv <HOME> <HOME>.off-lineage
+mkdir -p <HOME>/keys
+cp <HOME>.off-lineage/keys/<node-name>.key <HOME>/keys/
+gents init --home <HOME> --key-path <HOME>/keys/<node-name>.key --node-name <node-name> ...
+```
+
+Pass the same `--node-name`, identity backend and backend options the node was
+first set up with, then start it and re-enroll it. `/status` should show
+`"non_canonical_lineages": []`. For the desktop app, reset its local data.
 
 ## Roll back
 

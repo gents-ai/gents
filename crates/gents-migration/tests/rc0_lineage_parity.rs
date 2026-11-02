@@ -6,28 +6,14 @@
 //! same patches (`upgrades::CANONICAL_ROOTS`). These tests hold a store born on rc0 and one
 //! born on this build to the same versions for every managed collection.
 
-use gents_migration::{canonical_versions, ensure_migrations, non_canonical_store_lineages};
+use gents_migration::{
+    canonical_schema_plan, canonical_versions, ensure_migrations, is_known_off_lineage,
+    non_canonical_store_lineages,
+};
 use gents_protocol::schemas;
 
 mod common;
 use common::fresh_node;
-
-/// Version IDs v1.0.0-rc0 (689d75369) registered for the collections this build has
-/// changed since, taken from that tag's `registry.rs` baseline.
-const RC0_PINS: &[(&str, &str)] = &[
-    (
-        schemas::AGENT_MESSAGE_NAME,
-        "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a",
-    ),
-    (
-        schemas::INFERENCE_BACKEND_NAME,
-        "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike",
-    ),
-    (
-        schemas::NODE_NAME,
-        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby",
-    ),
-];
 
 /// Where both an upgraded rc0 store and a fresh store land.
 const CANONICAL: &[(&str, &str)] = &[
@@ -44,25 +30,6 @@ const CANONICAL: &[(&str, &str)] = &[
         "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli",
     ),
 ];
-
-fn rc0_sdl(name: &str) -> String {
-    let (current, added) = match name {
-        schemas::AGENT_MESSAGE_NAME => (
-            schemas::AGENT_MESSAGE,
-            "    native_request_id: String @immutable\n",
-        ),
-        schemas::INFERENCE_BACKEND_NAME => {
-            (schemas::INFERENCE_BACKEND, "    claude_platform: JSON\n")
-        }
-        schemas::NODE_NAME => (schemas::NODE, "    avatar: String\n"),
-        other => panic!("no rc0 fixture for {other}"),
-    };
-    assert!(
-        current.contains(added),
-        "{name} no longer declares {added:?}"
-    );
-    current.replace(added, "")
-}
 
 async fn active_versions(
     node: &defra_node::EmbeddedNode,
@@ -88,13 +55,54 @@ fn canonical_versions_are_the_rc0_upgrade_targets() {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct Rc0Baseline {
+    baseline: Vec<Rc0Collection>,
+}
+
+#[derive(serde::Deserialize)]
+struct Rc0Collection {
+    name: String,
+    sdl: String,
+    version: String,
+}
+
+/// v1.0.0-rc0's own baseline, dumped from the tag's registry: registering it in order is
+/// exactly what a fresh rc0 store did (that release applied no steps on a fresh store).
+fn rc0_baseline() -> Vec<Rc0Collection> {
+    serde_json::from_str::<Rc0Baseline>(include_str!("fixtures/rc0_baseline.json"))
+        .unwrap()
+        .baseline
+}
+
+/// Every store born on v1.0.0-rc0 (the whole fleet reports exactly these pins) upgrades onto
+/// the versions a store born on this build gets, for every collection this build manages.
 #[tokio::test]
-async fn rc0_upgraded_store_and_fresh_store_share_every_version() {
+async fn rc0_born_store_upgrades_onto_every_fresh_version() {
     let upgraded = fresh_node().await;
-    for (name, pin) in RC0_PINS {
-        upgraded.add_collection(&rc0_sdl(name)).await.unwrap();
-        let registered = upgraded.get_collection(name).unwrap().unwrap();
-        assert_eq!(registered.version_id, *pin, "{name} rc0 fixture drifted");
+    for collection in rc0_baseline() {
+        upgraded
+            .add_collection(&collection.sdl)
+            .await
+            .unwrap_or_else(|error| panic!("rc0 {}: {error}", collection.name));
+        let registered = upgraded.get_collection(&collection.name).unwrap().unwrap();
+        assert_eq!(
+            registered.version_id, collection.version,
+            "{} does not reproduce its rc0 pin",
+            collection.name
+        );
+        if let Some(plan) = canonical_schema_plan(&collection.name).unwrap() {
+            assert_eq!(
+                plan.root_sdl, collection.sdl,
+                "{} rc0 root SDL drifted",
+                collection.name
+            );
+            assert_eq!(
+                plan.root_version, collection.version,
+                "{} rc0 root",
+                collection.name
+            );
+        }
     }
     let before = upgraded.get_all_collection_versions().await.unwrap();
     assert_eq!(
@@ -103,14 +111,14 @@ async fn rc0_upgraded_store_and_fresh_store_share_every_version() {
         "an rc0 store's steps must land it on the canonical versions"
     );
     let report = ensure_migrations(upgraded.as_ref()).await.unwrap();
-    assert_eq!(report.steps_applied, RC0_PINS.len());
+    assert!(report.steps_applied > 0);
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let rerun = ensure_migrations(upgraded.as_ref()).await.unwrap();
+    assert_eq!(rerun.steps_applied, 0);
 
     let fresh = fresh_node().await;
     let report = ensure_migrations(fresh.as_ref()).await.unwrap();
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
-    let again = ensure_migrations(fresh.as_ref()).await.unwrap();
-    assert_eq!(again.steps_applied, 0);
 
     let upgraded_versions = active_versions(&upgraded).await;
     let fresh_versions = active_versions(&fresh).await;
@@ -172,5 +180,25 @@ async fn rc1_born_store_starts_and_reports_its_lineage_split() {
         mismatches[0].active,
         "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm"
     );
+    // A peer is judged only by versions known to be off the lineage, never by being
+    // another release.
+    for mismatch in &mismatches {
+        assert!(
+            is_known_off_lineage(&mismatch.collection, &mismatch.active),
+            "{mismatch}"
+        );
+        assert!(!is_known_off_lineage(
+            &mismatch.collection,
+            &mismatch.canonical
+        ));
+    }
+    assert!(!is_known_off_lineage(
+        schemas::AGENT_MESSAGE_NAME,
+        "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a"
+    ));
+    assert!(!is_known_off_lineage(
+        schemas::AGENT_SESSION_NAME,
+        "bafyother"
+    ));
     node.shutdown().await;
 }

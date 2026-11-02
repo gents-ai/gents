@@ -10,7 +10,8 @@ mod upgrades;
 pub use engine::{
     canonical_schema_plan, canonical_versions, check_migration_compatibility, ensure_migrations,
     ensure_migrations_arc, ensure_migrations_dynamic, ensure_migrations_with_registry,
-    non_canonical_lineages, non_canonical_store_lineages, CanonicalSchemaPlan, LineageMismatch,
+    is_known_off_lineage, non_canonical_lineages, non_canonical_store_lineages,
+    CanonicalSchemaPlan, LineageMismatch,
 };
 pub use error::{Error, Result};
 pub use expectation::CollectionExpectation;
