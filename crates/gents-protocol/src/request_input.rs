@@ -53,6 +53,29 @@ pub struct AuthoredRequestInput {
     pub attachments: Vec<RequestAttachment>,
 }
 
+impl AuthoredRequestInput {
+    pub fn has_authored_input(&self, prose: &str) -> bool {
+        has_authored_input(
+            prose,
+            &self.selected_skill_ids,
+            &self.captured_context,
+            &self.attachments,
+        )
+    }
+}
+
+fn has_authored_input(
+    prose: &str,
+    selected_skill_ids: &[String],
+    captured_context: &[CapturedContext],
+    attachments: &[RequestAttachment],
+) -> bool {
+    !prose.trim().is_empty()
+        || !selected_skill_ids.is_empty()
+        || !captured_context.is_empty()
+        || !attachments.is_empty()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestInput {
@@ -134,9 +157,12 @@ impl RequestInput {
     }
 
     pub fn has_authored_input(&self, prose: &str) -> bool {
-        !prose.trim().is_empty()
-            || !self.captured_context.is_empty()
-            || !self.attachments.is_empty()
+        has_authored_input(
+            prose,
+            &self.selected_skill_ids,
+            &self.captured_context,
+            &self.attachments,
+        )
     }
 
     /// A retry or queue edit is a new physical request in the same session.
