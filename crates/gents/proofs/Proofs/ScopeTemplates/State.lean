@@ -112,7 +112,7 @@ def clientToRuntimeCollections : List String :=
      "AgentSessionInputEdit", "AgentSessionGoalControl"]
 
 def clientControlPlaneCollections : List String :=
-  agentConfigCollections ++
+  ["Node"] ++ agentConfigCollections ++
     ([.task, .schedule, .trigger, .eventSource] : List ConfigDocuments.Collection).map
       ConfigDocuments.Collection.collectionName
 

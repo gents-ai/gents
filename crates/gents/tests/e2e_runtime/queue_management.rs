@@ -526,6 +526,62 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
 }
 
 #[tokio::test]
+async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
+    let db = test_db("skill-only-queue-edit").await;
+    let did = db.node_identity.did();
+    crate::support::create_agent(&db.node, "general", did).await;
+    let access = ConfigAccess::local(db.node.clone());
+    let owner = escape_graphql_string(did);
+    access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "general:context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
+    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_id: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
+    let original = enqueue(
+        &db,
+        "general",
+        "skill-only-session",
+        "original",
+        "original message",
+        QueueDelivery::Queue,
+    )
+    .await;
+    let edit = |skills: Vec<String>| PendingQueueEdit {
+        expected_request_doc_ids: vec![original.clone()],
+        selected_request_doc_ids: vec![original.clone()],
+        messages: vec![PendingMessageEdit {
+            request_doc_id: original.clone(),
+            content: String::new(),
+            authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
+                selected_skill_ids: skills,
+                ..Default::default()
+            }),
+        }],
+    };
+    let error = submit_edit(&db, "skill-only-session", edit(vec![]))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("A message cannot be empty"));
+    let receipt = submit_edit(&db, "skill-only-session", edit(vec!["review".into()]))
+        .await
+        .unwrap();
+    let pending = pending_user_queue(&access, did, "skill-only-session", did)
+        .await
+        .unwrap();
+    assert_eq!(pending.entries.len(), 1);
+    assert_eq!(
+        pending.entries[0].request_doc_id,
+        receipt.request_doc_ids[0]
+    );
+    assert_eq!(pending.entries[0].content, "");
+    assert_eq!(pending.entries[0].selected_skill_ids, ["review"]);
+    let replacement = row(&db, &receipt.request_doc_ids[0]).await;
+    let input: gents_protocol::request_input::RequestInput =
+        serde_json::from_value(replacement["input"].clone()).unwrap();
+    assert_eq!(
+        input.queue.unwrap().position.unwrap().slot_request_doc_id,
+        original
+    );
+}
+
+#[tokio::test]
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
     let _did = db.node_identity.did();

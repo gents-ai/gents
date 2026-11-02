@@ -1,16 +1,18 @@
 import { useContext, type ReactNode } from "react";
-import { Inbox, Plus, ScrollText, Waypoints } from "lucide-react";
+import { Waypoints } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
 import { Kbd } from "@gents/ui/components/kbd";
-import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { TOOLTIP_KBD } from "@/screens/Hint";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
-import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
+import { navRowState, type NavContext } from "./navRegistry";
+import { drawNavRows, useNavFooter, useNavRows, type NavRow } from "./navLayout";
+import { NavMenu } from "./CustomizeNav";
+import { NavScroll } from "./NavScroll";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
@@ -91,7 +93,11 @@ function RailNode({ route }: { route: Route }) {
           (route.name === "agent" || route.name === "nodes") && "ring-2 ring-ink",
         )}
       >
-        <NodeAvatar name={nodeName ?? "Node"} className="size-7" />
+        <NodeAvatar
+          name={nodeName ?? "Node"}
+          {...nodeAvatarOf(node)}
+          className="size-7"
+        />
         <span
           className={cn(
             "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-background",
@@ -126,76 +132,68 @@ function RailSyncDot() {
 export function Rail({ route, settings }: { route: Route; settings: ReactNode }) {
   const mailboxCount = useMailboxCount();
   const selected = useSelectedNode();
-  const primary = useNavItems("primary");
-  const footer = useNavItems("footer");
+  const rows = useNavRows();
+  const footer = useNavFooter();
   const navContext: NavContext = {
     mailboxCount,
     selectedNodeDid: selected?.nodeDid ?? null,
   };
-  /* a row a UX plugin contributed: its predicates are evaluated apart and
+  /* a row a UX plugin contributed has its predicates evaluated apart and
      its icon drawn behind a boundary, so one bad row costs that row; a row
      with nowhere to go right now is not drawn */
-  const contributed = (item: NavItem) => {
-    const { to, active, count } = navRowState(item, route, navContext);
+  const drawRow = (item: NavRow) => {
+    const { to, active, count } = navRowState(
+      item.railActive ? { ...item, active: item.railActive } : item,
+      route,
+      navContext,
+    );
     if (!to) return null;
+    const drawn = (
+      <RailItem
+        key={item.id}
+        label={item.label}
+        keys={item.keys}
+        to={to}
+        active={active}
+        count={count}
+      >
+        {item.icon}
+      </RailItem>
+    );
+    if (item.own) return drawn;
     return (
       <ContribBoundary key={item.id} id={item.id} variant="chip">
-        <RailItem label={item.label} to={to} active={active} count={count}>
-          {item.icon}
-        </RailItem>
+        {drawn}
       </ContribBoundary>
     );
   };
   return (
     /* the flyout and the pinned panel start their node at this height */
-    <nav className="flex h-full flex-col items-center gap-1 pt-[23px]">
+    <NavMenu
+      render={<nav className="flex h-full flex-col items-center gap-1 pt-[23px]" />}
+    >
       <RailNode route={route} />
       <div className="mb-1 h-px w-5 bg-border" />
-      <RailItem
-        label="New session"
-        keys={PAGE_KEYS.newSession}
-        to={{ name: "session", sessionId: null }}
-        active={route.name === "session" && route.sessionId === null}
-      >
-        <Plus className="size-4" />
-      </RailItem>
-      <RailItem
-        label="Mailbox"
-        keys={MAILBOX_KEYS}
-        to={{ name: "mailbox" }}
-        active={route.name === "mailbox"}
-        count={mailboxCount}
-      >
-        <Inbox className="size-4" />
-      </RailItem>
-      <RailItem
-        label="Sessions"
-        keys={PAGE_KEYS.sessions}
-        to={{ name: "sessions" }}
-        active={
-          route.name === "sessions" ||
-          route.name === "sessionsUnder" ||
-          route.name === "sessionsArchived" ||
-          (route.name === "session" && route.sessionId !== null)
-        }
-      >
-        <ScrollText className="size-4" />
-      </RailItem>
-      {primary.map(contributed)}
-      <div className="mt-auto flex flex-col items-center gap-1 pb-[17px]">
-        <RailSyncDot />
+      {/* the top items scroll when the window is too short for them, and
+          the foot stays; the badges overhang their icons, so the list keeps
+          room for them, as the panel's does */}
+      <NavScroll>
+        <div className="flex flex-col items-center gap-2 py-1.5">
+          {drawNavRows(rows, drawRow, (id) => (
+            <div
+              key={id}
+              data-testid="nav-divider"
+              className="my-1 h-px w-5 bg-border"
+            />
+          ))}
+        </div>
+      </NavScroll>
+      <div className="flex shrink-0 flex-col items-center gap-1 pb-[17px]">
+        {footer.status && <RailSyncDot />}
         <div className="h-px w-8 bg-border" />
-        {footer.map(contributed)}
-        <RailItem
-          label="Nodes"
-          keys={PAGE_KEYS.nodes}
-          to={{ name: "nodes" }}
-          active={route.name === "nodes" || route.name === "agents"}
-        >
-          <Waypoints className="size-4" />
-        </RailItem>
+        {footer.rows.map(drawRow)}
         {settings}
       </div>
-    </nav>
+    </NavMenu>
   );
 }

@@ -1,5 +1,6 @@
 import { QuestionPanel } from "./QuestionPanel";
 import { MorphProvider, useMorphCard } from "@/lib/morph";
+import { COMPOSER_FIELD } from "./composerField";
 import { AskedChip } from "./AskedChip";
 import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
 import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
@@ -17,6 +18,7 @@ import { useStore } from "zustand";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
+import { ComposerReasonBox, composerReason } from "./ComposerReason";
 import { RichComposer } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
@@ -148,6 +150,9 @@ export function OpenSessionComposer({
   const otherWay = followUp === "steer" ? "queue" : "steer";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
+  /* what nothing typed could get past stands in the input's place */
+  const reason =
+    blocked && !covered ? composerReason(deployment, agentId, sendStatus) : null;
   /* an open question takes the composer's place until it is answered, or
      until the person chooses to write instead; a new question asks again */
   const questionScope = useSelectedSessionFields((session) =>
@@ -341,14 +346,18 @@ export function OpenSessionComposer({
           aria-label="Choose attachments"
         />
         <div
-          inert={covered || undefined}
-          className={cn("[grid-area:1/1]", covered && "invisible")}
+          inert={covered || (reason && !editing) ? true : undefined}
+          className={cn(
+            "[grid-area:1/1]",
+            (covered || (reason && !editing)) && "invisible",
+          )}
         >
           <RichComposer
             key={editing ? `edit ${editing.docId}` : draftKey}
             editorState={editing ? null : field}
             onEditorStateChange={editing ? undefined : setField}
             className="text-foreground"
+            fieldProps={COMPOSER_FIELD}
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
             onSend={
@@ -506,6 +515,9 @@ export function OpenSessionComposer({
           />
         </div>
         {covered && <LoadingStatus overlay />}
+        {reason && !editing && (
+          <ComposerReasonBox reason={reason} deployment={deployment} />
+        )}
       </div>
       {edit.error && (
         <p role="alert" className="mt-2 text-xs text-destructive">
@@ -525,17 +537,19 @@ export function OpenSessionComposer({
           </>
         }
         status={
-          <SessionSubmissionStatus
-            activityStatus={activityStatus}
-            hint={
-              status.kind === "disabled" &&
-              !inFlight &&
-              !covered &&
-              (draft.trim() !== "" || attachments.hasAttachments)
-                ? status.hint
-                : null
-            }
-          />
+          reason ? null : (
+            <SessionSubmissionStatus
+              activityStatus={activityStatus}
+              hint={
+                status.kind === "disabled" &&
+                !inFlight &&
+                !covered &&
+                (draft.trim() !== "" || attachments.hasAttachments)
+                  ? status.hint
+                  : null
+              }
+            />
+          )
         }
       />
     </div>

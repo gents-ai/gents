@@ -14,6 +14,7 @@ fn summary(session_id: &str, agent_id: Option<&str>, turn_state: Option<&str>) -
         session_id: session_id.to_string(),
         title: None,
         preview_text: None,
+        reply_preview: None,
         status: None,
         agent_id: agent_id.map(str::to_string),
         latest_request_id: None,

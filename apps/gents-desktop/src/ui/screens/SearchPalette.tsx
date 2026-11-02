@@ -24,7 +24,10 @@ import { Button } from "@gents/ui/components/button";
 import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
-import { navigate, type Route } from "@/lib/router";
+import { currentRoute, navigate, reviewNavigation, type Route } from "@/lib/router";
+import { isLocalNode } from "@/lib/firstRun";
+import { switchedRoute } from "@/app/NodeSwitcher";
+import { NodeAvatar } from "./AgentAvatar";
 import {
   searchEntries,
   searchGroups,
@@ -32,9 +35,9 @@ import {
   type SearchFilter,
 } from "@/lib/search";
 import { useApp } from "@/app/AppContext";
-import { useSelectedNodeDid } from "@/hooks/useClient";
+import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { useFleet } from "../hooks/useFleet";
+import { activityOf, activityText, useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
 import { SETTINGS_SECTIONS } from "./settings/sections";
 import { KIND, openItem } from "./MailboxItem";
@@ -43,6 +46,7 @@ import { NodeAgentStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
 import { agentName } from "./behavior";
 import { Hint } from "./Hint";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 /** The palette's shortcut, as shown and as `aria-keyshortcuts` names it. */
@@ -136,7 +140,9 @@ export function SearchPalette() {
         className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
         style={{
           top: "calc(var(--viewport-top) + var(--viewport-height) * 0.12)",
-          maxHeight: "calc(var(--viewport-height) * 0.76)",
+          /* a steady frame: results scroll inside it, so the field doesn't
+             move as they change */
+          height: "min(calc(var(--viewport-height) * 0.76), 34rem)",
           translate: "-50% 0",
         }}
         data-testid="search-palette"
@@ -149,12 +155,14 @@ export function SearchPalette() {
 }
 
 function useEntries(): SearchEntry[] {
+  const homeDid = useHomeDid();
   const selected = useSelectedNodeDid();
   const sections = useAgentSections();
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
       sessions: s.sessions,
+      sessionsOf: s.sessionsOf,
       mailboxOf: s.mailboxOf,
       nodeKeys: s.nodeKeys,
     })),
@@ -181,6 +189,12 @@ function useEntries(): SearchEntry[] {
           node: nodeName(n.nodeDid),
         })),
       ),
+      nodes: nodes.map((n) => ({
+        nodeDid: n.nodeDid,
+        name: nodeName(n.nodeDid),
+        place: isLocalNode(n, homeDid) ? "Local" : "Remote",
+        doing: n.dialSucceeded ? activityText(activityOf(fleet, n.nodeDid)) : "Offline",
+      })),
       agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),
       nodeName,
       places: [
@@ -203,7 +217,7 @@ function useEntries(): SearchEntry[] {
       ],
       actions: ACTIONS,
     });
-  }, [fleet, selected, sections]);
+  }, [fleet, selected, sections, homeDid]);
 }
 
 function PaletteBody({
@@ -216,16 +230,26 @@ function PaletteBody({
   const entries = useEntries();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SearchFilter>("all");
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const deferred = useDeferredValue(query);
   const groups = useMemo(
-    () => searchGroups(entries, deferred, filter),
-    [entries, deferred, filter],
+    () => searchGroups(entries, deferred, filter, expanded),
+    [entries, deferred, filter, expanded],
   );
-  const flat = useMemo(() => groups.flatMap((g) => g.entries), [groups]);
+  /* every row the arrows reach: a group's entries, then its "more" */
+  const flat = useMemo(
+    () =>
+      groups.flatMap((g): Item[] => [
+        ...g.entries,
+        ...(g.more > 0 ? [{ key: `more:${g.kind}`, more: g.more, group: g.kind }] : []),
+      ]),
+    [groups],
+  );
   const [active, setActive] = useState(0);
   const listId = useId();
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => setActive(0), [deferred, filter]);
+  useEffect(() => setExpanded(new Set()), [deferred, filter]);
   const current = flat[Math.min(active, flat.length - 1)];
   useEffect(() => {
     if (!current) return;
@@ -234,12 +258,26 @@ function PaletteBody({
       ?.scrollIntoView({ block: "nearest" });
   }, [current]);
 
-  const run = (e: SearchEntry) => {
+  const run = (e: Item) => {
+    if ("more" in e) {
+      setExpanded((was) => new Set([...was, e.group]));
+      return;
+    }
     closeSearch();
     /* an item on the active node opens in the mailbox's dialog over this
        page; one on another node is reached through its session, which
        carries the switch to that node */
-    if (e.kind === "attention") {
+    if (e.kind === "node") {
+      /* as the nav's node switcher does, asked first since a draft stays
+         with the node it was written for */
+      const here = currentRoute();
+      const next = here ? switchedRoute(here, e.nodeDid) : null;
+      if (e.nodeDid !== selected)
+        reviewNavigation({ name: "sessions", nodeDid: e.nodeDid }, () => {
+          actions.selectNode(e.nodeDid);
+          if (next) navigate(next);
+        });
+    } else if (e.kind === "attention") {
       if (e.item.nodeDid === selected) openInStack(e.item);
       else void openItem(e.item, actions.openMailboxItem);
     } else if (e.kind === "session")
@@ -275,6 +313,7 @@ function PaletteBody({
           ref={searchInput}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          {...SEARCH_FIELD}
           placeholder="Search sessions, agents and settings"
           role="combobox"
           aria-expanded
@@ -329,6 +368,18 @@ function PaletteBody({
                 onRun={() => run(e)}
               />
             ))}
+            {g.more > 0 && (
+              <MoreRow
+                id={`${listId}-more:${g.kind}`}
+                itemKey={`more:${g.kind}`}
+                more={g.more}
+                active={current?.key === `more:${g.kind}`}
+                onHover={() =>
+                  setActive(flat.findIndex((i) => i.key === `more:${g.kind}`))
+                }
+                onRun={() => setExpanded((was) => new Set([...was, g.kind]))}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -347,6 +398,43 @@ function PaletteBody({
           Close <Kbd>Esc</Kbd>
         </span>
       </div>
+    </div>
+  );
+}
+
+/** a row of the list: an entry, or a group's "Show N more" */
+type Item = SearchEntry | { key: string; more: number; group: string };
+
+function MoreRow({
+  id,
+  itemKey,
+  more,
+  active,
+  onHover,
+  onRun,
+}: {
+  id: string;
+  itemKey: string;
+  more: number;
+  active: boolean;
+  onHover: () => void;
+  onRun: () => void;
+}) {
+  return (
+    <div
+      id={id}
+      data-key={itemKey}
+      role="option"
+      aria-selected={active}
+      onMouseMove={onHover}
+      onClick={onRun}
+      className={cn(
+        "flex h-8 cursor-default items-center gap-3 rounded-lg px-3 text-xs text-muted-foreground",
+        active && "bg-accent text-foreground",
+      )}
+    >
+      <span className="size-4 shrink-0" aria-hidden="true" />
+      Show {more} more
     </div>
   );
 }
@@ -373,7 +461,7 @@ function Row({
       onMouseMove={onHover}
       onClick={onRun}
       className={cn(
-        "flex cursor-default items-center gap-3 rounded-lg px-3 py-1.5 text-sm",
+        "flex h-8 cursor-default items-center gap-3 rounded-lg px-3 text-sm",
         active && "bg-accent",
       )}
     >
@@ -404,6 +492,8 @@ function EntryIcon({ entry: e }: { entry: SearchEntry }) {
     );
   }
   if (e.kind === "agent") return <Workflow className={box} />;
+  if (e.kind === "node")
+    return <NodeAvatar name={e.name} className="size-4 shrink-0" />;
   const Icon = e.icon;
   return <Icon className={box} />;
 }

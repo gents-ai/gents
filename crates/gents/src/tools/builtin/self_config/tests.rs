@@ -201,11 +201,15 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         canonical_struct_fields::<DatastoreTools>().unwrap(),
         "datastore",
     );
-    assert_fields(
-        &shapes["integrations"],
-        canonical_struct_fields::<IntegrationTools>().unwrap(),
-        "integrations",
-    );
+    // `eth_tool_ids` is accepted on read from v1.0.0-rc0 documents and
+    // dropped; help must not offer it, so it is not part of the canonical set.
+    let integration_fields = canonical_struct_fields::<IntegrationTools>()
+        .unwrap()
+        .iter()
+        .copied()
+        .filter(|field| *field != "eth_tool_ids")
+        .collect::<Vec<_>>();
+    assert_fields(&shapes["integrations"], &integration_fields, "integrations");
     assert_fields(
         &shapes["integrations"]["lsp"],
         canonical_struct_fields::<LspTools>().unwrap(),
@@ -459,6 +463,50 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         output["effective"]["digest"]
     );
 
+    let (_staged_root, staged) =
+        crate::test_support::fixture_pack_copy("plugin_documents_fixture", &json!({}));
+    let manifest_path = staged.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["version"] = "1.1.0".into();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&staged).unwrap();
+    let staged_artifact = crate::pack::store::PackStore::new(home.path())
+        .import(&bytes[..], None)
+        .unwrap();
+    let mut staged_preview = vec![
+        "pack",
+        "preview",
+        "update",
+        staged_artifact.header.digest.as_str(),
+    ];
+    staged_preview.extend(slot_argv);
+    let preview: Value = serde_json::from_str(
+        &tool
+            .call(json!({"argv": staged_preview}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["committed"], false);
+    let listed: Value = serde_json::from_str(
+        &tool
+            .call(json!({"argv": ["pack", "list"]}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entry = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "fixture/plugin_documents_fixture")
+        .unwrap();
+    assert_eq!(entry["version"], output["effective"]["version"]);
+    assert_eq!(entry["installed_digest"], output["effective"]["digest"]);
+    assert_eq!(entry["available_version"], "1.1.0");
+    assert_eq!(entry["other_stored_versions"][0]["version"], "1.1.0");
+
     let bad_digest = format!("sha256:{}", "0".repeat(64));
     let rejected = tool
         .call(
@@ -527,6 +575,33 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         tags.data.unwrap()["Agent"][0]["tags"],
         json!(["gents:pack:plugin_documents_fixture", "user:favorite"])
     );
+    let store = crate::pack::store::PackStore::new(home.path());
+    let installed_path = store
+        .path(output["effective"]["digest"].as_str().unwrap())
+        .unwrap();
+    let installed_bytes = std::fs::read(&installed_path).unwrap();
+    std::fs::remove_file(&installed_path).unwrap();
+    std::fs::remove_dir_all(home.path().join("packs").join("unpacked")).unwrap();
+    let listed: Value = serde_json::from_str(
+        &tool
+            .call(json!({"argv": ["pack", "list"]}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entry = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "fixture/plugin_documents_fixture")
+        .unwrap();
+    assert_eq!(entry["installed_digest"], output["effective"]["digest"]);
+    assert_eq!(entry["installable"], false);
+    assert!(entry["error"]
+        .as_str()
+        .unwrap()
+        .contains("could not be opened"));
+    std::fs::write(installed_path, installed_bytes).unwrap();
     let removed = tool
         .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
         .await
@@ -591,11 +666,16 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
     let (_node, _did, tools) = pack_tool("pack-list", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
-    assert_eq!(page["source"], "store");
+    assert_eq!(page["source"], "store_and_installations");
     assert_eq!(page["page"]["total"], 1);
     assert_eq!(page["page"]["truncated"], false);
     assert_eq!(page["items"][0]["name"], "fixture/documents_fixture");
-    assert_eq!(page["items"][0]["version"], "1.0.0");
+    assert_eq!(page["items"][0]["version"], Value::Null);
+    assert_eq!(page["items"][0]["available_version"], "1.0.0");
+    assert_eq!(
+        page["items"][0]["other_stored_versions"][0]["version"],
+        "1.0.0"
+    );
     assert_eq!(page["items"][0]["installable"], true);
     assert_eq!(page["items"][0]["installed"], Value::Null);
 

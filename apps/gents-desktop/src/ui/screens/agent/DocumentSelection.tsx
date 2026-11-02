@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Checkbox } from "@gents/ui/components/checkbox";
 import { Input } from "@gents/ui/components/input";
 import { StackedRow } from "./rows";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 /** Select explicit document references; discovery never implicitly grants access. */
 export function DocumentSelection({
@@ -38,6 +39,7 @@ export function DocumentSelection({
     <StackedRow label={label} description={description}>
       <Input
         aria-label={`Search ${label.toLowerCase()}`}
+        {...SEARCH_FIELD}
         placeholder="Search by name"
         value={search}
         onChange={(event) => setSearch(event.target.value)}

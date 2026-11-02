@@ -38,6 +38,7 @@ export function SectionedScreen({
   scrollKey,
   pageKey,
   testId,
+  banner,
   children,
 }: {
   entries: SectionEntry[];
@@ -50,6 +51,8 @@ export function SectionedScreen({
   /** a change of this draws the page anew */
   pageKey?: string;
   testId: string;
+  /** a notice about the whole page, held at the top of its column */
+  banner?: ReactNode;
   children: ReactNode;
 }) {
   const content = useRef<HTMLDivElement>(null);
@@ -88,38 +91,41 @@ export function SectionedScreen({
           </SidebarNav>
         </ScrollArea>
         <ScrollArea ref={content} className="h-full">
-          <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur @4xl:hidden">
-            <Select
-              items={entries.map((s) => ({ value: s.id, label: s.label }))}
-              value={current}
-              onValueChange={(v) => v && onSelect(v)}
-            >
-              <SelectTrigger aria-label="Section" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {groups.map((group) => (
-                  <SelectGroup key={group}>
-                    <SelectLabel>{group}</SelectLabel>
-                    {entries
-                      .filter((s) => s.group === group)
-                      .map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          <span className="flex items-center gap-2">
-                            <s.icon className="size-4 text-muted-foreground" />
-                            {s.label}
-                            {s.count ? (
-                              <span className="ml-auto pl-3 text-xs text-muted-foreground">
-                                {s.count}
-                              </span>
-                            ) : null}
-                          </span>
-                        </SelectItem>
-                      ))}
-                  </SelectGroup>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="sticky top-0 z-10">
+            {banner}
+            <div className="border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur @4xl:hidden">
+              <Select
+                items={entries.map((s) => ({ value: s.id, label: s.label }))}
+                value={current}
+                onValueChange={(v) => v && onSelect(v)}
+              >
+                <SelectTrigger aria-label="Section" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {groups.map((group) => (
+                    <SelectGroup key={group}>
+                      <SelectLabel>{group}</SelectLabel>
+                      {entries
+                        .filter((s) => s.group === group)
+                        .map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            <span className="flex items-center gap-2">
+                              <s.icon className="size-4 text-muted-foreground" />
+                              {s.label}
+                              {s.count ? (
+                                <span className="ml-auto pl-3 text-xs text-muted-foreground">
+                                  {s.count}
+                                </span>
+                              ) : null}
+                            </span>
+                          </SelectItem>
+                        ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div key={pageKey} className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8">
             {children}

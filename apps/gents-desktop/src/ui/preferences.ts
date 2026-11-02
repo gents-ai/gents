@@ -29,7 +29,31 @@ export type Preferences = {
   /** experimental features switched on this device, by flag id; an absent
       flag takes its default */
   flags: Record<string, FlagSetting>;
+  /** the side nav's own items as arranged on this device */
+  navLayout: NavLayout;
 };
+
+/** The side nav's items and sections in the order chosen, and which are
+    shown. An entry absent from `order` keeps its place after the ordered
+    ones of its group; one absent from `shown` takes its default. Ids are
+    the nav's item and section ids, and a plugin's row is kept under its
+    contribution id. `recent` is how many recent sessions are listed, and
+    `listed` how many items each mailbox section lists, by section id. */
+export type NavLayout = {
+  order: string[];
+  shown: Record<string, boolean>;
+  recent?: RecentCount;
+  listed?: Record<string, ListedCount>;
+};
+
+export const RECENT_COUNTS = [5, 8, 12] as const;
+export type RecentCount = (typeof RECENT_COUNTS)[number];
+
+/** fewer than Recent's: these are things to act on, not to browse */
+export const LISTED_COUNTS = [3, 5, 8] as const;
+export type ListedCount = (typeof LISTED_COUNTS)[number];
+
+export const DEFAULT_NAV_LAYOUT: NavLayout = { order: [], shown: {} };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
 
@@ -41,6 +65,7 @@ const initial = (): Preferences => ({
   followUp: "steer",
   pinnedSessions: [],
   flags: {},
+  navLayout: DEFAULT_NAV_LAYOUT,
 });
 
 /* only flags this build knows survive, so an unknown id is dropped on the
@@ -54,6 +79,29 @@ function knownFlags(stored: unknown): Record<string, FlagSetting> {
     if (value === "on" || value === "off") known[id] = value;
   }
   return known;
+}
+
+function restoreNavLayout(stored: unknown, defaults: NavLayout): NavLayout {
+  if (typeof stored !== "object" || stored === null) return defaults;
+  const saved = stored as Record<string, unknown>;
+  const shown: Record<string, boolean> = {};
+  if (typeof saved.shown === "object" && saved.shown !== null)
+    for (const [id, value] of Object.entries(saved.shown))
+      if (typeof value === "boolean") shown[id] = value;
+  const recent = (RECENT_COUNTS as readonly unknown[]).includes(saved.recent)
+    ? (saved.recent as RecentCount)
+    : undefined;
+  const listed: Record<string, ListedCount> = {};
+  if (typeof saved.listed === "object" && saved.listed !== null)
+    for (const [id, value] of Object.entries(saved.listed))
+      if ((LISTED_COUNTS as readonly unknown[]).includes(value))
+        listed[id] = value as ListedCount;
+  return {
+    order: Array.isArray(saved.order) ? storedStrings(saved.order) : defaults.order,
+    shown,
+    ...(recent ? { recent } : {}),
+    ...(Object.keys(listed).length > 0 ? { listed } : {}),
+  };
 }
 
 export function restorePreferences(
@@ -88,6 +136,7 @@ export function restorePreferences(
       ? storedStrings(saved.pinnedSessions)
       : defaults.pinnedSessions,
     flags: knownFlags(saved.flags ?? defaults.flags),
+    navLayout: restoreNavLayout(saved.navLayout, defaults.navLayout),
   };
 }
 
@@ -135,6 +184,12 @@ export const preferences = {
   resetFlags() {
     store.setState({ flags: {} });
   },
+  setNavLayout(navLayout: NavLayout) {
+    store.setState({ navLayout });
+  },
+  resetNavLayout() {
+    store.setState({ navLayout: DEFAULT_NAV_LAYOUT });
+  },
 };
 
 export function followZoom(apply: (zoom: number) => void) {
@@ -181,6 +236,7 @@ export const zoomLevel = () => store.getState().zoom;
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
 export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);
+export const useNavLayout = () => usePreferences((p) => p.navLayout);
 
 const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
   const setting = flags[id];

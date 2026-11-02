@@ -205,14 +205,17 @@ macro_rules! baseline_entry {
 }
 
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
+    // `InferenceBackend` and `Node` changed after v1.0.0-rc0, so their baseline is the rc0 root
+    // (`upgrades::CANONICAL_ROOTS`): a fresh store registers it and takes the same patches an
+    // upgraded rc0 store takes, so every store converges on one version.
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
-        gents_protocol::schemas::INFERENCE_BACKEND,
-        "bafyreibyanrs5nrmpd6dp5pa74agyp5njjfztpctt3ls5qyl5pt2mkojd4"
+        crate::upgrades::BACKEND_RC0_SDL,
+        "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike"
     ),
     baseline_entry!(
         gents_protocol::schemas::NODE_NAME,
-        gents_protocol::schemas::NODE,
+        crate::upgrades::NODE_RC0_SDL,
         "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby"
     ),
     baseline_entry!(
@@ -418,7 +421,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
         gents_protocol::schemas::AGENT_MESSAGE,
-        "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm"
+        "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,

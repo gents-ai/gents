@@ -414,6 +414,7 @@ mod tests {
                         session_id: "sess_1".into(),
                         title: Some("Chat".into()),
                         preview_text: Some("hi".into()),
+                        reply_preview: None,
                         status: None,
                         agent_id: None,
                         latest_request_id: None,

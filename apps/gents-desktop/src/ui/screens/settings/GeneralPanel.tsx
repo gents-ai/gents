@@ -8,6 +8,7 @@ import {
 import type { FollowUp, NavMode, SentTurnPlacement } from "@/preferences";
 import {
   preferences,
+  useFlag,
   useFollowUp,
   useNavMode,
   useSentTurnPlacement,
@@ -17,6 +18,8 @@ import { MOD } from "../Shortcuts";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@gents/ui/components/toggle-group";
 import { Hint } from "../Hint";
+import { Button } from "@gents/ui/components/button";
+import { openCustomizeNav } from "@/app/CustomizeNav";
 import { ChoiceRow } from "../agent/editors";
 import { Group, Row } from "../agent/rows";
 
@@ -59,6 +62,7 @@ export function GeneralPanel() {
   const nav = useNavMode();
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
+  const customizableNav = useFlag("customize-nav");
   const [usageTelemetry, setUsageTelemetry] = useState<ProductTelemetryStatus | null>(
     null,
   );
@@ -86,11 +90,21 @@ export function GeneralPanel() {
           value={nav}
           onChange={(v) => preferences.setNav(v as NavMode)}
           items={[
-            { value: "hover", label: "Show on hover" },
-            { value: "expanded", label: "Always expanded" },
-            { value: "collapsed", label: "Collapsed" },
+            { value: "hover", label: "Open on hover" },
+            { value: "expanded", label: "Always open" },
+            { value: "collapsed", label: "Icons only" },
           ]}
         />
+        {customizableNav && (
+          <Row
+            label="Navigation items"
+            description="Reorder the side nav's items, hide them, or add pages of the node to it."
+          >
+            <Button variant="outline" size="sm" onClick={openCustomizeNav}>
+              Customize…
+            </Button>
+          </Row>
+        )}
       </Group>
       <Group title="Privacy">
         {usageTelemetry?.configured || usageTelemetry?.enabled ? (

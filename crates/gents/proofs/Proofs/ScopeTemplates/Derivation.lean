@@ -343,6 +343,10 @@ theorem client_readiness_return_is_owner_scoped
   simp [clientRouteFilters, clientTranscriptPredicates, transcriptCollections,
     clientTranscriptCollections]
 
+theorem client_node_is_return_only :
+    "Node" ∉ clientRouteCollections .clientToRuntime ∧
+      "Node" ∈ clientRouteCollections .runtimeToClient := by decide
+
 theorem client_return_control_plane_is_unfiltered
     (requesterDid ownerDid : Did) :
     clientControlPlaneCollections.all

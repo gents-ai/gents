@@ -238,10 +238,30 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
             replicated_schema_status(&state.replicated_schema),
         );
         map.insert(
+            "non_canonical_lineages".to_string(),
+            non_canonical_lineages_status(&state.replicated_schema),
+        );
+        map.insert(
             gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD.to_string(),
             json!(state.serve_lifecycle.current()),
         );
     }
+}
+
+/// Replicated collections whose active version differs from the canonical one, so peers
+/// and apps on the canonical lineage cannot sync them with this node.
+fn non_canonical_lineages_status(
+    replicated_schema: &OnceCell<gents_protocol::peer_schema::ReplicatedSchema>,
+) -> Value {
+    let Some(schema) = replicated_schema.get() else {
+        return Value::Null;
+    };
+    gents::store::schema::migration::non_canonical_lineages(
+        schema
+            .iter()
+            .map(|(name, identity)| (name.as_str(), identity.version_id.as_str())),
+    )
+    .map_or(Value::Null, |mismatches| json!(mismatches))
 }
 
 fn replicated_schema_status(

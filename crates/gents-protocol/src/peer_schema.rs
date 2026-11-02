@@ -55,16 +55,40 @@ impl ReplicatedCollectionIdentity {
 pub type ReplicatedSchema = BTreeMap<String, ReplicatedCollectionIdentity>;
 
 /// A peer whose replicated collections differ from this node's.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReplicatedSchemaSkew {
     /// Collections that are missing on either side or whose identities differ.
     pub collections: Vec<String>,
     /// `false` when the peer published no readable schema at all.
     pub advertised: bool,
+    /// Differing collections this side holds off the canonical schema lineage (a store
+    /// created by v1.0.0-rc1). Same release on both sides cannot fix those; re-creating
+    /// this side's store can.
+    pub local_off_lineage: Vec<String>,
+    /// Differing collections the peer holds off the canonical schema lineage.
+    pub remote_off_lineage: Vec<String>,
 }
 
 impl fmt::Display for ReplicatedSchemaSkew {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.local_off_lineage.is_empty() {
+            return write!(
+                f,
+                "this app's local store was created on a schema lineage the agent runtime \
+                 does not share ({}), so their synced data is incompatible; reset this app's \
+                 local data to re-create the store from this release",
+                self.local_off_lineage.join(", ")
+            );
+        }
+        if !self.remote_off_lineage.is_empty() {
+            return write!(
+                f,
+                "the agent runtime's store was created on a schema lineage this app does not \
+                 share ({}), so their synced data is incompatible; re-create the runtime's \
+                 store (see docs/upgrade-from-rc0.md)",
+                self.remote_off_lineage.join(", ")
+            );
+        }
         write!(
             f,
             "this app and the agent runtime are different Gents versions, so their synced \
@@ -94,6 +118,7 @@ pub fn compare_replicated_schema(
         return Err(ReplicatedSchemaSkew {
             collections: expected.iter().map(|name| (*name).to_string()).collect(),
             advertised: false,
+            ..ReplicatedSchemaSkew::default()
         });
     };
     let mut collections = expected
@@ -112,6 +137,7 @@ pub fn compare_replicated_schema(
         Err(ReplicatedSchemaSkew {
             collections,
             advertised: true,
+            ..ReplicatedSchemaSkew::default()
         })
     }
 }

@@ -30,6 +30,17 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         )
         .collect::<Vec<_>>();
 
+    // A collection changed since v1.0.0-rc0 is registered at its rc0 root and reaches the
+    // live SDL through the same patches an upgraded rc0 store takes.
+    let expected = expected
+        .into_iter()
+        .map(
+            |(name, sdl)| match gents_migration::canonical_schema_plan(name).unwrap() {
+                Some(plan) => (name, plan.root_sdl),
+                None => (name, sdl),
+            },
+        )
+        .collect::<Vec<_>>();
     assert_eq!(actual, expected, "baseline must use the canonical live SDL");
     assert!(gents_migration::DEFAULT_STEPS.is_empty());
     let stepped_client_collections = gents_migration::DEFAULT_STEPS
@@ -227,8 +238,11 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
             >= gents_migration::DEFAULT_BASELINE.len(),
         "expected full baseline coverage, got {report1:?}"
     );
-    assert_eq!(report1.steps_applied, gents_migration::DEFAULT_STEPS.len());
-    if gents_migration::DEFAULT_STEPS.is_empty() {
+    assert_eq!(
+        report1.steps_applied,
+        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
+    );
+    if gents_migration::DEFAULT_STEPS.is_empty() && common::fresh_canonical_steps() == 0 {
         assert_eq!(
             report1.materialization.collections_attempted, 0,
             "a chain-free baseline has no old document versions to materialize"
@@ -241,7 +255,7 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
     assert_eq!(report2.steps_applied, 0);
     assert_eq!(
         report2.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len()
+        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
     );
     assert!(
         report2.baseline_already_present >= gents_migration::DEFAULT_BASELINE.len()
@@ -330,7 +344,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert_eq!(rerun.steps_applied, 0, "re-run applied steps: {rerun:?}");
     assert_eq!(
         rerun.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len()
+        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
     );
     let cv = node
         .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
@@ -804,10 +818,17 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
             .unwrap()
             .is_branchable
     );
+    let canonical = gents_migration::canonical_versions().unwrap();
     for (name, version) in versions {
+        // A collection stored at its rc0 root moves on to its canonical version; every other
+        // lineage is left exactly where it was.
+        let expected = match gents_migration::canonical_schema_plan(name).unwrap() {
+            Some(plan) if plan.root_version == version => canonical[name].clone(),
+            _ => version,
+        };
         assert_eq!(
             node.get_collection(name).unwrap().unwrap().version_id,
-            version,
+            expected,
             "{name}"
         );
     }
@@ -999,6 +1020,46 @@ async fn node_memory_text_schema_pins_match() {
 }
 
 #[tokio::test]
+async fn node_avatar_schema_pins_match() {
+    let fresh = fresh_node().await;
+    fresh.add_collection(schemas::NODE).await.unwrap();
+    let fresh_id = fresh.get_collection("Node").unwrap().unwrap().version_id;
+    let old = fresh_node().await;
+    let old_sdl = schemas::NODE
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("avatar:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    old.add_collection(&old_sdl).await.unwrap();
+    assert_eq!(
+        old.get_collection("Node").unwrap().unwrap().version_id,
+        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby"
+    );
+    let patched = old
+        .patch_collection(
+            "Node",
+            r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (fresh_id.as_str(), patched.version_id.as_str()),
+        (
+            "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey",
+            "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli"
+        )
+    );
+    // Registering the current SDL directly lands off the canonical lineage.
+    assert!(gents_migration::is_known_off_lineage("Node", &fresh_id));
+    assert_eq!(
+        gents_migration::canonical_versions().unwrap()["Node"],
+        patched.version_id
+    );
+    fresh.shutdown().await;
+    old.shutdown().await;
+}
+
+#[tokio::test]
 async fn starter_columns_preserve_each_supported_session_lineage() {
     let old = schemas::AGENT_SESSION
         .lines()
@@ -1100,34 +1161,33 @@ async fn tool_file_content_schema_pin_matches() {
     node.shutdown().await;
 }
 
+/// `AgentMessage` is client-authored, so it keeps its v1.0.0-rc0 schema: a fresh store and an
+/// rc0 store share the rc0 version, and an rc0 store's messages are left exactly as written
+/// (the provider request id now travels inside `publication`, not as a column).
 #[tokio::test]
-async fn native_request_id_column_upgrades_existing_messages_in_place() {
-    let legacy_sdl = schemas::AGENT_MESSAGE
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("native_request_id:"))
-        .collect::<Vec<_>>()
-        .join("\n");
+async fn agent_message_keeps_its_rc0_schema_and_rows() {
+    const RC0: &str = "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a";
+    assert!(!schemas::AGENT_MESSAGE.contains("native_request_id"));
     let fresh = fresh_node().await;
-    fresh.add_collection(schemas::AGENT_MESSAGE).await.unwrap();
+    ensure_migrations(fresh.as_ref()).await.unwrap();
     let fresh_id = fresh
         .get_collection("AgentMessage")
         .unwrap()
         .unwrap()
         .version_id;
+    assert_eq!(fresh_id, RC0);
 
     let node = fresh_node().await;
-    node.add_collection(&legacy_sdl).await.unwrap();
+    node.add_collection(schemas::AGENT_MESSAGE).await.unwrap();
     let legacy = node.get_collection("AgentMessage").unwrap().unwrap();
-    assert_eq!(
-        legacy.version_id,
-        "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a"
-    );
+    assert_eq!(legacy.version_id, RC0);
     let created = node
         .execute(
             r#"mutation {
         add_AgentMessage(input: {
             message_key: "provider-turn" session_id: "session" node_did: "did:key:node"
-            publication: "{\"kind\":\"request_execution\"}" outcome: "complete" sequence: 1
+            publication: "{\"kind\":\"request_execution\",\"native_request_id\":\"req_1\"}"
+            outcome: "complete" sequence: 1
             role: "assistant" native_id: "msg_1" blocks: "[]" created_at: "2026-10-21T00:00:00Z"
         }) {_docID}
     }"#,
@@ -1136,17 +1196,11 @@ async fn native_request_id_column_upgrades_existing_messages_in_place() {
     assert!(!created.has_errors(), "seed legacy message: {created:?}");
 
     let first = ensure_migrations(node.as_ref()).await.unwrap();
-    assert!(first.steps_applied > 0);
-    let migrated = node.get_collection("AgentMessage").unwrap().unwrap();
-    assert_eq!(
-        (fresh_id.as_str(), migrated.version_id.as_str()),
-        (
-            "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm",
-            "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4"
-        )
-    );
+    assert!(first.warnings.is_empty(), "{first:?}");
+    let after = node.get_collection("AgentMessage").unwrap().unwrap();
+    assert_eq!(after.version_id, RC0);
     for field in &legacy.fields {
-        let current = migrated.fields.iter().find(|f| f.name == field.name);
+        let current = after.fields.iter().find(|f| f.name == field.name);
         assert_eq!(
             current.map(|f| &f.id),
             Some(&field.id),
@@ -1155,12 +1209,11 @@ async fn native_request_id_column_upgrades_existing_messages_in_place() {
         );
     }
     let read = node
-        .execute(r#"{ AgentMessage { native_id native_request_id } }"#)
+        .execute(r#"{ AgentMessage { native_id publication } }"#)
         .await;
     assert!(!read.has_errors(), "{read:?}");
     let rows = &read.data.as_ref().unwrap()["AgentMessage"];
     assert_eq!(rows[0]["native_id"], "msg_1");
-    assert!(rows[0]["native_request_id"].is_null());
     let second = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(second.steps_applied, 0);
     fresh.shutdown().await;

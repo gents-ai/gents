@@ -149,6 +149,78 @@ async fn dispatch_with_lost_receipt(
 }
 
 #[tokio::test]
+async fn agent_new_inherits_the_signed_caller_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let identity =
+        crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
+    let did = identity.did().to_owned();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(&did)
+            .data_path(dir.path())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    enable_agents_tools(&node, &did).await;
+    let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "cwd-parent",
+        &did,
+        &did,
+        "general",
+        &session,
+        "start agents",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+    );
+    create.input.cwd = Some(dir.path().to_string_lossy().into_owned());
+    let lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create(
+            &node, &identity, create,
+        )
+        .await;
+    bind_claimed_hook_request(
+        &hook,
+        lifecycle,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    hook.on_completion_call(&user_text_message("start agents"), &[])
+        .await;
+    for (call_id, args, operation) in [
+        (
+            "cwd-normal",
+            json!({"agent": "general", "prompt": "work"}),
+            "session_message.commit_request",
+        ),
+        (
+            "cwd-goal",
+            json!({"agent": "general", "task": {"task_id": "goal"}}),
+            "session_message.commit_goal",
+        ),
+    ] {
+        let (_, caused) = dispatch_with_lost_receipt(
+            &hook,
+            call_id,
+            crate::tools::native::AGENT_NEW_TOOL_NAME,
+            args,
+            operation,
+        )
+        .await;
+        assert_eq!(
+            caused["input"]["cwd"],
+            dir.path().to_string_lossy().as_ref()
+        );
+    }
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let dir = tempfile::tempdir().unwrap();
     let identity =

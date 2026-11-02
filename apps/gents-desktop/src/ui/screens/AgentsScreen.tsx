@@ -2,7 +2,10 @@ import { memo, useState } from "react";
 import { useStore } from "zustand";
 import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
-import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
+import {
+  enrollmentActivationMessage,
+  type EnrollmentRequestView,
+} from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   AlertDialog,
@@ -36,7 +39,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
-import { NodeAvatar } from "./AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
@@ -84,6 +87,11 @@ export function AgentsScreen() {
       />
     );
   }
+  /* a request waits among the remote nodes until its node is listed; the
+     node's own row then takes its place */
+  const waiting = (pending ?? []).filter(
+    (r) => !nodes.some((node) => node.nodeDid === r.ownerNode),
+  );
   const groups = [
     {
       key: "local",
@@ -115,38 +123,6 @@ export function AgentsScreen() {
             database can be read.
           </p>
         )}
-        {pending && pending.length > 0 && (
-          <ul className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-3">
-            {pending.map((r) => (
-              <li
-                key={r.requestId}
-                className="flex items-center gap-3 rounded-2xl border border-dashed border-border px-5 py-4"
-              >
-                <Spinner className="text-foreground" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">
-                    {enrollmentActivationMessage(r)
-                      ? "Access approved · connection retrying"
-                      : r.state === "approved"
-                        ? "Approval received · finishing secure route"
-                        : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
-                  </p>
-                  {enrollmentActivationMessage(r) && (
-                    <p role="alert" className="break-words text-sm text-destructive">
-                      {enrollmentActivationMessage(r)}
-                    </p>
-                  )}
-                  <p className="truncate font-mono text-[11px] text-muted-foreground">
-                    {r.requestId}
-                    {r.state !== "approved" && (
-                      <> · expires {new Date(r.expiresAt).toLocaleTimeString()}</>
-                    )}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
         {groups.map((g) => (
           <section key={g.key} className="mt-6">
             <h2 className="flex items-baseline gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
@@ -155,7 +131,7 @@ export function AgentsScreen() {
                 <span className="text-muted-foreground/70">{g.nodes.length}</span>
               )}
             </h2>
-            {g.nodes.length === 0 && (
+            {g.nodes.length === 0 && !(g.key === "remote" && waiting.length > 0) && (
               <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
                 <p>
                   {g.key === "local"
@@ -177,6 +153,8 @@ export function AgentsScreen() {
               </div>
             )}
             <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
+              {g.key === "remote" &&
+                waiting.map((r) => <PendingNodeRow key={r.requestId} request={r} />)}
               {g.nodes.map((d) => (
                 <AgentRow
                   key={d.nodeDid}
@@ -443,7 +421,7 @@ const AgentRow = memo(function AgentRow({
               active && "ring-2 ring-ink ring-offset-2 ring-offset-raised",
             )}
           >
-            <NodeAvatar name={name} className="size-8" />
+            <NodeAvatar name={name} {...nodeAvatarOf(d)} className="size-8" />
           </span>
         </NodeHoverCard>
         <span
@@ -574,3 +552,46 @@ const AgentRow = memo(function AgentRow({
     </li>
   );
 });
+
+/** A node asked to accept this desktop, in the place its row will take: a
+    dashed outline where the node's portrait goes, its name, and where the
+    request stands. */
+function PendingNodeRow({ request: r }: { request: EnrollmentRequestView }) {
+  const failure = enrollmentActivationMessage(r);
+  const name = r.serverLabel ?? r.serverPeer;
+  return (
+    <li
+      data-testid="pending-node"
+      className="flex items-center gap-4 rounded-2xl border border-dashed border-border px-5 py-4"
+    >
+      <span className="grid size-8 shrink-0 place-items-center rounded-full ring-1 ring-border ring-dashed">
+        <Spinner className="size-3.5 text-muted-foreground" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="flex min-w-0 items-baseline gap-3">
+          <span className="truncate font-heading text-base font-medium text-heading">
+            {name}
+          </span>
+          <span className="min-w-0 truncate text-sm text-muted-foreground">
+            {failure
+              ? "Access approved · connection retrying"
+              : r.state === "approved"
+                ? "Approval received · finishing secure route"
+                : `Waiting for ${name} to accept`}
+          </span>
+        </p>
+        {failure && (
+          <p role="alert" className="break-words text-sm text-destructive">
+            {failure}
+          </p>
+        )}
+        <p className="truncate font-mono text-[11px] text-muted-foreground">
+          {r.requestId}
+          {r.state !== "approved" && (
+            <> · expires {new Date(r.expiresAt).toLocaleTimeString()}</>
+          )}
+        </p>
+      </div>
+    </li>
+  );
+}

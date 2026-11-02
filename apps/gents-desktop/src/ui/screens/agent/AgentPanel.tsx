@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
 import { DraftActions, NumberRow, RefRow, TagsRow, TextRow } from "./editors";
@@ -9,6 +9,7 @@ import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
 import { packOrigin } from "./ListDetail";
 import { useApp } from "@/app/AppContext";
+import { settleAvatar } from "@/lib/avatarRoll";
 import { useBootstrap, useNodeConfigReadOnly, useNodeReach } from "@/hooks/useClient";
 
 export function AgentPanel({ deployment }: { deployment: NodeView }) {
@@ -35,6 +36,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       enabled: agent.enabled ?? true,
       maxRequestHop: deployment.nodeConfig?.max_request_hop?.toString() ?? "",
       tags: deployment.nodeConfig?.tags ?? [],
+      avatar: deployment.nodeConfig?.avatar ?? "",
     },
     async (next) => {
       if (next.defaultAgentId !== agent.defaultAgentId)
@@ -43,6 +45,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         document: {
           node_did: agent.nodeDid,
           display_name: next.displayName.trim(),
+          avatar: next.avatar || null,
           default_agent_id: next.defaultAgentId,
           enabled: next.enabled,
           max_request_hop:
@@ -66,6 +69,15 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
     },
   );
 
+  /* a rolled portrait shows across the desktop while it is unsaved, and
+     the saved one again once it is saved or set aside */
+  const savedAvatar = deployment.nodeConfig?.avatar ?? "";
+  const nodeDid = deployment.nodeDid;
+  useEffect(() => {
+    if (d.draft.avatar === savedAvatar) settleAvatar(nodeDid);
+  }, [d.draft.avatar, savedAvatar, nodeDid]);
+  useEffect(() => () => settleAvatar(nodeDid), [nodeDid]);
+
   return (
     <div>
       <AgentCard
@@ -86,6 +98,8 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
                 tags: d.draft.tags,
               }
         }
+        avatar={d.draft.avatar || null}
+        onAvatar={(v) => d.set("avatar", v)}
       />
       {!readOnly && (
         <>

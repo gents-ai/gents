@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { href, navigate, type Route } from "@/lib/router";
 import { Row } from "./rows";
 import { toastFailure } from "@/lib/failure";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 function RowLink({
   onOpen,
@@ -391,6 +392,7 @@ export function ListDetail({
         <div className="mb-6 flex flex-wrap items-center gap-3">
           {filterable && (
             <Input
+              {...SEARCH_FIELD}
               type="search"
               aria-label="Filter the list"
               placeholder={`Filter ${rows.length}`}

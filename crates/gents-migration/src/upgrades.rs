@@ -9,8 +9,28 @@ const NODE_MEMORY_TEXT_TARGET: &str = "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkh
 const NODE_MEMORY_TEXT_PATCH: &str = r#"[{"op":"add","path":"/NodeMemory/Fields/-","value":{"Name":"value_text","Kind":"String","Typ":6}}]"#;
 
 const MESSAGE_ROOT: &str = "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a";
+/// An rc0 `AgentMessage` after v1.0.0-rc1's `native_request_id` patch.
 const MESSAGE_REQUEST_ID_TARGET: &str =
     "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4";
+/// `AgentMessage` as a store created by v1.0.0-rc1 registered it (with `native_request_id`).
+const MESSAGE_RC1_FRESH: &str = "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm";
+const MESSAGE_REQUEST_ID_PATCH: &str = r#"[{"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"native_request_id","Kind":"String","Immutable":true}}]"#;
+/// `InferenceBackend` as a store created by v1.0.0-rc1 registered it (its SDL directly).
+const BACKEND_RC1_FRESH: &str = "bafyreibyanrs5nrmpd6dp5pa74agyp5njjfztpctt3ls5qyl5pt2mkojd4";
+
+/// Versions earlier builds produced that are off this release's lineage: a store holding one
+/// starts, takes no step for that collection, and reports it (`non_canonical_store_lineages`).
+/// - `AgentMessage` is client-authored and keeps its v1.0.0-rc0 schema (#1123/#1125), so rc1's
+///   `native_request_id` column is off the lineage whether a store was created by rc1 or
+///   patched by it.
+/// - An `InferenceBackend` rc1 registered fresh, and a `Node` a pre-canonical #3353 build
+///   registered fresh, never match the canonical rc0-root-plus-patches versions.
+pub(crate) const KNOWN_OFF_LINEAGE: &[(&str, &str)] = &[
+    ("AgentMessage", MESSAGE_REQUEST_ID_TARGET),
+    ("AgentMessage", MESSAGE_RC1_FRESH),
+    ("InferenceBackend", BACKEND_RC1_FRESH),
+    ("Node", NODE_UNPATCHED_FRESH),
+];
 
 const INFERENCE_CALL_ROOT: &str = "bafyreibbbdmb7au32traw5ufp6rqytb3jv63bmjflykfhize2u6bwvqiwe";
 const INFERENCE_CALL_TARGET: &str = "bafyreie6maihybat7mu2hbygehkkcsb7x6h5bcdcvg53ygjhfcoikfdfau";
@@ -23,6 +43,19 @@ const INFERENCE_CALL_USAGE_PATCH: &str = r#"[
     {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"provider_total_tokens","Kind":"Int"}},
     {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"usage_completeness","Kind":"String"}}
 ]"#;
+
+pub(crate) const NODE_ROOT: &str = "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby";
+/// `Node` as a build that registered the current SDL directly produced it (a #3353 build
+/// before the canonical lineage). Off the lineage: the canonical version is the rc0 root plus
+/// `node-add-avatar`.
+const NODE_UNPATCHED_FRESH: &str = "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey";
+/// v1.0.0-rc0's SDL of the collections in [`CANONICAL_ROOTS`], vendored from the tag. These
+/// are what [`crate::DEFAULT_BASELINE`] registers on a fresh store.
+pub(crate) const NODE_RC0_SDL: &str = include_str!("../schemas/rc0/node.graphql");
+pub(crate) const BACKEND_RC0_SDL: &str = include_str!("../schemas/rc0/inference_backend.graphql");
+const NODE_AVATAR_TARGET: &str = "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli";
+const NODE_AVATAR_PATCH: &str =
+    r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#;
 
 const PROFILE_ROOT: &str = "bafyreiat2uhx24kbgbm54lz7nt56vtjjsfttkiwop2ntii7qn2xtceehxi";
 const PROFILE_TARGET: &str = "bafyreieksrjdkg546ymilx5qrpbtciuyr3cwqyq25u52o64lobpoek3qqi";
@@ -52,7 +85,8 @@ const SESSION_STARTER_PATCH: &str = r#"[{"op":"add","path":"/AgentSession/Fields
 
 /// `InferenceBackend` before the platform settings: the fresh store (catalog freshness in the
 /// schema) and the store patched from the original RC1 lineage.
-const BACKEND_FRESHNESS_FRESH: &str = "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike";
+pub(crate) const BACKEND_FRESHNESS_FRESH: &str =
+    "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike";
 const BACKEND_FRESHNESS_PATCHED: &str =
     "bafyreiabl7unecvetnazzwctm4iihrsb7x3jeo6l3m45u6bbjodj7zxfxi";
 /// The same stores after the `claude_platform` patch.
@@ -61,6 +95,33 @@ const BACKEND_PLATFORM_FROM_FRESH: &str =
 const BACKEND_PLATFORM_FROM_PATCHED: &str =
     "bafyreickxk6jgbbg74hxamckiaeoh323zwr3bdojam5oze4eywnhrryxre";
 const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/Fields/-","value":{"Name":"claude_platform","Kind":"JSON"}}]"#;
+
+/// One canonical lineage per collection. DefraDB derives a patched version ID from the
+/// version it patches, so an rc0 store patched to the current SDL and a fresh store that
+/// registers the current SDL directly can never share a version ID, and stores on different
+/// versions cannot merge each other's blocks. A fresh store therefore registers the
+/// v1.0.0-rc0 SDL of these collections and replays the same versioned patches an upgraded rc0
+/// store receives, landing on the same version ID.
+///
+/// [`crate::DEFAULT_BASELINE`] registers exactly these roots, so any store built from the
+/// default registry (`ensure_migrations`, a desktop client store, `canonical_schema_plan` for a
+/// client that applies SDL itself) starts on the rc0 root and takes the same patches.
+///
+/// When a change adds a versioned step on top of a collection's rc0 pin, add the collection
+/// here with its rc0 SDL vendored under `schemas/rc0/` (copied from tag v1.0.0-rc0), and point
+/// its baseline entry at the same SDL and root. `tests/rc0_lineage_parity.rs` fails until both
+/// are done.
+pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[
+    ("InferenceBackend", BACKEND_RC0_SDL, BACKEND_FRESHNESS_FRESH),
+    ("Node", NODE_RC0_SDL, NODE_ROOT),
+];
+
+fn canonical_root(name: &str) -> Option<&'static str> {
+    CANONICAL_ROOTS
+        .iter()
+        .find(|(collection, _, _)| *collection == name)
+        .map(|(_, _, root)| *root)
+}
 
 fn session_before_starter(version: &str) -> &str {
     match version {
@@ -115,6 +176,28 @@ pub(crate) fn include_existing_by_version(
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
+    // A store an earlier build registered off the canonical lineage stays where it is:
+    // verified at its own version, never patched. `non_canonical_store_lineages` names it.
+    for (name, current_sdl, off) in [
+        ("Node", gents_protocol::schemas::NODE, NODE_UNPATCHED_FRESH),
+        (
+            "InferenceBackend",
+            gents_protocol::schemas::INFERENCE_BACKEND,
+            BACKEND_RC1_FRESH,
+        ),
+    ] {
+        if get_version(name)?.as_deref() == Some(off) {
+            if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == name) {
+                entry.sdl = current_sdl;
+                entry.expected_version = Some(off);
+            }
+        }
+    }
+    // A collection the store lacks is registered at its canonical root (the baseline entry),
+    // so it takes the same steps an rc0 store holding that root takes.
+    let get_version = &|name: &str| -> Result<Option<String>> {
+        Ok(get_version(name)?.or_else(|| canonical_root(name).map(str::to_owned)))
+    };
     for (name, root, target, id, patch, fields) in [
         (
             "InferenceBackend",
@@ -153,6 +236,14 @@ pub(crate) fn include_existing_by_version(
             ][..],
         ),
         (
+            "Node",
+            NODE_ROOT,
+            NODE_AVATAR_TARGET,
+            "node-add-avatar",
+            NODE_AVATAR_PATCH,
+            &["avatar"][..],
+        ),
+        (
             "InferenceProfile",
             PROFILE_ROOT,
             PROFILE_TARGET,
@@ -183,14 +274,6 @@ pub(crate) fn include_existing_by_version(
             "agent-tool-call-add-background-request",
             TOOL_BACKGROUND_PATCH,
             &["background_requested_at"][..],
-        ),
-        (
-            "AgentMessage",
-            MESSAGE_ROOT,
-            MESSAGE_REQUEST_ID_TARGET,
-            "agent-message-add-native-request-id",
-            r#"[{"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"native_request_id","Kind":"String","Immutable":true}}]"#,
-            &["native_request_id"][..],
         ),
         (
             "AgentSession",
@@ -271,6 +354,30 @@ pub(crate) fn include_existing_by_version(
                 expected_state: CollectionExpectation::fields(fields),
             });
         }
+    }
+    // An `AgentMessage` v1.0.0-rc1 changed stays where it is: verified at its own version,
+    // never patched further or back. `non_canonical_store_lineages` names it.
+    match get_version("AgentMessage")?.as_deref() {
+        Some(MESSAGE_REQUEST_ID_TARGET) => {
+            if let Some(entry) = baseline.iter_mut().find(|e| e.name == "AgentMessage") {
+                entry.expected_version = Some(MESSAGE_ROOT);
+                steps.push(MigrationStep::PatchVersioned {
+                    id: "agent-message-add-native-request-id",
+                    collection: "AgentMessage",
+                    patch: MESSAGE_REQUEST_ID_PATCH,
+                    lens: None,
+                    expected_version: Some(MESSAGE_REQUEST_ID_TARGET),
+                    expected_transform: None,
+                    expected_state: CollectionExpectation::fields(&["native_request_id"]),
+                });
+            }
+        }
+        Some(MESSAGE_RC1_FRESH) => {
+            if let Some(entry) = baseline.iter_mut().find(|e| e.name == "AgentMessage") {
+                entry.expected_version = Some(MESSAGE_RC1_FRESH);
+            }
+        }
+        _ => {}
     }
     if let Some(current) = get_version("NodeMemory")? {
         if [NODE_MEMORY_ROOT, NODE_MEMORY_TEXT_TARGET].contains(&current.as_str()) {

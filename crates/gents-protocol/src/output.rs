@@ -294,20 +294,23 @@ pub enum TerminalOutput {
 /// replaced by this recovery policy. Provider-input narrowing still applies.
 /// Validate source extent/run accounting for all streams, but decode native
 /// payloads only for referenced blocks.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// Stored form: `AgentMessage` is client-authored, so its schema stays the v1.0.0-rc0 one
+/// (#1123/#1125) and `native_request_id` has no column. It is read from a
+/// `native_request_id` key inside the `publication` JSON, and written there only when
+/// [`storage::PERSIST_NATIVE_REQUEST_ID`] is on (it is off; see there).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "storage::TranscriptMessageWire")]
 pub struct TranscriptMessage {
     /// Existing owner-defined idempotency key (tool-result key, request-scoped
     /// authored key, or provider-turn coordinate).
     pub message_key: String,
     pub session_id: String,
     pub node_did: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     /// Exact request this message belongs to, not necessarily the request that
     /// produced its referenced bytes. Absent only for history a fork placed in
     /// a child session, which must not acquire live request membership.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_doc_id: Option<String>,
     pub publication: MessagePublication,
     /// Set by the publisher; never derived from the closing records its blocks
@@ -315,17 +318,10 @@ pub struct TranscriptMessage {
     pub outcome: OutputOutcome,
     pub sequence: u32,
     pub role: MessageRole,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_id: Option<String>,
     /// The provider's response request id, carried like `native_id`: only a
     /// provider assistant message has one (never system, user or recovery).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_request_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "storage::deserialize_blocks",
-        skip_serializing_if = "Vec::is_empty"
-    )]
     pub blocks: Vec<MessageBlock>,
     pub created_at: String,
 }

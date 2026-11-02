@@ -65,16 +65,18 @@ function NodeSettings({
       scrollKey={`${nodeDid}/${section}/${item ?? ""}`}
       pageKey={deployment.nodeDid}
       testId="agent-screen"
+      banner={
+        readOnly && (
+          <p
+            role="status"
+            className="flex items-center gap-2 border-b border-border/60 bg-raised/95 px-6 py-2.5 text-sm text-foreground/85 backdrop-blur"
+          >
+            <Lock aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            {readOnly}
+          </p>
+        )
+      }
     >
-      {readOnly && (
-        <p
-          role="status"
-          className="mx-6 mt-4 flex items-center gap-1.5 text-xs text-muted-foreground"
-        >
-          <Lock aria-hidden className="size-3 shrink-0" />
-          {readOnly}
-        </p>
-      )}
       {/* read-only: values at full strength, and nothing offered that would
           change them */}
       <fieldset

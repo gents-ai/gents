@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 import { ChevronDown, Package, Plus, Search } from "lucide-react";
 import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
@@ -206,6 +207,7 @@ function MountedAgentPicker({
                   setQuery("");
                 }
               }}
+              {...SEARCH_FIELD}
               placeholder="Search agents"
               aria-label="Search agents"
               className="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"

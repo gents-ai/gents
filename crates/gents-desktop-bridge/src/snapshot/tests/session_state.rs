@@ -701,7 +701,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
 #[test]
 fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
     let cases = lean_desktop_client_shell_cases();
-    assert_eq!(cases.len(), 26);
+    assert_eq!(cases.len(), 28);
     assert!(cases
         .iter()
         .any(|case| !case.desktop_queued_request_ids.is_empty()));

@@ -84,7 +84,7 @@ export function StartedCount({
           <span
             data-testid="started-mark"
             className={cn(
-              "absolute top-0.5 right-0.5 size-1.5 rounded-full",
+              "size-1.5 shrink-0 rounded-full",
               failed > 0 ? "bg-destructive" : "bg-brand",
             )}
           />
