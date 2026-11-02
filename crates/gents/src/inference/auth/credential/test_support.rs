@@ -13,7 +13,7 @@ pub(crate) async fn test_node() -> Arc<EmbeddedNode> {
             .await
             .expect("embedded node"),
     );
-    crate::schema::ensure_runtime_schemas(&node)
+    crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .expect("schemas");
     node

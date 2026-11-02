@@ -15,7 +15,7 @@ use gents_loop::loop_stream::LoopConfig;
 use gents_protocol::session::SessionCreationCause;
 
 use crate::inference::resolved::ResolvedAgent;
-use crate::lifecycle::ExecutionOrigin;
+use crate::request::lifecycle::ExecutionOrigin;
 use crate::session::origin::{self, CreationOrigin, SessionScope};
 use crate::store::config_client::ConfigAccess;
 use crate::AgentRequest;

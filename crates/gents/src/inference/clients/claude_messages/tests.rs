@@ -1514,7 +1514,6 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
                 &test_account(),
                 RapidHashSet::new(),
                 &bearer,
-                &ReqwestClient::new(),
                 Some(crate::inference::usage_observation::UsageReporter::new(
                     cache.clone(),
                     node.clone(),

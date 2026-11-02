@@ -1,4 +1,4 @@
-use rapidhash::RapidHashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use rig::streaming::RawStreamingChoice;
 use serde_json::Value;
 
@@ -62,8 +62,8 @@ fn the_finish_fallback_keeps_the_response_request_id() {
     // No message_stop: finish() takes the fallback path that emits the final
     // response itself, which must still carry the request id.
     let sse = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"hi\"}}\n\n";
-    let mut state = MessagesSseState::new(RapidHashSet::new())
-        .with_request_id(Some("req_fallback".into()));
+    let mut state =
+        MessagesSseState::new(RapidHashSet::new()).with_request_id(Some("req_fallback".into()));
     let mut events = Vec::new();
     for line in sse.lines() {
         events.extend(state.push_line(line).expect("push"));

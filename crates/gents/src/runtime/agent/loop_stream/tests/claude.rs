@@ -183,6 +183,7 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
         Some(128),
         &[Message::Assistant {
             id: None,
+            request_id: None,
             content: expected_content.clone(),
         }],
         &[],
@@ -339,7 +340,7 @@ async fn run_claude_fixture_turns(
     first_turn: String,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 ) -> ClaudeFixtureRun {
-    use crate::inference::clients::claude_messages::fixtures::{
+    use crate::inference::clients::claude_messages::{
         install_messages_sse_fixtures, lock_fixtures_for_test, sse_fixture_final_text,
     };
     use crate::inference::clients::claude_subscription::{ClaudeSubscriptionClient, StaticBearer};
@@ -422,7 +423,7 @@ async fn run_claude_fixture_turns(
 
 #[test]
 fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
-    use crate::inference::clients::claude_messages::fixtures::{
+    use crate::inference::clients::claude_messages::{
         blocking_lock_fixtures_for_test, install_messages_sse_fixtures, sse_fixture_final_text,
     };
     use crate::inference::llm::backend_client::{build_backend_client, BackendClient};

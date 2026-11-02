@@ -129,14 +129,8 @@ mod tests {
             serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["grant_type"], "refresh_token");
         assert_eq!(body["refresh_token"], "refresh-OLD");
-        assert_eq!(
-            body["client_id"],
-            crate::inference::auth::claude::CLAUDE_OAUTH_CLIENT_ID
-        );
-        assert_eq!(
-            body["scope"],
-            crate::inference::auth::claude::CLAUDE_OAUTH_SCOPES
-        );
+        assert_eq!(body["client_id"], gents_claude::oauth::CLIENT_ID);
+        assert_eq!(body["scope"], gents_claude::oauth::REFRESH_SCOPES.join(" "));
         assert_eq!(refreshed.access_token, "access-NEW");
         assert_eq!(refreshed.refresh_token, "refresh-NEW");
         assert!(
