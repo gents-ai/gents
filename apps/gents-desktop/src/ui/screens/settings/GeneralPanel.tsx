@@ -22,6 +22,7 @@ import { Button } from "@gents/ui/components/button";
 import { openCustomizeNav } from "@/app/CustomizeNav";
 import { ChoiceRow } from "../agent/editors";
 import { Group, Row } from "../agent/rows";
+import { NotificationsGroup } from "./NotificationsGroup";
 
 const THEMES: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "System", icon: Monitor },
@@ -63,6 +64,7 @@ export function GeneralPanel() {
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
   const customizableNav = useFlag("customize-nav");
+  const notifications = useFlag("notifications");
   const [usageTelemetry, setUsageTelemetry] = useState<ProductTelemetryStatus | null>(
     null,
   );
@@ -191,6 +193,7 @@ export function GeneralPanel() {
           ]}
         />
       </Group>
+      {notifications && <NotificationsGroup />}
     </div>
   );
 }

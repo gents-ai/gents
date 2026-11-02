@@ -50,6 +50,18 @@ export const FLAGS = [
     removeWhen: "Customizing the side nav ships to everyone.",
     restart: false,
   },
+  {
+    id: "notifications",
+    name: "Notifications",
+    description:
+      "Tells you through the system's notifications when a session finishes, fails or needs your answer, or the mailbox gets something new, while the app's window is in the background.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-02-01",
+    removeWhen:
+      "Notifications ship to everyone, fed by the app's one place for things that need the person.",
+    restart: false,
+  },
 ] as const satisfies readonly Flag[];
 
 export type FlagId = (typeof FLAGS)[number]["id"];

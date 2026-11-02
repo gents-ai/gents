@@ -15,6 +15,7 @@
     "opener:default",
     "dialog:allow-open",
     "dialog:allow-message",
+    "notification:default",
     "gents-desktop-bridge:default",
     "gents-desktop-bridge:full",
     "native-swipe"

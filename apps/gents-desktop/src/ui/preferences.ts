@@ -6,6 +6,7 @@ import { FLAGS, type FlagId, type FlagSetting } from "./lib/flags";
 import { browserStorage, storedStrings } from "./lib/storage";
 import { applyTheme, systemTheme, type Theme, type ThemePreference } from "./theme";
 import { ZOOM_STEPS } from "./lib/zoom";
+import type { NotifyKind } from "./lib/notify/events";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
 
@@ -31,6 +32,8 @@ export type Preferences = {
   flags: Record<string, FlagSetting>;
   /** the side nav's own items as arranged on this device */
   navLayout: NavLayout;
+  /** which kinds of thing the app's notifications tell this device about */
+  notify: Record<NotifyKind, boolean>;
 };
 
 /** The side nav's items and sections in the order chosen, and which are
@@ -57,6 +60,27 @@ export const DEFAULT_NAV_LAYOUT: NavLayout = { order: [], shown: {} };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
 
+const NOTIFY_ALL: Record<NotifyKind, boolean> = {
+  finished: true,
+  failed: true,
+  question: true,
+  mailbox: true,
+};
+
+function restoreNotify(
+  stored: unknown,
+  defaults: Record<NotifyKind, boolean>,
+): Record<NotifyKind, boolean> {
+  const saved = (typeof stored === "object" && stored !== null ? stored : {}) as Record<
+    string,
+    unknown
+  >;
+  const kinds = { ...defaults };
+  for (const kind of Object.keys(kinds) as NotifyKind[])
+    if (typeof saved[kind] === "boolean") kinds[kind] = saved[kind] as boolean;
+  return kinds;
+}
+
 const initial = (): Preferences => ({
   theme: "system",
   nav: "hover",
@@ -66,6 +90,7 @@ const initial = (): Preferences => ({
   pinnedSessions: [],
   flags: {},
   navLayout: DEFAULT_NAV_LAYOUT,
+  notify: { ...NOTIFY_ALL },
 });
 
 /* only flags this build knows survive, so an unknown id is dropped on the
@@ -137,6 +162,7 @@ export function restorePreferences(
       : defaults.pinnedSessions,
     flags: knownFlags(saved.flags ?? defaults.flags),
     navLayout: restoreNavLayout(saved.navLayout, defaults.navLayout),
+    notify: restoreNotify(saved.notify, defaults.notify),
   };
 }
 
@@ -190,6 +216,9 @@ export const preferences = {
   resetNavLayout() {
     store.setState({ navLayout: DEFAULT_NAV_LAYOUT });
   },
+  setNotify(kind: NotifyKind, on: boolean) {
+    store.setState({ notify: { ...store.getState().notify, [kind]: on } });
+  },
 };
 
 export function followZoom(apply: (zoom: number) => void) {
@@ -237,6 +266,9 @@ export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
 export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);
 export const useNavLayout = () => usePreferences((p) => p.navLayout);
+export const useNotifyKinds = () => usePreferences((p) => p.notify);
+/** the kinds this device is told about, for the notification owner */
+export const notifyKinds = () => store.getState().notify;
 
 const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
   const setting = flags[id];
