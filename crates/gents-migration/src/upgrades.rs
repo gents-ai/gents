@@ -30,6 +30,7 @@ pub(crate) const KNOWN_OFF_LINEAGE: &[(&str, &str)] = &[
     ("AgentMessage", MESSAGE_RC1_FRESH),
     ("InferenceBackend", BACKEND_RC1_FRESH),
     ("Node", NODE_UNPATCHED_FRESH),
+    ("ToolServiceRegistry", TOOL_SERVICE_REGISTRY_UNPATCHED_FRESH),
 ];
 
 const INFERENCE_CALL_ROOT: &str = "bafyreibbbdmb7au32traw5ufp6rqytb3jv63bmjflykfhize2u6bwvqiwe";
@@ -57,6 +58,11 @@ pub(crate) const TOOL_SERVICE_REGISTRY_RC0_SDL: &str =
     include_str!("../schemas/rc0/tool_service_registry.graphql");
 pub(crate) const TOOL_SERVICE_REGISTRY_ROOT: &str =
     "bafyreigckps33q33zvnrodzqlz72ri4osyodxleniwy6txwkfhnq7tgg3q";
+/// `ToolServiceRegistry` as a build that registered the current SDL (with `endpoint_url`)
+/// directly produced it. Off the lineage: the canonical version is the rc0 root plus
+/// `tool-service-registry-add-endpoint-url`.
+const TOOL_SERVICE_REGISTRY_UNPATCHED_FRESH: &str =
+    "bafyreig6mtnbxpflm6cxrolzx6hb2a2x3nljjpcwv6p3mg3touwxer753e";
 const NODE_AVATAR_TARGET: &str = "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli";
 const NODE_AVATAR_PATCH: &str =
     r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#;
