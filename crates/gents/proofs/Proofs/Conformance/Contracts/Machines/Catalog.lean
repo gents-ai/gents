@@ -9,7 +9,6 @@ import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
-import Proofs.Conformance.Contracts.Machines.EthSubmission
 import Proofs.CompletionRetry.Contracts
 import Proofs.Eval
 
@@ -77,7 +76,6 @@ def stateMachines : List StateMachineContract :=
   , managedExecMachine
   , goalMachine
   , mailboxMachine
-  , ethSubmissionMachine
   ]
 
 end Conformance.Contracts

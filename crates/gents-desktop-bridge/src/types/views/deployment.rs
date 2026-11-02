@@ -26,6 +26,7 @@ pub struct SyncHealthView {
     pub state: String,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
+    pub activation_error_count: usize,
     pub pending_dag_count: Option<usize>,
     pub persisted_pending_dag_count: Option<usize>,
     pub push_retry_marker_count: Option<usize>,
@@ -152,10 +153,10 @@ pub struct AgentEnvironmentView {
     pub active_session_count: usize,
 }
 
-pub use gents::document_config::{
-    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
-    DatastoreToolSurfaceDocument, EventSource, InferenceExecution, InferenceProfile,
-    InferenceSampling, Node, Schedule, ToolServiceRegistry, Tools, Trigger,
+pub use gents::documents::{
+    Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
+    EventSource, InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule,
+    ToolServiceRegistry, Tools, Trigger,
 };
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -169,7 +170,7 @@ pub struct TaskView {
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
-    pub hooks: Vec<gents::document_config::TaskHook>,
+    pub hooks: Vec<gents::documents::TaskHook>,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,
     pub tags: Vec<String>,
@@ -197,7 +198,7 @@ pub struct TaskRunSummaryView {
     pub requester_did: Option<String>,
     pub session_id: Option<String>,
     pub agent_id: Option<String>,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     pub execution_origin: Option<String>,
     pub caused_by_trigger_id: Option<String>,
     pub caused_by_trigger_kind: Option<String>,
@@ -269,6 +270,11 @@ pub struct SessionSummary {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub unsendable_reason: Option<String>,
+    /// The folder the session's latest request ran with, as its node recorded
+    /// it: a path on that node's computer, absent when the request named none.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -406,7 +412,6 @@ pub struct DeploymentView {
     pub tool_service_registries: Vec<ToolServiceRegistry>,
     pub agent_targets: Vec<AgentTargetDocument>,
     pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
-    pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub skills: Vec<SkillView>,
     pub tasks: Vec<TaskView>,
     pub schedules: Vec<Schedule>,

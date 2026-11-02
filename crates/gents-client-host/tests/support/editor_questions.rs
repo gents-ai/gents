@@ -37,7 +37,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
         } else {
             ChatAction::Sse(fake_llm::tool_call_sse_with_id(
                 "question-cancel",
-                gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
                 &json!({
                     "title":"Interrupted plan", "question": {
                         "version":3, "prompt":"Should this cancelled task proceed?",
@@ -74,7 +74,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
     Some(ChatAction::Sse(if returned("question-approaches") {
         fake_llm::completion_text_sse("Choose the worker approach below.")
     } else {
-        fake_llm::tool_call_sse_with_id("question-approaches", gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME, &json!({
+        fake_llm::tool_call_sse_with_id("question-approaches", gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME, &json!({
             "title":"Worker approach", "question":{
                 "version":3, "prompt":"What should the worker inspect?", "allow_free_text":true,
                 "options":[
@@ -93,11 +93,11 @@ pub async fn verify(
     session: &str,
     author: &str,
 ) -> Result<Value> {
-    use gents::graphql::escape_graphql_string as escape;
-    let response = access.execute(&format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ {} }} MailboxItem(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} }}", escape(node), gents::SIGNED_REQUEST_FIELDS, escape(node), escape(session), gents::mailbox::MAILBOX_FIELDS)).await?;
+    use gents::store::graphql::escape_graphql_string as escape;
+    let response = access.execute(&format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ {} }} MailboxItem(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} }}", escape(node), gents::SIGNED_REQUEST_FIELDS, escape(node), escape(session), gents::session::mailbox::MAILBOX_FIELDS)).await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
-    let questions: Vec<gents::mailbox::MailboxItem> =
+    let questions: Vec<gents::session::mailbox::MailboxItem> =
         serde_json::from_value(response["data"]["MailboxItem"].clone())?;
     ensure!(
         questions.len() == 2,

@@ -1,4 +1,4 @@
-import { ListFilter } from "lucide-react";
+import { MoreHorizontal } from "lucide-react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -15,33 +15,39 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
-import { useFleet } from "@/hooks/useFleet";
+import { useSelectedNodeDid } from "@/hooks/useClient";
 import {
-  emptyFilter,
-  hasFilter,
   isShown,
   matchesSource,
   matchesState,
+  sameFilter,
   toggleShown,
   type SessionFilter,
 } from "@/lib/session-filter";
-import { agentName } from "@/screens/behavior";
-import { SOURCES, STATES, type Option } from "@/screens/SessionFilters";
-import { nodeKeyOf } from "../../hooks/fleetStore";
-import { listViews, useListViews } from "./listViews";
+import {
+  SOURCES,
+  STATES,
+  useAgentChoices,
+  type Option,
+} from "@/screens/SessionFilters";
+import { listViews, recentDefault, useListViews } from "./listViews";
 
-/** The side nav's filter on its recent sessions: the sessions list's
-    agent, state and started-by choices, kept apart from that list's. */
+/** The side nav's options for its recent sessions: whether sessions other
+    sessions started show, then the sessions list's agent, state and
+    started-by filters, kept apart from that list's. */
 export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
   const value = useListViews((views) => views.recentFilter);
-  const nodes = useFleet((state) => state.nodes);
-  const active = hasFilter(value);
-  const agents = [...new Set(sessions.flatMap((c) => (c.agentId ? [c.agentId] : [])))]
-    .map((id) => {
-      const holder = sessions.find((c) => c.agentId === id)!;
-      return { id, name: agentName(id, nodes[nodeKeyOf(holder)] ?? null) };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const active = !sameFilter(value, recentDefault);
+  const selected = useSelectedNodeDid();
+  const nodeDids = [
+    ...new Set([...(selected ? [selected] : []), ...sessions.map((c) => c.nodeDid)]),
+  ];
+  const agents = useAgentChoices(
+    sessions,
+    nodeDids,
+    value.agents,
+    (id) => sessions.filter((c) => c.agentId === id).length,
+  );
   const agentIds = agents.map((a) => a.id);
   const toggle = <K extends keyof SessionFilter>(
     axis: K,
@@ -60,14 +66,14 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
           <Button
             variant="quiet"
             size="icon-xs"
-            aria-label="Filter recent sessions"
+            aria-label="Recent sessions options"
             className={cn("shrink-0", active && "text-foreground")}
           />
         }
       >
-        <ListFilter />
+        <MoreHorizontal />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-52">
+      <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuGroup>
           <DropdownMenuLabel>Filters</DropdownMenuLabel>
           {agents.length > 1 && (
@@ -114,13 +120,24 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
             }))}
           />
         </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          checked={isShown(value.sources, "session")}
+          onCheckedChange={() =>
+            toggle(
+              "sources",
+              SOURCES.map((s) => s.value),
+              "session",
+            )
+          }
+          closeOnClick={false}
+        >
+          Show sub-sessions
+        </DropdownMenuCheckboxItem>
         {active && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => listViews.setRecentFilter(emptyFilter)}>
-              Clear filters
-            </DropdownMenuItem>
-          </>
+          <DropdownMenuItem onClick={() => listViews.setRecentFilter(recentDefault)}>
+            Reset filters
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

@@ -228,10 +228,10 @@ impl Check for SchemaMatches {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_client::ConfigAccess;
     use crate::defra_node::EmbeddedNode;
     use crate::eval::runner::ScriptedExecutor;
     use crate::eval::OutcomeKind;
+    use crate::store::config_client::ConfigAccess;
     use std::sync::Arc;
 
     #[test]

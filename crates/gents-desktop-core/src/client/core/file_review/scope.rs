@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::error::{BridgeError, BridgeErrorCode};

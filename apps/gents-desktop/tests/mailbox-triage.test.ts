@@ -1,6 +1,13 @@
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
-import { groupItems, matches, orderItems, triageOf } from "@/screens/mailbox-triage";
+import {
+  greeting,
+  groupItems,
+  matches,
+  orderItems,
+  triageOf,
+  waiting,
+} from "@/screens/mailbox-triage";
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
 const min = (n: number) => new Date(NOW + n * 60_000).toISOString();
@@ -76,5 +83,33 @@ describe("search", () => {
     expect(matches(m, "nightly")).toBe(true);
     expect(matches(m, "rollback")).toBe(false);
     expect(matches(m, "   ")).toBe(true);
+  });
+});
+
+describe("the mailbox's greeting", () => {
+  it("follows the hour, and says hello late at night", () => {
+    expect(greeting(5)).toBe("Good morning");
+    expect(greeting(11)).toBe("Good morning");
+    expect(greeting(12)).toBe("Good afternoon");
+    expect(greeting(18)).toBe("Good evening");
+    expect(greeting(23)).toBe("Hello");
+    expect(greeting(2)).toBe("Hello");
+  });
+
+  it("says what waits, worst first, and leaves done out", () => {
+    const groups = groupItems([
+      item("ask"),
+      item("gate"),
+      item("flag"),
+      item("failed"),
+      item("finished"),
+    ]);
+    expect(waiting(groups)).toBe("1 went wrong · 2 to decide · 1 worth a look");
+    expect(waiting(groupItems([item("ask")]))).toBe("1 to decide");
+  });
+
+  it("is all caught up when only finished work is left", () => {
+    expect(waiting(groupItems([item("finished")]))).toBe("All caught up");
+    expect(waiting([])).toBe("All caught up");
   });
 });

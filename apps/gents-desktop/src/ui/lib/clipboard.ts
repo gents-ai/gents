@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 export function useCopied(ms = 1200) {
   const [copied, setCopied] = useState(false);
@@ -28,4 +29,9 @@ export function copyLater(text: Promise<string>): Promise<void> {
     return clipboard.write([new ClipboardItem({ "text/plain": blob })]);
   }
   return text.then((t) => clipboard.writeText(t));
+}
+
+export function copyText(text: string) {
+  void navigator.clipboard?.writeText(text);
+  toast("Copied");
 }

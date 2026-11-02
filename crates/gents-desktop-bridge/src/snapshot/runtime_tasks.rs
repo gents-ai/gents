@@ -58,7 +58,7 @@ pub(super) fn recent_runs_for_task_views(
             .filter(|trigger| {
                 matches!(
                     trigger.config.source,
-                    gents::document_config::TriggerSource::Schedule { .. }
+                    gents::documents::TriggerSource::Schedule { .. }
                 )
             })
             .count(),
@@ -67,7 +67,7 @@ pub(super) fn recent_runs_for_task_views(
             .filter(|trigger| {
                 matches!(
                     trigger.config.source,
-                    gents::document_config::TriggerSource::Event { .. }
+                    gents::documents::TriggerSource::Event { .. }
                 )
             })
             .count(),
@@ -206,6 +206,9 @@ pub(crate) fn session_summaries(
                 tool_call_count: None,
                 unreadable_reason: None,
                 unsendable_reason: None,
+                cwd: request
+                    .and_then(|request| request.input.as_ref())
+                    .and_then(|input| input.cwd.clone()),
             }
         })
         .collect::<Vec<_>>();
@@ -265,9 +268,7 @@ pub(super) fn task_run_histories(
                     requester_did: request.requester_did.clone(),
                     session_id: normalize_optional(request.session_id.as_deref()),
                     agent_id: request.agent_id.clone(),
-                    lifecycle_state: request
-                        .lifecycle_state
-                        .map(|state| state.as_str().to_string()),
+                    lifecycle_state: request.lifecycle_state,
                     execution_origin: normalize_optional(request.execution_origin.as_deref()),
                     caused_by_trigger_id: normalize_optional(
                         request.caused_by_trigger_id.as_deref(),
@@ -350,10 +351,10 @@ mod trigger_recent_runs_tests {
 /// What a session's starter verdict depends on apart from its physical row:
 /// its scope, agent and complete provenance, including the node-signed
 /// creation receipt that binds the physical document and starter index.
-type StarterEvidence = (gents::session_origin::SessionScope, String, String);
+type StarterEvidence = (gents::session::origin::SessionScope, String, String);
 
 fn starter_evidence(
-    scope: gents::session_origin::SessionScope,
+    scope: gents::session::origin::SessionScope,
     agent_id: &str,
     provenance: Option<&gents_protocol::session::SessionProvenance>,
 ) -> Option<StarterEvidence> {
@@ -374,7 +375,7 @@ fn starter_evidence(
 #[derive(Default)]
 pub(crate) struct StarterCache(
     std::sync::Mutex<
-        std::collections::BTreeMap<StarterEvidence, Option<gents::session_origin::SessionLink>>,
+        std::collections::BTreeMap<StarterEvidence, Option<gents::session::origin::SessionLink>>,
     >,
 );
 
@@ -383,11 +384,11 @@ pub(super) async fn resolve_summary_starters<'a, R>(
     cache: &StarterCache,
     summaries: impl IntoIterator<Item = &'a mut SessionSummary>,
 ) where
-    R: gents::config_client::ConfigRead + ?Sized,
+    R: gents::store::config_client::ConfigRead + ?Sized,
 {
     let mut started = Vec::new();
     for summary in summaries {
-        let scope = gents::session_origin::SessionScope {
+        let scope = gents::session::origin::SessionScope {
             node_did: summary.node_did.clone(),
             session_id: summary.session_id.clone(),
             requester_did: summary.requester_did.clone(),
@@ -417,7 +418,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
         missing
     };
     if !missing.is_empty() {
-        match gents::session_origin::verified_recorded_starters(access, &missing).await {
+        match gents::session::origin::verified_recorded_starters(access, &missing).await {
             Ok(observed) => {
                 let mut known = cache
                     .0
@@ -425,7 +426,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 for row in observed {
                     if let Some(evidence) = starter_evidence(
-                        gents::session_origin::SessionScope::from(&row.session),
+                        gents::session::origin::SessionScope::from(&row.session),
                         &row.session.agent_id,
                         row.session.provenance.as_ref(),
                     ) {

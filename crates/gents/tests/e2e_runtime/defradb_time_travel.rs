@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -278,7 +278,7 @@ async fn text_crdt_reads_each_revision_at_its_cid() {
 
 #[tokio::test]
 async fn text_crdt_versions_written_in_one_transaction_stay_readable() {
-    use gents::config_client::{ConfigAccess, IdempotentTransactionRetry};
+    use gents::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 
     let db = probe_db().await;
     let node = db.node;
@@ -311,7 +311,7 @@ async fn text_crdt_versions_written_in_one_transaction_stay_readable() {
                         .await?;
                     cids.push(first_composite_version_cid(&updated["data"], "row").to_string());
                 }
-                Ok::<_, gents::config_client::ConfigClientError>(cids)
+                Ok::<_, gents::store::config_client::ConfigClientError>(cids)
             })
         },
     )

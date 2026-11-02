@@ -90,7 +90,16 @@ function timelineItemUnchanged(
         previous.messagesCompacted === next.messagesCompacted &&
         previous.originalTokens === next.originalTokens &&
         previous.compactedTokens === next.compactedTokens &&
-        previous.timestamp === next.timestamp
+        previous.timestamp === next.timestamp &&
+        previous.summary === next.summary &&
+        sameOptionalStrings(
+          previous.filesRead ?? undefined,
+          next.filesRead ?? undefined,
+        ) &&
+        sameOptionalStrings(
+          previous.filesModified ?? undefined,
+          next.filesModified ?? undefined,
+        )
       );
     case "pendingUserTurn":
       return (

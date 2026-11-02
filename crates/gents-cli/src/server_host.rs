@@ -39,7 +39,7 @@ pub struct ProvisionOptions {
     pub node_name: String,
     pub tool_ceiling: ManagedToolCeiling,
     pub tool_root: Option<PathBuf>,
-    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    pub store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
 }
 
 /// Provisioning drives `init`, whose node opening is not `Send`, on a blocking
@@ -49,9 +49,11 @@ pub async fn ensure_standard_home(
     runtime: &tokio::runtime::Handle,
     options: ProvisionOptions,
 ) -> Result<()> {
-    gents::storage_backend::drive_unsendable(runtime, move || ensure_standard_home_inner(options))
-        .await
-        .context("joining managed Gents provision task")?
+    gents::store::local::storage_backend::drive_unsendable(runtime, move || {
+        ensure_standard_home_inner(options)
+    })
+    .await
+    .context("joining managed Gents provision task")?
 }
 
 async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
@@ -87,7 +89,7 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         argv.push("--tool-root".to_string());
         argv.push(tool_root.display().to_string());
     }
-    if options.store_key_custody == gents::store_key::StoreKeyCustodyChoice::File {
+    if options.store_key_custody == gents::store::local::store_key::StoreKeyCustodyChoice::File {
         argv.extend(["--store-key-custody".to_string(), "file".to_string()]);
     }
     let cli = Cli::try_parse_from(argv).context("building standard Gents provision request")?;

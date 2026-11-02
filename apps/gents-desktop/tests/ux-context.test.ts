@@ -7,6 +7,7 @@ import {
   installUxHost,
   isGentsUxPlugin,
   UndeclaredContributionError,
+  type UxCaller,
   type UxHost,
 } from "@/contrib/plugin";
 import { registry } from "@/contrib/registry";
@@ -17,11 +18,17 @@ import {
   TRANSCRIPT_DIRECTIVE_AREA,
 } from "@/contrib/types";
 
-function fakeHost(): UxHost & { sent: string[]; calls: Array<[string, unknown]> } {
+function fakeHost(): UxHost & {
+  sent: string[];
+  callers: UxCaller[];
+  calls: Array<[string, unknown]>;
+} {
   const sent: string[] = [];
+  const callers: UxCaller[] = [];
   const calls: Array<[string, unknown]> = [];
   return {
     sent,
+    callers,
     calls,
     shell: {
       route: () => ({ name: "sessions" }),
@@ -29,8 +36,9 @@ function fakeHost(): UxHost & { sent: string[]; calls: Array<[string, unknown]> 
       deployments: () => [],
       selectedDeployment: () => null,
       selectedSessionId: () => null,
-      send: async (content) => {
+      send: async (content, caller) => {
         sent.push(content);
+        callers.push(caller);
       },
     },
     plugin: async (listing, name, input) => ({ listing, name, input }),
@@ -148,6 +156,19 @@ describe("ux plugin context", () => {
       name: "tool",
       input: { x: 1 },
     });
+  });
+
+  it("sends as the plugin it was made for, through ctx.send and ctx.shell.send alike", async () => {
+    const named = createUxContext("board", { name: "Task Board" });
+    await named.send("from ctx");
+    await named.shell.send("from shell");
+    await createUxContext("unnamed").send("no name");
+    expect(host.sent).toEqual(["from ctx", "from shell", "no name"]);
+    expect(host.callers).toEqual([
+      { id: "board", name: "Task Board" },
+      { id: "board", name: "Task Board" },
+      { id: "unnamed", name: "unnamed" },
+    ]);
   });
 
   it("offers no raw bridge verb: the host's names are the whole surface", () => {

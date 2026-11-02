@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::document_config::Agent;
-use gents::graphql::escape_graphql_string;
-use gents::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
-use gents::tool_surface::presets;
+use gents::documents::Agent;
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
+use gents::tools::surface::presets;
 use gents::{default_agent_id_for_node, Collection, NodeIdentity};
 use serde_json::{json, Value};
 
@@ -141,11 +141,15 @@ pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
     .await
 }
 
+/// Resolve one logical ID to one row, the same way the `config` tool does:
+/// a bare ID prefers the local node's row, and an ambiguity names the
+/// candidate rows instead of counting them.
 async fn load_document(
     access: &ConfigAccess,
     collection: Collection,
     fields: &str,
     owner: Option<&str>,
+    local_owner: Option<&str>,
     id: &str,
 ) -> Result<Option<Value>> {
     let escaped_id = escape_graphql_string(id);
@@ -158,8 +162,8 @@ async fn load_document(
     };
     let query = format!(
         r#"{{
-            {collection_type}(filter: {{ {owner_filter}{unique_field}: {{ _eq: "{escaped_id}" }} }}, limit: 2) {{
-                {fields}
+            {collection_type}(filter: {{ {owner_filter}{unique_field}: {{ _eq: "{escaped_id}" }} }}) {{
+                {fields} node_did
             }}
         }}"#,
         collection_type = collection.graphql_type(),
@@ -167,19 +171,47 @@ async fn load_document(
         unique_field = collection.unique_field(),
     );
     let rows = graphql_rows(access, collection.graphql_type(), &query).await?;
+    if owner.is_some() {
+        anyhow::ensure!(
+            rows.len() <= 1,
+            "ambiguous {} {id:?}: {} live rows resolve this logical id",
+            collection.graphql_type(),
+            rows.len()
+        );
+        return Ok(rows.into_iter().next());
+    }
+    // A bare ID prefers the local node's row; a replicated peer row with the
+    // same logical ID is not an ambiguity.
+    let mut local = rows
+        .iter()
+        .filter(|row| {
+            local_owner
+                .is_some_and(|owner| row.get("node_did").and_then(Value::as_str) == Some(owner))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if local.len() == 1 {
+        return Ok(local.pop());
+    }
     anyhow::ensure!(
         rows.len() <= 1,
-        "ambiguous {} {id:?}: {} live rows resolve this logical id",
+        "ambiguous {} {id:?}: {} live rows resolve this logical id: {}. Use the full <node_did>/<id> form to name one",
         collection.graphql_type(),
-        rows.len()
+        rows.len(),
+        rows.iter()
+            .map(|row| format!(
+                "{}/{}",
+                row.get("node_did").and_then(Value::as_str).unwrap_or("?"),
+                id
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     Ok(rows.into_iter().next())
 }
 
 async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<&'static str>> {
-    use gents::document_config::{
-        merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools,
-    };
+    use gents::documents::{merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools};
     let tools: Tools = serde_json::from_value(value.clone())?;
     tools.validate()?;
     let mut surfaces = Vec::<DatastoreToolSurfaceDocument>::new();
@@ -194,6 +226,7 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
             access,
             Collection::DatastoreToolSurface,
             "surface_id node_did display_name enabled entries created_at tags",
+            Some(&tools.node_did),
             Some(&tools.node_did),
             id,
         )
@@ -216,12 +249,17 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .context("resolving access for config agent show")?;
+    // The local DID only decides which row a bare ID prefers. An explicit
+    // --graphql endpoint can be read from a clean home, so a missing local DID
+    // is not an error here: the exact-ID read below still resolves.
+    let local_owner = crate::resolve_node_did(args.home.as_deref(), None).ok();
 
     let mut row = load_document(
         &access,
         Collection::Agent,
         CANONICAL_AGENT_SHOW_FIELDS,
         None,
+        local_owner.as_deref(),
         &id,
     )
     .await?
@@ -250,6 +288,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
                 Collection::AgentContext,
                 "context_id node_did display_name description system_prompt tools_id compaction_id skill_ids tags",
                 Some(&node_did),
+                Some(&node_did),
                 context_id,
             )
             .await?
@@ -268,6 +307,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
                 Collection::Tools,
                 "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags",
                 Some(&node_did),
+                Some(&node_did),
                 tools_id,
             )
             .await?
@@ -280,6 +320,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
                 &access,
                 Collection::InferenceProfile,
                 CANONICAL_PROFILE_SHOW_FIELDS,
+                Some(&node_did),
                 Some(&node_did),
                 profile_id,
             )
@@ -316,7 +357,7 @@ mod tests {
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
-    use gents::document_config::Tools;
+    use gents::documents::Tools;
     use gents::{ensure_runtime_schemas, upsert_agent};
     use serde_json::Value;
 
@@ -351,6 +392,137 @@ mod tests {
         Ok(rows.into_iter().next())
     }
 
+    /// #3330 "Done when": slug resolution with a replicated peer row present.
+    /// A bare ID prefers the local node's row; a genuine ambiguity names the
+    /// candidate rows instead of counting them.
+    #[tokio::test]
+    async fn bare_id_prefers_the_local_row_and_ambiguity_names_candidates() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .data_path(tempdir.path().join("data"))
+                .build()
+                .await
+                .expect("embedded node boots"),
+        );
+        ensure_runtime_schemas(&node).await?;
+        let local = "did:key:local-owner";
+        let peer = "did:key:peer-owner";
+        gents::ensure_node(&node, local).await?;
+        gents::ensure_node(&node, peer).await?;
+        use gents::store::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        let documents = [local, peer]
+            .into_iter()
+            .flat_map(|owner| {
+                [
+                    (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+                    (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
+                ]
+            })
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect();
+        let plan = DesiredStateApplyPlan::new(documents)?;
+        ConfigAccess::transact_local_write(&node, None, "test.slug.profile", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await?;
+        for (owner, display) in [(local, "Local"), (peer, "Peer")] {
+            upsert_agent(
+                &node,
+                &Agent {
+                    agent_id: "web-researcher".to_string(),
+                    node_did: owner.to_string(),
+                    display_name: Some(display.to_string()),
+                    description: None,
+                    context_id: None,
+                    inference_profile_id: "profile-1".to_string(),
+                    enabled: true,
+                    tags: Vec::new(),
+                    created_at: None,
+                },
+            )
+            .await?;
+        }
+        let access = ConfigAccess::local(node.clone());
+
+        // A replicated peer row with the same logical ID is not an ambiguity.
+        let row = load_document(
+            &access,
+            Collection::Agent,
+            "agent_id node_did display_name",
+            None,
+            Some(local),
+            "web-researcher",
+        )
+        .await?
+        .expect("the local row resolves");
+        assert_eq!(row["node_did"], local);
+        assert_eq!(row["display_name"], "Local");
+
+        // Two rows under one owner is a real ambiguity, and it names them.
+        upsert_agent(
+            &node,
+            &Agent {
+                agent_id: "web-researcher".to_string(),
+                node_did: peer.to_string(),
+                display_name: Some("Peer again".to_string()),
+                description: None,
+                context_id: None,
+                inference_profile_id: "profile-1".to_string(),
+                enabled: true,
+                tags: Vec::new(),
+                created_at: None,
+            },
+        )
+        .await?;
+        // A clean home has no local DID to prefer. Two rows are then a real
+        // ambiguity, and it must be reported as one — not as a missing-home
+        // error, which is what `resolve_node_did(...)?` used to produce before
+        // the read was ever attempted.
+        let error = load_document(
+            &access,
+            Collection::Agent,
+            "agent_id node_did display_name",
+            None,
+            None,
+            "web-researcher",
+        )
+        .await
+        .expect_err("two rows with no local DID to prefer is ambiguous");
+        let message = format!("{error:#}");
+        assert!(message.contains("ambiguous"), "{message}");
+        assert!(
+            message.contains(&format!("{local}/web-researcher"))
+                && message.contains(&format!("{peer}/web-researcher")),
+            "the error must name both candidate rows: {message}"
+        );
+
+        let error = load_document(
+            &access,
+            Collection::Agent,
+            "agent_id node_did display_name",
+            None,
+            Some("did:key:absent-owner"),
+            "web-researcher",
+        )
+        .await
+        .expect_err("two rows under one owner is ambiguous");
+        let message = format!("{error:#}");
+        assert!(message.contains("ambiguous"), "{message}");
+        assert!(
+            message.contains(&format!("{peer}/web-researcher")),
+            "the error must name the candidate rows: {message}"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn agent_create_and_clone_materialize_canonical_chain() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -362,14 +534,14 @@ mod tests {
                 .expect("embedded node boots"),
         );
         ensure_runtime_schemas(&node).await?;
-        let identity = gents::identity::KeyIdentity::load_or_create(
+        let identity = gents::store::identity::KeyIdentity::load_or_create(
             tempdir.path().join("identity.key"),
             None,
         )?;
         let owner = identity.did();
         let actor = identity::Did::new(owner.to_string()).expect("valid test ACP actor");
         gents::ensure_node(&node, owner).await?;
-        use gents::config_client::{
+        use gents::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let documents = [
@@ -434,7 +606,7 @@ mod tests {
                 .as_ref()
                 .and_then(|host| host.bash.as_ref())
                 .map(|bash| bash.mode),
-            Some(gents::tool_surface::BashMode::Unrestricted),
+            Some(gents::tools::surface::BashMode::Unrestricted),
         );
 
         let clone_doc = ConfigureAgentParams {
@@ -485,6 +657,7 @@ mod tests {
             Collection::Agent,
             "agent_id node_did",
             Some("did:key:foreign"),
+            Some(owner),
             agent_id
         )
         .await?
@@ -493,6 +666,7 @@ mod tests {
             &access,
             Collection::Agent,
             "agent_id node_did",
+            Some(owner),
             Some(owner),
             agent_id
         )

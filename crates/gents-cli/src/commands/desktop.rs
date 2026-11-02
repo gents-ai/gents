@@ -146,7 +146,7 @@ async fn reset(
         ),
     }
     let _home_lock = if plan.runtime.is_some() {
-        Some(gents::home::lock_home_store(&home)?)
+        Some(gents::store::local::home::lock_home_store(&home)?)
     } else {
         None
     };

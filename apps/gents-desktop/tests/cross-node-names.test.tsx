@@ -155,8 +155,8 @@ describe("a agent on another node", () => {
       ),
       <MailboxScreen />,
     );
-    expect(screen.getByText("in Diff review")).toBeInTheDocument();
-    expect(screen.queryByText("in Wrong title")).not.toBeInTheDocument();
+    expect(screen.getByText("Diff review")).toBeInTheDocument();
+    expect(screen.queryByText("Wrong title")).not.toBeInTheDocument();
     expect(screen.getByText("Code Reviewer")).toBeInTheDocument();
   });
 });

@@ -16,7 +16,7 @@ mod execution_policy;
     reason = "The shared decoder also serves trace and provider cases in other conformance targets."
 )]
 mod runtime_contract;
-#[path = "../../gents/src/lifecycle/terminal_binding.rs"]
+#[path = "../../gents/src/request/lifecycle/terminal_binding.rs"]
 mod terminal_binding;
 
 #[test]

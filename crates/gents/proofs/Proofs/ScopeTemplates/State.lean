@@ -85,8 +85,7 @@ transport cannot carry them. -/
 def reachableConfigKinds : List ConfigDocuments.Collection :=
   [.agent, .agentContext, .compaction, .tools, .agentTarget,
    .inferenceProfile, .inferenceSampling, .inferenceExecution,
-   .inferenceRetryPolicy, .toolServiceRegistry, .skill, .datastoreToolSurface,
-   .chainKeyBinding, .ethTool]
+   .inferenceRetryPolicy, .toolServiceRegistry, .skill, .datastoreToolSurface]
 
 def agentConfigCollections : List String :=
   reachableConfigKinds.map ConfigDocuments.Collection.collectionName

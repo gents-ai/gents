@@ -3,6 +3,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -15,6 +16,7 @@ import type {
   RenderedTimelineItem,
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
+import { messagePlaces } from "@/app/messagePlaces";
 import { workspace } from "@/app/workspace";
 import { writeSession } from "../src/hooks/sessionStore";
 import {
@@ -24,7 +26,8 @@ import {
   stateOf,
   type BackgroundCall,
   resetBackgroundPlaces,
-  briefStateOf,
+  rowStateOf,
+  useBackgroundCalls,
 } from "../src/ui/screens/background";
 import { BackgroundButton } from "../src/ui/screens/BackgroundButton";
 import { BackgroundSurface } from "../src/ui/screens/BackgroundCalls";
@@ -48,6 +51,7 @@ vi.mock("../src/ui/screens/terminal", () => ({
 const NODE = "did:key:parent";
 const NOW = Date.parse("2026-10-26T12:00:00Z");
 const minutesAgo = (mins: number) => new Date(NOW - mins * 60_000).toISOString();
+const secondsAgo = (secs: number) => new Date(NOW - secs * 1000).toISOString();
 
 const command = (
   toolCallId: string,
@@ -314,7 +318,7 @@ describe("the running in background group", () => {
       wrapper: withApp(app),
     });
     expect(screen.queryByRole("region", { name: /background/ })).toBeNull();
-    expect(screen.getByText("Nothing is running in the background.")).toBeVisible();
+    expect(screen.getByText("Nothing running")).toBeVisible();
     expect(fetchOperationsSnapshot).not.toHaveBeenCalled();
   });
 
@@ -337,23 +341,27 @@ describe("the running in background group", () => {
     });
     const running = within(screen.getByRole("region", { name: "Running" }));
     const finished = within(screen.getByRole("region", { name: "Finished" }));
-    expect(running.getByRole("button").textContent).toBe("npm run build");
-    expect(finished.getByRole("button").textContent).toBe("make test");
+    expect(running.getAllByRole("button")[0]!.textContent).toBe("npm run build");
+    expect(finished.getAllByRole("button")[0]!.textContent).toBe("make test");
     const [build] = running.getAllByRole("listitem");
     const [test] = finished.getAllByRole("listitem");
-    expect(within(test!).getByTestId("background-state")).toHaveTextContent("3 min");
+    expect(within(test!).getByTestId("background-state")).toHaveTextContent(
+      "Done · ran 3m",
+    );
     expect(test!.firstElementChild).toHaveAttribute(
       "title",
       "make test\nFinished after 3 min",
     );
     await waitFor(() =>
-      expect(within(build!).getByTestId("background-state")).toHaveTextContent("stuck"),
+      expect(within(build!).getByTestId("background-state")).toHaveTextContent(
+        "Stuck · stopped responding 3 min ago",
+      ),
     );
     expect(build!.firstElementChild).toHaveAttribute(
       "title",
       "npm run build\nStopped responding 3 min ago",
     );
-    expect(screen.queryByText("Nothing is running in the background.")).toBeNull();
+    expect(screen.queryByText("Nothing running")).toBeNull();
   });
 
   it("opens a command's output from its row in the transcript", async () => {
@@ -410,16 +418,197 @@ describe("the running in background group", () => {
     reading.above = 0;
   });
 
-  it("puts a short state at the end of a row", () => {
-    expect(briefStateOf(call({ tool: command("a", "x") }), NOW)).toBe("12 min");
-    expect(
-      briefStateOf(
-        call({
-          tool: command("b", "x", { statusKind: "failed" }, {}),
-        }),
-        NOW,
+  it("goes Back to the row it opened, where the list was, and keeps that place", () => {
+    const { app } = appWith(
+      ["one", "two", "three"].map((id) =>
+        command(id, `run ${id}`, { statusKind: "success" }),
       ),
-    ).toMatch(/^(failed|exit \d+)$/);
+    );
+    const surface = () =>
+      render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+        wrapper: withApp(app),
+      });
+    let view = surface();
+    const viewport = () =>
+      view.container.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")!;
+    viewport().scrollTop = 120;
+    fireEvent.scroll(viewport());
+
+    fireEvent.click(screen.getByRole("button", { name: "run two" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(viewport().scrollTop).toBe(120);
+    const returned = view.container.querySelectorAll("[data-returned]");
+    expect(returned).toHaveLength(1);
+    expect(returned[0]).toHaveClass("bg-accent");
+    expect(returned[0]).toContainElement(
+      screen.getByRole("button", { name: "run two" }),
+    );
+
+    /* another tab or the dock closed, then back */
+    view.unmount();
+    view = surface();
+    expect(viewport().scrollTop).toBe(120);
+    expect(view.container.querySelector("[data-returned]")).toBeNull();
+  });
+
+  it("says under each command where it stands, how long it ran and when it ended", () => {
+    const line = (c: BackgroundCall) => {
+      const { state, more } = rowStateOf(c, NOW);
+      return more ? `${state} · ${more}` : state;
+    };
+    const ended = (
+      id: string,
+      statusKind: string,
+      result: Record<string, unknown>,
+      over: Partial<RenderedToolCallView> = {},
+    ) =>
+      call({
+        tool: command(
+          id,
+          "x",
+          { statusKind, completedAt: minutesAgo(2), ...over },
+          result,
+        ),
+      });
+    expect(line(call({ tool: command("a", "x", { startedAt: secondsAgo(42) }) }))).toBe(
+      "Running · 42s",
+    );
+    expect(
+      line(
+        call({ view: viewOf("w", { waitStatus: { lifecycle: "pending" } as never }) }),
+      ),
+    ).toBe("Waiting to start");
+    expect(line(ended("f", "failed", { durationMs: 38_000 }))).toBe(
+      "Failed · ran 38s · 2 min ago",
+    );
+    expect(line(ended("e", "error", { durationMs: 38_000, exitCode: 1 }))).toBe(
+      "Exit 1 · ran 38s · 2 min ago",
+    );
+    expect(
+      line(
+        ended(
+          "t",
+          "failed",
+          { durationMs: 300_000, timedOut: true },
+          { completedAt: minutesAgo(60) },
+        ),
+      ),
+    ).toBe("Timed out · ran 5m · 1 h ago");
+    expect(
+      line(
+        ended(
+          "s",
+          "cancelled",
+          {},
+          { startedAt: secondsAgo(12), completedAt: new Date(NOW).toISOString() },
+        ),
+      ),
+    ).toBe("Stopped · ran 12s · just now");
+    expect(
+      line(
+        ended("d", "success", { durationMs: 252_000 }, { completedAt: minutesAgo(60) }),
+      ),
+    ).toBe("Done · ran 4m 12s · 1 h ago");
+    expect(
+      line(
+        call({
+          tool: command("k", "x"),
+          view: viewOf("k", { stuckSince: minutesAgo(3) }),
+        }),
+      ),
+    ).toBe("Stuck · stopped responding 3 min ago");
+  });
+
+  it("counts each second a call runs", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(NOW);
+    const { app } = appWith([
+      command("serve", "npm run dev", { startedAt: secondsAgo(42) }),
+      command(
+        "done",
+        "make",
+        { statusKind: "success", completedAt: minutesAgo(1) },
+        { durationMs: 4_000 },
+      ),
+    ]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const [serve, done] = screen.getAllByTestId("background-state");
+    expect(serve).toHaveTextContent("Running · 42s");
+    act(() => vi.advanceTimersByTime(1000));
+    expect(serve).toHaveTextContent("Running · 43s");
+    expect(done).toHaveTextContent("Done · ran 4s · 1 min ago");
+  });
+
+  it("shows a call where it started in the transcript, from its row and its log", () => {
+    const tool = command("build", "npm run build", { partialOutputTail: "one" });
+    const { app } = appWith([tool]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const place = {
+      sessionId: "parent",
+      sequence: 1,
+      itemKey: "item-build",
+      open: true,
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Show in transcript" }));
+    expect(messagePlaces.request()).toMatchObject(place);
+    act(() => messagePlaces.landed(messagePlaces.request()!.id, false));
+
+    fireEvent.click(screen.getByRole("button", { name: "npm run build" }));
+    expect(screen.getByTestId("background-command")).toHaveTextContent("npm run build");
+    fireEvent.click(screen.getByRole("button", { name: "Show in transcript" }));
+    expect(messagePlaces.request()).toMatchObject(place);
+    act(() => messagePlaces.landed(messagePlaces.request()!.id, false));
+  });
+
+  it("shows a spawned process at the step that spawned it", () => {
+    const spawn = {
+      ...command("spawn", "x", { toolName: "spawn_process", awaitMode: null }),
+      presentation: {
+        kind: "process",
+        action: "spawn",
+        target: "bash",
+        description: JSON.stringify({ command: "npm run dev" }),
+        output: null,
+      },
+    } as unknown as RenderedToolCallView;
+    const { app } = appWith([spawn, command("spawned:doc-spawn", "bash")]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show in transcript" }));
+    expect(messagePlaces.request()).toMatchObject({
+      itemKey: "item-spawn",
+      sequence: 1,
+    });
+    act(() => messagePlaces.landed(messagePlaces.request()!.id, false));
+  });
+
+  it("offers no way to the transcript for a call its rows can't place", async () => {
+    const { app } = appWith(
+      [command("build", "npm run build")],
+      [viewOf("build"), viewOf("unloaded", { toolName: "cargo" })],
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    const unloaded = (await screen.findByRole("button", { name: "cargo" })).closest(
+      "li",
+    )!;
+    const build = screen.getByRole("button", { name: "npm run build" }).closest("li")!;
+    expect(
+      within(build).getByRole("button", { name: "Show in transcript" }),
+    ).toBeInTheDocument();
+    expect(
+      within(unloaded).queryByRole("button", { name: "Show in transcript" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "cargo" }));
+    expect(screen.getByRole("button", { name: "Back" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Show in transcript" })).toBeNull();
   });
 
   it("says a finished spawned process's output can't be shown, without a terminal", () => {
@@ -434,6 +623,26 @@ describe("the running in background group", () => {
     );
     expect(screen.queryByTestId("background-output")).toBeNull();
     expect(screen.queryByText("Output (last part)")).toBeNull();
+  });
+
+  it("marks where each day starts among finished calls, only once they span days", () => {
+    const done = (id: string, startedAt: string) =>
+      command(id, `echo ${id}`, { statusKind: "success", startedAt });
+    const { app } = appWith([
+      done("today", minutesAgo(30)),
+      done("earlier", minutesAgo(60 * 24 * 3)),
+    ]);
+    const view = render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    expect(screen.getAllByTestId("day-marker")).toHaveLength(2);
+    view.unmount();
+
+    const same = appWith([done("one", minutesAgo(30)), done("two", minutesAgo(40))]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(same.app),
+    });
+    expect(screen.queryByTestId("day-marker")).toBeNull();
   });
 
   it("says a finished command printed nothing", () => {
@@ -663,6 +872,46 @@ describe("the running in background group", () => {
       action: "stop",
     });
     expect(processControl).not.toHaveBeenCalled();
+  });
+});
+
+describe("reading running calls again", () => {
+  const showWindow = (shown: boolean) =>
+    act(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => (shown ? "visible" : "hidden"),
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    vi.useRealTimers();
+  });
+
+  it("waits while the window is hidden and reads at once when it shows", async () => {
+    const { app, fetchOperationsSnapshot } = appWith(
+      [command("build", "npm run build")],
+      [viewOf("build")],
+    );
+    renderHook(() => useBackgroundCalls("parent"), { wrapper: withApp(app) });
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(2);
+
+    showWindow(false);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(2);
+
+    showWindow(true);
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(3);
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(fetchOperationsSnapshot).toHaveBeenCalledTimes(4);
   });
 });
 

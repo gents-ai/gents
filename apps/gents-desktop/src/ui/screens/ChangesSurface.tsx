@@ -1,3 +1,5 @@
+import { FileDiff } from "lucide-react";
+import { PanelEmpty } from "./PanelEmpty";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@gents/ui/lib/utils";
 import type { SurfaceContext } from "@/app/surfaces";
@@ -25,9 +27,9 @@ export function ChangesSurface({ sessionId }: SurfaceContext) {
   const shown = useShownChanges(scope);
   if (!scope || !shown)
     return (
-      <p className="p-4 text-sm text-muted-foreground">
-        Choose a file under a reply to see what the turn changed.
-      </p>
+      <PanelEmpty icon={FileDiff} title="No file chosen">
+        Choose a file under a reply to see what that turn changed.
+      </PanelEmpty>
     );
   return (
     <TurnDiffs

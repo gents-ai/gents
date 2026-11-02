@@ -3,19 +3,21 @@ use crate::lean_vocab_test::{
     lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
     LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
 };
-use gents::config_client::patch::{
+use gents::store::config_client::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
 };
-use gents::self_config::agent::{
+use gents::tools::builtin::self_config::agent::{
     admit_sibling_tools_target, decide_agent_operation, materialize_agent, AgentCandidate,
     AgentCatalogView, AgentCreateRequest, AgentOperation, SiblingToolsTarget,
 };
-use gents::self_config::{apply_tool_grant_selection, validate_tool_network_selection};
-use gents::self_config::{
+use gents::tools::builtin::self_config::{
+    apply_tool_grant_selection, validate_tool_network_selection,
+};
+use gents::tools::builtin::self_config::{
     guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
     guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants,
 };
-use gents::toolset::CommandNetworkMode;
+use gents::tools::native::CommandNetworkMode;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
@@ -434,7 +436,7 @@ fn generated_sibling_tools_cases_drive_production_tools_selection() {
             continue;
         }
 
-        let mut tools = gents::document_config::Tools::default();
+        let mut tools = gents::documents::Tools::default();
         apply_tool_grant_selection(&mut tools, None, Some(existing));
         apply_tool_grant_selection(&mut tools, None, requested);
         let selected = tools
@@ -456,7 +458,7 @@ fn generated_self_config_selection_cases_drive_production_tools_selection() {
     let cases = lean_self_config_selection_cases();
     assert!(!cases.tool_flag_cases.is_empty());
     for case in &cases.tool_flag_cases {
-        let mut tools = gents::document_config::Tools::default();
+        let mut tools = gents::documents::Tools::default();
         apply_tool_grant_selection(&mut tools, Some(case.existing), None);
         apply_tool_grant_selection(&mut tools, case.requested, None);
         assert_eq!(

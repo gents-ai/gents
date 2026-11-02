@@ -208,8 +208,8 @@ fn init_tracing() {
                 .with_target(false)
                 .compact()
                 .without_time()
-                .with_filter(gents::log_rate::RateLimitFilter::new(
-                    gents::log_rate::RateLimitConfig::default(),
+                .with_filter(gents::observe::log_rate::RateLimitFilter::new(
+                    gents::observe::log_rate::RateLimitConfig::default(),
                 )),
         )
         .try_init();

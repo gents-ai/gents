@@ -26,6 +26,7 @@ import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
 import { observeMailboxAnswerRetirement } from "./mailboxAnswerRetirement";
 import { seenMarks } from "../ui/app/sessionViews";
+import { mailboxSeen } from "../ui/app/mailboxSeen";
 import { seenMarkOf } from "../ui/lib/seen";
 import { listedSession, sessionKeyOf } from "./fleetStore";
 
@@ -110,6 +111,7 @@ export type DesktopApp = ReturnType<typeof createDesktopApp>;
    in front of the reader never reads as new */
 function keepSeen(stores: ShellStores) {
   seenMarks.start(new Date().toISOString());
+  mailboxSeen.start(new Date().toISOString());
   const stamp = () => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden")
       return;

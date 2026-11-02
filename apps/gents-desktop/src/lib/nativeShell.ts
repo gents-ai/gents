@@ -66,7 +66,8 @@ export function setWindowTitle(title: string) {
   void getCurrentWindow().setTitle(title);
 }
 
-export function setWindowTheme(theme: "light" | "dark") {
+/** null leaves the window to follow the system's appearance */
+export function setWindowTheme(theme: "light" | "dark" | null) {
   void getCurrentWindow()
     .setTheme(theme)
     .catch(() => {});
@@ -89,12 +90,15 @@ export function announceWindowSetupComplete() {
 
 export const canPickDirectory = inNativeShell;
 
-export async function confirmPluginMessage(content: string): Promise<boolean> {
-  const message = `Send this message to the selected chat?\n\n${content}`;
+export async function confirmPluginMessage(
+  plugin: string,
+  content: string,
+): Promise<boolean> {
+  const message = `${plugin} wants to send this message to the selected chat:\n\n${content}`;
   if (!inNativeShell()) return window.confirm(message);
   const { confirm } = await import("@tauri-apps/plugin-dialog");
   return confirm(message, {
-    title: "Plugin message",
+    title: `Message from ${plugin}`,
     okLabel: "Send message",
     cancelLabel: "Cancel",
   });

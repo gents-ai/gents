@@ -1,15 +1,15 @@
 import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ChevronDown, Plus, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  ChevronDown,
+  Package,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@gents/ui/components/select";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -55,6 +55,7 @@ function ListItem({
   compact = false,
   expanded,
   onToggle,
+  inPackGroup = false,
 }: {
   row: ListRow;
   base: Extract<Route, { name: "agent" }>;
@@ -62,7 +63,10 @@ function ListItem({
   compact?: boolean;
   expanded?: boolean;
   onToggle?: () => void;
+  /** under its pack's header, which already names the pack */
+  inPackGroup?: boolean;
 }) {
+  const origin = inPackGroup ? null : packOrigin(r.tags);
   if (nested || compact) {
     return (
       <li
@@ -112,7 +116,7 @@ function ListItem({
               </span>
             )}
           </p>
-          {(r.meta || packOrigin(r.tags)) && (
+          {(r.meta || origin) && (
             <p
               className={`mt-0.5 truncate text-muted-foreground ${r.metaMono ? "font-mono text-[11px]" : "text-xs"}`}
             >
@@ -136,9 +140,7 @@ function ListItem({
               ) : (
                 r.meta
               )}
-              {packOrigin(r.tags)
-                ? `${r.meta ? " · " : ""}pack ${packOrigin(r.tags)}`
-                : ""}
+              {origin ? `${r.meta ? " · " : ""}pack ${origin}` : ""}
             </p>
           )}
         </div>
@@ -190,8 +192,64 @@ export type ListRow = {
   metaLeadToggles?: boolean;
 };
 
+/* which packs' groups the person opened (true) or folded (false) in a list,
+   per section, kept on this device; a pack they never touched follows the
+   list's default */
+const groupsKey = (section: string) => `gents.config.packGroups.${section}`;
+function loadGroupChoices(section: string): Record<string, boolean> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(groupsKey(section)) ?? "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+    return Object.fromEntries(
+      Object.entries(saved).filter(
+        (entry): entry is [string, boolean] => typeof entry[1] === "boolean",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+function saveGroupChoices(section: string, choices: Record<string, boolean>) {
+  try {
+    localStorage.setItem(groupsKey(section), JSON.stringify(choices));
+  } catch {}
+}
+
+/** Which of a list's pack groups are open: the person's choice for a pack,
+    else the list's default. */
+export function usePackGroups(section: string) {
+  const [choices, setChoices] = useState<Record<string, boolean>>(() =>
+    loadGroupChoices(section),
+  );
+  return {
+    isOpen: (pack: string, byDefault: boolean) => choices[pack] ?? byDefault,
+    toggle: (pack: string, byDefault: boolean) =>
+      setChoices((prev) => {
+        const next = { ...prev, [pack]: !(prev[pack] ?? byDefault) };
+        saveGroupChoices(section, next);
+        return next;
+      }),
+  };
+}
+
+/** What a config list says when it has nothing, inside the list's surface. */
+function EmptyRow({ children }: { children: ReactNode }) {
+  return (
+    <li className="px-4 py-8 text-center text-sm text-muted-foreground">{children}</li>
+  );
+}
+
+/** An empty config list on its own: the same card a list shows when it has
+    no entries, for pages that draw their lists another way. */
+export function EmptyList({ children }: { children: ReactNode }) {
+  return (
+    <ul className="rounded-2xl border border-border/60 bg-raised">
+      <EmptyRow>{children}</EmptyRow>
+    </ul>
+  );
+}
+
 const PACK_ORIGIN_PREFIX = "gents:pack:";
-const NOT_FROM_PACK_FILTER = "__not_from_pack__";
 export function packOrigin(tags: string[] | null | undefined): string | null {
   const origins = (tags ?? [])
     .filter((tag) => tag.startsWith(PACK_ORIGIN_PREFIX))
@@ -228,9 +286,10 @@ export function ListDetail({
   const creatingRef = useRef(false);
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
-  const [originFilter, setOriginFilter] = useState("all");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [allNested, setAllNested] = useState<Set<string>>(() => new Set());
+  const packGroups = usePackGroups(base.section);
+
   const origins = useMemo(
     () =>
       Array.from(
@@ -242,12 +301,6 @@ export function ListDetail({
       ).sort(),
     [rows],
   );
-  const effectiveOrigin =
-    originFilter === "all" ||
-    originFilter === NOT_FROM_PACK_FILTER ||
-    origins.includes(originFilter)
-      ? originFilter
-      : "all";
   const create = async () => {
     if (!onCreate || creatingRef.current) return;
     creatingRef.current = true;
@@ -279,22 +332,62 @@ export function ListDetail({
   }
   const filterable = rows.length > FILTER_AFTER;
   const q = query.trim().toLowerCase();
-  const shown = rows.filter((r) => {
-    const origin = packOrigin(r.tags);
-    const matchesOrigin =
-      effectiveOrigin === "all" ||
-      (effectiveOrigin === NOT_FROM_PACK_FILTER
-        ? origin === null
-        : origin === effectiveOrigin);
-    const matchesQuery =
+  /* a search matches an entry's own words or the name of the pack it came
+     from, so typing a pack's name brings up its group */
+  const shown = rows.filter(
+    (r) =>
       !filterable ||
       !q ||
-      [r.title, r.titleNote, r.meta, r.badge].some((t) => t?.toLowerCase().includes(q));
-    return matchesOrigin && matchesQuery;
-  });
+      [r.title, r.titleNote, r.meta, r.badge, packOrigin(r.tags)].some((t) =>
+        t?.toLowerCase().includes(q),
+      ),
+  );
+  /* a pack's entries start folded under the person's own, so packs don't
+     flood the list; with none of their own showing, the groups are the
+     list, so they start open */
+  const groupsOpenByDefault = !shown.some((r) => packOrigin(r.tags) === null);
+  const groupOpen = (pack: string) => packGroups.isOpen(pack, groupsOpenByDefault);
+  const toggleGroup = (pack: string) => packGroups.toggle(pack, groupsOpenByDefault);
+  const renderRow = (r: ListRow, inPackGroup: boolean) => (
+    <Fragment key={r.id}>
+      <ListItem
+        row={r}
+        base={base}
+        compact={compact}
+        inPackGroup={inPackGroup}
+        expanded={r.children ? expanded.has(r.id) : undefined}
+        onToggle={() =>
+          setExpanded((prev) => {
+            const next = new Set(prev);
+            if (next.has(r.id)) next.delete(r.id);
+            else next.add(r.id);
+            return next;
+          })
+        }
+      />
+      {expanded.has(r.id) &&
+        (allNested.has(r.id) || (r.children?.length ?? 0) <= NESTED_SHOWN + 1
+          ? r.children
+          : r.children?.slice(0, NESTED_SHOWN)
+        )?.map((c) => <ListItem key={c.id} row={c} base={base} nested />)}
+      {expanded.has(r.id) &&
+        !allNested.has(r.id) &&
+        (r.children?.length ?? 0) > NESTED_SHOWN + 1 && (
+          <ListItem
+            base={base}
+            nested
+            row={{
+              id: `${r.id}:more`,
+              title: `Show ${(r.children?.length ?? 0) - NESTED_SHOWN} more`,
+              onOpen: () => setAllNested((prev) => new Set(prev).add(r.id)),
+            }}
+          />
+        )}
+    </Fragment>
+  );
   return (
     <div>
-      {(onCreate || createMenu || filterable || origins.length > 0) && (
+      {(onCreate || createMenu || filterable) && (
         <div className="mb-6 flex flex-wrap items-center gap-3">
           {filterable && (
             <Input
@@ -306,34 +399,6 @@ export function ListDetail({
               className="w-72 max-md:w-full"
             />
           )}
-          {origins.length > 0 && (
-            <Select
-              items={[
-                { value: "all", label: "All origins" },
-                ...origins.map((o) => ({ value: o, label: `Pack ${o}` })),
-                { value: NOT_FROM_PACK_FILTER, label: "Not from a pack" },
-              ]}
-              value={effectiveOrigin}
-              onValueChange={(v) => setOriginFilter(v ?? "all")}
-            >
-              <SelectTrigger
-                aria-label="Origin"
-                data-testid={`${base.section}-origin-filter`}
-                className="w-48 max-md:w-full"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All origins</SelectItem>
-                {origins.map((o) => (
-                  <SelectItem key={o} value={o}>
-                    Pack {o}
-                  </SelectItem>
-                ))}
-                <SelectItem value={NOT_FROM_PACK_FILTER}>Not from a pack</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
           {createMenu && <div className="ml-auto">{createMenu}</div>}
           {onCreate && (
             <Button
@@ -341,6 +406,7 @@ export function ListDetail({
               variant="outline"
               disabled={creating}
               onClick={create}
+              data-readonly-hide=""
             >
               <Plus /> {creating ? "Creating…" : createLabel}
             </Button>
@@ -348,50 +414,47 @@ export function ListDetail({
         </div>
       )}
       <ul className="divide-y divide-border/60 rounded-2xl border border-border/60 bg-raised">
-        {shown.map((r) => (
-          <Fragment key={r.id}>
-            <ListItem
-              row={r}
-              base={base}
-              compact={compact}
-              expanded={r.children ? expanded.has(r.id) : undefined}
-              onToggle={() =>
-                setExpanded((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(r.id)) next.delete(r.id);
-                  else next.add(r.id);
-                  return next;
-                })
-              }
-            />
-            {expanded.has(r.id) &&
-              (allNested.has(r.id) || (r.children?.length ?? 0) <= NESTED_SHOWN + 1
-                ? r.children
-                : r.children?.slice(0, NESTED_SHOWN)
-              )?.map((c) => <ListItem key={c.id} row={c} base={base} nested />)}
-            {expanded.has(r.id) &&
-              !allNested.has(r.id) &&
-              (r.children?.length ?? 0) > NESTED_SHOWN + 1 && (
-                <ListItem
-                  base={base}
-                  nested
-                  row={{
-                    id: `${r.id}:more`,
-                    title: `Show ${(r.children?.length ?? 0) - NESTED_SHOWN} more`,
-                    onOpen: () => setAllNested((prev) => new Set(prev).add(r.id)),
-                  }}
-                />
-              )}
-          </Fragment>
-        ))}
-        {rows.length === 0 && (
-          <li className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {empty}
-          </li>
-        )}
+        {/* your own entries first, then each pack's under its name, foldable;
+            a search shows every match, folded or not */}
+        {shown
+          .filter((r) => packOrigin(r.tags) === null)
+          .map((r) => renderRow(r, false))}
+        {origins.map((pack) => {
+          const entries = shown.filter((r) => packOrigin(r.tags) === pack);
+          if (entries.length === 0) return null;
+          const open = Boolean(q) || groupOpen(pack);
+          return (
+            <Fragment key={`pack:${pack}`}>
+              <li className="flex items-center gap-2 bg-background/40 pr-4">
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() => toggleGroup(pack)}
+                  className="flex min-w-0 flex-1 items-center gap-2 py-2.5 pl-4 text-left text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronDown
+                    aria-hidden
+                    className={`size-3.5 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+                  />
+                  <Package aria-hidden className="size-3.5 shrink-0" />
+                  <span className="truncate font-medium text-foreground">{pack}</span>
+                  <span className="shrink-0">· {entries.length} from this pack</span>
+                </button>
+                <a
+                  href={href({ ...base, section: "packs", item: undefined })}
+                  className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Packs <ArrowUpRight aria-hidden className="size-3" />
+                </a>
+              </li>
+              {open && entries.map((r) => renderRow(r, true))}
+            </Fragment>
+          );
+        })}
+        {rows.length === 0 && <EmptyRow>{empty}</EmptyRow>}
         {rows.length > 0 && shown.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {q ? `Nothing matches “${query.trim()}”.` : "Nothing from that origin."}
+            {q ? `Nothing matches “${query.trim()}”.` : "Nothing matches."}
           </li>
         )}
       </ul>
@@ -533,7 +596,7 @@ export function DeleteButton({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <FieldSet className="mt-12 mb-8" data-testid="danger-zone">
+    <FieldSet className="mt-12 mb-8" data-testid="danger-zone" data-readonly-hide="">
       <FieldLegend variant="eyebrow">Danger zone</FieldLegend>
       <FieldRows className="ring-destructive/25 dark:ring-destructive/30">
         <Row

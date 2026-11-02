@@ -1,7 +1,7 @@
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { restoreListViews } from "../src/ui/app/listViews";
+import { recentDefault, restoreListViews } from "../src/ui/app/listViews";
 import { emptyFilter } from "../src/ui/lib/session-filter";
 import {
   applyChosenTheme,
@@ -20,6 +20,7 @@ const defaults: Preferences = {
   sentTurn: "follow",
   followUp: "steer",
   pinnedSessions: [],
+  flags: {},
 };
 
 describe("preferences read back from storage", () => {
@@ -33,6 +34,7 @@ describe("preferences read back from storage", () => {
       sentTurn: "follow",
       followUp: "steer",
       pinnedSessions: [],
+      flags: {},
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",
@@ -143,17 +145,26 @@ describe("list views read back from storage", () => {
     });
   });
 
-  it("discards obsolete per-list node picks while retaining content filters", () => {
+  it("discards obsolete per-list node picks and mailbox kinds, keeping the mailbox tab", () => {
     expect(
       restoreListViews({
         sessionNodes: ["a"],
         mailboxNodes: ["b"],
         mailboxKinds: ["failed", 1],
+        mailboxTab: "wrong",
+        mailboxOpen: { nodeDid: null, itemId: "kept", at: 0, where: "/mailbox" },
+        mailboxQuery: "kept",
       }),
     ).toEqual({
       sessionFilter: emptyFilter,
-      recentFilter: emptyFilter,
-      mailboxKinds: ["failed"],
+      recentFilter: recentDefault,
+      mailboxTab: "wrong",
+      mailboxOpen: null,
+      mailboxQuery: null,
     });
+  });
+
+  it("restores an unknown mailbox tab as all of it", () => {
+    expect(restoreListViews({ mailboxTab: "someday" }).mailboxTab).toBe("all");
   });
 });

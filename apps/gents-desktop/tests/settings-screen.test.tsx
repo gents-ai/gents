@@ -18,7 +18,7 @@ describe("the app's settings screen", () => {
   it("opens on the general section without one named, and on the one named", () => {
     const { unmount } = renderIn(testApp(), <SettingsScreen />);
     expect(screen.getByTestId("settings-screen").dataset.section).toBe("general");
-    expect(screen.getByRole("combobox", { name: "Theme" })).toBeVisible();
+    expect(screen.getByRole("group", { name: "Theme" })).toBeVisible();
     unmount();
     renderIn(testApp(), <SettingsScreen section="developer" />);
     expect(screen.getByTestId("settings-screen").dataset.section).toBe("developer");

@@ -1,8 +1,8 @@
 use crate::config_writes::ConfigAccess;
 use crate::{desired_state, shared::ConfigExportBundle, CONFIG_EXPORT_FORMAT};
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
-use gents::{config_client::config_projection, Collection};
+use gents::store::graphql::escape_graphql_string;
+use gents::{store::config_client::config_projection, Collection};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 

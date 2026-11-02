@@ -14,6 +14,8 @@ export type SessionFacts = {
   rowsRevision: number;
   toolsRevision: number;
   tools: readonly RenderedToolCallView[];
+  /* each tool's message number, by its item key */
+  toolMessages: ReadonlyMap<string, number>;
   userRequestIds: ReadonlySet<string>;
 };
 
@@ -28,10 +30,12 @@ export type SessionStore = StoreApi<SessionState>;
 const NO_ITEMS: readonly RenderedTimelineItem[] = [];
 const NO_TOOLS: readonly RenderedToolCallView[] = [];
 const NO_REQUESTS: ReadonlySet<string> = new Set();
+const NO_MESSAGES: ReadonlyMap<string, number> = new Map();
 const NO_FACTS: SessionFacts = {
   rowsRevision: 0,
   toolsRevision: 0,
   tools: NO_TOOLS,
+  toolMessages: NO_MESSAGES,
   userRequestIds: NO_REQUESTS,
 };
 
@@ -132,6 +136,15 @@ function factsOf(
     tools: toolsSame
       ? facts.tools
       : after.flatMap((item) => (item.kind === "toolGroup" ? item.tools : [])),
+    toolMessages: toolsSame
+      ? facts.toolMessages
+      : new Map(
+          after.flatMap((item) =>
+            item.kind === "toolGroup" && item.messageSequence != null
+              ? item.tools.map((tool) => [tool.itemKey, item.messageSequence!] as const)
+              : [],
+          ),
+        ),
     userRequestIds,
   };
 }
@@ -147,6 +160,7 @@ export function holdsRequest(
     latest === sent.requestId ||
     state.facts.userRequestIds.has(sent.requestId) ||
     session.queuedTurns.some((turn) => turn.requestId === sent.requestId) ||
+    (session.pendingQueue ?? []).some((entry) => entry.requestId === sent.requestId) ||
     session.foldedInputs.some((folded) => folded.requestId === sent.requestId) ||
     (latest !== null && latest !== sent.latestWhenSent)
   );

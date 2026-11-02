@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::{
     compute_owned_pairing_diff, to_replication_filters, PairingActual as RuntimePairingActual,
 };
 
@@ -102,7 +102,9 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
     Ok(())
 }
 
-fn pending_owned_ops(snapshot: &ObservedSnapshot) -> Vec<gents::agent::p2p_reconcile::DiffOp> {
+fn pending_owned_ops(
+    snapshot: &ObservedSnapshot,
+) -> Vec<gents::runtime::agent::p2p_reconcile::DiffOp> {
     // Mirror the live filter observation so the runtime diff sees the same
     // route the harness installed instead of an artificial unfiltered route.
     let live_filter = to_replication_filters(&snapshot.applied.replicator_filter)

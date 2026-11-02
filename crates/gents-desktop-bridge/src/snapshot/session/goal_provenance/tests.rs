@@ -2,7 +2,7 @@ use super::*;
 use gents_protocol::output::MessagePublication;
 
 pub(crate) async fn assert_paged_native_forks(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     opening: &gents_desktop_core::client::ClientStoreRows,
     followup: &gents_protocol::row::AgentRequestRow,
 ) {
@@ -13,7 +13,7 @@ pub(crate) async fn assert_paged_native_forks(
     use gents::session::{ForkBoundary, ForkParams};
 
     let session = &opening.sessions[0];
-    let node = gents::graphql::escape_graphql_string(&session.node_did);
+    let node = gents::store::graphql::escape_graphql_string(&session.node_did);
     access.write("goal_marker.paged_session", &format!(r#"mutation {{
         create_Agent(input: {{node_did:"{node}",agent_id:"default",inference_profile_id:"fixture",enabled:true}}) {{_docID}}
         create_AgentSession(input: {{node_did:"{node}",requester_did:"{node}",agent_id:"default",session_id:"session",created_at:"2026-10-25T00:00:00Z"}}) {{_docID}}
@@ -55,7 +55,7 @@ pub(crate) async fn assert_paged_native_forks(
                             &output_segment_create_variables(&segment)?,
                         )
                         .await?;
-                    let close = gents::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                    let close = gents::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                     let gents_protocol::output::MessageBlock::Text { text } = &mut header.blocks[0]
                     else {
                         panic!("the Goal marker fixture publishes text messages");
@@ -68,7 +68,7 @@ pub(crate) async fn assert_paged_native_forks(
                     .await?;
                     terminals.insert(
                         header.request_doc_id.unwrap(),
-                        gents::graphql::created_doc_id(&response, "AgentMessage")?,
+                        gents::store::graphql::created_doc_id(&response, "AgentMessage")?,
                     );
                 }
                 txn.execute_with_variables(
@@ -84,7 +84,7 @@ pub(crate) async fn assert_paged_native_forks(
                     txn.execute_with_variables(
                         &format!(r#"mutation($input: AgentRequestMutationInputArg!) {{
                             update_AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, input: $input) {{_docID}}
-                        }}"#, gents::graphql::escape_graphql_string(&request)),
+                        }}"#, gents::store::graphql::escape_graphql_string(&request)),
                         &serde_json::json!({"input": {"terminal_output":
                             gents_protocol::output::TerminalOutput::Message { message_doc_id: message }
                         }}),
@@ -156,7 +156,7 @@ pub(crate) async fn assert_paged_native_forks(
 }
 
 async fn assert_native_pages(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     source_session: &gents_protocol::session::AgentSession,
     session_id: &str,
     expected_items: usize,
@@ -261,7 +261,7 @@ async fn assert_native_pages(
 }
 
 pub(crate) async fn assert_copied_opening(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     rows: &gents_desktop_core::client::ClientStoreRows,
 ) {
     use gents_desktop_core::client::{ClientStore, ClientStoreRows};

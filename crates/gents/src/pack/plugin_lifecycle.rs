@@ -12,7 +12,7 @@ use crate::plugin::{install, store};
 #[allow(clippy::too_many_arguments)]
 pub async fn install<F>(
     home: &Path,
-    archive: &crate::pack_archive::PackArchive,
+    archive: &crate::pack::archive::PackArchive,
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
@@ -34,7 +34,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub async fn install_plugin<F>(
     home: &Path,
-    archive: &crate::pack_archive::PackArchive,
+    archive: &crate::pack::archive::PackArchive,
     consent: bool,
     notify: impl FnOnce(PackIdentity) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
@@ -51,7 +51,7 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn install_owned<F>(
     home: &Path,
-    archive: &crate::pack_archive::PackArchive,
+    archive: &crate::pack::archive::PackArchive,
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
@@ -137,7 +137,7 @@ pub fn release_plugin_records(
     coordinate: &str,
     plugins: &[InstalledPackPlugin],
 ) -> Result<Vec<InstalledPackPlugin>> {
-    let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let (namespace, _) = crate::pack::registry::split_pack_coordinate(coordinate);
     let mut released = Vec::new();
     for plugin in plugins {
         if store::remove_record_if_owned(home, namespace, &plugin.name, coordinate, &plugin.digest)?
@@ -177,7 +177,7 @@ pub fn remove_local_locked<P>(
     let record = super::read_home_install(home, coordinate)?
         .with_context(|| format!("{coordinate} is not installed"))?;
     let prepared_cache = prepare_cache(&record)?;
-    let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let (namespace, _) = crate::pack::registry::split_pack_coordinate(coordinate);
     let mut previous = Vec::new();
     for plugin in &record.plugins {
         match store::read_record(home, namespace, &plugin.name) {
@@ -275,7 +275,7 @@ pub(crate) mod tests {
     ) -> (
         tempfile::TempDir,
         std::path::PathBuf,
-        crate::pack_archive::PackArchive,
+        crate::pack::archive::PackArchive,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
@@ -298,10 +298,10 @@ pub(crate) mod tests {
             b"Offline deterministic plugin fixture.\n",
         )
         .unwrap();
-        let (bytes, _) = crate::pack_archive::pack_dir(&source).unwrap();
+        let (bytes, _) = crate::pack::archive::pack_dir(&source).unwrap();
         let artifact = dir.path().join("native_echo.pack");
         std::fs::write(&artifact, &bytes).unwrap();
-        let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         (dir, artifact, archive)
     }
 

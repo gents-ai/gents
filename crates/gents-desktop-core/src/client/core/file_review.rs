@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
-use gents::tool_call_lifecycle::{
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::call::lifecycle::{
     load_tool_file_change_observation, ToolFileChangeRead, VerifiedFileImageReceipt,
 };
 use gents::NodeIdentity;
@@ -368,7 +368,7 @@ async fn admit_image_demand(
         let input = input.clone();
         let demand = demand.clone();
         Box::pin(async move {
-            gents::graphql::fence_arrivals(txn, demand.collection_name()).await?;
+            gents::store::graphql::fence_arrivals(txn, demand.collection_name()).await?;
             let response = txn.execute(&query).await?;
             if let Some(row) = demand_row(&response)? {
                 ensure_demand(row, &demand)?;
@@ -377,7 +377,7 @@ async fn admit_image_demand(
                     &format!("mutation($input: {0}MutationInputArg!) {{ create_FileImageHydrationRequest: create_{0}(input: $input) {{ _docID }} }}", demand.collection_name()),
                     &serde_json::json!({"input": input}),
                 ).await?;
-                gents::graphql::created_doc_id(&response, "FileImageHydrationRequest")?;
+                gents::store::graphql::created_doc_id(&response, "FileImageHydrationRequest")?;
             }
             Ok(())
         })

@@ -4,7 +4,18 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## Unreleased
+## 1.0.0-rc1 - 2026-10-31
+
+- Recover stalled conversation and file synchronization without resetting saved
+  history, including reconnects and duplicate enrollment route records.
+- Improve mobile keyboard layout, touch targets, composer history, question
+  focus, and mailbox navigation; preserve a session's selected folder when branching.
+
+- Remove `gents chain` and the built-in Ethereum surface (`EthTool`,
+  `ChainKeyBinding`, `EthSubmission`, `PackConfig.eth_tools`,
+  `PackConfig.chain_key_bindings`, and `Tools.integrations.eth_tool_ids`).
+  Existing homes keep their stored collections; no data is deleted. The
+  extraction is tracked in [gents-ai/packs#50](https://github.com/gents-ai/packs/issues/50).
 
 - Claude platform backends. Seven provider kinds (`ClaudeBedrock`,
   `ClaudeVertex`, `ClaudeFoundry`, `ClaudeAnthropicAws`, `ClaudeMantle`,

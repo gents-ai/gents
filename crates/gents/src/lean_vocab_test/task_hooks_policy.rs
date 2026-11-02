@@ -1,9 +1,9 @@
-use crate::document_config::{Task, TaskHook};
+use crate::documents::{Task, TaskHook};
 use crate::lean_vocab_test::{
     lean_hook_phase, lean_task_hook_admission_cases, lean_task_hook_recovery_cases,
     lean_task_hook_run_cases,
 };
-use crate::task_hooks::effective_timeout_secs;
+use crate::request::task_hooks::effective_timeout_secs;
 
 fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
     Task {

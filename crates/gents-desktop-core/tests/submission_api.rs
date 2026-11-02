@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use gents::identity::NodeIdentity;
+use gents::store::identity::NodeIdentity;
 use gents_desktop_core::client::{
     initialize_local_standard_peer, ClientCore, ClientCoreOptions, DesktopPaths,
     SubmitRequestOptions,
@@ -32,9 +32,9 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
                     requester_did: {{ _eq: "{}" }}
                 }}) {{ _docID }}
             }}"#,
-            gents::graphql::escape_graphql_string(&session_id),
-            gents::graphql::escape_graphql_string(&node_did),
-            gents::graphql::escape_graphql_string(&node_did),
+            gents::store::graphql::escape_graphql_string(&session_id),
+            gents::store::graphql::escape_graphql_string(&node_did),
+            gents::store::graphql::escape_graphql_string(&node_did),
         ))
         .await;
     assert!(
@@ -214,7 +214,7 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
     let node_home = root.join("node-home");
     std::fs::create_dir_all(&node_home)?;
     let key_path = node_home.join("node.key");
-    let identity = gents::identity::KeyIdentity::load_or_create(&key_path, None)?;
+    let identity = gents::store::identity::KeyIdentity::load_or_create(&key_path, None)?;
     let node_did = identity.did().to_string();
     let key_path_text = key_path.display().to_string();
     std::fs::write(

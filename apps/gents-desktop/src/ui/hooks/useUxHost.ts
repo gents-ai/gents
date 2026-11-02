@@ -52,7 +52,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
       deployments: () => fleetNodes(fleet()),
       selectedDeployment: selectedNode,
       selectedSessionId: () => selection().sessionId,
-      send: async (content) => {
+      send: async (content, caller) => {
         const target = selection();
         if (target.sessionId === null) {
           throw new Error("ctx.send: no session is selected");
@@ -66,7 +66,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
           throw new Error("ctx.send: a message is already awaiting confirmation");
         confirmingMessage = true;
         try {
-          if (!(await confirmPluginMessage(content))) {
+          if (!(await confirmPluginMessage(caller.name, content))) {
             throw new Error("ctx.send: message was not confirmed");
           }
           const current = selection();

@@ -1,9 +1,9 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::tool_call_lifecycle::deadline_is_expired;
+use gents::tools::call::lifecycle::deadline_is_expired;
 use gents::{call_state_holds_backend_slot, UNKNOWN_PROBE_STATUS};
 use gents_protocol::row::{
     project_node_readiness_summary, AgentReadinessState, AgentRequestRow, NodeReadinessRow,

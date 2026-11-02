@@ -90,6 +90,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select a matching macOS SDK for the linker
+        run: .github/scripts/setup-macos-rust-toolchain.sh
+
+      - name: Install CMake for native dependencies
+        run: bash .github/scripts/setup-cmake.sh
+
       - name: Validate release version
         env:
           RELEASE_VERSION_INPUT: ${{ inputs.release_version }}

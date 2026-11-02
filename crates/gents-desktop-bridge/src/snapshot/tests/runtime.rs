@@ -460,11 +460,11 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
         )
         .await;
     }
-    let access = gents::config_client::ConfigAccess::local(core.node_arc());
+    let access = gents::store::config_client::ConfigAccess::local(core.node_arc());
     let load = |session_id: &'static str| {
         let access = access.clone();
         async move {
-            gents::session_origin::load_session(&access, session_id, Some(OPERATOR))
+            gents::session::origin::load_session(&access, session_id, Some(OPERATOR))
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("fixture session {session_id} must load"))
@@ -578,11 +578,11 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
     use gents::NodeIdentity;
     struct SessionRead(serde_json::Value, std::sync::atomic::AtomicUsize);
     #[async_trait::async_trait]
-    impl gents::config_client::ConfigRead for SessionRead {
+    impl gents::store::config_client::ConfigRead for SessionRead {
         async fn execute_read(
             &self,
             query: &str,
-        ) -> Result<serde_json::Value, gents::config_client::ConfigClientError> {
+        ) -> Result<serde_json::Value, gents::store::config_client::ConfigClientError> {
             assert!(
                 query.contains("AgentSession") && !query.contains("AgentRequest"),
                 "a starter is verified from its session row alone: {query}"
@@ -623,7 +623,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
         row["_docID"] = "physical-session".into();
         row["started_by_node_did"] = source.node_did.clone().into();
         row["started_by_session_id"] = source.session_id.clone().into();
-        let scope = gents::session_origin::SessionScope::from(&session);
+        let scope = gents::session::origin::SessionScope::from(&session);
         let candidate = |name: &str| {
             let mut row = row.clone();
             match name {
@@ -665,7 +665,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             let expected = case["accepted"].as_bool().unwrap();
             let candidate = candidate(name);
             let read = SessionRead(candidate.clone(), Default::default());
-            let verified = gents::session_origin::verified_recorded_starter(&read, &scope)
+            let verified = gents::session::origin::verified_recorded_starter(&read, &scope)
                 .await
                 .unwrap();
             assert_eq!(verified.is_some(), expected, "{name}");

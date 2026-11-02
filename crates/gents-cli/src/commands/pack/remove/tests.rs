@@ -80,7 +80,7 @@ async fn an_assets_pack_from_a_directory_releases_its_archive() {
     let home = tempfile::tempdir().unwrap();
     let installed = install(home.path(), assets_fixture_spec()).await.unwrap();
     let digest = installed["digest"].as_str().unwrap().to_owned();
-    let store = gents::pack_store::PackStore::new(home.path());
+    let store = gents::pack::store::PackStore::new(home.path());
     assert!(store.contains(&digest).unwrap());
 
     remove_pkg(home.path(), "fixture/assets_fixture")
@@ -151,7 +151,7 @@ async fn same_name_assets_have_independent_removal_locks() {
             installed["installed_assets"].as_str().unwrap(),
         ));
     }
-    let _lease = gents::file_lock::FileLock::shared(
+    let _lease = gents::store::local::file_lock::FileLock::shared(
         gents::pack::materialize::cache_lock(roots[1].parent().unwrap()).unwrap(),
     )
     .unwrap();
@@ -173,7 +173,7 @@ async fn install_unscoped_assets(home: &Path, package: String) -> HomePackInstal
     let (_, name) = super::super::split_namespace(&record.coordinate);
     record.assets = format!(
         "packs/{name}/{}",
-        gents::pack_archive::digest_hex(&record.digest).unwrap()
+        gents::pack::archive::digest_hex(&record.digest).unwrap()
     );
     let recorded_root = home.join(&record.assets);
     super::super::test_support::copy_tree(root, &recorded_root).unwrap();
@@ -187,7 +187,7 @@ async fn recorded_unscoped_assets_use_their_original_lock_and_retention_rules() 
     let home = tempfile::tempdir().unwrap();
     let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
     let root = home.path().join(&record.assets);
-    let _lease = gents::file_lock::FileLock::shared(
+    let _lease = gents::store::local::file_lock::FileLock::shared(
         gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
     )
     .unwrap();
@@ -227,20 +227,20 @@ async fn removing_a_materialized_pack_preserves_a_digest_named_namespace() {
         .find_map(|version| {
             let dir = assets_pack_dir("fixture", "materialized", &format!("1.0.{version}"));
             let pack = super::super::test_support::local_pack_source(dir.path(), home.path());
-            let namespace = gents::pack_archive::digest_hex(pack.digest()).unwrap();
+            let namespace = gents::pack::archive::digest_hex(pack.digest()).unwrap();
             gents::pack::is_valid_pack_name(namespace).then_some(dir)
         })
         .expect("a pack digest beginning with a letter");
     let record =
         install_unscoped_assets(home.path(), dir.path().to_str().unwrap().to_owned()).await;
-    let namespace = gents::pack_archive::digest_hex(&record.digest).unwrap();
+    let namespace = gents::pack::archive::digest_hex(&record.digest).unwrap();
     let other = assets_pack_dir(namespace, "tools", "1.0.0");
     let installed = install(home.path(), other.path().to_str().unwrap().to_owned())
         .await
         .unwrap();
     let root = Path::new(installed["installed_assets"].as_str().unwrap());
     std::fs::create_dir(root.join("runs")).unwrap();
-    let _lease = gents::file_lock::FileLock::shared(
+    let _lease = gents::store::local::file_lock::FileLock::shared(
         gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
     )
     .unwrap();
@@ -271,7 +271,7 @@ async fn releasing_an_unpacked_pack_preserves_recorded_runs_on_every_release() {
         "holds run history"
     );
     assert_eq!(removed["removed"]["archives"], json!([record.digest]));
-    let store = gents::pack_store::PackStore::new(home.path());
+    let store = gents::pack::store::PackStore::new(home.path());
     assert!(!store.contains(&record.digest).unwrap());
     assert!(store.lookup("fixture", "unpacked", None).unwrap().is_none());
     assert!(!store.release(&record.digest).unwrap());
@@ -685,8 +685,8 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         }
     });
     pause.reached.notified().await;
-    let (archive_bytes, _) = gents::pack_archive::pack_dir(replacement.path()).unwrap();
-    let archive = gents::pack_archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+    let (archive_bytes, _) = gents::pack::archive::pack_dir(replacement.path()).unwrap();
+    let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
     let notify_access = access.clone();
     let notify_owner = owner.clone();
     let notify_home = home.path().to_owned();
@@ -735,7 +735,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
             let owner = &owner;
             let agent = &agent;
             Box::pin(async move {
-                gents::document_config::load_agent_context_and_tools_in_txn(txn, owner, agent).await
+                gents::documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await
             })
         })
         .await
@@ -828,8 +828,9 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let home = tempfile::tempdir().unwrap();
-    let access =
-        gents::config_client::ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"));
+    let access = gents::store::config_client::ConfigAccess::graphql(format!(
+        "http://{address}/api/v0/graphql"
+    ));
     let cases: Value =
         tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
             .await
@@ -898,7 +899,7 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
         },
     )
     .unwrap();
-    let access = gents::config_client::ConfigAccess::graphql(url);
+    let access = gents::store::config_client::ConfigAccess::graphql(url);
     let request = super::super::wire::WireRequest {
         plugin: "acme/missing".into(),
         agent: "engineer".into(),
