@@ -1,6 +1,12 @@
 import { memo, useCallback, useState } from "react";
 import { useStore } from "zustand";
-import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
+import {
+  ChevronDown,
+  EllipsisVertical,
+  Inbox,
+  Plus,
+  SlidersHorizontal,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   enrollmentActivationMessage,
@@ -59,6 +65,7 @@ import type { NodeView } from "../../hooks/fleetStore";
 import { useShallow } from "zustand/react/shallow";
 import { errorText } from "../../lib/errorText";
 import { useHidden } from "@/lib/hidden";
+import { usePackGroups } from "./agent/ListDetail";
 import { preferences, useOpenOn } from "@/preferences";
 
 export function AgentsScreen() {
@@ -110,6 +117,8 @@ export function AgentsScreen() {
     [selected, openOn],
   );
   const shown = nodes.filter((d) => !hidden.node(d.nodeDid));
+  const groupChoices = usePackGroups("nodes");
+  const hiddenOpen = groupChoices.isOpen("hidden", false);
   if (addingLocal) {
     return (
       <SetupScreen
@@ -168,12 +177,34 @@ export function AgentsScreen() {
         )}
         {groups.map((g) => (
           <section key={g.key} className="mt-6">
-            <h2 className="flex items-baseline gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
-              {g.label}
-              {g.count && (
-                <span className="text-muted-foreground/70">{g.nodes.length}</span>
-              )}
-            </h2>
+            {g.key === "hidden" ? (
+              /* folded unless opened, since these were put out of the way */
+              <h2>
+                <button
+                  type="button"
+                  aria-expanded={hiddenOpen}
+                  onClick={() => groupChoices.toggle("hidden", false)}
+                  className="flex items-center gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase hover:text-foreground"
+                >
+                  <ChevronDown
+                    aria-hidden
+                    className={cn(
+                      "size-3.5 transition-transform",
+                      !hiddenOpen && "-rotate-90",
+                    )}
+                  />
+                  {g.label}
+                  <span className="text-muted-foreground/70">{g.nodes.length}</span>
+                </button>
+              </h2>
+            ) : (
+              <h2 className="flex items-baseline gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+                {g.label}
+                {g.count && (
+                  <span className="text-muted-foreground/70">{g.nodes.length}</span>
+                )}
+              </h2>
+            )}
             {g.nodes.length === 0 && !(g.key === "remote" && waiting.length > 0) && (
               <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
                 <p>
@@ -195,21 +226,23 @@ export function AgentsScreen() {
                   )}
               </div>
             )}
-            <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
-              {g.key === "remote" &&
-                waiting.map((r) => <PendingNodeRow key={r.requestId} request={r} />)}
-              {g.nodes.map((d) => (
-                <AgentRow
-                  key={d.nodeDid}
-                  node={d}
-                  homeDid={homeDid}
-                  hidden={g.key === "hidden"}
-                  onHide={hide}
-                  onRename={setRenaming}
-                  onRemove={setRemoving}
-                />
-              ))}
-            </ul>
+            {(g.key !== "hidden" || hiddenOpen) && (
+              <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
+                {g.key === "remote" &&
+                  waiting.map((r) => <PendingNodeRow key={r.requestId} request={r} />)}
+                {g.nodes.map((d) => (
+                  <AgentRow
+                    key={d.nodeDid}
+                    node={d}
+                    homeDid={homeDid}
+                    hidden={g.key === "hidden"}
+                    onHide={hide}
+                    onRename={setRenaming}
+                    onRemove={setRemoving}
+                  />
+                ))}
+              </ul>
+            )}
           </section>
         ))}
       </div>
@@ -235,8 +268,8 @@ export function AgentsScreen() {
             <AlertDialogTitle>Hide {hiding?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               {hiding?.why === "active"
-                ? "It's the node in use. It stays in use until you switch, but the node switcher, the nav and search won't offer it again."
-                : "The app is set to open on it, and still will, but the node switcher, the nav and search won't offer it."}
+                ? "It's the node in use. It stays in use until you switch, but the node switcher, the sidebar and search won't offer it again."
+                : "It's the startup node, and the app still starts on it, but the node switcher, the sidebar and search won't offer it."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -481,7 +514,10 @@ const AgentRow = memo(function AgentRow({
   return (
     <li
       key={d.nodeDid}
-      className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
+      className={cn(
+        "flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent",
+        hidden && "opacity-75",
+      )}
     >
       <a
         href={href({ name: "sessions", nodeDid: d.nodeDid })}

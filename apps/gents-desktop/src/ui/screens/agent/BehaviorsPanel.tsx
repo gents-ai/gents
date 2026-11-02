@@ -83,6 +83,18 @@ function RowControls({
       className="flex items-center gap-1"
       data-testid={inEditor ? "agent-status" : "agent-row-controls"}
     >
+      {hidden && !inEditor && (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`Show ${agent.displayName}`}
+          onClick={() =>
+            preferences.setAgentHidden(deployment.nodeDid, agent.agentId, false)
+          }
+        >
+          Show
+        </Button>
+      )}
       <span
         className="flex items-center gap-2.5 px-1 text-sm"
         title={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
@@ -240,7 +252,7 @@ export function AgentsPanel({
             title: b.displayName,
             titleNote: b.isDefault ? "Default" : undefined,
             /* left out of the agent picker and search on this device */
-            badge: hidden.agent(deployment.nodeDid, b.agentId) ? "Hidden" : undefined,
+            hidden: hidden.agent(deployment.nodeDid, b.agentId),
             meta: line(b),
             metaMono: true,
             trailing: <RowControls deployment={deployment} agent={b} />,

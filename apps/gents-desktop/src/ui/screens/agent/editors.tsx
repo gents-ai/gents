@@ -1,6 +1,7 @@
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { SEARCH_FIELD } from "@/lib/textAssist";
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -39,7 +40,10 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@gents/ui/components/select";
@@ -447,6 +451,7 @@ export function ChoiceRow({
   value,
   onChange,
   items,
+  groups,
   none,
   error,
   disabled,
@@ -454,9 +459,21 @@ export function ChoiceRow({
   value: string;
   onChange: (v: string) => void;
   items: Choice[];
+  /** choices under headings, after `none` and before the ungrouped `items` */
+  groups?: { label: string; items: Choice[] }[];
   none?: string;
 }) {
-  const all = none ? [{ value: "", label: none }, ...items] : items;
+  const shownGroups = groups?.filter((g) => g.items.length > 0) ?? [];
+  const all = [
+    ...(none ? [{ value: "", label: none }] : []),
+    ...shownGroups.flatMap((g) => g.items),
+    ...items,
+  ];
+  const option = (i: Choice) => (
+    <SelectItem key={i.value || "∅"} value={i.value}>
+      {i.label}
+    </SelectItem>
+  );
   return (
     <Row label={label} description={description} htmlFor={id} error={error}>
       <Select
@@ -473,11 +490,24 @@ export function ChoiceRow({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {all.map((i) => (
-            <SelectItem key={i.value || "∅"} value={i.value}>
-              {i.label}
-            </SelectItem>
-          ))}
+          {groups ? (
+            <>
+              {none && option({ value: "", label: none })}
+              {shownGroups.map((g, n) => (
+                <Fragment key={g.label}>
+                  {(none || n > 0) && <SelectSeparator />}
+                  <SelectGroup>
+                    <SelectLabel>{g.label}</SelectLabel>
+                    {g.items.map(option)}
+                  </SelectGroup>
+                </Fragment>
+              ))}
+              {items.length > 0 && <SelectSeparator />}
+              {items.map(option)}
+            </>
+          ) : (
+            all.map(option)
+          )}
         </SelectContent>
       </Select>
     </Row>
