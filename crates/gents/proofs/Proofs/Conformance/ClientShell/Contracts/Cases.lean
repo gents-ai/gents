@@ -81,6 +81,14 @@ def storeNewQueuedBehindRunning : LocalStore :=
 def storeNewFoldedIntoRunning : LocalStore :=
   storeWith (rowsObs foldedRows)
 
+def storeNewInPendingQueue : LocalStore :=
+  storeWith [{ (sessionObs sid1 (some reqOld) (some turnRunning)) with
+    pendingQueueRequests := [reqNew] }]
+
+def storeOtherInPendingQueue : LocalStore :=
+  storeWith [{ (sessionObs sid1 (some reqOld) (some turnRunning)) with
+    pendingQueueRequests := [reqOther] }]
+
 def desktopRowsFor (store : LocalStore) : List ClientShell.SessionTurn.Row :=
   if store.sessions = storeNewQueuedBehindRunning.sessions then queuedRows
   else if store.sessions = storeNewFoldedIntoRunning.sessions then foldedRows
@@ -146,6 +154,9 @@ def awaitedRequestForFrontend
 def queuedRequestsOf (obs : Option SessionObservation) : List RequestId :=
   (obs.map (·.queuedRequests)).getD []
 
+def pendingQueueRequestsOf (obs : Option SessionObservation) : List RequestId :=
+  (obs.map (·.pendingQueueRequests)).getD []
+
 def foldedRequestsOf (obs : Option SessionObservation) : List RequestId :=
   (obs.map (·.foldedRequests)).getD []
 
@@ -154,7 +165,7 @@ def trackedRequestForFrontend
     (obs : Option SessionObservation)
     (workflow : SubmissionWorkflow) : Option RequestId :=
   (awaitedRequestForFrontend selection obs workflow).filter
-    (fun req => !(queuedRequestsOf obs).contains req && !(foldedRequestsOf obs).contains req)
+    (fun req => !(queuedRequestsOf obs).contains req && !(pendingQueueRequestsOf obs).contains req && !(foldedRequestsOf obs).contains req)
 
 def activeRequestForFrontend
     (selection : Selection)
@@ -292,6 +303,7 @@ def clientShellCaseFromStep
   , frontendSessionTurnState := turnStateOptionName (obs.bind (·.latestTurn))
   , frontendSessionPendingRequestId := pendingRequestForFrontend obs
   , frontendSessionQueuedRequestIds := queuedRequestsOf obs
+  , frontendSessionPendingQueueRequestIds := pendingQueueRequestsOf obs
   , frontendSessionFoldedRequestIds := foldedRequestsOf obs
   , frontendLocalWorkflowKind :=
       match frontendLocal.workflow with
@@ -448,6 +460,18 @@ def clientShellCases : List ClientShellContractCase :=
       "folded_observation_retires_awaiting"
       "folded_observation_retires_awaiting"
       awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeNewFoldedIntoRunning
+  , let input := ShellInput.snapshot storeNewInPendingQueue
+    let post := step awaitingNew input emptyStore .healthy ctxReady
+    clientShellCaseFromStep
+      "pending_queue_observation_retires_awaiting"
+      "pending_queue_observation_retires_awaiting"
+      awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeNewInPendingQueue
+  , let input := ShellInput.snapshot storeOtherInPendingQueue
+    let post := step awaitingNew input emptyStore .healthy ctxReady
+    clientShellCaseFromStep
+      "unrelated_pending_queue_keeps_awaiting"
+      "unrelated_pending_queue_does_not_retire_awaiting"
+      awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeOtherInPendingQueue
   , let pre := selectedShell (some sid1)
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep

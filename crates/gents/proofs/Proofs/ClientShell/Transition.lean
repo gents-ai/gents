@@ -8,7 +8,7 @@ def workflowAfterSelectSession
   | w                 => w
 
 def observesRequest (obs : SessionObservation) (req : RequestId) : Prop :=
-  obs.latestObservedRequest = some req ∨ req ∈ obs.queuedRequests ∨
+  obs.latestObservedRequest = some req ∨ req ∈ obs.queuedRequests ∨ req ∈ obs.pendingQueueRequests ∨
     req ∈ obs.foldedRequests
 
 instance (obs : SessionObservation) (req : RequestId) : Decidable (observesRequest obs req) := by

@@ -22,9 +22,10 @@ theorem unrelated_terminal_does_not_retire_awaiting
     (obs : SessionObservation) (hfind : store.find sid = some obs)
     (hother : obs.latestObservedRequest ≠ some req)
     (hunqueued : req ∉ obs.queuedRequests)
+    (hnotpending : req ∉ obs.pendingQueueRequests)
     (hunfolded : req ∉ obs.foldedRequests) :
     snapshotAdvanceWorkflow (.awaiting sid req) store = .awaiting sid req := by
-  simp [snapshotAdvanceWorkflow, observesRequest, hfind, hother, hunqueued, hunfolded]
+  simp [snapshotAdvanceWorkflow, observesRequest, hfind, hother, hunqueued, hnotpending, hunfolded]
 
 theorem observed_before_ack_retires_without_another_snapshot
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
