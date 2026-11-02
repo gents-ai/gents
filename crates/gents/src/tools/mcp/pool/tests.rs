@@ -1261,3 +1261,75 @@ async fn pinned_connection_cannot_be_rebound_between_admission_and_dispatch() {
         "did:test:first"
     );
 }
+
+/// Answers every request with one fixed raw HTTP response, like an MCP server
+/// that demands authorization before the handshake.
+async fn spawn_refusing_mcp_server(response: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind refusing MCP server");
+    let addr = listener.local_addr().expect("refusing MCP server address");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let _ = read_mcp_http_request(&mut stream).await;
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://{addr}/mcp")
+}
+
+const UNAUTHORIZED: &str = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer resource_metadata=\"https://mcp.example.com/.well-known/oauth-protected-resource\", scope=\"read\", error_description=\"token tok_SECRET expired\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+const FORBIDDEN_SCOPE: &str = "HTTP/1.1 403 Forbidden\r\nWWW-Authenticate: Bearer error=\"insufficient_scope\", scope=\"files:write\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+#[tokio::test]
+async fn handshake_401_is_a_typed_auth_refusal_with_its_challenge() {
+    let endpoint = spawn_refusing_mcp_server(UNAUTHORIZED).await;
+    let error = McpPool::new()
+        .list_tools_with_node_did("svc", &endpoint, None)
+        .await
+        .unwrap_err();
+    let refused = error
+        .downcast_ref::<McpHandshakeRefused>()
+        .unwrap_or_else(|| panic!("expected a typed refusal, got: {error:#}"));
+    assert_eq!(
+        refused.refusal,
+        McpAuthRefusal::Required {
+            resource_metadata: Some(
+                "https://mcp.example.com/.well-known/oauth-protected-resource".into()
+            ),
+            scope: Some("read".into()),
+        }
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("authorization required (HTTP 401)"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("tok_SECRET"),
+        "server text must not be echoed: {message}"
+    );
+}
+
+#[tokio::test]
+async fn handshake_403_scope_challenge_is_a_typed_auth_refusal() {
+    let endpoint = spawn_refusing_mcp_server(FORBIDDEN_SCOPE).await;
+    let error = McpPool::new()
+        .list_tools_with_node_did("svc", &endpoint, None)
+        .await
+        .unwrap_err();
+    let refused = error
+        .downcast_ref::<McpHandshakeRefused>()
+        .unwrap_or_else(|| panic!("expected a typed refusal, got: {error:#}"));
+    assert_eq!(
+        refused.refusal,
+        McpAuthRefusal::InsufficientScope {
+            scope: Some("files:write".into())
+        }
+    );
+}

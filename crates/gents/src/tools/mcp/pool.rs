@@ -14,7 +14,10 @@ use rmcp::{
 use tokio::sync::RwLock;
 use tracing::Instrument;
 
+mod auth_refusal;
 mod resume;
+
+pub use auth_refusal::{McpAuthRefusal, McpHandshakeRefused};
 
 pub use resume::McpResumeStats;
 use resume::SessionResumePolicy;
@@ -150,10 +153,18 @@ async fn connect_mcp_service(
     config.retry_config = Arc::clone(&resume_policy)
         as Arc<dyn rmcp::transport::common::client_side_sse::SseRetryPolicy>;
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
-    let client = ()
-        .serve(transport)
-        .await
-        .map_err(|e| anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}"))?;
+    let auth_refusal = auth_refusal::refusal_classifier(&transport);
+    let client =
+        ().serve(transport)
+            .await
+            .map_err(|e| match auth_refusal(&e) {
+                Some(refusal) => anyhow::Error::new(McpHandshakeRefused {
+                    service_id: service_id.to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    refusal,
+                }),
+                None => anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}"),
+            })?;
     let mut connection = wrap_connection(endpoint.to_string(), client, resume_policy);
     connection.node_did_header = node_did_header.map(ToOwned::to_owned);
     connection.trace_context_headers = trace_context_headers;
