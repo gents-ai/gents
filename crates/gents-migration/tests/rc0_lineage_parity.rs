@@ -23,6 +23,10 @@ const RC0_PINS: &[(&str, &str)] = &[
         schemas::INFERENCE_BACKEND_NAME,
         "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike",
     ),
+    (
+        schemas::NODE_NAME,
+        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby",
+    ),
 ];
 
 /// Where both an upgraded rc0 store and a fresh store land.
@@ -37,7 +41,7 @@ const CANONICAL: &[(&str, &str)] = &[
     ),
     (
         schemas::NODE_NAME,
-        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby",
+        "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli",
     ),
 ];
 
@@ -50,6 +54,7 @@ fn rc0_sdl(name: &str) -> String {
         schemas::INFERENCE_BACKEND_NAME => {
             (schemas::INFERENCE_BACKEND, "    claude_platform: JSON\n")
         }
+        schemas::NODE_NAME => (schemas::NODE, "    avatar: String\n"),
         other => panic!("no rc0 fixture for {other}"),
     };
     assert!(

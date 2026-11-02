@@ -67,8 +67,6 @@ const BACKEND_PLATFORM_FROM_PATCHED: &str =
     "bafyreickxk6jgbbg74hxamckiaeoh323zwr3bdojam5oze4eywnhrryxre";
 const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/Fields/-","value":{"Name":"claude_platform","Kind":"JSON"}}]"#;
 
-const NODE_RC0_ROOT: &str = "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby";
-
 /// One canonical lineage per collection. DefraDB derives a patched version ID from the
 /// version it patches, so an rc0 store patched to the current SDL and a fresh store that
 /// registers the current SDL directly can never share a version ID, and stores on different
@@ -93,7 +91,7 @@ pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[
     (
         "Node",
         include_str!("../schemas/rc0/node.graphql"),
-        NODE_RC0_ROOT,
+        NODE_ROOT,
     ),
 ];
 
