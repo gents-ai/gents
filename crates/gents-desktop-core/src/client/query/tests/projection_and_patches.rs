@@ -765,9 +765,9 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
     }))?;
     gents::ensure_node(&node, &backend.node_did).await?;
     let access = gents::ConfigAccess::local(node.clone());
-    gents::config_client::write_inference_backend_document(&access, &backend).await?;
+    gents::store::config_client::write_inference_backend_document(&access, &backend).await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
-        let catalog: gents::document_config::BackendModelCatalog =
+        let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
                 "node_did":null, "observed_at":observed_at,
                 "models":[{"model_name":"retained-model"}]
@@ -777,8 +777,10 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog)
-                        .await
+                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                        txn, backend, catalog,
+                    )
+                    .await
                 })
             })
             .await?;

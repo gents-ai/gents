@@ -117,7 +117,7 @@ async fn call_installed_inner(
                 .transact_write("ux_plugin.writes", |txn| {
                     let (grant, stamps, writes) = (&grant, &stamps, writes.clone());
                     Box::pin(async move {
-                        gents::application_write::apply_plugin_writes_in_txn(
+                        gents::plugin::application_write::apply_plugin_writes_in_txn(
                             txn, grant, stamps, writes,
                         )
                         .await
@@ -410,8 +410,8 @@ mod tests {
         let manifest: gents::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        let (archive_bytes, _) = gents::pack_archive::pack_dir(fixture.path()).unwrap();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let (archive_bytes, _) = gents::pack::archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
         gents::plugin::install::install_pack_plugins(
             home.path(),
@@ -455,8 +455,8 @@ mod tests {
         let manifest: gents::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        let (archive_bytes, _) = gents::pack_archive::pack_dir(fixture.path()).unwrap();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let (archive_bytes, _) = gents::pack::archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
         gents::plugin::install::install_pack_plugins(
             home.path(),
@@ -551,8 +551,8 @@ mod tests {
         let manifest: gents::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        let (archive_bytes, _) = gents::pack_archive::pack_dir(fixture.path()).unwrap();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let (archive_bytes, _) = gents::pack::archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
         gents::plugin::install::install_pack_plugins(
             home.path(),

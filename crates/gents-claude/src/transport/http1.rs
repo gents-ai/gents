@@ -128,13 +128,6 @@ struct Inner {
     proxy: Option<Proxy>,
 }
 
-/// Why one attempt failed.
-enum Failure {
-    /// A pooled connection was dead before any response byte arrived.
-    Stale,
-    Fatal(TransportError),
-}
-
 impl Client {
     /// Builds a client. Loads the platform trust roots, so call it at startup.
     pub fn new(options: ClientOptions) -> Result<Self, TransportError> {
@@ -171,9 +164,12 @@ impl Client {
 
     /// Sends `head` then `body` verbatim and returns once the response head is read.
     ///
-    /// A pooled connection that the server closed while idle shows up as a
-    /// close or reset before any response byte; the request was then written
-    /// in full to a dead socket, so it is resent once on a fresh connection.
+    /// The request is written exactly once. A pooled connection the server
+    /// closed while idle shows up as a close or reset before any response
+    /// byte, but the request may already have reached the server, so the
+    /// transport never replays it: the failure is returned and the caller's
+    /// retry owner decides. Replaying here would duplicate a POST the server
+    /// may have acted on.
     pub async fn send(
         &self,
         target: &Target,
@@ -186,19 +182,11 @@ impl Client {
             tls: target.tls,
         };
         let close = request_wants_close(head);
-        if let Some(conn) = self.inner.idle.take(&key) {
-            match self.exchange(conn, &key, head, body, close, true).await {
-                Ok(r) => return Ok(r),
-                Err(Failure::Fatal(e)) => return Err(e),
-                Err(Failure::Stale) => {}
-            }
-        }
-        let conn = self.connect(target).await?;
-        match self.exchange(conn, &key, head, body, close, false).await {
-            Ok(r) => Ok(r),
-            Err(Failure::Fatal(e)) => Err(e),
-            Err(Failure::Stale) => Err(TransportError::Closed),
-        }
+        let (conn, reused) = match self.inner.idle.take(&key) {
+            Some(conn) => (conn, true),
+            None => (self.connect(target).await?, false),
+        };
+        self.exchange(conn, &key, head, body, close, reused).await
     }
 
     async fn exchange(
@@ -209,7 +197,7 @@ impl Client {
         body: &[u8],
         close: bool,
         reused: bool,
-    ) -> Result<Response, Failure> {
+    ) -> Result<Response, TransportError> {
         // A server may answer and close before reading a large body; the
         // write then fails, but a complete head already received is the reply.
         let write_err = conn.write_all(head, body).await.err();
@@ -217,9 +205,9 @@ impl Client {
             let h = match read_head(&mut conn).await {
                 Ok(h) => h,
                 Err(_) if write_err.is_some() => {
-                    return Err(Failure::Fatal(TransportError::Io(
+                    return Err(TransportError::Io(
                         write_err.unwrap_or_else(|| std::io::ErrorKind::BrokenPipe.into()),
-                    )));
+                    ));
                 }
                 Err(e) => return Err(classify(e, reused && conn.buf.is_empty())),
             };
@@ -233,13 +221,13 @@ impl Client {
             minor,
             headers,
         } = parsed;
-        let framing = framing(status, &headers).map_err(Failure::Fatal)?;
+        let framing = framing(status, &headers)?;
         let encoding = if matches!(framing, Framing::Done) {
             None
         } else {
-            content_encoding(&headers).map_err(Failure::Fatal)?
+            content_encoding(&headers)?
         };
-        let decoder = Decoder::for_encoding(encoding).map_err(Failure::Fatal)?;
+        let decoder = Decoder::for_encoding(encoding)?;
         let keep_alive = minor == 1
             && write_err.is_none()
             && !close
@@ -301,17 +289,21 @@ impl Client {
     }
 }
 
-/// Maps a head-read error; a dead pooled socket with nothing read is stale.
-fn classify(e: TransportError, nothing_read: bool) -> Failure {
+/// Maps a head-read error; a dead pooled socket with nothing read is a close.
+///
+/// `nothing_read` is `reused && conn.buf.is_empty()`: only a connection taken
+/// from the pool can be a socket the server closed while idle. A reset on a
+/// fresh connection keeps its `Io` error, as it did before the replay fix.
+pub(super) fn classify(e: TransportError, nothing_read: bool) -> TransportError {
     let dead = match &e {
         TransportError::Closed => true,
         TransportError::Io(io) => is_peer_gone(io),
         _ => false,
     };
     if dead && nothing_read {
-        Failure::Stale
+        TransportError::Closed
     } else {
-        Failure::Fatal(e)
+        e
     }
 }
 

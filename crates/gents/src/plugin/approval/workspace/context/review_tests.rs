@@ -24,7 +24,7 @@ impl Fixture {
             0,
             Mode::AutoReview,
             Some(&workspace::ReviewTaskSelection::for_task(
-                &crate::document_config::Task {
+                &crate::documents::Task {
                     task_id: "review".into(),
                     ..workspace::default_review_task("node", "agent")
                 },
@@ -60,7 +60,7 @@ impl Fixture {
                     cwd: self.key.path.clone(),
                     root: self.key.path.clone(),
                     writable_root: None,
-                    policy: crate::toolset::CommandExecutionPolicy::write_capable(),
+                    policy: crate::tools::native::CommandExecutionPolicy::write_capable(),
                 })
             },
             covered,
@@ -282,7 +282,7 @@ async fn a_review_that_cancels_the_caller_cannot_release_the_command() {
     });
     scope(
         Some(fixture.context(reviewer)),
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
             None,
             cancellation,
             async {
@@ -314,7 +314,7 @@ async fn stop_cancels_review_before_a_human_question_can_be_published() {
     let cancellation = tokio_util::sync::CancellationToken::new();
     scope(
         Some(fixture.context(reviewer)),
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
             None,
             cancellation.clone(),
             async {

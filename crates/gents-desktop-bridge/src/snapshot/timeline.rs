@@ -121,7 +121,7 @@ fn render_timeline_order(
                         captured_context: pending_turn.captured_context.clone(),
                         attachments: pending_turn.attachments.clone(),
                         selected_skill_ids: pending_turn.selected_skill_ids.clone(),
-                        lifecycle_state: pending_turn.lifecycle_state.clone(),
+                        lifecycle_state: pending_turn.lifecycle_state,
                         folded_into_request_id: pending_turn.folded_into_request_id.clone(),
                         origin: pending_turn.origin.clone(),
                         created_at: pending_turn.created_at.clone(),
@@ -378,7 +378,7 @@ mod tests {
             tool_call_key: "start-1".to_string(),
             request_id: Some("parent-1".to_string()),
             message_sequence: Some(2),
-            tool_name: Some(gents::toolset::AGENT_NEW_TOOL_NAME.to_string()),
+            tool_name: Some(gents::tools::native::AGENT_NEW_TOOL_NAME.to_string()),
             tool_call_id: Some("start-1".to_string()),
             args: Some(r#"{"agent":"researcher","prompt":"trace the request flow"}"#.to_string()),
             partial_output_tail: None,
@@ -461,7 +461,7 @@ mod tests {
         for text in [
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
-            gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ] {
             let message = MessageView {
                 runtime_control: true,
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn user_text_that_looks_like_a_control_message_still_renders() {
-        let content = gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        let content = gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
 
         let timeline = build_rendered_timeline(&messages, &[], &[]);

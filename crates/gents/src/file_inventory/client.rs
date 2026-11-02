@@ -9,8 +9,8 @@ use gents_protocol::file_inventory::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::{escape_graphql_string, required_rows};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::{escape_graphql_string, required_rows};
 use crate::NodeIdentity;
 
 use super::{FileInventoryPrefix, FileInventoryReceiver};
@@ -510,7 +510,7 @@ async fn save_in_txn(
         "create_FileInventoryProgress"
     };
     ensure!(
-        crate::graphql::mutation_documents(&result, operation)?.is_some_and(|rows| {
+        crate::store::graphql::mutation_documents(&result, operation)?.is_some_and(|rows| {
             rows.len() == 1
                 && rows[0]["_docID"]
                     .as_str()

@@ -10,6 +10,7 @@ import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { dayLabel, dayOf, dayOpenings } from "../src/ui/screens/TranscriptMarker";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { NO_WORKERS } from "../src/ui/screens/workers";
+import userEvent from "@testing-library/user-event";
 import { renderIn, testApp } from "./app-fixture";
 import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixture";
 
@@ -55,8 +56,22 @@ describe("day labels", () => {
       rows,
       (row) => row.key,
       (row) => row.at,
+      day(2026, 9, 28),
     );
     expect([...opens.keys()]).toEqual(["b", "e"]);
+  });
+
+  it("opens no day above a first row from today, but marks today after an earlier day", () => {
+    const opens = (...at: string[]) => [
+      ...dayOpenings(
+        at.map((time, n) => ({ key: String(n), at: time })),
+        (row) => row.key,
+        (row) => row.at,
+        day(2026, 9, 27),
+      ).keys(),
+    ];
+    expect(opens("2026-10-27T08:00:00", "2026-10-27T09:00:00")).toEqual([]);
+    expect(opens("2026-10-26T18:00:00", "2026-10-27T08:00:00")).toEqual(["0", "1"]);
   });
 });
 
@@ -99,6 +114,50 @@ describe("day markers in the transcript", () => {
     expect(markers.map((marker) => marker.textContent)).toEqual(["Yesterday", "Today"]);
     expect(
       within(markers[1].closest("[data-timeline-key]")!).getByText("next"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("when each message was sent", () => {
+  it("sits in its actions: the time today, the date with it before", async () => {
+    const sent = at(1, 16);
+    const replied = at(0, 9);
+    const session = sessionSnapshot({
+      timelineItems: [
+        userMessage({ itemKey: "u1", sequence: 1, content: "first", timestamp: sent }),
+        assistantMessage({
+          itemKey: "a2",
+          sequence: 2,
+          content: "reply",
+          timestamp: replied,
+        }),
+      ],
+    });
+    const { container } = renderIn(
+      testApp(),
+      <TranscriptPanel
+        inFlight={false}
+        scroller={null}
+        session={session}
+        workers={NO_WORKERS}
+        parentWork={NO_PARENT}
+        workerActions={{ interrupt: () => {} }}
+      />,
+    );
+    const times = [...container.querySelectorAll("time")];
+    const sentTime = times.find((time) => time.dateTime === sent)!;
+    const replyTime = times.find((time) => time.dateTime === replied)!;
+    expect(sentTime.closest('[data-slot="message-actions"]')).not.toBeNull();
+    expect(sentTime.textContent).toMatch(/\d/);
+    expect(sentTime.textContent).not.toBe(replyTime.textContent!.trim());
+    expect(replyTime.closest('[data-slot="message-actions"]')).not.toBeNull();
+    await userEvent.hover(replyTime);
+    expect(
+      await screen.findByText(
+        new Date(replied).toLocaleString(),
+        {},
+        { timeout: 2000 },
+      ),
     ).toBeInTheDocument();
   });
 });

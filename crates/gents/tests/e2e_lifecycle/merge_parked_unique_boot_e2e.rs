@@ -8,9 +8,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::runtime::agent::p2p_reconcile::{
+    EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
+};
+use gents::store::graphql::escape_graphql_string;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::test_p2p_db;
@@ -167,7 +169,7 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         }
     }
 
-    gents::migration::ensure_migrations(&home.node)
+    gents::store::schema::migration::ensure_migrations(&home.node)
         .await
         .expect("ensure_migrations after boot");
 

@@ -1,7 +1,7 @@
 use anyhow::Context as _;
 use clap::Parser;
-use gents::config_client::read_desired_state_record_in_txn;
 use gents::eval::checks::CheckRegistry;
+use gents::store::config_client::read_desired_state_record_in_txn;
 use gents::Collection;
 use tokio_util::sync::CancellationToken;
 
@@ -104,7 +104,7 @@ pub(crate) async fn delete_definition(fixture: &Fixture) {
                 txn.execute(&format!(
                     r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#,
                     name = Collection::EvalDefinition.graphql_type(),
-                    doc_id = gents::graphql::escape_graphql_string(&doc_id),
+                    doc_id = gents::store::graphql::escape_graphql_string(&doc_id),
                 ))
                 .await
                 .map(|_| ())

@@ -33,7 +33,7 @@ async fn control(
             "Runtime operator authorization is required.",
         );
     };
-    if !gents::plugin_job::control::operator_control_authorized(
+    if !gents::tools::background::job::control::operator_control_authorized(
         &state.node_did,
         &request.node_did,
         &state.node_did,

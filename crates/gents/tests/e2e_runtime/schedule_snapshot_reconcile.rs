@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity, ToolCeiling};
 
 use crate::support::fixtures::bind_default_agent_backend;
@@ -21,7 +21,9 @@ async fn apply_documents(
     node: &Arc<gents::defra_node::EmbeddedNode>,
     documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
-    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -35,7 +37,9 @@ async fn apply_documents(
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.automation_configuration", |txn| {
         let plan = &plan;
-        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();
@@ -165,7 +169,7 @@ async fn fetch_schedule_agent_requests(
             escape_graphql_string(trigger_id),
         ))
         .await;
-    gents::graphql::rows::<serde_json::Value>(&response, "AgentRequest").unwrap()
+    gents::store::graphql::rows::<serde_json::Value>(&response, "AgentRequest").unwrap()
 }
 
 async fn fetch_trigger_observation(
@@ -180,7 +184,7 @@ async fn fetch_trigger_observation(
             escape_graphql_string(trigger_id),
         ))
         .await;
-    let rows = gents::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
+    let rows = gents::store::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
     assert_eq!(rows.len(), 1, "owner-scoped Trigger must be unique");
     rows.into_iter().next().unwrap()
 }

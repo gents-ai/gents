@@ -63,6 +63,22 @@ export function startClientObservation(
     const pollMs = timingConfig().activeSessionPollMs;
     let polled: string | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const hidden = () => document.visibilityState === "hidden";
+    const nextPollMs = (interval: number) =>
+      readSession(stores.session)?.liveCursor
+        ? Math.min(250, interval)
+        : (actions.sessionReadGapMs() ?? interval);
+    /* a hidden window is not read on a timer; showing it reads it in full */
+    const schedulePoll = () => {
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
+      const key = polled;
+      if (stopped || key === null || pollMs === null || hidden()) return;
+      pollTimer = setTimeout(async () => {
+        await controller.request("sessionDelta");
+        if (polled === key) schedulePoll();
+      }, nextPollMs(pollMs));
+    };
     const followPoll = () => {
       const sessionId = selection.getState().sessionId;
       const requestId = view.getState().trackedRequestId;
@@ -70,18 +86,7 @@ export function startClientObservation(
         sessionId && requestId && pollMs !== null ? `${sessionId}\0${requestId}` : null;
       if (key === polled) return;
       polled = key;
-      clearTimeout(pollTimer);
-      pollTimer = undefined;
-      if (key === null || pollMs === null) return;
-      const nextPollMs = () =>
-        readSession(stores.session)?.liveCursor
-          ? Math.min(250, pollMs)
-          : (actions.sessionReadGapMs() ?? pollMs);
-      const poll = async () => {
-        await controller.request("sessionDelta");
-        if (!stopped && polled === key) pollTimer = setTimeout(poll, nextPollMs());
-      };
-      pollTimer = setTimeout(poll, nextPollMs());
+      schedulePoll();
     };
 
     publishSelection();
@@ -101,10 +106,12 @@ export function startClientObservation(
     });
 
     const refreshForegroundState = () => {
-      if (document.visibilityState !== "hidden") void controller.request("full");
+      if (hidden()) return;
+      void controller.request("full").then(schedulePoll);
     };
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshForegroundState();
+      if (hidden()) schedulePoll();
+      else refreshForegroundState();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", refreshForegroundState);

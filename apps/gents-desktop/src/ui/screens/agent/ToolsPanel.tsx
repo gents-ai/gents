@@ -19,7 +19,8 @@ import {
   useDraft,
 } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
-import { Group } from "./rows";
+import { Group, Unfold } from "./rows";
+import { ToolsSummary } from "./ToolsSummary";
 import {
   BASH_OUTPUT_LIMIT,
   FILE_LIMITS,
@@ -201,6 +202,7 @@ export function ToolsEditor({
   const { changeConfig } = useApp().actions;
   const [invalidLimits, setInvalidLimits] = useState<Record<string, string>>({});
   const [controlsGeneration, setControlsGeneration] = useState(0);
+  const [editing, setEditing] = useState(false);
   const reportInvalidLimit = useCallback((id: string, label: string | null) => {
     setInvalidLimits((current) => {
       if ((current[id] ?? null) === label) return current;
@@ -297,24 +299,49 @@ export function ToolsEditor({
     },
   );
   const id = (f: string) => `${tools.tools_id}-${f}`;
+  /* its own page opens on what the tools allow; a sheet keeps the form */
+  const page = !embedded && !draftMode;
+  const identity = (
+    <>
+      {!draftMode && (
+        <FactRow label="Tools ID" mono>
+          {tools.tools_id}
+        </FactRow>
+      )}
+      <TextRow
+        id={id("name")}
+        label="Display name"
+        value={d.draft.displayName}
+        onChange={(v) => d.set("displayName", v)}
+      />
+    </>
+  );
   return (
     <>
-      <Group
-        title={
-          embedded || draftMode ? undefined : (tools.display_name ?? tools.tools_id)
-        }
-      >
-        {!draftMode && (
-          <FactRow label="Tools ID" mono>
-            {tools.tools_id}
-          </FactRow>
-        )}
-        <TextRow
-          id={id("name")}
-          label="Display name"
-          value={d.draft.displayName}
-          onChange={(v) => d.set("displayName", v)}
-        />
+      {page && (
+        <>
+          <ToolsSummary
+            deployment={deployment}
+            tools={tools}
+            draft={{
+              name: d.draft.displayName,
+              files: d.draft.files,
+              bash: d.draft.bash,
+              root: d.draft.root,
+            }}
+            edit={{
+              open: editing,
+              onToggle: () => setEditing((open) => !open),
+              controls: id("about"),
+            }}
+          />
+          <Unfold open={editing} id={id("about")}>
+            <Group title="About">{identity}</Group>
+          </Unfold>
+        </>
+      )}
+      <Group title={page ? "Files and commands" : undefined}>
+        {!page && identity}
         <PathRow
           id={id("root")}
           label={ROOT}

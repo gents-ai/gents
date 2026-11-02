@@ -28,6 +28,7 @@ fn summary(session_id: &str, agent_id: Option<&str>, turn_state: Option<&str>) -
         tool_call_count: None,
         unreadable_reason: None,
         unsendable_reason: None,
+        cwd: None,
     }
 }
 

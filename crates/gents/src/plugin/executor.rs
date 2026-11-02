@@ -104,7 +104,7 @@ struct PluginAttemptError {
 }
 
 fn json_digest(value: &serde_json::Value) -> String {
-    let canonical = crate::workspace::canonical_json_string(value)
+    let canonical = crate::tools::workspace::canonical_json_string(value)
         .expect("JSON value has a canonical encoding");
     format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
 }
@@ -421,7 +421,7 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
     ) -> Result<PluginCall> {
-        let session = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+        let session = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
             .as_ref()
             .and_then(|context| context.workspace_cwd.clone())

@@ -30,7 +30,7 @@ async fn create_session_with_agent_id_and_requester_did(
     agent_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.create",
@@ -76,7 +76,7 @@ pub(crate) async fn ensure_session_with_agent_id_and_requester_did(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
     node_did: &str,
     agent_id: &str,
@@ -157,7 +157,7 @@ pub(crate) async fn ensure_session_in_txn(
     }
 
     if let Some(origin) = provenance.as_mut() {
-        origin.started_by = crate::session_origin::verified_starter_in_txn(
+        origin.started_by = crate::session::origin::verified_starter_in_txn(
             txn,
             origin,
             node_did,
@@ -186,7 +186,8 @@ pub(crate) async fn ensure_session_in_txn(
             .context("session create omitted data")?
             .clone(),
     );
-    let created_doc = crate::graphql::single_mutation_document(&created, "create_AgentSession")?;
+    let created_doc =
+        crate::store::graphql::single_mutation_document(&created, "create_AgentSession")?;
     if created_doc.is_none() {
         // Revalidate scope through the same preserved-document contract so a
         // colliding writer cannot silently win with a different binding.
@@ -216,7 +217,7 @@ pub(crate) async fn ensure_session_in_txn(
             .and_then(|doc| doc.get("_docID"))
             .and_then(serde_json::Value::as_str)
             .context("created session lacks physical identity")?;
-        origin.creation_receipt = crate::session_origin::issue_creation_receipt_in_txn(
+        origin.creation_receipt = crate::session::origin::issue_creation_receipt_in_txn(
             txn,
             node_did,
             session_id,
@@ -227,7 +228,7 @@ pub(crate) async fn ensure_session_in_txn(
         )
         .await?;
         if origin.creation_receipt.is_some() {
-            let mutation = format!("mutation($provenance: JSON) {{update_AgentSession(docID: \"{}\", input: {{provenance: $provenance}}) {{_docID}}}}", crate::graphql::escape_graphql_string(doc_id));
+            let mutation = format!("mutation($provenance: JSON) {{update_AgentSession(docID: \"{}\", input: {{provenance: $provenance}}) {{_docID}}}}", crate::store::graphql::escape_graphql_string(doc_id));
             let response = txn
                 .execute_with_variables(&mutation, &serde_json::json!({"provenance": origin}))
                 .await?;
@@ -238,7 +239,7 @@ pub(crate) async fn ensure_session_in_txn(
                     .clone(),
             );
             anyhow::ensure!(
-                crate::graphql::single_mutation_document(&response, "update_AgentSession")?
+                crate::store::graphql::single_mutation_document(&response, "update_AgentSession")?
                     .is_some(),
                 "session creation receipt was not attached"
             );
@@ -255,7 +256,7 @@ pub(crate) async fn ensure_session_in_txn(
 }
 
 pub(crate) async fn reopen_session_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -306,7 +307,7 @@ pub(crate) async fn reopen_session_in_txn(
 }
 
 pub(crate) async fn touch_session_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     row: &super::rows::SessionOwnerRow,
     now: &str,
 ) -> Result<()> {
@@ -326,7 +327,7 @@ pub async fn close_session(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid session closed_at")?;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.close",
@@ -362,7 +363,7 @@ pub(super) const SESSION_SCOPE_FIELDS: &str = "session_id node_did requester_did
 created_at closed_at title provenance observation tags _docID";
 
 pub async fn load_agent_session_row_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -373,7 +374,7 @@ pub async fn load_agent_session_row_in_txn(
 }
 
 pub async fn load_agent_session_owner_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<super::rows::SessionOwnerRow>> {
@@ -444,7 +445,7 @@ pub(super) fn touched_observation(
 }
 
 pub(super) async fn patch_session_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     doc_id: &str,
     input: serde_json::Value,
 ) -> Result<()> {
@@ -461,7 +462,7 @@ pub(super) async fn patch_session_in_txn(
         response
             .get("data")
             .and_then(|data| data.get("update_AgentSession"))
-            .is_some_and(crate::graphql::response_has_documents),
+            .is_some_and(crate::store::graphql::response_has_documents),
         "session patch matched no document"
     );
     Ok(())
@@ -473,7 +474,7 @@ pub(crate) async fn max_sequence(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<u32> {
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "session.max_sequence",
@@ -487,7 +488,7 @@ pub(crate) async fn max_sequence(
 }
 
 pub(super) async fn max_sequence_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

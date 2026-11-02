@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::pack::{InstalledPackPlugin, PackKind, RemoveReport};
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
@@ -29,7 +29,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
             documents_record = true;
         }
         anyhow::ensure!(
-            gents::home::init_config_path(&home).is_file(),
+            gents::store::local::home::init_config_path(&home).is_file(),
             "{coordinate} is not installed in {}",
             home.display()
         );
@@ -154,7 +154,7 @@ async fn release_archives(
         return Ok(Vec::new());
     }
     let referenced = gents::pack::referenced_pack_digests(home, node).await?;
-    let store = gents::pack_store::PackStore::new(home);
+    let store = gents::pack::store::PackStore::new(home);
     let mut released = Vec::new();
     for digest in digests {
         if referenced.contains(digest) {
@@ -186,7 +186,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
     home: &Path,
     plugins: &BTreeSet<String>,
 ) -> Result<()> {
-    if plugins.is_empty() || !gents::home::init_config_path(home).is_file() {
+    if plugins.is_empty() || !gents::store::local::home::init_config_path(home).is_file() {
         return Ok(());
     }
     let scope = crate::cli::ScopeArgs {

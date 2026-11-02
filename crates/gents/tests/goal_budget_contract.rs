@@ -22,7 +22,7 @@
 //! These tests use only public API and static schema text: no database, no
 //! network, no provider.
 
-use gents::document_config::{InferenceExecution, Task};
+use gents::documents::{InferenceExecution, Task};
 use gents::goal::{
     decide_goal_continuation, validate_task_goal_declaration, GoalDecision, GoalDocument,
     GoalRequestTerminal, GoalStatus,

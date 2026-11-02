@@ -14,4 +14,9 @@ unreadableReason?: string | null,
 /**
  * Why a send from this client into the session would be refused, when it would.
  */
-unsendableReason?: string | null, };
+unsendableReason?: string | null,
+/**
+ * The folder the session's latest request ran with, as its node recorded
+ * it: a path on that node's computer, absent when the request named none.
+ */
+cwd?: string | null, };

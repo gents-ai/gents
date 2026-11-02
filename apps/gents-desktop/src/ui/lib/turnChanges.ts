@@ -1,4 +1,7 @@
-import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  RenderedTimelineItem,
+  RenderedToolCallView,
+} from "@source-inc/gents-desktop-client";
 import type { TranscriptEntry } from "@/screens/transcript-groups";
 
 /** One applied edit by a native file tool: where its recorded before and
@@ -11,12 +14,22 @@ export type FileEdit = {
   removed: number;
 };
 
+/** `added` and `removed` sum the edits' diffs, which is the file's net
+    change only when it was edited once; `whole` is false when the turn
+    began before the loaded rows, so earlier edits may be missing. */
 export type ChangedFile = {
   path: string;
   added: number;
   removed: number;
   edits: FileEdit[];
+  whole: boolean;
 };
+
+/** A file's line counts, when they are its net change in the turn. */
+export const netCounts = (file: ChangedFile) =>
+  file.whole && file.edits.length === 1
+    ? { added: file.added, removed: file.removed }
+    : null;
 
 /** The edit `tool` applied, when it is a native file edit that confirmed
     it changed the file. Commands, plugins and previews are not edits here:
@@ -47,6 +60,7 @@ export const sameChangedFiles = (
       file.path === other.path &&
       file.added === other.added &&
       file.removed === other.removed &&
+      file.whole === other.whole &&
       file.edits.length === other.edits.length &&
       file.edits.every(
         (edit, j) => edit.toolCallDocId === other.edits[j]!.toolCallDocId,
@@ -55,7 +69,7 @@ export const sameChangedFiles = (
   });
 
 /** Edits grouped by file, in the order each file was first changed. */
-export function changedFiles(edits: readonly FileEdit[]): ChangedFile[] {
+export function changedFiles(edits: readonly FileEdit[], whole = true): ChangedFile[] {
   const files = new Map<string, ChangedFile>();
   for (const edit of edits) {
     const file = files.get(edit.path) ?? {
@@ -63,6 +77,7 @@ export function changedFiles(edits: readonly FileEdit[]): ChangedFile[] {
       added: 0,
       removed: 0,
       edits: [],
+      whole,
     };
     file.added += edit.added;
     file.removed += edit.removed;
@@ -72,21 +87,30 @@ export function changedFiles(edits: readonly FileEdit[]): ChangedFile[] {
   return [...files.values()];
 }
 
-/** For each turn's final reply, by its entry key, the files the turn's
-    edits changed. A turn runs from a person's message to its final reply;
-    a turn still running has no final reply yet, so no entry. */
-export function turnChanges(
+type TurnTools = {
+  reply: RenderedTimelineItem;
+  tools: RenderedToolCallView[];
+  /** false when the rows begin partway through the turn */
+  whole: boolean;
+};
+
+/** For each turn's final reply, by its entry key, the reply and the tool
+    calls the turn made. A turn runs from a person's message to its final
+    reply; a turn still running has no final reply yet, so no entry. When
+    `startLoaded` is false the rows begin partway through a turn, which is
+    then not whole. */
+export function turnTools(
   entries: readonly TranscriptEntry[],
   finalKeys: ReadonlySet<string>,
-): Map<string, ChangedFile[]> {
-  const byFinal = new Map<string, ChangedFile[]>();
-  let edits: FileEdit[] = [];
+  startLoaded = true,
+): Map<string, TurnTools> {
+  const byFinal = new Map<string, TurnTools>();
+  let tools: RenderedToolCallView[] = [];
+  let whole = startLoaded;
   for (const entry of entries) {
     if (entry.kind === "group") {
-      for (const member of entry.members) {
-        const edit = member.kind === "tool" ? fileEditOf(member.tool) : null;
-        if (edit) edits.push(edit);
-      }
+      for (const member of entry.members)
+        if (member.kind === "tool") tools.push(member.tool);
       continue;
     }
     const kind = entry.item.kind;
@@ -95,11 +119,30 @@ export function turnChanges(
       kind === "pendingUserTurn" ||
       kind === "automatedInput"
     ) {
-      edits = [];
+      tools = [];
+      whole = true;
     } else if (finalKeys.has(entry.key)) {
-      if (edits.length) byFinal.set(entry.key, changedFiles(edits));
-      edits = [];
+      byFinal.set(entry.key, { reply: entry.item, tools, whole });
+      tools = [];
+      whole = true;
     }
+  }
+  return byFinal;
+}
+
+/** For each turn's final reply, by its entry key, the files the turn's
+    edits changed, for the turns that changed any. When `startLoaded` is
+    false the rows begin partway through a turn, whose files are then not
+    whole. */
+export function turnChanges(
+  entries: readonly TranscriptEntry[],
+  finalKeys: ReadonlySet<string>,
+  startLoaded = true,
+): Map<string, ChangedFile[]> {
+  const byFinal = new Map<string, ChangedFile[]>();
+  for (const [key, { tools, whole }] of turnTools(entries, finalKeys, startLoaded)) {
+    const edits = tools.flatMap((tool) => fileEditOf(tool) ?? []);
+    if (edits.length) byFinal.set(key, changedFiles(edits, whole));
   }
   return byFinal;
 }

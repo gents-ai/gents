@@ -16,8 +16,7 @@ import { useSelectedNode } from "@/hooks/useClient";
 import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
 import { useMinute, when } from "./time";
-import { isLive } from "@/lib/live";
-import { type Reached, type Workers } from "./workers";
+import { requestPhase, type Reached, type Workers } from "./workers";
 import { RequestStop } from "./WorkerActions";
 
 type Tone = "running" | "done" | "failed" | "stopped" | "unknown";
@@ -46,8 +45,6 @@ export function failureLine(output: string | null | undefined): string | null {
 const since = (iso: string | null | undefined) =>
   iso ? duration(Math.max(0, Date.now() - Date.parse(iso))) : null;
 
-const WAITING = new Set(["waitingforclaim", "pending", "claimed"]);
-
 export function workerNow(
   tool: RenderedToolCallView,
   reached: Reached | null,
@@ -69,28 +66,22 @@ export function workerNow(
         return { tone: "unknown", text: "state unknown" };
     }
   }
-  if (WAITING.has(state.toLowerCase()))
-    return { tone: "running", text: "waiting for the agent to pick it up" };
-  if (isLive(state)) {
-    const s = when(reached?.summary?.updatedAt ?? null, now);
-    return {
-      tone: "running",
-      text: s && s !== "now" ? `working · last change ${s}` : "working",
-    };
-  }
-  switch (state) {
-    case "completed":
+  switch (requestPhase(state)) {
+    case "waiting":
+      return { tone: "running", text: "waiting for the agent to pick it up" };
+    case "working": {
+      const s = when(reached?.summary?.updatedAt ?? null, now);
+      return {
+        tone: "running",
+        text: s && s !== "now" ? `working · last change ${s}` : "working",
+      };
+    }
+    case "done":
       return { tone: "done", text: "finished" };
     case "failed":
-    case "error":
-    case "dead":
       return { tone: "failed", text: "failed", detail: failure };
-    case "cancelled":
-    case "interrupted":
-    case "superseded":
+    case "stopped":
       return { tone: "stopped", text: state };
-    default:
-      return { tone: "unknown", text: state };
   }
 }
 

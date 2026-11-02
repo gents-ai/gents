@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Semaphore};
 use tokio::task::JoinSet;
@@ -242,7 +242,7 @@ async fn measure_encrypted_admission(
                     let count = active.fetch_add(1, Ordering::SeqCst) + 1;
                     maximum.fetch_max(count, Ordering::SeqCst);
                     tokio::task::yield_now().await;
-                    let body = gents::graphql::escape_graphql_string(&"x".repeat(1024));
+                    let body = gents::store::graphql::escape_graphql_string(&"x".repeat(1024));
                     let response = transaction
                         .execute(&format!(
                             "mutation {{ create_AdmissionDocument(input: {{writer: {writer}, iteration: {iteration}, body: \"{body}\"}}) {{_docID}} }}"

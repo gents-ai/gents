@@ -84,10 +84,15 @@ jobs:
           bash -n scripts/measure-gents-binary.sh
           bash -n scripts/measure-gents-build-attribution.sh
           bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
+          bash -n .github/scripts/setup-macos-rust-toolchain.sh .github/scripts/setup-cmake.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
           shellcheck scripts/measure-gents-build-attribution.sh
           shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
+          shellcheck .github/scripts/setup-macos-rust-toolchain.sh .github/scripts/setup-cmake.sh
+
+      - name: Check the macOS toolchain selection
+        run: python3 .github/scripts/test-macos-rust-toolchain.py
 
       - name: Check desktop Rust build and test graph routing
         run: python3 .github/scripts/test-desktop-rust-suite.py
@@ -106,12 +111,9 @@ jobs:
 
       - name: Check compiler-tool download recovery
         run: |
-          bash -n .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
-          shellcheck .github/scripts/setup-afterburner-toolchains.sh .github/scripts/setup-cmake.sh .github/scripts/setup-macos-rust-toolchain.sh
+          bash -n .github/scripts/setup-afterburner-toolchains.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh
           python3 .github/scripts/test-afterburner-downloads.py
-
-      - name: Check the macOS toolchain selection
-        run: python3 .github/scripts/test-macos-rust-toolchain.py
 
   publish-control-tests:
     if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
@@ -165,8 +167,12 @@ jobs:
 
       # A Command Line Tools update repointed the default SDK to MacOSX27.2.sdk,
       # whose libSystem.B.tbd declares arm64e.x1-macos targets that neither
-      # linker on this runner understands. Pin SDKROOT to the SDK of the
-      # developer directory the linker comes from (as release/rc1 does).
+      # linker on this runner understands: Xcode-beta's ld-1266.5 fails with
+      # `ld: tapi error: malformed file`, and rust-lld (forced by
+      # .cargo/config.toml) with `could not load TAPI file ... unknown target`.
+      # Pin SDKROOT to the SDK of the developer directory the linker comes
+      # from, so cc-rs crates and the C fixtures the tests spawn with
+      # /usr/bin/cc all resolve one readable SDK.
       - name: Select a matching macOS SDK for the linker
         run: .github/scripts/setup-macos-rust-toolchain.sh
 
@@ -322,7 +328,7 @@ jobs:
         # --no-fail-fast: a node flake in gents-migration must not mask the
         # 140 pure gents-protocol/gents-schemas assertions that run after it.
         run: |
-          cargo test --no-fail-fast --features gents-claude/transport \
+          cargo test --no-fail-fast --features gents-claude/transport,gents-protocol/typescript \
             -p gents-migration \
             -p gents-lens-fixture-add-label \
             -p gents-callback-fixture-create-workspace \
@@ -355,14 +361,14 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         run: |
-          cargo test -p gents --lib runtime_status::tests::
-          cargo test -p gents --lib toolset::tests::read_only_bash
-          cargo test -p gents --lib managed_exec::
+          cargo test -p gents --lib runtime::status::tests::
+          cargo test -p gents --lib tools::native::tests::read_only_bash
+          cargo test -p gents --lib tools::exec::
           cargo test -p gents --lib artifact_
           # Live-output byte evidence for background tools must fail the PR
           # that breaks it, not the post-merge main run (#2686).
-          cargo test -p gents --lib hook::tests::r4c_list_background_tools::
-          cargo test -p gents --lib callback::
+          cargo test -p gents --lib tools::call::hook::tests::r4c_list_background_tools::
+          cargo test -p gents --lib triggers::callback::
           cargo test -p gents --test onboarding_evals
           cargo test -p gents --test eval_runner_canary
           # Per-request store budgets: a capture, segment or write-drop
@@ -424,6 +430,10 @@ jobs:
         if: matrix.suite == 'desktop' && github.event_name != 'pull_request'
         # iOS shares the desktop crates, so desktop-only Tauri APIs break it
         # silently; a compile check is the cheapest gate (#890).
+        # Keep the DEVELOPER_DIR/SDKROOT selected above: it is the Xcode
+        # developer directory the linker comes from, and that Xcode ships the
+        # iOS SDKs. Unsetting them would fall back to the default SDK, which is
+        # the Command Line Tools one rust-lld cannot read.
         run: |
           rustup target add aarch64-apple-ios-sim
           cargo check -p gents-desktop-tauri --lib --target aarch64-apple-ios-sim

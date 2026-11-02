@@ -779,7 +779,7 @@ describe("transcript cursor ownership", () => {
       itemKey: "pending-r",
       requestId: "r",
       content: "queued",
-      lifecycleState: "pending",
+      lifecycleState: "pending" as const,
       selectedSkillIds: [],
       foldedIntoRequestId: null,
       origin: null,

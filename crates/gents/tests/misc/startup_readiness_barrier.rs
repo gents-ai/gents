@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use events::EventName;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
-use gents::startup_readiness::StartupReadinessOptions;
+use gents::runtime::startup_readiness::StartupReadinessOptions;
+use gents::store::graphql::escape_graphql_string;
 use gents::{
     ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ProcessLifecycleState,
     ToolCeiling,
@@ -72,7 +72,9 @@ impl RecordingBuildFailureObserver {
     }
 }
 
-impl gents::startup_readiness::StartupBuildFailureObserver for RecordingBuildFailureObserver {
+impl gents::runtime::startup_readiness::StartupBuildFailureObserver
+    for RecordingBuildFailureObserver
+{
     fn on_build_failure(&self, agent_id: &str, failure_number: u32, budget: u32, error: &str) {
         let count = {
             let mut failures = self
@@ -185,7 +187,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             startup_build_failure_observer: Some(build_failure_observer.clone()),
-            retry_policy: gents::retry::RetryPolicy {
+            retry_policy: gents::runtime::agent::retry::RetryPolicy {
                 max_retries: 3,
                 base_delay_ms: 1,
                 max_delay_ms: 5,
@@ -310,7 +312,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         identity.clone(),
         DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
-            retry_policy: gents::retry::RetryPolicy {
+            retry_policy: gents::runtime::agent::retry::RetryPolicy {
                 max_retries: 3,
                 base_delay_ms: 50,
                 max_delay_ms: 100,

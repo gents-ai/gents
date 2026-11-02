@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::identity::{
+use gents::store::identity::{
     load_file_identity, load_or_create_file_identity, register_ed25519_signing_identity,
     IdentityError, NodeIdentity, ServiceAccount,
 };

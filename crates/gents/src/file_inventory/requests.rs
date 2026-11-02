@@ -5,8 +5,8 @@ use defra_node::EmbeddedNode;
 use gents_protocol::file_inventory::{FileInventoryPageDemand, FileInventoryResponse};
 use serde::Deserialize;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::{escape_graphql_string, required_rows};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::{escape_graphql_string, required_rows};
 
 pub(crate) const REQUEST_FIELDS: &str =
     "_docID request_key peer_id requester_did node_did session_id demand status response";
@@ -75,7 +75,7 @@ pub async fn admit_demand(
                     "created_at": chrono::Utc::now().to_rfc3339(),
                 }}),
             ).await?;
-            Ok(crate::graphql::created_doc_id(&result, "FileInventoryRequest")?)
+            Ok(crate::store::graphql::created_doc_id(&result, "FileInventoryRequest")?)
         })
     }).await
 }
@@ -130,7 +130,7 @@ pub(crate) async fn publish_response_in_txn(
     let result = txn.execute_with_variables(&format!(
         "mutation($input: FileInventoryRequestMutationInputArg!) {{ update_FileInventoryRequest(filter: {{ {filter} }}, input: $input) {{ _docID }} }}"),
         &serde_json::json!({"input": {"status": status, "response": response}})).await?;
-    let rows = crate::graphql::mutation_documents(&result, "update_FileInventoryRequest")?
+    let rows = crate::store::graphql::mutation_documents(&result, "update_FileInventoryRequest")?
         .context("file inventory request update omitted its result")?;
     ensure!(
         rows.len() == 1 && rows[0]["_docID"].as_str() == Some(row.document_id.as_str()),

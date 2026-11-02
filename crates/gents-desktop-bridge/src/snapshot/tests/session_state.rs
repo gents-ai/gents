@@ -131,10 +131,10 @@ fn lean_session_rows(
                     .map(|doc| format!("doc-{doc}")),
                 failure_reason: row
                     .folded_into
-                    .map(|_| gents::lifecycle::FOLDED_REASON.to_owned())
+                    .map(|_| gents::request::lifecycle::FOLDED_REASON.to_owned())
                     .or_else(|| {
                         row.replaced_by
-                            .map(|_| gents::lifecycle::REPLACED_REASON.to_owned())
+                            .map(|_| gents::request::lifecycle::REPLACED_REASON.to_owned())
                     }),
                 input: (row.queued_after.is_some() || row.background_wake).then(|| RequestInput {
                     queue: Some(RequestQueue {
@@ -811,8 +811,8 @@ fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
         );
         if let Some(pending) = snapshot.pending_turn.as_ref() {
             assert_eq!(
-                pending.lifecycle_state.as_deref(),
-                Some(request_state_for_turn(Some(expected)).as_str()),
+                pending.lifecycle_state,
+                Some(request_state_for_turn(Some(expected))),
                 "{}",
                 case.name
             );
@@ -1280,7 +1280,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
     let pending = snapshot.pending_turn.expect("refused prompt stays visible");
     assert_eq!(pending.request_id, "req-2");
     assert_eq!(pending.content, "run the disallowed skill");
-    assert_eq!(pending.lifecycle_state.as_deref(), Some("failed"));
+    assert_eq!(pending.lifecycle_state, Some(RequestLifecycleState::Failed));
     assert!(
         snapshot
             .timeline_items

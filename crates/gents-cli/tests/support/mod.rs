@@ -5,6 +5,8 @@ mod document_handle;
 pub mod fs;
 pub(crate) use document_handle::document_handle;
 pub mod graphql;
+#[path = "../../../gents/tests/support/inference_target.rs"]
+pub mod inference_target;
 pub mod mocks;
 pub mod ports;
 pub mod process;
@@ -70,7 +72,7 @@ pub async fn initialized_node(
         .context("loading initialized node identity")?;
 
     let data = node_home.join("data");
-    gents::store_key::open_home_store_key(node_home, &data)
+    gents::store::local::store_key::open_home_store_key(node_home, &data)
         .await?
         .encrypt(
             gents::defra_node::EmbeddedNode::builder()

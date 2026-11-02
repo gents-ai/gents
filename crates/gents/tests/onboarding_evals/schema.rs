@@ -1,4 +1,4 @@
-use gents::document_config::EvalCapture;
+use gents::documents::EvalCapture;
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::{CaptureResult, ScriptedExecutor};
 use gents::eval::OutcomeKind;
@@ -76,10 +76,10 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
 
 #[tokio::test]
 async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
-    use gents::application_write::{WriteParams, WriteTool};
-    use gents::config_client::ConfigAccess;
-    use gents::defra_query::{execute_command, CollectionScope, QueryParams};
     use gents::eval::runner::embedded::observe::ToolCallEvidence;
+    use gents::plugin::application_write::{WriteParams, WriteTool};
+    use gents::store::config_client::ConfigAccess;
+    use gents::tools::builtin::defra_query::{execute_command, CollectionScope, QueryParams};
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
     use std::sync::Arc;

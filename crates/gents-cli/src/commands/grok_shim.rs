@@ -31,7 +31,7 @@ use crate::commands::grok_shim::server::{
 
 #[derive(Clone)]
 pub(crate) struct GrokShimBindArgs {
-    pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
+    pub(crate) background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) actor: identity::Did,
     pub(crate) graphql: String,
@@ -95,7 +95,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
 
 #[derive(Clone)]
 struct AcpDelegateFactoryInputs {
-    background_executions: gents::hook::BackgroundExecutionRegistry,
+    background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
     actor: identity::Did,
     graphql: String,

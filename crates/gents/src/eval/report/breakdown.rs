@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::document_config::EvalTier;
+use crate::documents::EvalTier;
 use crate::eval::outcome::{classify, EvidenceClass};
 use crate::eval::report::build::SlotVerdict;
 use crate::eval::report::compare::{CaseComparison, Comparison, PairedTrial};

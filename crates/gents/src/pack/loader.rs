@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
-use crate::document_config::{EvalCase, PackConfig};
+use crate::documents::{EvalCase, PackConfig};
 
 pub fn load_pack_config(
     manifest: &PackManifest,
@@ -146,10 +146,9 @@ pub fn decode_pack_config(
 fn pin_callback_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-    callback: &mut crate::document_config::Callback,
+    callback: &mut crate::documents::Callback,
 ) -> Result<()> {
-    let crate::document_config::CallbackHandler::Plugin { plugin, digest, .. } =
-        &mut callback.handler
+    let crate::documents::CallbackHandler::Plugin { plugin, digest, .. } = &mut callback.handler
     else {
         return Ok(());
     };

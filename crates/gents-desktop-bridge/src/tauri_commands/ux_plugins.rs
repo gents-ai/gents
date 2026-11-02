@@ -56,10 +56,13 @@ where
     Fut: std::future::Future<Output = anyhow::Result<T>>,
     T: Send + 'static,
 {
-    gents::storage_backend::drive_unsendable(tauri::async_runtime::handle().inner(), operation)
-        .await
-        .map_err(|error| BridgeError::untyped(format!("the ux plugin operation stopped: {error}")))?
-        .map_err(failed)
+    gents::store::local::storage_backend::drive_unsendable(
+        tauri::async_runtime::handle().inner(),
+        operation,
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(format!("the ux plugin operation stopped: {error}")))?
+    .map_err(failed)
 }
 
 #[tauri::command]
@@ -145,7 +148,7 @@ pub async fn desktop_ux_data_call(
     packs::ux_data_call(
         home,
         access,
-        gents::ux_data::UxDataCall {
+        gents::observe::ux_data::UxDataCall {
             ux: request.ux,
             node_did: request.node_did,
             surface: request.surface,

@@ -42,7 +42,7 @@ pub struct CommandApproval<'a> {
     pub argv: &'a [String],
     pub cwd: &'a Path,
     pub root: &'a Path,
-    pub policy: &'a crate::toolset::CommandExecutionPolicy,
+    pub policy: &'a crate::tools::native::CommandExecutionPolicy,
 }
 
 impl Request {
@@ -165,7 +165,7 @@ impl Request {
         if let Some(command) = self.command() {
             return format!(
                 "Run {} in {}?",
-                crate::toolset::shell_join(command.argv),
+                crate::tools::native::shell_join(command.argv),
                 command.cwd.display()
             );
         }

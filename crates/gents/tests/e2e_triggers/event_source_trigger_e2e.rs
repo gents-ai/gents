@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -356,7 +356,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let response = gents::graphql::graphql_with_transaction_retry(
+        let response = gents::store::graphql::graphql_with_transaction_retry(
             db.node.as_ref(),
             &cursor_query,
             "test event trigger readiness",

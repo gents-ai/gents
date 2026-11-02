@@ -384,7 +384,7 @@ pub struct PendingTurnView {
     #[ts(optional = nullable)]
     pub attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
     pub selected_skill_ids: Vec<String>,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     /// The request whose transcript published this as a folded entry; it is
     /// that turn's input, not a turn.
     pub folded_into_request_id: Option<String>,
@@ -487,6 +487,19 @@ pub enum RenderedTimelineItem {
         original_tokens: Option<i64>,
         compacted_tokens: Option<i64>,
         timestamp: Option<String>,
+        /// What the model reads in place of the compacted messages, so the
+        /// person can see what the agent still knows of them.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        summary: Option<String>,
+        /// The files the compacted messages read and modified, as the
+        /// compaction kept them for the model.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        files_read: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        files_modified: Option<Vec<String>>,
     },
     #[serde(rename_all = "camelCase")]
     PendingUserTurn {
@@ -503,7 +516,7 @@ pub enum RenderedTimelineItem {
         #[ts(optional = nullable)]
         attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
         selected_skill_ids: Vec<String>,
-        lifecycle_state: Option<String>,
+        lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
         folded_into_request_id: Option<String>,
         origin: Option<RequestOriginView>,
         created_at: Option<String>,
@@ -565,6 +578,14 @@ pub struct SessionCompactionView {
     pub original_tokens: Option<i64>,
     pub compacted_tokens: Option<i64>,
     pub created_at: Option<String>,
+    /// The transcript row that marks this compaction, and the message it is
+    /// drawn after, so a list of compactions can open the session there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub item_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub message_sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

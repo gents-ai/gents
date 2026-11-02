@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gents::log_rate::{RateLimitConfig, RateLimitFilter};
+use gents::observe::log_rate::{RateLimitConfig, RateLimitFilter};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 fn log_rate_ceiling() -> RateLimitFilter {
@@ -12,7 +12,7 @@ pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
         Some(ref filter) => EnvFilter::try_new(filter).unwrap_or_else(|_| default_env_filter()),
         None => EnvFilter::try_from_default_env().unwrap_or_else(|_| default_env_filter()),
     };
-    let native = gents::native_logging::layer("desktop");
+    let native = gents::runtime::native_logging::layer("desktop");
     let console = config.console || native.is_none();
     let _ = tracing_subscriber::registry()
         .with(env_filter)
@@ -26,7 +26,7 @@ pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
         .try_init();
 
     tracing::info!(
-        diagnostics = gents::native_logging::diagnostics_hint(),
+        diagnostics = gents::runtime::native_logging::diagnostics_hint(),
         "desktop logs initialized"
     );
 }
@@ -38,7 +38,7 @@ pub fn runtime_error_log(desktop_root: &Path) -> PathBuf {
 pub fn diagnostics_hint(desktop_root: &Path) -> String {
     format!(
         "{}. Runtime startup errors: {}",
-        gents::native_logging::diagnostics_hint(),
+        gents::runtime::native_logging::diagnostics_hint(),
         runtime_error_log(desktop_root).display()
     )
 }

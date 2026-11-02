@@ -8,7 +8,7 @@ pub const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_
 created_at closed_at stopped_at archived_at archive_revision title provenance observation tags _docID";
 
 pub(crate) async fn session_stopped_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -43,7 +43,7 @@ pub(crate) async fn session_is_stopped(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<bool> {
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "session.stop_latch",
@@ -186,11 +186,14 @@ pub(super) async fn load_agent_session_rows(
         }}"#
     );
 
-    let resp =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "load_agent_session_rows")
-            .await?;
+    let resp = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_agent_session_rows",
+    )
+    .await?;
 
-    let rows = crate::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
     rows.iter().map(decode_session_row).collect()
 }
 
@@ -235,13 +238,13 @@ pub(crate) async fn load_session_requester_scope(
         escape_graphql_string(node_did),
         escape_graphql_string(session_id)
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &query,
         "load session requester scope",
     )
     .await?;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentSession")?;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "AgentSession")?;
     anyhow::ensure!(rows.len() <= 1, "duplicate AgentSession rows for one label");
     Ok(match rows.first() {
         Some(row) => decode_session_row(row)?.session.requester_did,

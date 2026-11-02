@@ -1,10 +1,10 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
@@ -221,7 +221,7 @@ async fn clear_indicator(indicator: &mut Option<WorkingIndicator>) {
 }
 
 fn folded_input_completed(state: RequestLifecycleState, reason: &str) -> bool {
-    state == RequestLifecycleState::Superseded && reason == gents::lifecycle::FOLDED_REASON
+    state == RequestLifecycleState::Superseded && reason == gents::request::lifecycle::FOLDED_REASON
 }
 
 #[derive(Clone, Copy)]
@@ -328,11 +328,11 @@ pub(crate) async fn stream_turn_progress(
 
         let folded = request
             .as_ref()
-            .is_some_and(|row| gents::lifecycle::folded_into(row).is_some());
+            .is_some_and(|row| gents::request::lifecycle::folded_into(row).is_some());
         if folded
             || request
                 .as_ref()
-                .is_some_and(|row| gents::lifecycle::replaced_by(row).is_some())
+                .is_some_and(|row| gents::request::lifecycle::replaced_by(row).is_some())
         {
             clear_indicator(&mut indicator).await;
             let envelope = crate::request_helpers::wait_for_terminal_response_with_progress(
@@ -925,15 +925,17 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
 
 fn account_problem_lines(
     failure_reason: &str,
-    accounts: &[(String, gents::oauth_credential::ServingAccount)],
-    all: &[gents::oauth_credential::AccountSummary],
+    accounts: &[(String, gents::inference::auth::credential::ServingAccount)],
+    all: &[gents::inference::auth::credential::AccountSummary],
 ) -> Vec<String> {
     if !gents_protocol::node_readiness::is_behavior_unavailable_rejection(failure_reason.trim()) {
         return Vec::new();
     }
     accounts
         .iter()
-        .filter(|(_, account)| account.state != gents::oauth_credential::AccountState::Enabled)
+        .filter(|(_, account)| {
+            account.state != gents::inference::auth::credential::AccountState::Enabled
+        })
         .filter_map(|(profile, account)| {
             let provider = account.provider?;
             Some(format!(
@@ -941,7 +943,7 @@ fn account_problem_lines(
                  set-account {profile} <account> ({})",
                 account.label,
                 account.state.as_str(),
-                gents::oauth_credential::enabled_accounts_note(provider, all),
+                gents::inference::auth::credential::enabled_accounts_note(provider, all),
             ))
         })
         .collect()
@@ -960,11 +962,11 @@ async fn account_problems(
         return Vec::new();
     };
     let read = async {
-        let access = gents::config_client::ConfigAccess::Graphql(graphql.clone());
+        let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
         let did = submitted.node_did.as_str();
         anyhow::Ok((
-            gents::config_client::agent_accounts(&access, did, agent_id).await?,
-            gents::oauth_credential::list_accounts(&access, did).await?,
+            gents::store::config_client::agent_accounts(&access, did, agent_id).await?,
+            gents::inference::auth::credential::list_accounts(&access, did).await?,
         ))
     };
     match read.await {
@@ -1272,7 +1274,7 @@ mod tests {
 
     mod account_problem {
         use super::*;
-        use gents::oauth_credential::{AccountState, AccountSummary, ServingAccount};
+        use gents::inference::auth::credential::{AccountState, AccountSummary, ServingAccount};
         use gents_protocol::row::AgentReadinessUnavailableReason as Reason;
 
         const CLAUDE: &str = "claude-subscription";
@@ -1386,7 +1388,7 @@ mod folded_input_tests {
 
     #[test]
     fn only_owned_fold_supersession_is_an_informational_completion() {
-        let reason = gents::lifecycle::FOLDED_REASON;
+        let reason = gents::request::lifecycle::FOLDED_REASON;
         assert!(folded_input_completed(
             RequestLifecycleState::Superseded,
             reason

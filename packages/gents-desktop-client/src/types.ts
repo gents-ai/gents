@@ -107,6 +107,7 @@ export type {
   ToolServiceTestRequest,
   ToolServiceTestResult,
   ToolServiceToolView,
+  RequestLifecycleState,
 } from "./types/requests.js";
 export type {
   ChatSendResult,
@@ -170,6 +171,7 @@ export type {
 export type {
   FoundPack,
   InstalledPack,
+  PackInfo,
   PackEditedChoice,
   PackInstallRequest,
   PackPluginSlot,

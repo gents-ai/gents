@@ -8,7 +8,9 @@ use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
 
-pub(crate) use gents::config_client::{graphql_api_base, graphql_diagnostic_hint, post_graphql};
+pub(crate) use gents::store::config_client::{
+    graphql_api_base, graphql_diagnostic_hint, post_graphql,
+};
 
 /// Availability probing is a single bounded request so a stale endpoint does
 /// not indefinitely delay the caller's choice of access path.

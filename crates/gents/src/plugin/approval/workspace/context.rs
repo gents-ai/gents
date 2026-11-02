@@ -284,7 +284,7 @@ mod tests {
                 cwd: first.workspace.path.clone(),
                 root: first.workspace.path.clone(),
                 writable_root: None,
-                policy: crate::toolset::CommandExecutionPolicy::write_capable(),
+                policy: crate::tools::native::CommandExecutionPolicy::write_capable(),
             },
             ceiling_allows: true,
             crosses_boundary: true,

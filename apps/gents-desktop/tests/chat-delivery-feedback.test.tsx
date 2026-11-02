@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function fixture() {
+function fixture(sending = false) {
   const nodeDid = node().nodeDid;
   const request: ChatSendRequest = {
     clientDid: "client",
@@ -55,10 +55,23 @@ function fixture() {
     },
   }));
   app.drafts.setState({ drafts: { newer: "Keep this newer draft" } });
+  if (sending)
+    app.stores.chat.setState({ chatRequestsInFlight: new Set(["original-request"]) });
   saveChatDraft(app.stores.chat, retainChatDraft(request, null));
   const view = render(<ChatDeliveryFeedback />, { wrapper: withApp(app) });
   return { app, request, read, control, ack, view };
 }
+
+it("shows nothing while a message is sent and confirmed without trouble", () => {
+  const f = fixture(true);
+  expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull();
+  saveChatDraft(f.app.stores.chat, {
+    ...loadChatDrafts().chatDrafts[0]!,
+    result: acceptedChat(f.request),
+  });
+  f.app.stores.chat.setState({ chatRequestsInFlight: new Set() });
+  expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull();
+});
 
 it("checks without dispatch and explicitly resumes the retained message while preserving newer text", async () => {
   const f = fixture();

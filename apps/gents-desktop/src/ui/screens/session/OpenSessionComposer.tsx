@@ -1,8 +1,15 @@
+import { QuestionPanel } from "./QuestionPanel";
+import { MorphProvider, useMorphCard } from "@/lib/morph";
+import { AskedChip } from "./AskedChip";
+import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
+import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
 import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type KeyboardEvent,
   type RefCallback,
 } from "react";
@@ -22,6 +29,7 @@ import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
 import { Goal } from "../SessionHeader";
+import { useMentionMenu } from "../useMentionMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import {
   ComposerFooter,
@@ -29,6 +37,8 @@ import {
   presentedComposerSendStatus,
 } from "./composerParts";
 import { ComposerEditContext, lastEditable, useComposerEditing } from "./composerEdit";
+import { sentMessages, useComposerHistory } from "./composerHistory";
+import { selectedIn } from "@/hooks/useSelectedSession";
 import { GoalChip, goalCommand, goalIsEditable, useGoalMode } from "./goalMode";
 import { useComposerSend } from "./useComposerSend";
 import { useFollowUp } from "@/preferences";
@@ -36,6 +46,9 @@ import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
 import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 import { ActiveNodeLabel } from "@/app/ActiveNodeLabel";
 import { chipSkills, withSkillLines } from "@/lib/skillLines";
+
+/* the one card the composer box and the question panel share (morph.css) */
+const CARD = "[view-transition-class:morph-card]";
 
 export function OpenSessionComposer({
   roomRef,
@@ -65,14 +78,28 @@ export function OpenSessionComposer({
   const textarea = useRef<HTMLDivElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
-  const edit = useComposerEditing({ queue, onEdit, setDraft, send, textarea });
+  const agent = agentOf(deployment, agentId);
+  const editSlash = useSlashMenu(
+    deployment?.skills ?? [],
+    deployment?.contexts.find((c) => c.context_id === agent?.contextId),
+    [],
+    () => {},
+  );
+  const edit = useComposerEditing({
+    queue,
+    onEdit,
+    setDraft,
+    send,
+    textarea,
+    commands: editSlash.names,
+  });
   const editing = edit.editing;
   const editContext = useMemo(
     () => ({ editingDocId: editing?.docId ?? null, begin: edit.begin }),
     [editing?.docId, edit.begin],
   );
-  const agent = agentOf(deployment, agentId);
   const sessionId = stores.selection.use.sessionId();
+  const nodeDid = stores.selection.use.nodeDid();
   const goalMode = useGoalMode({
     draft,
     setDraft,
@@ -91,12 +118,23 @@ export function OpenSessionComposer({
         ? goalMode.edit(goal.objective ?? "")
         : goalMode.create(),
   );
-  const editSlash = useSlashMenu(
-    deployment?.skills ?? [],
-    deployment?.contexts.find((c) => c.context_id === agent?.contextId),
-    [],
-    () => {},
+  const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
+  const commands = editing ? editSlash : slash;
+  const chipKinds = useMemo(
+    () => ({ ...commands.chipKinds, ...mention.chipKinds }),
+    [commands.chipKinds, mention.chipKinds],
   );
+  const history = useComposerHistory({
+    field: slash.field,
+    sent: () =>
+      sentMessages(
+        selectedIn(stores.session.getState(), {
+          selectedSessionId: sessionId,
+          selectedNodeDid: nodeDid,
+        })?.timelineItems ?? [],
+      ),
+    kinds: chipKinds,
+  });
 
   /* a session that never takes this app's messages says so before anything is typed */
   const readOnly =
@@ -110,8 +148,47 @@ export function OpenSessionComposer({
   const otherWay = followUp === "steer" ? "queue" : "steer";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
+  /* an open question takes the composer's place until it is answered, or
+     until the person chooses to write instead; a new question asks again */
+  const questionScope = useSelectedSessionFields((session) =>
+    session?.nodeDid
+      ? { nodeDid: session.nodeDid, sessionId: session.sessionId }
+      : null,
+  );
+  const questions = useUnansweredQuestions(questionScope);
+  const questionsKey = questions.map((q) => q.itemId).join(" ");
+  const [typingFor, setTypingFor] = useState<string | null>(null);
+  /* a question that arrives while the person writes waits beside the
+     composer, so it neither hides their draft nor reads their next key as a
+     pick; the composer still holds the focus while this renders */
+  const [askedKey, setAskedKey] = useState(questionsKey);
+  if (askedKey !== questionsKey) {
+    setAskedKey(questionsKey);
+    const shown = askedKey !== "" && typingFor !== askedKey && !editing;
+    const writing =
+      draft.trim() !== "" || !!attachmentRoot.current?.contains(document.activeElement);
+    if (questionsKey && !shown && writing) setTypingFor(questionsKey);
+  }
+  const asking = questions.length > 0 && typingFor !== questionsKey && !editing;
+  /* the composer box and the question panel are one card, so a question
+     arriving or leaving morphs one into the other */
+  const card = useMorphCard();
+  const [shownAsking, setShownAsking] = useState(asking);
+  useEffect(() => {
+    if (shownAsking !== asking) card.morph(() => setShownAsking(asking));
+  }, [asking, shownAsking, card]);
+  const cardPart = card.part("card");
+  const composerRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      attachmentRoot.current = element;
+      return cardPart(element);
+    },
+    [cardPart],
+  );
   const draftKey = useView((view) => view.draftKey);
   const [field, setField] = useDraftField(drafts, draftKey);
+  const leaveHistory = history.leave;
+  useEffect(() => leaveHistory(), [draftKey, !!editing, leaveHistory]);
   const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
   useEffect(() => {
     if (!focusRequested || blocked) return;
@@ -170,7 +247,8 @@ export function OpenSessionComposer({
     }
     goalMode.onKeyDown(event);
     if (event.defaultPrevented || goalMode.mode) return;
-    if (event.key === "ArrowUp" && draft === "" && !attachments.hasAttachments) {
+    const empty = draft === "" && !attachments.hasAttachments;
+    if (event.key === "ArrowUp" && empty) {
       const last = lastEditable(queue);
       if (last) {
         event.preventDefault();
@@ -178,6 +256,7 @@ export function OpenSessionComposer({
         return;
       }
     }
+    if (history.onKeyDown(event, empty)) return;
     if (
       !event.defaultPrevented &&
       turnRunning &&
@@ -232,12 +311,27 @@ export function OpenSessionComposer({
       </ComposerEditContext.Provider>
       <GoalDeliveryFeedback />
       <ChatDeliveryFeedback />
+      {shownAsking && (
+        <div ref={cardPart} className={CARD}>
+          <MorphProvider value={card}>
+            <QuestionPanel
+              items={questions}
+              onTypeInstead={() => setTypingFor(questionsKey)}
+            />
+          </MorphProvider>
+        </div>
+      )}
+      {!shownAsking && questions.length > 0 && (
+        <AskedChip item={questions[0]!} onAnswer={() => setTypingFor(null)} />
+      )}
       <div
         data-testid="composer"
-        ref={attachmentRoot}
+        hidden={shownAsking || undefined}
+        ref={composerRef}
         {...activeAttachments.dropProps}
         className={cn(
           "relative grid rounded-2xl",
+          CARD,
           activeAttachments.over && "ring-2 ring-ring",
         )}
       >
@@ -260,7 +354,7 @@ export function OpenSessionComposer({
             onSend={
               editing
                 ? (text) => {
-                    const prepared = withSkillLines(text, [
+                    const skills = [
                       ...new Set([
                         ...editing.skills,
                         ...chipSkills(
@@ -268,10 +362,11 @@ export function OpenSessionComposer({
                           editSlash.names,
                         ),
                       ]),
-                    ]);
+                    ];
+                    const prepared = withSkillLines(text, skills);
                     void (editing.reached
                       ? edit.sendAsNew(text, addedAttachments(), prepared)
-                      : edit.save(text, addedAttachments(), prepared));
+                      : edit.save(text, addedAttachments(), prepared, skills));
                   }
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
@@ -348,6 +443,15 @@ export function OpenSessionComposer({
                 />
               ) : (
                 <>
+                  {history.position && (
+                    <p
+                      role="status"
+                      data-testid="composer-history"
+                      className="px-3 pt-2 text-xs text-muted-foreground"
+                    >
+                      History {history.position.index}/{history.position.total}
+                    </p>
+                  )}
                   <ReplyingTo />
                   {attachments.over && (
                     <p
@@ -366,14 +470,13 @@ export function OpenSessionComposer({
               )
             }
             onKeyDown={onKeyDown}
+            onPartsChange={editing ? undefined : history.onPartsChange}
             fieldRef={textarea}
-            commands={editing ? editSlash.names : slash.names}
-            composerRef={editing ? editSlash.field : slash.field}
+            commands={commands.names}
+            composerRef={commands.field}
             commandsAt="word"
-            chipKinds={editing ? editSlash.chipKinds : slash.chipKinds}
-            triggers={
-              goalMode.mode ? undefined : [editing ? editSlash.trigger : slash.trigger]
-            }
+            chipKinds={chipKinds}
+            triggers={goalMode.mode ? undefined : [commands.trigger, mention.trigger]}
             clearable={!editing}
             submitLabel={
               editing

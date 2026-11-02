@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { chipSkills, splitSkillLines, withSkillLines } from "../src/ui/lib/skillLines";
+import {
+  chipSkills,
+  splitSkillLines,
+  withSkillLines,
+  writtenText,
+} from "../src/ui/lib/skillLines";
 
 const chip = (id: string, kind = "command") =>
   ({ type: "chip", chip: { kind, id, label: `/${id}` } }) as const;
@@ -35,5 +40,20 @@ describe("skills sent with a message", () => {
       skills: [],
     });
     expect(splitSkillLines("/review it")).toEqual({ text: "/review it", skills: [] });
+  });
+});
+
+describe("a sent message copied as it was written", () => {
+  it("opens with the skills its text doesn't name, as the composer chips them", () => {
+    expect(writtenText("test", ["test-pirate"])).toBe("/test-pirate test");
+    expect(writtenText("fix it", ["review", "lint"])).toBe("/review\n/lint fix it");
+    expect(writtenText("", ["test-pirate"])).toBe("/test-pirate");
+  });
+
+  it("leaves a skill its text names where it is, and plain text as it was", () => {
+    expect(writtenText("please /review this", ["review"])).toBe("please /review this");
+    expect(writtenText("see /review.md", ["review"])).toBe("/review see /review.md");
+    expect(writtenText("plain", [])).toBe("plain");
+    expect(writtenText("plain", null)).toBe("plain");
   });
 });

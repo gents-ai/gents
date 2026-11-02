@@ -39,6 +39,14 @@ function bridgeApi(): Record<string, ReturnType<typeof vi.fn>> {
   );
 }
 
+function showWindow(shown: boolean) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => (shown ? "visible" : "hidden"),
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 describe("following the client while it runs", () => {
   it.each([false, true])(
     "paces polling by live-source availability (%s)",
@@ -94,6 +102,108 @@ describe("following the client while it runs", () => {
       }
     },
   );
+
+  it("reads nothing on a timer while the window is hidden, and reads in full on show", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const session = sessionSnapshot({
+        sessionId: "s-1",
+        nodeDid: NODE_DID,
+        turnState: "running",
+        latestRequestId: "r-1",
+        liveCursor: "source",
+        projectionRevision: { storeVersion: 1, provenanceVersion: 1 },
+        timelineItems: [liveAssistant({ itemKey: "live", content: "hello" })],
+      });
+      api.fetchSessionSnapshot.mockResolvedValue(session);
+      api.fetchSessionLiveDelta.mockResolvedValue({
+        outcome: "unchanged",
+        liveCursor: "source",
+        requestId: "r-1",
+        revision: { storeVersion: 1, provenanceVersion: 1 },
+        turnState: "running",
+        status: null,
+        content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
+        reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+      });
+      const app = testApp({ api, snapshot: running, session });
+      stop = startClientObservation(
+        app,
+        vi.fn(async () => () => {}),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      const indexReads = api.fetchDesktopSnapshot.mock.calls.length;
+
+      showWindow(false);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.fetchSessionLiveDelta).not.toHaveBeenCalled();
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(indexReads);
+
+      showWindow(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(indexReads + 1);
+      expect(api.fetchSessionLiveDelta).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(2);
+    } finally {
+      stop?.();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps one poll running when the window shows during a read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const session = sessionSnapshot({
+        sessionId: "s-1",
+        nodeDid: NODE_DID,
+        turnState: "running",
+        latestRequestId: "r-1",
+        projectionRevision: { storeVersion: 1, provenanceVersion: 1 },
+      });
+      api.fetchSessionSnapshot.mockResolvedValue(session);
+      const app = testApp({ api, snapshot: running, session });
+      stop = startClientObservation(
+        app,
+        vi.fn(async () => () => {}),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+
+      let land: (() => void) | undefined;
+      api.fetchSessionSnapshot.mockImplementationOnce(
+        () => new Promise((resolve) => (land = () => resolve(session))),
+      );
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      showWindow(false);
+      showWindow(true);
+      land!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(5);
+    } finally {
+      stop?.();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
+  });
 
   it("keeps one bridge listener while the person moves between sessions", async () => {
     const listen = vi.fn<DesktopClientUpdatedListenerFactory>(async () => () => {});

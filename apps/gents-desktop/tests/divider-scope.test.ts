@@ -113,3 +113,39 @@ describe("the dock divider when the window resizes", () => {
     expect(result.current.max).toBeLessThan(520);
   });
 });
+
+describe("expanding the dock", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("snaps to the window's end as a far drag does, and back to the width it had", () => {
+    let frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const settle = () => {
+      for (let t = 0; frames.length && t < 10_000; t += 16) {
+        const due = frames;
+        frames = [];
+        act(() => due.forEach((cb) => cb(t)));
+      }
+    };
+    const { result, rerender } = renderHook(
+      (props: { open: boolean }) =>
+        useDivider({ ...base, key: "divider-expand-test", scope: "s", ...props }),
+      { initialProps: { open: false } },
+    );
+    rerender({ open: true });
+    settle();
+    const width = result.current.pos;
+    act(() => result.current.hidePane());
+    settle();
+    expect(result.current.pos).toBe(result.current.end);
+    expect(result.current.paneHidden).toBe(true);
+    act(() => result.current.showPane());
+    settle();
+    expect(result.current.pos).toBe(width);
+    expect(result.current.paneHidden).toBe(false);
+  });
+});

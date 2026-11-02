@@ -1,3 +1,4 @@
+use crate::support::inference_target::{InferenceTarget, EVAL_TARGET_VARIABLE};
 use crate::support::*;
 
 use std::fs;
@@ -12,6 +13,7 @@ struct LiveFileAgents<'a> {
     host: Value,
     system_prompt: &'a std::path::Path,
     agent_ids: &'a [&'a str],
+    target: Option<&'a InferenceTarget>,
 }
 
 fn apply_live_file_agent_config(
@@ -26,6 +28,7 @@ fn apply_live_file_agent_config(
         host,
         system_prompt,
         agent_ids,
+        target,
     } = agents;
     run_cli_text(
         home,
@@ -44,6 +47,46 @@ fn apply_live_file_agent_config(
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
+    if let Some(target) = target {
+        let profile_id = config["agents"][0]["inference_profile_id"]
+            .as_str()
+            .context("default agent lacks inference profile")?
+            .to_owned();
+        let profile = config["inference_profiles"]
+            .as_array_mut()
+            .context("inference_profiles is not an array")?
+            .iter_mut()
+            .find(|profile| profile["profile_id"] == profile_id)
+            .context("default inference profile is missing")?;
+        let backend_id = profile["backend_id"]
+            .as_str()
+            .context("default profile lacks backend")?
+            .to_owned();
+        let mut selected_profile = target.profile(node_did);
+        selected_profile.profile_id = profile_id;
+        selected_profile.backend_id = backend_id.clone();
+        *profile = serde_json::to_value(selected_profile)?;
+        let backend = config["inference_backends"]
+            .as_array_mut()
+            .context("inference_backends is not an array")?
+            .iter_mut()
+            .find(|backend| backend["backend_id"] == backend_id)
+            .context("default inference backend is missing")?;
+        let mut selected_backend = target.backend(node_did);
+        selected_backend.backend_id = backend_id;
+        *backend = serde_json::to_value(selected_backend)?;
+        if let Some(sampling) = target.sampling(node_did) {
+            let rows = config
+                .as_object_mut()
+                .context("configuration object")?
+                .entry("inference_sampling")
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .context("inference_sampling is not an array")?;
+            rows.retain(|row| row["sampling_id"] != sampling.sampling_id);
+            rows.push(serde_json::to_value(sampling)?);
+        }
+    }
     let tools = config["tools"]
         .as_array_mut()
         .context("tools is not an array")?
@@ -143,10 +186,23 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
-    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let target = std::env::var_os(EVAL_TARGET_VARIABLE)
+        .map(|_| InferenceTarget::selected())
+        .transpose()?;
+    let model_endpoint = target
+        .as_ref()
+        .map(|target| target.endpoint().to_owned())
+        .unwrap_or_else(|| {
+            std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
+                .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string())
+        });
+    let model_name = target
+        .as_ref()
+        .map(|target| target.model().to_owned())
+        .unwrap_or_else(|| {
+            std::env::var("GENTS_CLI_E2E_MODEL_NAME")
+                .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string())
+        });
 
     let init_args = vec![
         "--home".to_string(),
@@ -250,6 +306,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
             agent_ids: &[&agent_id],
+            target: target.as_ref(),
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
@@ -405,6 +462,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
             agent_ids: &[&agent_id],
+            target: None,
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
@@ -823,6 +881,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
             agent_ids: &agent_ids,
+            target: None,
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
@@ -1135,6 +1194,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             }),
             system_prompt: &system_prompt,
             agent_ids: &[&agent_id],
+            target: None,
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node, 2, Duration::from_secs(6)).await?;
@@ -1390,7 +1450,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "harness: the held request must complete"
     );
 
-    let access = gents::config_client::ConfigAccess::Graphql(
+    let access = gents::store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
     let captures = captures_for(&active_request_id).await?;
@@ -1404,13 +1464,13 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             capture["request_doc_id"], active_doc_id,
             "steering must not start a second physical request"
         );
-        let body = gents::rendered_request::decode_capture_json(
+        let body = gents::inference::rendered_request::decode_capture_json(
             &access,
             capture["capture_version"]
                 .as_u64()
                 .context("capture_version")? as u32,
             capture["request_json"].as_str().context("request_json")?,
-            gents::rendered_request::CapturePayloadKind::RequestBody,
+            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await?
         .to_string();
@@ -1452,7 +1512,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         assert_eq!(row["lifecycle_state"], "superseded", "{row}");
         assert_eq!(
             row["failure_reason"],
-            gents::lifecycle::FOLDED_REASON,
+            gents::request::lifecycle::FOLDED_REASON,
             "{row}"
         );
         assert_eq!(

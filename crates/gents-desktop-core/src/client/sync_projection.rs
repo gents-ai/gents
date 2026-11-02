@@ -29,6 +29,7 @@ pub struct SyncHealth {
     pub state: SyncHealthState,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
+    pub activation_error_count: usize,
     pub pending_dag_count: Option<usize>,
     pub persisted_pending_dag_count: Option<usize>,
     pub push_retry_marker_count: Option<usize>,
@@ -41,6 +42,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     let database = sync.database_sync.as_ref();
     let database_error = sync.database_sync_error.as_ref();
     let schema_skew = sync.peer_schema_skew.values().next();
+    let activation_error_count = sync.enrollment_activation_errors.len();
     let connected_peer_count = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
     let offline = is_offline(
         transport.status,
@@ -50,6 +52,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     if schema_skew.is_none()
         && database.is_none()
         && database_error.is_none()
+        && activation_error_count == 0
         && transport.status == P2PHealthStatus::Healthy
         && !offline
     {
@@ -96,6 +99,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
         state,
         last_error,
         connected_peer_count,
+        activation_error_count,
         pending_dag_count: database.map(|status| status.pending_dags),
         persisted_pending_dag_count: database.map(|status| status.persisted_pending_dags),
         push_retry_marker_count,
@@ -303,6 +307,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(health.state, SyncHealthState::Healthy);
+    }
+
+    #[test]
+    fn enrollment_activation_failure_is_visible_beside_a_healthy_local_peer() {
+        use crate::client::core::{EnrollmentActivationError, EnrollmentActivationStage};
+
+        for database_sync in [None, Some(P2pSyncStatusSnapshot::default())] {
+            let mut unavailable = peer(false);
+            unavailable.peer_id = "remote-peer".into();
+            let mut sync = ClientSyncStateSnapshot {
+                transport: transport(P2PHealthStatus::Healthy),
+                database_sync,
+                database_sync_error: None,
+                enrollment_activation_errors: [(
+                    "remote-enrollment".into(),
+                    EnrollmentActivationError {
+                        request_digest: "private-enrollment-digest".into(),
+                        authorization_sequence: 1,
+                        authorization_expires_at: "2030-01-01T00:00:00Z".into(),
+                        stage: EnrollmentActivationStage::Authentication,
+                    },
+                )]
+                .into(),
+                peer_schema_skew: Default::default(),
+                directory: Vec::new(),
+                peers: vec![peer(true), unavailable],
+            };
+            let health = project_sync_health(&sync).expect("activation failure is observable");
+            assert_eq!(health.state, SyncHealthState::Healthy);
+            assert_eq!(health.connected_peer_count, 1);
+            assert_eq!(health.activation_error_count, 1);
+            assert_eq!(health.last_error, None);
+
+            sync.enrollment_activation_errors.clear();
+            assert!(project_sync_health(&sync)
+                .is_none_or(|health| health.state == SyncHealthState::Healthy));
+        }
     }
 
     #[test]
