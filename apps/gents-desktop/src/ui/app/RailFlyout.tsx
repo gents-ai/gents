@@ -93,7 +93,7 @@ function Item({
       href={to}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group/item mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pr-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        "group/item mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pe-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
         active && "border-border/60 bg-background text-ink shadow-xs",
         /* on the window's ground the page colour wouldn't show; the rail's
            fill alone marks the page there */
@@ -230,7 +230,7 @@ export function NavPanel({
       ) : null;
     return recent.length > 0 || recentFiltered ? (
       <Fragment key="recent">
-        <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
+        <div className="mt-2 flex items-center gap-1 ps-5 pe-3">
           <p className="m-0 min-w-0 flex-1 truncate font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
             Recent
           </p>
@@ -260,7 +260,7 @@ export function NavPanel({
           className="flex items-center gap-1 px-5 py-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
         >
           <span className="min-w-0 truncate">All sessions</span>
-          <ChevronRight className="size-3 shrink-0" />
+          <ChevronRight className="size-3 shrink-0 rtl:-scale-x-100" />
         </a>
       </Fragment>
     ) : null;
@@ -273,7 +273,7 @@ export function NavPanel({
         /* the node goes to its page; the caret beside it switches node */
         <div
           className={cn(
-            "mr-3 ml-[14px] flex items-center gap-1",
+            "ms-[14px] me-3 flex items-center gap-1",
             railAligned ? "mb-1" : "mb-2",
           )}
         >
@@ -305,7 +305,7 @@ export function NavPanel({
               />
               <span
                 className={cn(
-                  "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
+                  "absolute -end-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
                   online ? "bg-brand" : "bg-border",
                 )}
                 aria-hidden="true"
@@ -332,7 +332,7 @@ export function NavPanel({
           href={href({ name: "nodes" })}
           data-testid="no-working-node"
           className={cn(
-            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground",
+            "group ms-[14px] me-3 flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground",
             railAligned ? "mb-1" : "mb-2",
           )}
         >
@@ -347,7 +347,7 @@ export function NavPanel({
           </span>
         </a>
       )}
-      <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
+      <div className="ms-[18px] mb-1 h-px w-5 bg-border" />
       {/* the top items and the sections scroll together when the window
           is too short for them, and the foot stays */}
       <NavScroll>
@@ -499,7 +499,7 @@ export function RailFlyout({
           data-ground={floating ? "raised" : "window"}
           className={cn(
             "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden pb-2",
-            "left-1.5 pt-3.5",
+            "start-1.5 pt-3.5",
             /* floating over the page it is a surface of its own; always there,
                it is part of the window, on the window's ground */
             floating

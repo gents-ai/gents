@@ -20,7 +20,14 @@ export function useNavResize(width: number, most: number, onRail: boolean) {
   const [collapsing, setCollapsing] = useState(false);
   const collapsingRef = useRef(false);
   const liveRef = useRef<number | null>(null);
-  const drag = useRef<{ x: number; from: number; fromRail: boolean } | null>(null);
+  const drag = useRef<{
+    x: number;
+    from: number;
+    fromRail: boolean;
+    /* 1 left to right; -1 right to left, where the sidebar's edge widens it
+       toward the window's left */
+    dir: 1 | -1;
+  } | null>(null);
   const max = Math.max(NAV_WIDTH.min, Math.min(NAV_WIDTH.max, most));
   const shown = Math.min(width, max);
   const clamp = (w: number) => Math.min(max, Math.max(NAV_WIDTH.min, w));
@@ -35,14 +42,15 @@ export function useNavResize(width: number, most: number, onRail: boolean) {
     e.preventDefault();
     document.documentElement.dataset.dragging = "divider";
     const from = onRail ? RAIL_WIDTH : shown;
-    drag.current = { x: e.clientX, from, fromRail: onRail };
+    const dir = getComputedStyle(e.currentTarget).direction === "rtl" ? -1 : 1;
+    drag.current = { x: e.clientX, from, fromRail: onRail, dir };
     follow(from, onRail);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent<HTMLElement>) => {
     const d = drag.current;
     if (!d) return;
-    const to = d.from + e.clientX - d.x;
+    const to = d.from + (e.clientX - d.x) * d.dir;
     if (to < (NAV_WIDTH.min + RAIL_WIDTH) / 2) follow(RAIL_WIDTH, true);
     else follow(clamp(to));
   };
@@ -62,21 +70,26 @@ export function useNavResize(width: number, most: number, onRail: boolean) {
   };
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     const step = e.shiftKey ? 64 : 16;
+    /* the arrows move the edge the way they point, so right to left the
+       left arrow widens */
+    const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
+    const widen = rtl ? "ArrowLeft" : "ArrowRight";
+    const narrow = rtl ? "ArrowRight" : "ArrowLeft";
     if (onRail) {
-      if (e.key !== "ArrowRight") return;
+      if (e.key !== widen) return;
       e.preventDefault();
       sidebar.setNav("expanded");
       return;
     }
-    if (e.key === "ArrowLeft" && shown <= NAV_WIDTH.min) {
+    if (e.key === narrow && shown <= NAV_WIDTH.min) {
       e.preventDefault();
       sidebar.setNav("collapsed");
       return;
     }
     const to =
-      e.key === "ArrowRight"
+      e.key === widen
         ? shown + step
-        : e.key === "ArrowLeft"
+        : e.key === narrow
           ? shown - step
           : e.key === "Home"
             ? NAV_WIDTH.min

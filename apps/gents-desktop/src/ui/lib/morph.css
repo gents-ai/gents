@@ -23,7 +23,8 @@
    their own between the rail and the expanded sidebar. The page shows only
    its new picture, which moves with its box: two pictures of a page laid
    out at different widths would show every line twice. A sidebar hidden or
-   shown slides off or in at the window's left edge. A fade to transparent
+   shown slides off or in at the window's inline start: its left edge, or
+   its right edge when the page reads right to left. A fade to transparent
    inside the page is drawn in sRGB (bg-linear-to-b/srgb): WebKit draws an
    oklab one dark in a transition's picture. */
 ::view-transition-group(.morph-column),
@@ -38,7 +39,8 @@
 ::view-transition-new(.morph-column) {
   width: auto;
   height: auto;
-  inset: 0 auto auto 0;
+  inset-block: 0 auto;
+  inset-inline: 0 auto;
   animation-duration: 240ms;
 }
 ::view-transition-old(.morph-pane) {
@@ -54,6 +56,12 @@
 ::view-transition-new(.morph-sidebar):only-child {
   animation: 240ms cubic-bezier(0.2, 0, 0, 1) both morph-slide-in;
 }
+:root[dir="rtl"]::view-transition-old(.morph-sidebar):only-child {
+  animation-name: morph-slide-out-rtl;
+}
+:root[dir="rtl"]::view-transition-new(.morph-sidebar):only-child {
+  animation-name: morph-slide-in-rtl;
+}
 @keyframes morph-slide-out {
   to {
     transform: translateX(-100%);
@@ -62,6 +70,16 @@
 @keyframes morph-slide-in {
   from {
     transform: translateX(-100%);
+  }
+}
+@keyframes morph-slide-out-rtl {
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes morph-slide-in-rtl {
+  from {
+    transform: translateX(100%);
   }
 }
 

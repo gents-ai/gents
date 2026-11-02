@@ -80,7 +80,7 @@ export function NavMailbox({
           className="flex items-center gap-1 px-5 py-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
         >
           <span className="min-w-0 truncate">{more} more in Mailbox</span>
-          <ChevronRight className="size-3 shrink-0" />
+          <ChevronRight className="size-3 shrink-0 rtl:-scale-x-100" />
         </a>
       )}
     </>

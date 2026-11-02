@@ -63,7 +63,7 @@ function RailItem({
           {children}
         </span>
         {count ? (
-          <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-brand px-1 font-mono text-[10px] leading-none text-brand-foreground">
+          <span className="absolute -end-1.5 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-brand px-1 font-mono text-[10px] leading-none text-brand-foreground">
             {count}
           </span>
         ) : null}
@@ -112,7 +112,7 @@ function RailNode({ route }: { route: Route }) {
         />
         <span
           className={cn(
-            "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-background",
+            "absolute -end-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-background",
             online ? "bg-brand" : "bg-border",
           )}
           aria-hidden="true"
@@ -132,7 +132,7 @@ function RailSyncDot() {
           "absolute z-40",
           /* the dot keeps its place as it becomes the row, which spans the
              flyout's rows */
-          flyoutOpen ? "-top-0.5 -left-px w-[275px]" : "top-0 left-0 w-7",
+          flyoutOpen ? "-start-px -top-0.5 w-[275px]" : "start-0 top-0 w-7",
         )}
       >
         <SyncHealth syncHealth={syncHealth} compact={!flyoutOpen} row={flyoutOpen} />

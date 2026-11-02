@@ -45,7 +45,7 @@ function HistoryNav({ history }: { history: History }) {
           disabled={!history.canBack}
           onClick={history.back}
         >
-          <ArrowLeft />
+          <ArrowLeft className="rtl:-scale-x-100" />
         </Button>
       </Hint>
       <Hint label="Forward">
@@ -57,7 +57,7 @@ function HistoryNav({ history }: { history: History }) {
           disabled={!history.canForward}
           onClick={history.forward}
         >
-          <ArrowRight />
+          <ArrowRight className="rtl:-scale-x-100" />
         </Button>
       </Hint>
     </div>
@@ -191,7 +191,7 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
           className="mx-3 flex h-8 items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <Search className="size-4" />
-          <span className="flex-1 text-left">Search</span>
+          <span className="flex-1 text-start">Search</span>
         </button>
         <NavPanel route={route} settings={settings} syncRow />
       </SheetContent>
@@ -245,7 +245,7 @@ export function WindowBar({
           )}
           {navHoldsHistory && history && <HistoryNav history={history} />}
           {navHoldsHistory && (
-            <div className="ml-auto pr-2" data-tauri-drag-region={drag}>
+            <div className="ms-auto pe-2" data-tauri-drag-region={drag}>
               <SidebarToggle />
             </div>
           )}

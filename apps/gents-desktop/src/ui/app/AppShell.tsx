@@ -74,7 +74,7 @@ function SidebarPeek({
       <div
         aria-hidden
         data-testid="sidebar-edge"
-        className="absolute top-12 bottom-0 left-0 z-30 w-2"
+        className="absolute start-0 top-12 bottom-0 z-30 w-2"
         onPointerEnter={(e) => e.pointerType === "mouse" && later(true, PEEK_AFTER)}
         /* the panel slides in under a pointer already resting here, so it
            sees no entry; leaving the edge is what closes it then */
@@ -85,8 +85,10 @@ function SidebarPeek({
         inert={!open}
         aria-hidden={!open}
         className={cn(
-          "absolute top-12 bottom-0 left-0 z-40 transition-transform duration-200 ease-out motion-reduce:transition-none",
-          open ? "translate-x-0" : "pointer-events-none -translate-x-full",
+          "absolute start-0 top-12 bottom-0 z-40 transition-transform duration-200 ease-out motion-reduce:transition-none",
+          open
+            ? "translate-x-0"
+            : "pointer-events-none -translate-x-full rtl:translate-x-full",
         )}
         style={{ width }}
         onPointerEnter={() => later(true, 0)}
@@ -111,7 +113,7 @@ function NavResizeHandle({ layout }: { layout: ShellLayout }) {
     <div
       {...layout.navResize.handleProps}
       aria-label="Resize sidebar"
-      className="group absolute top-2 -right-1 bottom-2 z-10 flex w-2 cursor-col-resize items-center justify-center outline-none focus-visible:bg-accent"
+      className="group absolute -end-1 top-2 bottom-2 z-10 flex w-2 cursor-col-resize items-center justify-center outline-none focus-visible:bg-accent"
     >
       <div className="h-10 w-0.5 rounded-full bg-transparent transition-colors group-hover:bg-muted-foreground group-focus-visible:bg-ring" />
     </div>
@@ -196,8 +198,8 @@ export function AppShell({
             ref={shell.part("pane")}
             className={cn(
               "flex min-h-0 min-w-0 flex-col [view-transition-class:morph-column_morph-pane]",
-              "md:col-start-2 md:row-start-2 md:mt-2 md:mr-2 md:mb-2 md:overflow-hidden md:rounded-2xl md:border md:border-border/60",
-              navHidden && "md:ml-2",
+              "md:col-start-2 md:row-start-2 md:mt-2 md:me-2 md:mb-2 md:overflow-hidden md:rounded-2xl md:border md:border-border/60",
+              navHidden && "md:ms-2",
             )}
             data-testid="pane"
           >

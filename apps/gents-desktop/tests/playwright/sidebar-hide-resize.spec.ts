@@ -178,4 +178,66 @@ test.describe("the sidebar", () => {
     await expect.poll(() => paneX(page)).toBeLessThan(80);
     expect(await paneX(page)).toBeGreaterThan(20);
   });
+
+  test.describe("read right to left", () => {
+    const rtl = (page: Page) =>
+      page.evaluate(() => {
+        document.documentElement.dir = "rtl";
+      });
+    const box = async (page: Page, testId: string) =>
+      (await page.getByTestId(testId).boundingBox())!;
+
+    test("opens its hover panel on screen, beside the rail at the right", async ({
+      page,
+    }) => {
+      await withNav(page, { nav: "hover" });
+      await rtl(page);
+      const rail = page.locator("nav").first();
+      const at = (await rail.boundingBox())!;
+      expect(at.x).toBeGreaterThan(1440 / 2);
+      await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+      const panel = page.locator("[data-ground=raised]");
+      await expect(panel).toHaveAttribute("aria-hidden", "false");
+      const drawn = (await panel.boundingBox())!;
+      expect(drawn.x).toBeGreaterThanOrEqual(0);
+      expect(drawn.x + drawn.width).toBeLessThanOrEqual(1440);
+      expect(drawn.x + drawn.width).toBeGreaterThan(at.x);
+    });
+
+    test("widens as its edge is dragged toward the window's left", async ({ page }) => {
+      await withNav(page, { nav: "expanded" });
+      await rtl(page);
+      const pane = await box(page, "pane");
+      const handle = page.getByRole("separator", { name: "Resize sidebar" });
+      const edge = (await handle.boundingBox())!;
+      const y = edge.y + edge.height / 2;
+      expect(edge.x).toBeGreaterThan(pane.x + pane.width - 20);
+      await page.mouse.move(edge.x + edge.width / 2, y);
+      await page.mouse.down();
+      await page.mouse.move(edge.x + edge.width / 2 - 60, y, { steps: 6 });
+      await page.mouse.up();
+      await expect
+        .poll(async () => {
+          const now = await box(page, "pane");
+          return now.x + now.width;
+        })
+        .toBeLessThan(pane.x + pane.width - 40);
+    });
+
+    test("peeks in from the window's right edge when hidden", async ({ page }) => {
+      await withNav(page, { navHidden: true });
+      await rtl(page);
+      const edge = await box(page, "sidebar-edge");
+      expect(edge.x + edge.width).toBeGreaterThan(1440 - 2);
+      await page.mouse.move(edge.x + edge.width / 2, edge.y + 200);
+      const peek = page.getByTestId("sidebar-peek");
+      await expect(peek).toHaveAttribute("aria-hidden", "false");
+      await expect
+        .poll(async () => {
+          const drawn = (await peek.boundingBox())!;
+          return Math.round(drawn.x + drawn.width);
+        })
+        .toBe(1440);
+    });
+  });
 });
