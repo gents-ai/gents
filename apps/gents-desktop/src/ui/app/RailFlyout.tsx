@@ -202,7 +202,7 @@ export function NavPanel({
     if (section.id === "pinned")
       return pinned.length > 0 ? (
         <Fragment key="pinned">
-          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase truncate">
             Pinned
           </p>
           <ul className="px-3">
@@ -215,7 +215,7 @@ export function NavPanel({
     return recent.length > 0 || recentFiltered ? (
       <Fragment key="recent">
         <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
-          <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+          <p className="m-0 min-w-0 flex-1 truncate font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
             Recent
           </p>
           <RecentFilter sessions={recentCandidates} />
@@ -241,9 +241,10 @@ export function NavPanel({
         </div>
         <a
           href={href({ name: "sessions" })}
-          className="flex items-center gap-1 px-5 py-1 text-xs text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1 px-5 py-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
         >
-          All sessions <ChevronRight className="size-3" />
+          <span className="min-w-0 truncate">All sessions</span>
+          <ChevronRight className="size-3 shrink-0" />
         </a>
       </Fragment>
     ) : null;
@@ -297,9 +298,13 @@ export function NavPanel({
               <span className="block truncate font-heading font-medium text-heading">
                 {selected.node.displayName ?? selected.label}
               </span>
-              <span className="block text-xs text-muted-foreground">
-                {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"} ·{" "}
-                {selected.nodeDid.slice(-8)}
+              {/* one line at any width: the id gives way before its kind */}
+              <span className="flex text-xs whitespace-nowrap text-muted-foreground">
+                <span className="shrink-0">
+                  {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"}{" "}
+                  ·&nbsp;
+                </span>
+                <span className="min-w-0 truncate">{selected.nodeDid.slice(-8)}</span>
               </span>
             </span>
           </a>
@@ -321,7 +326,7 @@ export function NavPanel({
             <span className="block truncate font-heading font-medium">
               No active node
             </span>
-            <span className="block text-xs">Choose a node to continue</span>
+            <span className="block truncate text-xs">Choose a node to continue</span>
           </span>
         </a>
       )}

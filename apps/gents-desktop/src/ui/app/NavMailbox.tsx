@@ -63,7 +63,7 @@ export function NavMailbox({
   const more = shown.length - limit;
   return (
     <>
-      <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+      <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase truncate">
         {found.label}
         {/* how many wait, of which the first few are listed */}
         <span className="tabular-nums"> · {shown.length}</span>
@@ -77,9 +77,10 @@ export function NavMailbox({
         <a
           href={href({ name: "mailbox" })}
           onClick={() => listViews.setMailboxTab(group.key)}
-          className="flex items-center gap-1 px-5 py-1 text-xs text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1 px-5 py-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
         >
-          {more} more in Mailbox <ChevronRight className="size-3" />
+          <span className="min-w-0 truncate">{more} more in Mailbox</span>
+          <ChevronRight className="size-3 shrink-0" />
         </a>
       )}
     </>
