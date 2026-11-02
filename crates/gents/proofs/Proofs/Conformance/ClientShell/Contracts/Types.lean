@@ -50,6 +50,7 @@ structure ClientShellContractCase where
   frontendSessionTurnState : Option String
   frontendSessionPendingRequestId : Option RequestId
   frontendSessionQueuedRequestIds : List RequestId
+  frontendSessionPendingQueueRequestIds : List RequestId
   frontendSessionFoldedRequestIds : List RequestId
   frontendLocalWorkflowKind : String
   frontendLocalWorkflowSession : Option SessionId

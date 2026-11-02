@@ -14,6 +14,7 @@ import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-cli
 import {
   inferenceActivityStatus,
   projectChatShell as projectChatShellWithReadiness,
+  reconcileProjectedWorkflow,
   requestProgressPresentation,
   type ChatBlockedReason,
   type ChatWorkflowState,
@@ -97,6 +98,7 @@ type LeanClientShellCase = {
   frontend_session_turn_state: TurnState | null;
   frontend_session_pending_request_id: number | null;
   frontend_session_queued_request_ids: number[];
+  frontend_session_pending_queue_request_ids: number[];
   frontend_session_folded_request_ids: number[];
   frontend_local_workflow_kind: string;
   frontend_local_workflow_session: number | null;
@@ -306,6 +308,16 @@ function sessionFromContract(contractCase: LeanClientShellCase) {
       origin: null,
       createdAt: "2026-04-21T12:01:30Z",
     })),
+    pendingQueue: contractCase.frontend_session_pending_queue_request_ids.map(
+      (id) => ({
+        requestDocId: `doc-${id}`,
+        requestId: requestId(id)!,
+        content: "queued prompt",
+        editable: true,
+        steerable: true,
+        editGroup: null,
+      }),
+    ),
     foldedInputs: contractCase.frontend_session_folded_request_ids.map(
       (id) => ({
         requestId: requestId(id)!,
@@ -411,7 +423,7 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(29);
+      expect(contractCases).toHaveLength(31);
       expect(
         contractCases.some(
           (contractCase) =>
@@ -480,6 +492,60 @@ describe("projectChatShell", () => {
     GENERATED_CONTRACT_TEST_TIMEOUT_MS,
   );
 });
+
+test.each(["remove", "edit"])(
+  "keeps the active turn target after pending-only message %s",
+  (action) => {
+    const common = {
+      clientAvailable: true,
+      selectedNodeDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      sending: false,
+      selectedSessionSummary: null,
+    };
+    const awaiting = {
+      kind: "awaitingObservation",
+      nodeDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "queued",
+    } as const;
+    const entry = {
+      requestDocId: "queued-doc",
+      requestId: "queued",
+      content: "Queued message",
+      editable: true,
+      steerable: true,
+      editGroup: null,
+    };
+    const observed = projectChatShell({
+      ...common,
+      localWorkflow: awaiting,
+      session: session({ turnState: "running", pendingQueue: [entry] }),
+    });
+    expect(observed.workflow).toMatchObject({
+      kind: "turnInProgress",
+      requestId: "req-1",
+    });
+    const localWorkflow = reconcileProjectedWorkflow(
+      awaiting,
+      observed.workflow,
+    );
+    const next = projectChatShell({
+      ...common,
+      localWorkflow,
+      session: session({
+        turnState: "running",
+        pendingQueue:
+          action === "edit" ? [{ ...entry, requestId: "replacement" }] : [],
+      }),
+    });
+    expect(next.workflow).toMatchObject({
+      kind: "turnInProgress",
+      requestId: "req-1",
+    });
+    expect(next.nonEmptyContentSendStatus.kind).toBe("queue");
+  },
+);
 
 describe("a session this app doesn't own", () => {
   const workerSummary = (unsendableReason: string | null) =>

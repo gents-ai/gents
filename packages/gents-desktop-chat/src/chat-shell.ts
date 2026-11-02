@@ -116,6 +116,7 @@ type ProjectionInput = {
     | "latestRequestId"
     | "pendingTurn"
     | "queuedTurns"
+    | "pendingQueue"
     | "foldedInputs"
   > | null;
   selectedSessionSummary: SessionSummary | null;
@@ -361,7 +362,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     : null;
 
   const queuedRequestIds = new Set(
-    (input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
+    [
+      ...(input.session?.queuedTurns ?? []),
+      ...(input.session?.pendingQueue ?? []),
+    ].map((turn) => turn.requestId),
   );
   const foldedRequestIds = new Set(
     (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
