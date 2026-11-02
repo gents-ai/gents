@@ -2710,6 +2710,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "request_input_cases" "RequestInputCases"
       "conformance::request_input::runtime_continuation_inputs_match_the_lean_owner")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "request_input_cases" "RequestInputCases"
+      "conformance::request_input::agent_new_directory_inheritance_matches_the_model")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases"
       "session::preview::tests::terminal_reply_projection_follows_the_model")
       "request-lifecycle" [Surface.runtimeInternal]
