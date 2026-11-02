@@ -111,6 +111,7 @@ impl MessagesSseState {
             events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
                 usage: self.usage.take(),
                 token_usage: messages_token_usage(&self.usage_fields, false)?,
+                request_id: self.request_id.clone(),
             }));
         }
         Ok(events)
@@ -198,6 +199,13 @@ impl MessagesSseState {
         };
         match kind {
             "message_start" => {
+                if let Some(id) = payload
+                    .get("message")
+                    .and_then(|message| message.get("id"))
+                    .and_then(Value::as_str)
+                {
+                    events.push(RawStreamingChoice::MessageId(id.to_owned()));
+                }
                 if let Some(usage) = payload
                     .get("message")
                     .and_then(|message| message.get("usage"))
@@ -529,6 +537,7 @@ impl MessagesSseState {
                     events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
                         usage: self.usage,
                         token_usage: messages_token_usage(&self.usage_fields, true)?,
+                        request_id: self.request_id.clone(),
                     }));
                 }
             }
@@ -643,9 +652,15 @@ fn mapped_tool_call(
         serde_json::from_str(&raw).map_err(|error| MessagesParseError::MalformedToolUse {
             message: format!("tool_use {} input is not JSON: {error}", tool.id),
         })?;
-    Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-        tool.id, tool.name, input,
-    )))
+    let mut call = RawStreamingToolCall::new(tool.id, tool.name, input);
+    // The loop moves the streamed text onto the native tool call and strips the key.
+    let mut params = serde_json::Map::new();
+    params.insert(
+        gents_loop::rig_compat::RAW_TOOL_ARGUMENTS_PARAM.to_owned(),
+        Value::String(raw),
+    );
+    call.additional_params = Some(Value::Object(params));
+    Ok(RawStreamingChoice::ToolCall(call))
 }
 
 /// Messages usage deltas are cumulative and may omit the initial input fields.
