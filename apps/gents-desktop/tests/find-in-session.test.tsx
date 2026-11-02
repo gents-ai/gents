@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeFind, findMatches, openFind } from "@/screens/session/find";
 import { FindBar } from "@/screens/session/FindBar";
 import { IS_MAC } from "@/screens/shortcutKeys";
+import { useGroupState } from "@/screens/ActivityGroup";
 import { groupTranscript, type TranscriptEntry } from "@/screens/transcript-groups";
 import { assistantMessage, userMessage } from "./timeline-fixture";
 
@@ -42,6 +43,14 @@ const entries: TranscriptEntry[] = groupTranscript([
   assistantMessage({ itemKey: "a1", content: "The snake game is in snake.py." }),
 ]);
 const keyOf = (entry: TranscriptEntry) => entry.key;
+const NO_ROWS = {
+  folded: {},
+  openStep: {},
+  reasoning: {},
+  setFolded() {},
+  setOpenStep() {},
+  setReasoning() {},
+};
 
 afterEach(() => act(() => closeFind()));
 
@@ -67,7 +76,14 @@ describe("finding in a session", () => {
   it("opens on its key, counts, steps both ways around, and closes with Escape", async () => {
     vi.useFakeTimers();
     const goTo = vi.fn();
-    const opener = { setFolded: vi.fn(), setOpenStep: vi.fn(), setReasoning: vi.fn() };
+    const opener = {
+      folded: {},
+      openStep: {},
+      reasoning: {},
+      setFolded: vi.fn(),
+      setOpenStep: vi.fn(),
+      setReasoning: vi.fn(),
+    };
     render(
       <>
         <button type="button">before</button>
@@ -147,7 +163,7 @@ describe("finding in a session", () => {
           entries={shown}
           keyOf={keyOf}
           goTo={() => {}}
-          opener={{ setFolded() {}, setOpenStep() {}, setReasoning() {} }}
+          opener={NO_ROWS}
           older={{
             more: from > 0,
             loading,
@@ -188,5 +204,105 @@ describe("finding in a session", () => {
     expect(screen.getByText(/of 2$/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Search all" })).toBeNull();
     vi.useRealTimers();
+  });
+
+  describe("what find opened", () => {
+    /* two groups, each with a step whose output holds the word, and a reply */
+    const rows = groupTranscript([
+      userMessage({ itemKey: "u1", content: "Run both." }),
+      {
+        kind: "toolGroup",
+        itemKey: "g1",
+        messageSequence: null,
+        tools: [command("t1", "a lizard")],
+      },
+      assistantMessage({ itemKey: "a1", content: "First done." }),
+      {
+        kind: "toolGroup",
+        itemKey: "g2",
+        messageSequence: null,
+        tools: [command("t2", "a lizard")],
+      },
+      assistantMessage({ itemKey: "a2", content: "A lizard, twice." }),
+    ]);
+    let state!: ReturnType<typeof useGroupState>;
+    function Session() {
+      state = useGroupState("s1");
+      const [scroller, setScroller] = useState<HTMLElement | null>(null);
+      return (
+        <div ref={setScroller}>
+          <div data-transcript-list>
+            {rows.map((entry) => (
+              <div key={entry.key} data-row-key={entry.key}>
+                <span>{entry.key}</span>
+              </div>
+            ))}
+          </div>
+          <FindBar
+            scroller={scroller}
+            sessionKey="s1"
+            entries={rows}
+            keyOf={keyOf}
+            goTo={() => {}}
+            opener={state}
+            older={{ more: false, loading: false, load: () => {}, messages: null }}
+          />
+        </div>
+      );
+    }
+    const findLizard = () => {
+      render(<Session />);
+      act(() => openFind());
+      const field = screen.getByRole("textbox", { name: "Find in session" });
+      fireEvent.change(field, { target: { value: "lizard" } });
+      act(() => vi.advanceTimersByTime(200));
+      return field;
+    };
+    afterEach(() => vi.useRealTimers());
+
+    it("folds a group again once the match leaves it", () => {
+      vi.useFakeTimers();
+      const field = findLizard();
+      expect(screen.getByText("1 of 3")).toBeInTheDocument();
+      expect(state.folded.g1).toBe(false);
+      expect(state.openStep.g1).toBe("t1");
+      fireEvent.keyDown(field, { key: "Enter" });
+      expect(state.folded.g2).toBe(false);
+      expect(state.folded.g1).toBe(true);
+      expect(state.openStep.g1).toBeNull();
+    });
+
+    it("leaves open a group the person clicked into", () => {
+      vi.useFakeTimers();
+      const field = findLizard();
+      fireEvent.pointerDown(screen.getByText("g1"));
+      fireEvent.keyDown(field, { key: "Enter" });
+      expect(state.folded.g1).toBe(false);
+      expect(state.openStep.g1).toBe("t1");
+    });
+
+    it("on Escape folds all it opened but the current match's", () => {
+      vi.useFakeTimers();
+      const field = findLizard();
+      /* the second match, in the second group */
+      fireEvent.keyDown(field, { key: "Enter" });
+      expect(screen.getByText("2 of 3")).toBeInTheDocument();
+      expect(state.folded.g2).toBe(false);
+      fireEvent.keyDown(field, { key: "Escape" });
+      expect(state.folded.g1).toBe(true);
+      expect(state.folded.g2).toBe(false);
+      expect(state.openStep.g2).toBe("t2");
+    });
+
+    it("holds the current match's row while what find opened folds", () => {
+      vi.useFakeTimers();
+      const held: string[] = [];
+      document.addEventListener("transcript:hold", (e) =>
+        held.push((e.target as HTMLElement).dataset.rowKey ?? ""),
+      );
+      const field = findLizard();
+      fireEvent.keyDown(field, { key: "Enter" });
+      expect(held).toContain("g2");
+    });
   });
 });

@@ -128,3 +128,55 @@ test("Search all reads the older pages and steps to a match only the oldest hold
   /* the first message's row */
   expect((await current(page))!.key).toContain("large-request-0");
 });
+
+test("a group find opened folds again when the match leaves it, and the view holds", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  const panel = page.getByTestId("transcript-panel");
+  await panel.getByText("stream-start", { exact: false }).last().waitFor();
+  /* a group of steps above the last message, the first with output */
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.toolBatch(6, 0, 40));
+  const group = panel.getByRole("button", { name: /6 commands/ });
+  await expect(group).toHaveAttribute("aria-expanded", "false");
+
+  await page.keyboard.press("ControlOrMeta+f");
+  const field = page.getByRole("textbox", { name: "Find in session" });
+  const count = page.getByTestId("find-bar").getByRole("status");
+  await field.fill("output line 39");
+  await expect(count).toHaveText("1 of 1");
+  await expect(group).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(async () => (await current(page))?.inView).toBe(true);
+
+  /* the next match is the message below the group */
+  await field.fill("fixture row 598");
+  await expect(count).toHaveText("1 of 1");
+  await expect(group).toHaveAttribute("aria-expanded", "false");
+  /* the match's row stays where find put it while the group above folds */
+  const placeOf = () =>
+    page.evaluate(() => {
+      const scroller = document
+        .querySelector('[data-testid="transcript-panel"]')!
+        .closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+      const range = [...(CSS.highlights.get("find-current") ?? [])][0] as
+        Range | undefined;
+      return range
+        ? Math.round(
+            range.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+          )
+        : null;
+    });
+  await expect.poll(placeOf).not.toBeNull();
+  const settled = (await placeOf())!;
+  await page.waitForTimeout(300);
+  expect(Math.abs((await placeOf())! - settled)).toBeLessThanOrEqual(2);
+  /* near the foot the view can't bring it up to the reader's line, but it
+     shows */
+  expect((await current(page))?.inView).toBe(true);
+});

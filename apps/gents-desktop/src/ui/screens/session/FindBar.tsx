@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
+import { holdRow } from "@/lib/scroll";
 import type { ReaderPlace } from "@/lib/transcriptList";
 import { SEARCH_FIELD } from "@/lib/textAssist";
 import { commandKey } from "../shortcutKeys";
@@ -16,16 +17,120 @@ import {
   type Found,
 } from "./find";
 
-/** what the find bar opens a match's step, group or reasoning with */
+type Reasoning = { open: boolean; all: boolean };
+
+/** the transcript's row state: what the find bar opens a match's group,
+    step or reasoning with, and how each was before */
 type Opener = {
+  folded: Readonly<Record<string, boolean>>;
+  openStep: Readonly<Record<string, string | null>>;
+  reasoning: Readonly<Record<string, Reasoning>>;
   setFolded: (groupKey: string, folded: boolean) => void;
   setOpenStep: (groupKey: string, stepKey: string | null) => void;
-  setReasoning: (key: string, state: { open: boolean; all: boolean }) => void;
+  setReasoning: (key: string, state: Reasoning) => void;
 };
+
+/* something find opened to show a match: its row, how to put it back, and
+   whether the person has since taken it over */
+type Opened = { rowKey: string; undo: () => void; taken: boolean };
+
+/** What find opens to show its matches, put back as it moves on: a group,
+    step or reasoning it opened folds again once the current match leaves
+    its row, and on close all but the last match's, unless the person took
+    it over by clicking, typing or selecting in its row. Folding holds the
+    current match's row in place. */
+function useRefold(scroller: HTMLElement | null, opener: Opener, open: boolean) {
+  const opened = useRef(new Map<string, Opened>());
+  const state = useRef(opener);
+  state.current = opener;
+
+  /* the person's hand in a row: what find opened there stays */
+  useEffect(() => {
+    if (!open || !scroller) return;
+    const take = (node: Node | null) => {
+      const row = (
+        node instanceof Element ? node : node?.parentElement
+      )?.closest<HTMLElement>("[data-row-key]");
+      if (!row) return;
+      for (const entry of opened.current.values())
+        if (entry.rowKey === row.dataset.rowKey) entry.taken = true;
+    };
+    const onEvent = (e: Event) => take(e.target as Node);
+    const onSelect = () => {
+      const selection = document.getSelection();
+      if (
+        selection &&
+        !selection.isCollapsed &&
+        scroller.contains(selection.anchorNode)
+      )
+        take(selection.anchorNode);
+    };
+    scroller.addEventListener("pointerdown", onEvent, true);
+    scroller.addEventListener("keydown", onEvent, true);
+    document.addEventListener("selectionchange", onSelect);
+    return () => {
+      scroller.removeEventListener("pointerdown", onEvent, true);
+      scroller.removeEventListener("keydown", onEvent, true);
+      document.removeEventListener("selectionchange", onSelect);
+    };
+  }, [open, scroller]);
+
+  return {
+    /** opens what holds `match`, keeping how each part was */
+    reveal(match: FindMatch) {
+      const s = state.current;
+      const keep = (id: string, undo: () => void) => {
+        if (!opened.current.has(id))
+          opened.current.set(id, { rowKey: match.rowKey, undo, taken: false });
+      };
+      if (match.group) {
+        const { key, step } = match.group;
+        if (s.folded[key] !== false) {
+          const was = s.folded[key];
+          keep(`group:${key}`, () => state.current.setFolded(key, was ?? true));
+        }
+        s.setFolded(key, false);
+        if (step && s.openStep[key] !== step) {
+          const was = s.openStep[key] ?? null;
+          keep(`step:${key}`, () => state.current.setOpenStep(key, was));
+          s.setOpenStep(key, step);
+        }
+      }
+      if (match.reasoning) {
+        const was = s.reasoning[match.reasoning];
+        if (!was?.open || !was.all)
+          keep(`reasoning:${match.reasoning}`, () =>
+            state.current.setReasoning(
+              match.reasoning!,
+              was ?? { open: false, all: false },
+            ),
+          );
+        s.setReasoning(match.reasoning, { open: true, all: true });
+      }
+    },
+    /** folds what find opened outside `keep`'s row, holding that row */
+    foldBack(keep: string | null) {
+      const back = [...opened.current].filter(([, e]) => e.rowKey !== keep);
+      if (!back.length) return;
+      const list = scroller?.querySelector("[data-transcript-list]");
+      if (keep && list) holdRow(rowOf(list, keep));
+      for (const [id, entry] of back) {
+        opened.current.delete(id);
+        if (!entry.taken) entry.undo();
+      }
+    },
+    /** forgets what find opened, folding nothing: another session's rows */
+    reset() {
+      opened.current.clear();
+    },
+  };
+}
 
 /* where a match's line is held in the view, from its top */
 const MATCH_LINE = 96;
 const TYPING_MS = 120;
+/* how long a match whose row is still opening is kept in view */
+const PLACING_MS = 800;
 const NOTHING: Found = { matches: [], more: false, done: true };
 
 const supported = () => typeof CSS !== "undefined" && "highlights" in CSS;
@@ -96,6 +201,8 @@ export function FindBar({
   const input = useRef<HTMLInputElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
   const shown = useRef<FindMatch | null>(null);
+  /* until when the current match's line is still being placed */
+  const placing = useRef(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(text), TYPING_MS);
@@ -112,6 +219,7 @@ export function FindBar({
       ? matches.findIndex((m) => m.rowKey === pick.rowKey && m.nth === pick.nth)
       : -1;
   const current = at === -1 ? null : matches[at]!;
+  const refold = useRefold(scroller, opener, open);
 
   /* Search all: the older pages, read one at a time through the same reads
      scrolling up makes, until the session's start or Stop; never begun by
@@ -129,6 +237,7 @@ export function FindBar({
 
   /* another session closes the bar */
   useEffect(() => {
+    refold.reset();
     setAll(false);
     closeFind();
     setText("");
@@ -144,6 +253,7 @@ export function FindBar({
   }, [open, focus]);
 
   const close = () => {
+    refold.foldBack(current?.rowKey ?? null);
     closeFind();
     const back = returnTo.current;
     returnTo.current = null;
@@ -174,17 +284,15 @@ export function FindBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, matches, done]);
 
-  /* the current match: what holds it is opened, and its row brought into
-     view; once drawn, its line is held where the reader looks */
+  /* the current match: what find opened for the one before folds again,
+     what holds this one is opened, and its row brought into view; once
+     drawn, its line is held where the reader looks */
   useEffect(() => {
     if (!current) return;
-    if (current.group) {
-      opener.setFolded(current.group.key, false);
-      if (current.group.step) opener.setOpenStep(current.group.key, current.group.step);
-    }
-    if (current.reasoning)
-      opener.setReasoning(current.reasoning, { open: true, all: true });
+    refold.foldBack(current.rowKey);
+    refold.reveal(current);
     shown.current = current;
+    placing.current = performance.now() + PLACING_MS;
     goTo({ key: current.rowKey, offset: MATCH_LINE });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.rowKey, current?.nth, current?.group?.step, current?.reasoning]);
@@ -210,12 +318,34 @@ export function FindBar({
       const range = mine[Math.min(target?.nth ?? 0, mine.length - 1)];
       if (!range) return CSS.highlights.delete("find-current");
       CSS.highlights.set("find-current", new Highlight(range));
-      /* a match far down a tall row is brought up to the reader's line */
-      const into = range.getBoundingClientRect().top - row!.getBoundingClientRect().top;
-      if (target && into > scroller!.clientHeight / 2) {
-        shown.current = null;
-        goTo({ key: target.rowKey, offset: MATCH_LINE - into });
+      /* a match far down a tall row, or in a step still opening, is
+         brought up to the reader's line while it settles; one in a box
+         that scrolls on its own, as a group's steps do, first within it */
+      const inner = range.startContainer.parentElement?.closest<HTMLElement>(
+        "[data-slot=scroll-area-viewport]",
+      );
+      if (
+        target &&
+        performance.now() < placing.current &&
+        inner &&
+        row!.contains(inner)
+      ) {
+        const box = inner.getBoundingClientRect();
+        const at = range.getBoundingClientRect();
+        if (at.top < box.top || at.bottom > box.bottom)
+          inner.scrollTop += at.top - box.top - box.height / 3;
       }
+      const view = scroller!.getBoundingClientRect();
+      const line = range.getBoundingClientRect().top;
+      if (
+        target &&
+        performance.now() < placing.current &&
+        (line < view.top || line > view.top + scroller!.clientHeight - 48)
+      )
+        goTo({
+          key: target.rowKey,
+          offset: MATCH_LINE - (line - row!.getBoundingClientRect().top),
+        });
     };
     const soon = () => {
       if (!frame) frame = requestAnimationFrame(paint);
