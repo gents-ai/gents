@@ -10,6 +10,17 @@ source consistency checks, not a separate runtime compatibility version.
   history, including reconnects and duplicate enrollment route records.
 - Improve mobile keyboard layout, touch targets, composer history, question
   focus, and mailbox navigation; preserve a session's selected folder when branching.
+- `/metrics` renders the remaining P2P sync diagnostics (request dispatch lanes
+  and saturation, pending-DAG registration and exhaustion, per-peer fetch health
+  and liveness, CAR serving, head hints, inbound budgets, retry markers), the
+  node's P2P identity, process memory (`process_resident_memory_bytes`, macOS
+  `gents_process_phys_footprint_bytes`, Linux anon/file/shmem RSS), uptime, and
+  the store directory size. `gents serve --metrics-addr ADDR:PORT` serves the
+  exposition alone on a dedicated listener that Prometheus can scrape without
+  runtime operator authorization: loopback serves it unauthenticated, a
+  specific interface requires `--metrics-auth-token-env`, and wildcard
+  addresses are refused. The runtime API's `/metrics` still requires the
+  operator.
 
 - Remove `gents chain` and the built-in Ethereum surface (`EthTool`,
   `ChainKeyBinding`, `EthSubmission`, `PackConfig.eth_tools`,
