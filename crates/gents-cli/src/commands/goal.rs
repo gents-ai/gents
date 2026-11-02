@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::config_client::ConfigAccess;
 use gents::goal::{
     delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument, GoalStatus,
     GOAL_FIELDS,
 };
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
@@ -42,7 +42,7 @@ async fn goal_show_value(
         .with_context(|| format!("no durable goal for session {session_id}"))?;
     let mut value = serde_json::to_value(gents::goal::snapshot(&goal, now))?;
     value["auto_resume_at_reset"] = goal.auto_resume_at_reset.unwrap_or(false).into();
-    let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
+    let blocked = gents::goal::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");
@@ -91,7 +91,8 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
         .ensure_supported("goal resume-request", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
-    let identity = gents::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
+    let identity =
+        gents::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
     let receipt = gents::goal::resume_goal_request(
         &access,
         &identity,
@@ -108,7 +109,8 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
         .ensure_supported("goal resume-on", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
-    let identity = gents::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
+    let identity =
+        gents::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
     let backend_id = crate::commands::config::profile::backend_for_account(
         &access,
         &node_did,
@@ -187,7 +189,7 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
 
 async fn access_and_did(
     scope: &GoalScopeArgs,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let node_did = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())
         .context("resolving goal owner node_did")?;
     let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref())

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
-use gents::document_config::{Schedule, Task};
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::documents::{Schedule, Task};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 
@@ -119,7 +119,7 @@ pub async fn run_schedule_config(
         session_id: row.session_id.unwrap_or_default(),
         node_did: row.node_did.unwrap_or_default(),
         agent_id: row.agent_id.unwrap_or_default(),
-        lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
+        lifecycle_state: row.lifecycle_state,
     })
 }
 
@@ -153,7 +153,7 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
         session_id: row.session_id.unwrap_or_default(),
         node_did: row.node_did.unwrap_or_default(),
         agent_id: row.agent_id.unwrap_or_default(),
-        lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
+        lifecycle_state: row.lifecycle_state,
     })
 }
 

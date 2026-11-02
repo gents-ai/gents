@@ -7,21 +7,29 @@ const COMMANDS_DIR = resolve(
   "../../crates/gents-desktop-bridge/src/tauri_commands",
 );
 
+const STARTUP_SOURCE = join(COMMANDS_DIR, "lifecycle", "core_start.rs");
+
+function rustSources(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return rustSources(path);
+    return entry.name.endsWith(".rs") ? [path] : [];
+  });
+}
+
 describe("native command async invariants", () => {
   it("never blocks async work on a Tauri command thread", () => {
-    const offenders = readdirSync(COMMANDS_DIR)
-      .filter((name) => name.endsWith(".rs") && name !== "lifecycle.rs")
-      .filter((name) =>
-        readFileSync(join(COMMANDS_DIR, name), "utf8").includes(
-          "tauri::async_runtime::block_on",
-        ),
+    const offenders = rustSources(COMMANDS_DIR)
+      .filter((path) => path !== STARTUP_SOURCE)
+      .filter((path) =>
+        readFileSync(path, "utf8").includes("tauri::async_runtime::block_on"),
       );
 
     expect(offenders).toEqual([]);
   });
 
   it("only blocks runtime startup on its dedicated background thread", () => {
-    const source = readFileSync(join(COMMANDS_DIR, "lifecycle.rs"), "utf8");
+    const source = readFileSync(STARTUP_SOURCE, "utf8");
     const occurrences = source.match(/tauri::async_runtime::block_on/g) ?? [];
 
     expect(occurrences).toHaveLength(1);
@@ -29,7 +37,15 @@ describe("native command async invariants", () => {
       "ClientCore::start_with_paths_reporting_stages(paths, options, stage_tx).await",
     );
     expect(source).toContain("start_client_core_async");
-    expect(source).toContain("single-flight");
+    expect(source).toContain("std::thread::Builder::new()");
+    expect(source).toContain('.name("desktop-client-start".to_string())');
+    expect(source).toContain(".spawn(move || {");
+    const coordinator = readFileSync(
+      join(COMMANDS_DIR, "lifecycle", "single_flight.rs"),
+      "utf8",
+    );
+    expect(coordinator).toContain("single-flight");
+    expect(coordinator).toContain("start_client_core_async(");
     expect(source).not.toContain(".join()");
   });
 });

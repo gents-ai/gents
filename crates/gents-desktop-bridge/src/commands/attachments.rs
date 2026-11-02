@@ -111,14 +111,14 @@ mod tests {
                 "agent_id": "test-agent", "created_at": "2026-10-28T00:00:00Z",
             }))
             .unwrap();
-            gents::config_client::ConfigAccess::local(core.node_arc())
+            gents::store::config_client::ConfigAccess::local(core.node_arc())
                 .write(
                     "test.image_session",
                     &format!("mutation {{ create_AgentSession(input: {session}) {{ _docID }} }}"),
                 )
                 .await
                 .unwrap();
-            gents::config_client::ConfigAccess::local(core.node_arc())
+            gents::store::config_client::ConfigAccess::local(core.node_arc())
                 .write(
                     "test.image_attachment",
                     &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
@@ -160,7 +160,7 @@ mod tests {
             .await
             .is_err());
 
-            let access = gents::config_client::ConfigAccess::local(core.node_arc());
+            let access = gents::store::config_client::ConfigAccess::local(core.node_arc());
             let orphan_request =
                 gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
                     "purpose": "normal", "request_id": "orphan-image-request",

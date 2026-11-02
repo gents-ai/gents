@@ -209,7 +209,7 @@ fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
     assert_eq!(
         (unset.context_window, unset.context_window_error),
         (
-            i64::try_from(gents::config::DEFAULT_CONTEXT_WINDOW).unwrap(),
+            i64::try_from(gents::inference::resolved::DEFAULT_CONTEXT_WINDOW).unwrap(),
             None
         )
     );
@@ -503,7 +503,7 @@ fn interrupted_unowned_input_survives_next_send_and_reloaded_projection() {
         .unwrap();
         assert!(
             matches!(&snapshot.timeline_items[0], RenderedTimelineItem::PendingUserTurn { request_id, content, lifecycle_state, .. }
-            if request_id == "req-1" && content == "interrupted question" && lifecycle_state.as_deref() == Some("interrupted"))
+            if request_id == "req-1" && content == "interrupted question" && *lifecycle_state == Some(RequestLifecycleState::Interrupted))
         );
         assert!(matches!(
             &snapshot.timeline_items[1],

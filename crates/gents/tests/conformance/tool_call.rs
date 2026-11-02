@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn cancel_cause_vocabulary_matches_production() {
-    use gents::tool_call_lifecycle::CancelCause;
+    use gents::tools::call::lifecycle::CancelCause;
     assert_eq!(
         lean_vocabulary_values("CancelCause"),
         CancelCause::ALL
@@ -14,7 +14,7 @@ fn cancel_cause_vocabulary_matches_production() {
 
 #[test]
 fn lean_emits_await_mode_vocabulary() {
-    use gents::tool_call_lifecycle::AwaitMode;
+    use gents::tools::call::lifecycle::AwaitMode;
 
     assert_eq!(
         lean_vocabulary_values("AwaitMode"),

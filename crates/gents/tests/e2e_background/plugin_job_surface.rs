@@ -3,10 +3,10 @@
 
 use std::time::Duration;
 
-use gents::background_tools::ProcessControlScope;
 use gents::plugin::data::StampContext;
 use gents::plugin::job_calls::{result as read_result, JobCaller};
-use gents::plugin_job::job::JobState;
+use gents::tools::background::job::job::JobState;
+use gents::tools::background::status::ProcessControlScope;
 use gents::ConfigAccess;
 use gents_protocol::job::JobResultRequest;
 use serde_json::{json, Value};
@@ -21,7 +21,7 @@ use crate::support::test_db;
 const TOOL_CALL: &str = "job-s";
 const CHILD_PROMPT: &str = "surface child a";
 
-fn entry(when: Value, output: gents::plugin_job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,
@@ -91,7 +91,7 @@ async fn parent_request_doc_id(h: &JobHarness) -> String {
     let response = ConfigAccess::local(h.db.node.clone())
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}-parent" }} }}, limit: 1) {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(&h.session_id)
+            gents::store::graphql::escape_graphql_string(&h.session_id)
         ))
         .await
         .expect("read the parent request");
@@ -103,7 +103,7 @@ async fn parent_request_doc_id(h: &JobHarness) -> String {
 
 async fn session_texts(h: &JobHarness) -> Vec<String> {
     let node = h.db.node.as_ref();
-    let session_id = gents::graphql::escape_graphql_string(&h.session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(&h.session_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ sequence: ASC }}) {{ _docID node_did requester_did }} }}"#
@@ -127,9 +127,9 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
         )
         .await
         .expect("reconstruct the message");
-        if let gents::llm::message::Message::User { content } = message {
+        if let gents::inference::llm::message::Message::User { content } = message {
             texts.extend(content.into_iter().filter_map(|item| match item {
-                gents::llm::message::UserContent::Text(text) => Some(text.text),
+                gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
                 _ => None,
             }));
         }

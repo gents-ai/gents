@@ -23,6 +23,7 @@ import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
 import { SentText } from "./SkillChips";
+import { writtenText } from "@/lib/skillLines";
 import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
 import { useHeldRows } from "@/lib/useHeldRows";
 import { sequenceOf } from "@/lib/transcriptRows";
@@ -54,10 +55,12 @@ import {
   AutomatedInput,
   UserInputWithState,
   pendingInputState,
+  SentContext,
+  unavailableReason,
 } from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
 import { useEditInBranch } from "./session/editInBranch";
-import { DayMarker, dayOpenings } from "./TranscriptMarker";
+import { CompactionMarker, DayMarker, dayOpenings } from "./TranscriptMarker";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
@@ -67,6 +70,7 @@ import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChang
 import { TurnChanges } from "./TurnChanges";
 import { toastFailure } from "@/lib/failure";
 import { sessionViews } from "@/app/sessionViews";
+import { messagePlaces, usePlaceRequest } from "@/app/messagePlaces";
 import { createHeightLearner, guessHeight, type RowShape } from "@/lib/rowHeights";
 import { useApp, useView } from "@/app/AppContext";
 import {
@@ -102,7 +106,58 @@ function copyActions(text: string | null | undefined) {
   ];
 }
 
+type PersonInput = Extract<
+  RenderedTimelineItem,
+  { kind: "userMessage" | "pendingUserTurn" }
+>;
+
+/* the bridge sends an input whose text this device can't read without it,
+   with the reason */
+const unavailableOf = (item: PersonInput) =>
+  item.kind === "userMessage" ? unavailableReason(item.reconstruction) : null;
+
+/** A person's input: its text, skills and captured context, or why its
+    text can't be shown. */
+function InputText({ item }: { item: PersonInput }) {
+  const unavailable = unavailableOf(item);
+  if (unavailable)
+    return (
+      <span className="text-muted-foreground" data-testid="user-input-unavailable">
+        {unavailable}
+      </span>
+    );
+  return (
+    <>
+      {item.content?.trim() || item.selectedSkillIds?.length ? (
+        <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
+      ) : null}
+      <SentContext items={item.capturedContext} />
+    </>
+  );
+}
+
+/* an input of only attachments: they show below, and a bubble would hold
+   nothing; while it waits, a line says what it carries, under its state */
+const onlyAttachments = (item: PersonInput) =>
+  !unavailableOf(item) &&
+  !item.content?.trim() &&
+  !item.selectedSkillIds?.length &&
+  !item.capturedContext?.length;
+
+function AttachmentsOnly({ item }: { item: PersonInput }) {
+  const count = item.attachments?.length ?? 0;
+  return (
+    <span className="text-muted-foreground">
+      {count} {count === 1 ? "attachment" : "attachments"}
+    </span>
+  );
+}
+
 const ParentContext = createContext<ParentWork | null>(null);
+
+/* how far below the view's top a place asked for lands, so the reader sees
+   what led up to it */
+const PLACE_OFFSET = 96;
 
 function OwnInput({
   item,
@@ -112,15 +167,25 @@ function OwnInput({
   state: string | null;
 }) {
   const branch = useEditInBranch(item.kind === "userMessage" ? item : null);
+  const bare = onlyAttachments(item);
   return (
     <div>
-      <UserInputWithState
-        content={
-          <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
-        }
-        state={state}
-        actions={[...copyActions(item.content), ...(branch ? [branch] : [])]}
-      />
+      {bare && !state ? null : (
+        <UserInputWithState
+          content={bare ? <AttachmentsOnly item={item} /> : <InputText item={item} />}
+          state={state}
+          actions={
+            unavailableOf(item) || bare
+              ? false
+              : [
+                  ...copyActions(
+                    writtenText(item.content ?? "", item.selectedSkillIds),
+                  ),
+                  ...(branch ? [branch] : []),
+                ]
+          }
+        />
+      )}
       <SentAttachments
         items={item.attachments}
         requestId={item.requestId}
@@ -148,39 +213,15 @@ function ModelInputReduction({
         )}
       </div>
       <p className="mt-1">
-        {item.reductionCount.toLocaleString()} affected model inputs
-        {` · ${item.compactedCount.toLocaleString()} compacted`}
-        {` · ${item.repairedCount.toLocaleString()} repaired`}
+        {item.reductionCount.toLocaleString()} affected model{" "}
+        {item.reductionCount === 1 ? "input" : "inputs"}
+        {/* a compaction with its own marker is not counted here */}
+        {item.compactedCount > 0 &&
+          ` · ${item.compactedCount.toLocaleString()} compacted`}
+        {item.repairedCount > 0 && ` · ${item.repairedCount.toLocaleString()} repaired`}
         {item.latestEstimatedInputTokens == null
           ? " · latest estimate unavailable"
           : ` · latest estimate ${item.latestEstimatedInputTokens.toLocaleString()} tokens`}
-      </p>
-    </div>
-  );
-}
-
-function SessionCompaction({
-  item,
-}: {
-  item: Extract<RenderedTimelineItem, { kind: "sessionCompaction" }>;
-}) {
-  return (
-    <div
-      className="mx-auto my-2 w-full max-w-3xl rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-      data-testid="session-compaction-event"
-      data-compaction-key={item.itemKey}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="font-medium text-foreground">Session history compacted</span>
-        {item.timestamp && <time dateTime={item.timestamp}>{item.timestamp}</time>}
-      </div>
-      <p className="mt-1">
-        {item.messagesCompacted == null
-          ? "Message count unavailable"
-          : `${item.messagesCompacted.toLocaleString()} messages compacted`}
-        {item.originalTokens == null || item.compactedTokens == null
-          ? " · Token estimates unavailable"
-          : ` · ${item.originalTokens.toLocaleString()} → ${item.compactedTokens.toLocaleString()} tokens`}
       </p>
     </div>
   );
@@ -218,9 +259,17 @@ const TranscriptItem = memo(function TranscriptItem({
       if (!sender) return <OwnInput item={item} state={state} />;
       const message = (
         <div>
-          <UserMessage actions={copyActions(item.content)}>
-            <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
-          </UserMessage>
+          {!onlyAttachments(item) && (
+            <UserMessage
+              actions={
+                unavailableOf(item)
+                  ? false
+                  : copyActions(writtenText(item.content ?? "", item.selectedSkillIds))
+              }
+            >
+              <InputText item={item} />
+            </UserMessage>
+          )}
           <SentAttachments
             items={item.attachments}
             requestId={item.requestId}
@@ -261,7 +310,7 @@ const TranscriptItem = memo(function TranscriptItem({
     case "requestContextReductionSummary":
       return <ModelInputReduction item={item} />;
     case "sessionCompaction":
-      return <SessionCompaction item={item} />;
+      return <CompactionMarker item={item} />;
   }
 });
 
@@ -335,7 +384,11 @@ function Reply({
     <div data-testid={live ? "live-assistant" : undefined}>
       <AssistantMessage
         className={item.content ? "py-4" : undefined}
-        actions={!live && item.content && !final ? copyActions(item.content) : false}
+        actions={
+          !live && item.content && !final
+            ? copyActions(writtenText(item.content ?? "", []))
+            : false
+        }
       >
         {readableReasoning(item.reasoning) ? (
           <Reasoning
@@ -618,12 +671,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   /* A finished turn's changes keep their identity while later turns stream,
      so its memoised row is not drawn again on every update. */
   const keptChanges = useRef(new Map<string, ItemChanges>());
+  const startLoaded = rows.olderBefore === null;
   const changes = useMemo(() => {
     const was = keptChanges.current;
     const next = new Map<string, ItemChanges>();
     if (nodeDid && sessionKey) {
       const scope = { nodeDid, sessionId: sessionKey };
-      for (const [key, files] of turnChanges(entries, finalKeys)) {
+      for (const [key, files] of turnChanges(entries, finalKeys, startLoaded)) {
         const held = was.get(key);
         next.set(
           key,
@@ -638,15 +692,19 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }
     keptChanges.current = next;
     return next;
-  }, [entries, finalKeys, nodeDid, sessionKey]);
+  }, [entries, finalKeys, startLoaded, nodeDid, sessionKey]);
   const groupState = useGroupState(sessionKey);
   const dayOpens = useMemo(
     () =>
       dayOpenings(
         entries,
         (entry) => entry.key,
+        /* a compaction is drawn by the message it follows, not its own
+           time, so it doesn't open a day */
         (entry) =>
-          entry.kind === "item" && "timestamp" in entry.item
+          entry.kind === "item" &&
+          entry.item.kind !== "sessionCompaction" &&
+          "timestamp" in entry.item
             ? entry.item.timestamp
             : null,
       ),
@@ -737,6 +795,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   useEffect(() => {
     if (!sessionKey || returning.current === sessionKey || entries.length === 0) return;
     returning.current = sessionKey;
+    /* a place asked for from elsewhere wins over where the reader left it */
+    if (messagePlaces.request()?.sessionId === sessionKey) return;
     const place = sessionViews.placeOf(sessionKey);
     if (!place || indexOf.has(place.key) || place.sequence === null) return;
     rows.jump(place.sequence, () => {
@@ -750,6 +810,51 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       pendingPlace.current = null;
       list.goTo(place);
     }
+  });
+
+  /* a place asked for from elsewhere: its row at once when drawn, else after
+     the page around its message is read; a row that page doesn't hold lands
+     on the message itself */
+  const asked = usePlaceRequest(sessionKey);
+  const jumpedFor = useRef<number | null>(null);
+  /* state, so the read's arrival draws again and settles the request */
+  const [readFor, setReadFor] = useState<number | null>(null);
+  useEffect(() => {
+    if (!asked || entries.length === 0) return;
+    const read = readFor === asked.id;
+    const byItem = asked.itemKey
+      ? entries.find(
+          (entry) => entry.kind === "item" && entry.item.itemKey === asked.itemKey,
+        )
+      : undefined;
+    const byMessage =
+      !asked.itemKey || read
+        ? entries.find(
+            (entry) => (entrySequence(entry, sequences) ?? -1) >= asked.sequence,
+          )
+        : undefined;
+    /* the page read holds neither: the nearest row before the message */
+    const nearest = read
+      ? [...entries]
+          .reverse()
+          .find(
+            (entry) => (entrySequence(entry, sequences) ?? Infinity) <= asked.sequence,
+          )
+      : undefined;
+    const target = byItem ?? byMessage ?? nearest;
+    if (target) {
+      jumpedFor.current = null;
+      list.goTo({ key: entryKey(target), offset: PLACE_OFFSET });
+      messagePlaces.landed(asked.id, target === byItem);
+      return;
+    }
+    if (read) {
+      messagePlaces.landed(asked.id, false);
+      return;
+    }
+    if (jumpedFor.current === asked.id) return;
+    jumpedFor.current = asked.id;
+    rows.jump(asked.sequence, () => setReadFor(asked.id));
   });
 
   /* the reader's place, kept as they read; at the foot there is none */

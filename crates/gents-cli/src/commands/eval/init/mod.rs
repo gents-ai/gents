@@ -365,7 +365,7 @@ pub(crate) async fn install_pack_slot(
     pack: &PackSource,
     slot: &str,
     profile: &str,
-) -> Result<gents::config_client::DesiredStateApplyCounts> {
+) -> Result<gents::store::config_client::DesiredStateApplyCounts> {
     let manifest = pack.manifest();
     let config = pack_config(pack, owner)?;
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
@@ -398,10 +398,7 @@ pub(crate) async fn install_pack_slot(
     .with_context(|| format!("installing the {} pack", manifest.name))
 }
 
-pub(crate) fn pack_config(
-    pack: &PackSource,
-    owner: &str,
-) -> Result<gents::document_config::PackConfig> {
+pub(crate) fn pack_config(pack: &PackSource, owner: &str) -> Result<gents::documents::PackConfig> {
     gents::pack::load_pack_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
@@ -490,7 +487,7 @@ mod tests {
         assert_eq!(outcome.rounds, 1);
         let definition = outcome.assembled.unwrap().definition;
         assert!(definition.cases.iter().all(|case| {
-            matches!(&case.stages[0].capture[0], gents::document_config::EvalCapture::Documents {
+            matches!(&case.stages[0].capture[0], gents::documents::EvalCapture::Documents {
                 collection, fields, ..
             } if collection == "AgentRequest" && fields.iter().any(|field| field == "request_id"))
         }));
@@ -550,7 +547,7 @@ mod tests {
                 let found = access
                     .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
-                            gents::config_client::read_desired_state_record_in_txn(
+                            gents::store::config_client::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,
                             )
                             .await

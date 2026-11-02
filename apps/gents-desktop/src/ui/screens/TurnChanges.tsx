@@ -4,6 +4,7 @@ import { useDock } from "@/app/workspace";
 import { CARD_FILES } from "@/lib/rowHeights";
 import type { SessionScope } from "../../lib/recordedFiles";
 import {
+  netCounts,
   relativeTo,
   sharedFolder,
   shortFolder,
@@ -24,6 +25,20 @@ export function Counts({ added, removed }: { added: number; removed: number }) {
     <span className="shrink-0 font-mono text-xs tabular-nums">
       <span className="text-diff-added-fg">+{added}</span>{" "}
       <span className="text-diff-removed-fg">−{removed}</span>
+    </span>
+  );
+}
+
+/** A file's net line counts; a file edited more than once shows how many
+    times instead, since its edits' diffs do not add up to its change, and
+    a file whose turn began before the loaded rows shows neither. */
+export function FileCounts({ file }: { file: ChangedFile }) {
+  const net = netCounts(file);
+  if (net) return <Counts {...net} />;
+  if (!file.whole) return null;
+  return (
+    <span className="shrink-0 text-xs text-muted-foreground">
+      {file.edits.length} edits
     </span>
   );
 }
@@ -73,7 +88,7 @@ export function FileRow({
         <FileLabel path={file.path} within={within} />
         {mark}
       </span>
-      <Counts added={file.added} removed={file.removed} />
+      <FileCounts file={file} />
     </button>
   );
 }
@@ -92,8 +107,14 @@ export function TurnChanges({
   const { openSurface } = useDock();
   const chosen = useChosenPath(scope, turn);
   const listed = files.slice(0, SHOWN);
-  const added = files.reduce((n, f) => n + f.added, 0);
-  const removed = files.reduce((n, f) => n + f.removed, 0);
+  const nets = files.map(netCounts);
+  const total = nets.every((net) => net !== null)
+    ? {
+        added: nets.reduce((n, net) => n + net!.added, 0),
+        removed: nets.reduce((n, net) => n + net!.removed, 0),
+      }
+    : null;
+  const partial = files.some((f) => !f.whole);
   const within = sharedFolder(files.map((f) => f.path));
   const open = (path: string) => {
     changesView.show({ scope, turn, files, path });
@@ -110,7 +131,16 @@ export function TurnChanges({
           {files.length} {files.length === 1 ? "file" : "files"} changed
           {within && <span title={within}> in {shortFolder(within)}</span>}
         </span>
-        <Counts added={added} removed={removed} />
+        {partial ? (
+          <span
+            className="shrink-0"
+            title="This turn began before the loaded messages; scroll up to load the rest"
+          >
+            Partial
+          </span>
+        ) : (
+          total && <Counts {...total} />
+        )}
       </header>
       <ul>
         {listed.map((file) => (

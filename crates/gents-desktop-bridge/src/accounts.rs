@@ -1,5 +1,7 @@
 use crate::error::{BridgeError, BridgeErrorCode};
-use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult};
+use gents::inference::auth::credential::{
+    list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 pub(crate) mod login;
@@ -8,7 +10,7 @@ pub mod usage;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSignInRequest {
     pub node_did: String,
-    pub method: gents::inference_setup::InferenceAuthMethod,
+    pub method: gents::inference::backends::setup::InferenceAuthMethod,
     pub label: Option<String>,
 }
 
@@ -25,7 +27,7 @@ pub struct BackendAuthenticationSaveRequest {
     pub node_did: String,
     pub backend_id: String,
     pub revision: gents_desktop_core::client::ConfigEditorRevision,
-    pub auth: gents::document_config::BackendAuth,
+    pub auth: gents::documents::BackendAuth,
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -34,7 +36,7 @@ pub struct BackendRotationSaveRequest {
     pub node_did: String,
     pub backend_id: String,
     pub revision: gents_desktop_core::client::ConfigEditorRevision,
-    pub rotation: gents::config_client::BackendRotation,
+    pub rotation: gents::inference::backends::rotation::BackendRotation,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -54,8 +56,8 @@ pub struct BackendRotationView {
     pub accounts: Vec<PoolAccountView>,
 }
 
-impl From<&gents::config_client::RotationOutcome> for BackendRotationView {
-    fn from(outcome: &gents::config_client::RotationOutcome) -> Self {
+impl From<&gents::inference::backends::rotation::RotationOutcome> for BackendRotationView {
+    fn from(outcome: &gents::inference::backends::rotation::RotationOutcome) -> Self {
         Self {
             backend_id: outcome.backend.backend_id.clone(),
             allow_overage: outcome.backend.auth.pool_allow_overage(),
@@ -88,8 +90,8 @@ impl BackendAuthenticationView {
         revision: gents_desktop_core::client::ConfigEditorRevision,
         backend: &gents::InferenceBackend,
     ) -> Self {
-        use gents::backend_provider::BackendProviderOauthExt;
-        use gents::document_config::BackendAuth;
+        use gents::documents::BackendAuth;
+        use gents::inference::backends::provider::BackendProviderOauthExt;
         let (kind, variable, account_ref) = match &backend.auth {
             BackendAuth::Unauthenticated => ("unauthenticated", None, None),
             BackendAuth::ApiKey { .. } => ("api_key", None, None),
@@ -142,7 +144,7 @@ mod authentication_tests {
 
     #[test]
     fn rotation_requests_decode_the_operator_choice_and_reject_unknown_fields() {
-        use gents::config_client::BackendRotation;
+        use gents::inference::backends::rotation::BackendRotation;
         let decode = |rotation: serde_json::Value| {
             serde_json::from_value::<crate::types::BackendRotationSetRequest>(
                 serde_json::json!({"nodeDid":"did:test:backend","backendId":"claude","rotation":rotation}),
@@ -182,11 +184,11 @@ mod authentication_tests {
             }))
             .unwrap()
         };
-        let member = |id: &str| gents::config_client::PoolMember {
+        let member = |id: &str| gents::inference::backends::rotation::PoolMember {
             credential_id: id.into(),
             label: format!("label-{id}"),
         };
-        let pool = gents::config_client::RotationOutcome {
+        let pool = gents::inference::backends::rotation::RotationOutcome {
             backend: backend(serde_json::json!({"kind":"node_oauth_pool","allow_overage":true})),
             members: vec![member("b"), member("a")],
         };
@@ -194,7 +196,7 @@ mod authentication_tests {
         assert_eq!(view["allowOverage"], true);
         assert_eq!(view["accounts"][0]["credentialId"], "b");
         assert_eq!(view["accounts"][1]["label"], "label-a");
-        let single = gents::config_client::RotationOutcome {
+        let single = gents::inference::backends::rotation::RotationOutcome {
             backend: backend(serde_json::json!({"kind":"node_oauth"})),
             members: Vec::new(),
         };
@@ -209,11 +211,11 @@ type CredentialKey = (String, String, String);
 
 pub struct IssuedOAuthCredential {
     sequence: u64,
-    credential: gents::oauth_credential::OAuthCredential,
+    credential: gents::inference::auth::credential::OAuthCredential,
 }
 
 impl IssuedOAuthCredential {
-    pub fn credential(&self) -> &gents::oauth_credential::OAuthCredential {
+    pub fn credential(&self) -> &gents::inference::auth::credential::OAuthCredential {
         &self.credential
     }
 
@@ -259,7 +261,7 @@ pub struct PendingOAuthCredentials {
 impl PendingOAuthCredentials {
     pub fn issue(
         &self,
-        credential: gents::oauth_credential::OAuthCredential,
+        credential: gents::inference::auth::credential::OAuthCredential,
     ) -> IssuedOAuthCredential {
         IssuedOAuthCredential {
             sequence: self
@@ -292,7 +294,7 @@ impl PendingOAuthCredentials {
         write: F,
     ) -> CredentialSave<T>
     where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        F: FnOnce(gents::inference::auth::credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
         let key = issued.key();
@@ -326,9 +328,12 @@ impl PendingOAuthCredentials {
         node_did: &str,
         provider: &str,
         write: F,
-    ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
+    ) -> Option<(
+        gents::inference::auth::credential::OAuthCredential,
+        anyhow::Result<T>,
+    )>
     where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        F: FnOnce(gents::inference::auth::credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
         let key = self
@@ -356,7 +361,10 @@ impl PendingOAuthCredentials {
         Some((credential, written))
     }
 
-    pub fn held_for(&self, node_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
+    pub fn held_for(
+        &self,
+        node_did: &str,
+    ) -> Vec<gents::inference::auth::credential::OAuthCredential> {
         let mut held: Vec<_> = self
             .slots()
             .iter()
@@ -370,9 +378,9 @@ impl PendingOAuthCredentials {
 
 pub(crate) fn provider_label(provider: &str) -> &'static str {
     match provider {
-        gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
-        gents::claude_oauth::CLAUDE_OAUTH_PROVIDER => "Claude",
-        gents::xai_grok_oauth::XAI_OAUTH_PROVIDER => "Grok",
+        gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
+        gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER => "Claude",
+        gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => "Grok",
         _ => "provider",
     }
 }
@@ -412,10 +420,11 @@ pub(crate) async fn upsert_through(
 ) -> anyhow::Result<SignIn> {
     let access = access?;
     let label = credential.label.clone();
-    let mut signed = gents::oauth_credential::store_sign_in(&access, credential, None).await?;
+    let mut signed =
+        gents::inference::auth::credential::store_sign_in(&access, credential, None).await?;
     if let (SignInResult::Added, Some(label)) = (&signed.result, label) {
         let stored = &signed.credential;
-        match gents::oauth_credential::set_account_label(
+        match gents::inference::auth::credential::set_account_label(
             &access,
             &stored.node_did,
             &stored.credential_id,
@@ -440,7 +449,7 @@ pub(crate) fn sign_in_label(label: Option<&str>) -> Result<Option<String>, Bridg
     label
         .map(str::trim)
         .filter(|label| !label.is_empty())
-        .map(gents::oauth_credential::validate_account_label)
+        .map(gents::inference::auth::credential::validate_account_label)
         .transpose()
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))
 }
@@ -567,14 +576,14 @@ impl From<&OAuthCredential> for ProviderAccountView {
             credential_id: credential.credential_id.clone(),
             node_did: credential.node_did.clone(),
             provider: credential.provider.clone(),
-            account_id: gents::oauth_credential::account_display_label(credential),
+            account_id: gents::inference::auth::credential::account_display_label(credential),
             plan_type: credential.chatgpt_plan_type.clone(),
             access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
             last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
             enabled: credential.enabled,
             pending_save: false,
             account_ref: credential.account_ref.clone(),
-            label: gents::oauth_credential::effective_account_label(credential),
+            label: gents::inference::auth::credential::effective_account_label(credential),
         }
     }
 }
@@ -596,7 +605,7 @@ impl From<&SignIn> for SignInView {
                 SignInResult::Refreshed => "refreshed",
             }
             .to_string(),
-            label: gents::oauth_credential::effective_account_label(&signed.credential),
+            label: gents::inference::auth::credential::effective_account_label(&signed.credential),
             account_ref: signed.credential.account_ref.clone(),
             hint: signed.account_chooser_hint(),
         }

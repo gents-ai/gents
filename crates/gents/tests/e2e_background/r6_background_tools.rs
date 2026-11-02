@@ -1,7 +1,9 @@
 use gents::defra_node::{EmbeddedNode, EventName};
-use gents::graphql::escape_graphql_string;
-use gents::llm::message::{AssistantContent, Message, Text, ToolResultContent, UserContent};
-use gents::tool_call_lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
+use gents::inference::llm::message::{
+    AssistantContent, Message, Text, ToolResultContent, UserContent,
+};
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::call::lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
 use gents::{interrupt_request, BackgroundExecutionRegistry, NodeIdentity};
 use serde::Deserialize;
 use serde_json::Value;
@@ -82,7 +84,7 @@ async fn boot_background_turn_with_bounds(
     .await;
     if let Some(deadline_duration_secs) = execution_deadline_secs {
         assert!(deadline_duration_secs > 1);
-        use gents::config_client::{
+        use gents::store::config_client::{
             read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
@@ -104,14 +106,13 @@ async fn boot_background_turn_with_bounds(
                     .expect("R6 inference profile");
                     let execution_id = format!("{R6_AGENT_ID}-deadline");
                     profile["execution_id"] = execution_id.clone().into();
-                    let execution =
-                        serde_json::to_value(gents::document_config::InferenceExecution {
-                            node_did: node_did.to_string(),
-                            execution_id,
-                            stream_liveness_timeout_secs: Some(deadline_duration_secs - 1),
-                            deadline_duration_secs: Some(deadline_duration_secs),
-                            ..Default::default()
-                        })?;
+                    let execution = serde_json::to_value(gents::documents::InferenceExecution {
+                        node_did: node_did.to_string(),
+                        execution_id,
+                        stream_liveness_timeout_secs: Some(deadline_duration_secs - 1),
+                        deadline_duration_secs: Some(deadline_duration_secs),
+                        ..Default::default()
+                    })?;
                     let plan = DesiredStateApplyPlan::new(vec![
                         DesiredStateApplyDocument {
                             collection: gents::Collection::InferenceProfile,
@@ -124,7 +125,7 @@ async fn boot_background_turn_with_bounds(
                             update: execution,
                         },
                     ])?;
-                    gents::config_client::apply_desired_state_plan(txn, &plan)
+                    gents::store::config_client::apply_desired_state_plan(txn, &plan)
                         .await
                         .map(|_| ())
                 })
@@ -139,11 +140,11 @@ async fn boot_background_turn_with_bounds(
         db.node_identity.did(),
         R6_AGENT_ID,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{R6_AGENT_ID}:tools"),
             node_did: db.node_identity.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec![
                         "sleep".to_string(),
@@ -833,8 +834,8 @@ async fn background_tool_execution_survives_parent_request_deadline() {
 
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
-    let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
+    let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
+        &gents::store::config_client::ConfigAccess::local(turn.db.node.clone()),
         "r6-background-outlives-deadline-request-2",
     )
     .await
@@ -1026,7 +1027,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     );
 
     let report =
-        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
             &turn.db.node,
             turn.db.node_identity.did(),
             &BackgroundExecutionRegistry::default(),
@@ -1139,8 +1140,8 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
 
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
-    let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
+    let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
+        &gents::store::config_client::ConfigAccess::local(turn.db.node.clone()),
         &turn.request_id,
     )
     .await
@@ -1488,7 +1489,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         observer_case.result.as_deref()
     );
     assert_eq!(row.cancel_cause.as_deref(), None);
-    gents::tool_control::cancel_session_background_process(
+    gents::tools::call::control::cancel_session_background_process(
         turn.db.node.clone(),
         &turn.executions,
         turn.db.node_identity.did(),
@@ -1647,11 +1648,11 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         foreign.did(),
         foreign_behavior,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{foreign_behavior}:tools"),
             node_did: foreign.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sleep".to_string()]),
                     background_enabled: true,
@@ -1900,8 +1901,8 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
     for handle in &handles {
         wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, handle).await;
     }
-    let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
+    let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
+        &gents::store::config_client::ConfigAccess::local(turn.db.node.clone()),
         &turn.request_id,
     )
     .await

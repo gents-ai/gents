@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents::document_config::{load_agent_tools_in_txn, PluginToolRef};
+use gents::documents::{load_agent_tools_in_txn, PluginToolRef};
 use gents::plugin::executor::PluginExecutor;
 use gents::plugin::store::InstalledPlugin;
 use serde::Serialize;
@@ -88,7 +88,7 @@ mod tests {
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
-    use gents::document_config::{AgentContext, IntegrationTools, PluginToolRef, Tools};
+    use gents::documents::{AgentContext, IntegrationTools, PluginToolRef, Tools};
     use serde_json::{json, Value};
 
     use super::*;
@@ -127,7 +127,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
         super::super::seed_test_agent_configuration(
@@ -148,7 +148,7 @@ mod tests {
             gents::ConfigAccess::transact_local_write(&node, None, "catalog.fixture", |txn| {
                 let (did, agent, refs) = (did.clone(), agent.clone(), refs.clone());
                 Box::pin(async move {
-                    use gents::config_client::{
+                    use gents::store::config_client::{
                         apply_desired_state_plan, read_desired_state_record_in_txn as read,
                         DesiredStateApplyDocument, DesiredStateApplyPlan,
                     };

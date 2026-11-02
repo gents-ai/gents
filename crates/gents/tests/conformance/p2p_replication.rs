@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_p2p_adapter::P2pDocumentRequest;
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 
 use crate::support::enrollment::wait_for_peer_identity;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};

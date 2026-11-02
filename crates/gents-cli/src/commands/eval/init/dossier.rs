@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use gents::document_config::{Agent, PackConfig};
+use gents::documents::{Agent, PackConfig};
 use gents::pack::{
     declared_paths, digest_declared_assets, interpolate, load_pack_config, PackInstallOptions,
     PackManifest,
@@ -41,7 +41,9 @@ pub(super) fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String
                 let fields = collection
                     .fields
                     .into_iter()
-                    .filter(|field| !gents::defra_query::is_restricted_field(&name, &field.name))
+                    .filter(|field| {
+                        !gents::tools::builtin::defra_query::is_restricted_field(&name, &field.name)
+                    })
                     .map(|field| field.name)
                     .collect();
                 (name, fields)

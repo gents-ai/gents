@@ -92,7 +92,7 @@ function harnessRequestOutcome(
   };
 }
 
-/* a conversation that runs from yesterday into today */
+/* a conversation that runs from yesterday into today, compacted between */
 function dayItems(): RenderedTimelineItem[] {
   const at = (daysAgo: number, hour: number) => {
     const date = new Date();
@@ -119,7 +119,43 @@ function dayItems(): RenderedTimelineItem[] {
       reasoning: null,
       timestamp: at(1, 16),
     }),
-    user(4, "Good morning. Let's fix it and add a test.", at(0, 9)),
+    {
+      kind: "sessionCompaction" as const,
+      itemKey: "day-compaction",
+      sequence: 4,
+      messagesCompacted: 128,
+      originalTokens: 182_400,
+      compactedTokens: 11_900,
+      /* made this morning, as today's first request started: a compaction
+         is drawn by the message it follows, so it opens no day */
+      timestamp: at(0, 8),
+      summary: [
+        "# Continuation checkpoint",
+        "",
+        "## Goal",
+        "",
+        "Fix the flaky parser test and add a regression test.",
+        "",
+        "## Progress",
+        "",
+        "### Done",
+        "",
+        "- Found the race: `parse_header` reads the buffer before the length is set.",
+        "- Moved the length check ahead of the read; the test passes 50 times in a row.",
+        "",
+        "## Next actions",
+        "",
+        "1. Add a regression test for an empty header.",
+        "",
+        "## Files read",
+        "",
+        "- src/parser.rs",
+        "- tests/parser.rs",
+      ].join("\n"),
+      filesRead: ["src/parser.rs", "tests/parser.rs"],
+      filesModified: ["src/parser.rs"],
+    },
+    user(5, "Good morning. Let's fix it and add a test.", at(0, 9)),
   ];
 }
 
@@ -147,6 +183,7 @@ export type DesktopUiHarnessScenario =
   | "backend-unavailable"
   | "mailbox-overflow"
   | "mailbox-question"
+  | "mailbox-many"
   | "long-content"
   | "active-turn"
   | "coding"
@@ -160,6 +197,10 @@ export type DesktopUiHarnessScenario =
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
   sessionIndexCount?: number;
+  /* the large session's message a compaction is marked after */
+  compactionAt?: number;
+  /* list that compaction in the meter but draw no marker for it */
+  compactionUnmarked?: boolean;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -269,7 +310,11 @@ function harnessSequenceOf(item: RenderedTimelineItem): number | null {
     ? (item.messageSequence ?? null)
     : item.kind === "userMessage" ||
         item.kind === "assistantMessage" ||
-        item.kind === "automatedInput"
+        item.kind === "automatedInput" ||
+        /* a rows read carries the context events anchored to its messages,
+           as the bridge attaches them */
+        item.kind === "sessionCompaction" ||
+        item.kind === "requestContextReductionSummary"
       ? (item.sequence ?? null)
       : null;
 }
@@ -412,6 +457,110 @@ export function createDesktopUiHarness(
           parentItemId: null,
           deadlineAt: null,
           createdAt: STARTED_AT,
+        },
+      ],
+    };
+  }
+  if (scenario === "mailbox-many") {
+    const base = {
+      requesterDid: "did:key:desktop-harness",
+      nodeDid: NODE_DID,
+      status: "open",
+      sourceKind: "session",
+      sourceId: "session-intro",
+      sessionId: "session-intro",
+      requestId: null,
+      causeDocId: null,
+      targetNodeDid: NODE_DID,
+      targetAgentId: DEFAULT_AGENT_ID,
+      expectedCollection: null,
+      parentItemId: null,
+      deadlineAt: null,
+    };
+    const at = (minutesAgo: number) =>
+      new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    deployment = {
+      ...deployment,
+      mailboxItems: [
+        {
+          ...base,
+          itemId: "many-colour",
+          itemKey: "many-colour",
+          kind: "ask",
+          action: "start_request",
+          title: "Button colour",
+          summary:
+            "The settings page has a primary **Save** button that is the same grey as the secondary actions, so people miss it. I can restyle it now; the colour is the one choice I can't make for you.",
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Which colour should the button be?",
+            options: [
+              { id: "red", label: "Red" },
+              { id: "blue", label: "Blue" },
+              { id: "green", label: "Green" },
+            ],
+            multi_select: false,
+            allow_free_text: true,
+          }),
+          createdAt: at(4),
+        },
+        {
+          ...base,
+          itemId: "many-workspace",
+          itemKey: "many-workspace",
+          kind: "ask",
+          action: "start_request",
+          title: "Choose a workspace",
+          summary: null,
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Where should this run?",
+            options: [
+              {
+                id: "local",
+                label: "This computer",
+                description: "Uses the folder you picked",
+              },
+              { id: "remote", label: "Remote host" },
+            ],
+            multi_select: true,
+            allow_free_text: true,
+          }),
+          createdAt: at(9),
+        },
+        {
+          ...base,
+          itemId: "many-failed",
+          itemKey: "many-failed",
+          kind: "failed",
+          action: "ack",
+          title: "Nightly build failed",
+          summary:
+            "The build stopped at the test step.\n\n`cargo test -p gents` exited with 101 after 14 minutes.",
+          payload: null,
+          createdAt: at(22),
+        },
+        {
+          ...base,
+          itemId: "many-flag",
+          itemKey: "many-flag",
+          kind: "flag",
+          action: "ack",
+          title: "Disk is nearly full",
+          summary: "The node's data folder has 2 GB left.",
+          payload: null,
+          createdAt: at(41),
+        },
+        {
+          ...base,
+          itemId: "many-finished",
+          itemKey: "many-finished",
+          kind: "finished",
+          action: "ack",
+          title: "Refactor landed",
+          summary: "Split the mailbox card into a row and a dialog.",
+          payload: null,
+          createdAt: at(65),
         },
       ],
     };
@@ -775,7 +924,14 @@ export function createDesktopUiHarness(
     });
   }
   if (scenario === "mobile-performance") {
-    sessions.set("session-large", createLargePerformanceSession());
+    sessions.set(
+      "session-large",
+      createLargePerformanceSession(
+        undefined,
+        options.compactionAt,
+        options.compactionUnmarked,
+      ),
+    );
     for (let index = 2; index < performanceFixture.sessionIndexCount; index += 1) {
       const sessionId = `session-index-${String(index).padStart(3, "0")}`;
       sessions.set(sessionId, {
@@ -819,6 +975,29 @@ export function createDesktopUiHarness(
       }
     }, 0);
   }
+
+  /* an item filed after the app started, so it reads as new */
+  if (scenario === "mailbox-many")
+    window.setTimeout(() => {
+      deployment = {
+        ...deployment,
+        mailboxItems: [
+          {
+            ...deployment.mailboxItems[0]!,
+            itemId: "many-deploy",
+            itemKey: "many-deploy",
+            kind: "finished",
+            action: "ack",
+            title: "Deploy to staging finished",
+            summary: "All 412 checks passed; staging runs the new build.",
+            payload: null,
+            createdAt: new Date().toISOString(),
+          },
+          ...deployment.mailboxItems,
+        ],
+      };
+      notify("store");
+    }, 2500);
 
   function notifyBurst(reason: string, count: number, responseOnly = false) {
     updateEvents += count;
@@ -1867,7 +2046,14 @@ export function createDesktopUiHarness(
       }
       return item;
     },
-    async dismissMailboxItem() {
+    async dismissMailboxItem(itemId) {
+      deployment = {
+        ...deployment,
+        mailboxItems: deployment.mailboxItems.map((item) =>
+          item.itemId === itemId ? { ...item, status: "dismissed" } : item,
+        ),
+      };
+      notify("store");
       return undefined;
     },
     async applyConfigComponents(request) {
@@ -3218,7 +3404,7 @@ export function createDesktopUiHarness(
                     requestId,
                     content: "again",
                     selectedSkillIds: [],
-                    lifecycleState: "pending",
+                    lifecycleState: "pending" as const,
                     foldedIntoRequestId: null,
                     origin: null,
                     createdAt: STARTED_AT,
@@ -3465,6 +3651,8 @@ export function createDesktopUiHarness(
 
 function createLargePerformanceSession(
   items: number = MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems,
+  compactionAt?: number,
+  compactionUnmarked = false,
 ): DesktopSessionSnapshot {
   const filler =
     "bounded durable transcript fixture with markdown `code`, stable prose, and comparable byte shape";
@@ -3513,8 +3701,46 @@ function createLargePerformanceSession(
     pendingTurn: null,
     queuedTurns: [],
     foldedInputs: [],
-    context: harnessSessionContext(),
-    timelineItems,
+    context:
+      compactionAt === undefined
+        ? harnessSessionContext()
+        : harnessSessionContext({
+            sessionCompactionCount: 1,
+            compactions: [
+              {
+                compactionKey: "large-compaction",
+                sequence: 1,
+                messagesCompacted: compactionAt + 1,
+                originalTokens: 90_000,
+                compactedTokens: 3_000,
+                createdAt: STARTED_AT,
+                itemKey: "large-compaction",
+                messageSequence: compactionAt,
+              },
+            ],
+          }),
+    timelineItems:
+      compactionAt === undefined || compactionUnmarked
+        ? timelineItems
+        : timelineItems.flatMap<DesktopSessionSnapshot["timelineItems"][number]>(
+            (item) =>
+              "sequence" in item && item.sequence === compactionAt
+                ? [
+                    item,
+                    {
+                      kind: "sessionCompaction" as const,
+                      itemKey: "large-compaction",
+                      sequence: compactionAt,
+                      messagesCompacted: compactionAt + 1,
+                      originalTokens: 90_000,
+                      compactedTokens: 3_000,
+                      timestamp: STARTED_AT,
+                      summary:
+                        "# Continuation checkpoint\n\n## Goal\n\nKeep the large fixture going.",
+                    },
+                  ]
+                : [item],
+          ),
   };
 }
 
@@ -3862,7 +4088,6 @@ function createDeployment(): DeploymentView {
     inferenceExecution: [],
     agentTargets: [],
     datastoreToolSurfaces: [],
-    chainKeyBindings: [],
     mailboxItems: [],
     sessions: [],
   };
@@ -3887,6 +4112,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "offline",
       lastError: "fixture transport unavailable",
       connectedPeerCount: 0,
+      activationErrorCount: 0,
       pendingDagCount: 0,
       persistedPendingDagCount: 0,
       pushRetryMarkerCount: 0,
@@ -3899,6 +4125,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "failed",
       lastError: "database DAG quarantined",
       connectedPeerCount: 1,
+      activationErrorCount: 0,
       pendingDagCount: 1,
       persistedPendingDagCount: 1,
       pushRetryMarkerCount: 0,
@@ -3911,6 +4138,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "healthy",
       lastError: null,
       connectedPeerCount: 1,
+      activationErrorCount: 0,
       pendingDagCount: 0,
       persistedPendingDagCount: 0,
       pushRetryMarkerCount: 0,
@@ -3922,6 +4150,7 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
     state: "healthy",
     lastError: null,
     connectedPeerCount: 1,
+    activationErrorCount: 0,
     pendingDagCount: 0,
     persistedPendingDagCount: 0,
     pushRetryMarkerCount: 0,
@@ -3945,6 +4174,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "backend-unavailable":
     case "mailbox-overflow":
     case "mailbox-question":
+    case "mailbox-many":
     case "long-content":
     case "active-turn":
     case "coding":

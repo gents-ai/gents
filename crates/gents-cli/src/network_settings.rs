@@ -28,7 +28,7 @@ pub(crate) struct NetworkSettings {
 }
 
 pub(crate) fn network_settings_path(home: &Path) -> PathBuf {
-    home.join(gents::home::NETWORK_CONFIG_FILE_NAME)
+    home.join(gents::store::local::home::NETWORK_CONFIG_FILE_NAME)
 }
 
 impl NetworkSettings {

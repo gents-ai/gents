@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{AgentContext, CompactionConfig, InferenceSampling};
-use gents::graphql::escape_graphql_string;
+use gents::documents::{AgentContext, CompactionConfig, InferenceSampling};
+use gents::store::graphql::escape_graphql_string;
 use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
 use serde::Deserialize;
 
@@ -114,11 +114,11 @@ async fn live_seeds_reach_the_provider() {
         );
         for row in inference_rows.into_iter().chain(compaction_rows) {
             assert_eq!(row.source, "openai_chat_completions");
-            let body = gents::rendered_request::decode_capture_json_embedded(
+            let body = gents::inference::rendered_request::decode_capture_json_embedded(
                 &db.node,
                 row.capture_version,
                 &row.request_json,
-                gents::rendered_request::CapturePayloadKind::RequestBody,
+                gents::inference::rendered_request::CapturePayloadKind::RequestBody,
             )
             .await
             .expect("decode captured provider request");
@@ -139,7 +139,7 @@ async fn configure_seed_and_compaction(
     agent_id: &str,
     profile_id: &str,
 ) {
-    use gents::config_client::{
+    use gents::store::config_client::{
         apply_desired_state_plan, read_desired_state_record_in_txn as read,
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -150,10 +150,19 @@ async fn configure_seed_and_compaction(
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default inference profile is missing"))?;
             let mut profile: gents::InferenceProfile = serde_json::from_value(profile)?;
+            let mut sampling = match profile.sampling_id.as_deref() {
+                Some(id) => {
+                    let (_, value) = read(txn, Collection::InferenceSampling, node_did, id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("selected inference sampling is missing"))?;
+                    serde_json::from_value::<InferenceSampling>(value)?
+                }
+                None => InferenceSampling::default(),
+            };
             let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
-            let mut behavior: gents::document_config::Agent = serde_json::from_value(behavior)?;
+            let mut behavior: gents::documents::Agent = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id
                 .clone()
@@ -177,15 +186,13 @@ async fn configure_seed_and_compaction(
             let compaction_id = format!("{agent_id}:compaction");
             profile.sampling_id = Some(sampling_id.clone());
             profile.context_window = Some(64_000);
-            profile.max_output_tokens = Some(512);
+            profile.max_output_tokens =
+                Some(profile.max_output_tokens.map_or(512, |cap| cap.min(512)));
             behavior.context_id = Some(context_id);
             context.compaction_id = Some(compaction_id.clone());
-            let sampling = InferenceSampling {
-                node_did: node_did.to_string(),
-                sampling_id,
-                seed: Some(PROFILE_SEED),
-                ..Default::default()
-            };
+            sampling.node_did = node_did.to_string();
+            sampling.sampling_id = sampling_id;
+            sampling.seed = Some(PROFILE_SEED);
             let compaction = CompactionConfig {
                 compaction_id,
                 node_did: node_did.to_string(),

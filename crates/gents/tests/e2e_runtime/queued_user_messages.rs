@@ -69,7 +69,7 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
             prompt,
             accepted_chunks: vec![StreamChunk::tool_call(
                 "queued-user-messages-call",
-                gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
                 serde_json::json!({"title": "Status", "body": "working"}).to_string(),
             )],
             child_plans: Vec::new(),

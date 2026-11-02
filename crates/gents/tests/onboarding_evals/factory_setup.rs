@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gents::document_config::{EvalDefinition, PackConfig, SurfaceToolDecl};
+use gents::documents::{EvalDefinition, PackConfig, SurfaceToolDecl};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::ScriptedExecutor;
 use gents::eval::OutcomeKind;
@@ -65,7 +65,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
             behavior
                 .tags
                 .iter()
-                .any(|tag| tag == gents::self_config::ENGINEER_AGENT_TAG),
+                .any(|tag| tag == gents::tools::builtin::self_config::ENGINEER_AGENT_TAG),
             "{name}: the Engineer carries the protected Setup tag"
         );
         assert_eq!(
@@ -93,7 +93,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         let tools = &config.tools[0];
         assert_eq!(
             tools.self_config,
-            Some(gents::self_config::engineer_self_config()),
+            Some(gents::tools::builtin::self_config::engineer_self_config()),
             "{name}: the Setup self-config grant"
         );
         assert_eq!(
@@ -114,14 +114,14 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         let host = tools.host.as_ref().unwrap();
         assert_eq!(
             host.bash.as_ref().map(|bash| bash.mode),
-            Some(gents::tool_surface::BashMode::Off),
+            Some(gents::tools::surface::BashMode::Off),
             "{name}"
         );
         let [surface] = config.datastore_tool_surfaces.as_slice() else {
             panic!("{name}: one surface, engineer-mailbox");
         };
         let expected = vec![SurfaceToolDecl::Create(
-            gents::mailbox::canonical_mailbox_write_decl(),
+            gents::session::mailbox::canonical_mailbox_write_decl(),
         )];
         assert_eq!(
             surface.entries.as_ref(),
@@ -167,14 +167,14 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
     assert!(stage.continuation.is_none() && repair.continuation.is_none());
     assert!(stage.checks.iter().all(|c| c.tier
         == if c.check == "crew_spec_match" {
-            gents::document_config::EvalTier::Development
+            gents::documents::EvalTier::Development
         } else {
-            gents::document_config::EvalTier::Acceptance
+            gents::documents::EvalTier::Acceptance
         }));
     assert!(repair
         .checks
         .iter()
-        .all(|c| c.tier == gents::document_config::EvalTier::Acceptance));
+        .all(|c| c.tier == gents::documents::EvalTier::Acceptance));
     let mut evidence =
         ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", Vec::new())
             .stages

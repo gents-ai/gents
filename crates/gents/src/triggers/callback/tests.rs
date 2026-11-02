@@ -1,0 +1,1551 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+
+use serde_json::json;
+use tempfile::TempDir;
+
+use crate::ensure_runtime_schemas;
+use crate::tools::workspace::{
+    action_plan_canonical_json, emit_create_workspace_plan, execute_create_workspace_plan,
+    parse_action_plan_json, ActionJournalEntry, ActionJournalState, CreateWorkspaceAction,
+    CreationPolicy, HostAction, HostExecutorContext, MemoryWorkspaceDocuments,
+    RepositoryPlacementRef, WorkspaceAdapterKind, WorkspaceDocuments, CAP_CLONE_ARTIFACTS,
+    CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE,
+};
+
+use super::claim::invocation_is_claimable;
+use super::documents::{
+    create_callback_result_mutation, strip_secret_fields, succeeded_missing_result,
+    succeeded_repair_cutoff, update_invocation_mutation, validate_callback_binding,
+    CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
+    CallbackResultInvocationRow,
+};
+use super::planner::{
+    compute_module_id, fixture_create_workspace_artifact, invoke_plugin_planner, plan_from_module,
+    validate_callback_module, CallbackModuleLimits, MAX_ARTIFACT_BYTES,
+};
+use super::run::{
+    apply_planner_deny, can_emit_callback_result, can_start_executing, decode_journal,
+    emit_plan_from_source, plan_from_callback, resolve_action_plan,
+    resolve_action_plan_with_module,
+};
+use super::{
+    LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
+};
+
+fn binding() -> CallbackBindingDoc {
+    serde_json::from_value(json!({"binding_id":"bind-1","node_did":"did:key:zWriter","event_source_id":"events","callback_id":"cb-1","input_fields":["work_unit_id","repository_id","base_sha","branch","owned_files"]})).unwrap()
+}
+fn callback() -> crate::documents::Callback {
+    serde_json::from_value(json!({"callback_id":"cb-1","node_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace"},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
+}
+
+fn lean_journal(states: &[String]) -> Vec<ActionJournalEntry> {
+    serde_json::from_value(json!(states
+        .iter()
+        .enumerate()
+        .map(|(index, state)| json!({ "index": index, "state": state }))
+        .collect::<Vec<_>>()))
+    .unwrap()
+}
+
+#[test]
+fn generated_recovery_and_denial_match_runtime_owners() {
+    let cases = crate::lean_vocab_test::lean_callback_recovery_cases();
+    assert_eq!(cases.len(), 28, "Lean must emit the whole recovery matrix");
+    for case in cases {
+        let journal = lean_journal(&case.journal);
+        let (state, recovered) = match crate::tools::workspace::recover_running(&journal) {
+            Some(failed) => (LIFECYCLE_FAILED, failed),
+            None => (LIFECYCLE_RUNNING, journal.clone()),
+        };
+        assert_eq!(state, case.post_state, "{}: recovered state", case.name);
+        assert_eq!(recovered, lean_journal(&case.post_journal), "{}", case.name);
+        assert_eq!(
+            crate::tools::workspace::retry_allowed(
+                state,
+                &recovered,
+                case.attempts,
+                case.max_attempts
+            ),
+            case.retry_allowed_after,
+            "{}: retry after recovery",
+            case.name,
+        );
+
+        let mut denied = CallbackInvocationDoc {
+            invocation_id: "inv-1".into(),
+            owner_node_did: "did:key:zWriter".into(),
+            callback_id: "cb-1".into(),
+            input: json!({}),
+            origin: crate::documents::CallbackInvocationOrigin::Event {
+                binding_id: "bind-1".into(),
+                source_collection: "WorkUnit".into(),
+                source_doc_id: "doc-1".into(),
+                source_version: None,
+            },
+            caused_by_correlation: None,
+            idempotency_key: "bind-1:doc-1".into(),
+            lifecycle_state: LIFECYCLE_RUNNING.into(),
+            attempts: Some(i64::from(case.attempts)),
+            action_plan: None,
+            action_journal: Some(serde_json::to_string(&journal).unwrap()),
+            error: None,
+            claimed_at: None,
+            created_at: None,
+        };
+        apply_planner_deny(&mut denied, "callback is disabled");
+        let denied_journal = decode_journal(denied.action_journal.as_deref()).unwrap();
+        assert_eq!(
+            denied.lifecycle_state, case.deny_post_state,
+            "{}: denied state",
+            case.name
+        );
+        assert_eq!(
+            denied_journal,
+            lean_journal(&case.deny_post_journal),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            crate::tools::workspace::retry_allowed(
+                &denied.lifecycle_state,
+                &denied_journal,
+                case.attempts,
+                case.max_attempts
+            ),
+            case.retry_allowed_after_deny,
+            "{}: retry after denial",
+            case.name,
+        );
+    }
+}
+
+#[test]
+fn executing_action_waits_for_prior_result_docs() {
+    let illegal = vec![
+        ActionJournalEntry::new(0, ActionJournalState::Validated),
+        ActionJournalEntry::new(1, ActionJournalState::Executing),
+    ];
+    assert!(!can_start_executing(&illegal, 1));
+
+    let legal = vec![
+        ActionJournalEntry::new(0, ActionJournalState::ResultDocsWritten),
+        ActionJournalEntry::new(1, ActionJournalState::Executing),
+    ];
+    assert!(can_start_executing(&legal, 1));
+    assert!(can_start_executing(&[], 0));
+}
+
+#[test]
+fn callback_result_requires_succeeded_complete_journal_and_docs() {
+    let journal = vec![ActionJournalEntry::new(
+        0,
+        ActionJournalState::ResultDocsWritten,
+    )];
+    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new())
+            .unwrap(),
+        workspace_id: "ws-1".into(),
+        work_unit_id: "unit-1".into(),
+        repository_id: "repo-1".into(),
+        base_sha: "abc".into(),
+        branch: "topic".into(),
+        creation_policy: "git_worktree_diff".into(),
+        adapter: "git_worktree".into(),
+        owner_node_did: "deploy-1".into(),
+        writer_principal: "did:key:zW".into(),
+        integrator_principal: "did:key:zI".into(),
+        instruction_manifest: "{}".into(),
+        seal_hash: None,
+        lifecycle_state: "ready".into(),
+        caused_by_invocation_id: "inv-1".into(),
+        caused_by_correlation: "corr-1".into(),
+    };
+    let placement = crate::tools::workspace::WorkspacePlacementDoc {
+        workspace_id: "ws-1".into(),
+        owner_node_did: "deploy-1".into(),
+        host_path: "/tmp/ws".into(),
+        repository_placement_id: "repo-1".into(),
+        adapter: "git_worktree".into(),
+        adapter_version: "gents-workspace-adapter/1".into(),
+        dirty_base: false,
+        dirty_base_summary: String::new(),
+        provisioning_state: "{}".into(),
+        observed_tree_hash: "tree".into(),
+    };
+    assert!(!can_emit_callback_result(
+        LIFECYCLE_RUNNING,
+        &journal,
+        Some(&workspace),
+        Some(&placement)
+    ));
+    assert!(!can_emit_callback_result(
+        LIFECYCLE_SUCCEEDED,
+        &[],
+        Some(&workspace),
+        Some(&placement)
+    ));
+    assert!(!can_emit_callback_result(
+        LIFECYCLE_SUCCEEDED,
+        &journal,
+        None,
+        Some(&placement)
+    ));
+    assert!(!can_emit_callback_result(
+        LIFECYCLE_SUCCEEDED,
+        &journal,
+        Some(&workspace),
+        None
+    ));
+    assert!(can_emit_callback_result(
+        LIFECYCLE_SUCCEEDED,
+        &journal,
+        Some(&workspace),
+        Some(&placement)
+    ));
+}
+
+#[test]
+fn non_owner_does_not_claim_invocation_or_workspace_request() {
+    let invocation = CallbackInvocationDoc {
+        invocation_id: "inv-1".into(),
+        owner_node_did: "deploy-owner".into(),
+        callback_id: "cb-1".into(),
+        input: json!({}),
+        origin: crate::documents::CallbackInvocationOrigin::Event {
+            binding_id: "bind-1".into(),
+            source_collection: "WorkUnit".into(),
+            source_doc_id: "doc-1".into(),
+            source_version: Some("created".into()),
+        },
+        caused_by_correlation: None,
+        idempotency_key: "bind-1:doc-1:created".into(),
+        lifecycle_state: LIFECYCLE_PENDING.into(),
+        attempts: Some(0),
+        action_plan: None,
+        action_journal: None,
+        error: None,
+        claimed_at: None,
+        created_at: None,
+    };
+    assert!(!invocation_is_claimable("deploy-replica", &invocation));
+    assert!(invocation_is_claimable("deploy-owner", &invocation));
+}
+
+#[test]
+fn apply_rejects_secret_bearing_source_fields() {
+    let mut secret = binding();
+    secret.input_fields = vec!["work_unit_id".into(), "api_token".into()];
+    assert!(validate_callback_binding(&secret).is_err());
+    assert!(validate_callback_binding(&binding()).is_ok());
+    let stripped = strip_secret_fields(json!({"branch": "topic", "api_token": "secret"}));
+    assert_eq!(stripped["branch"], "topic");
+    assert!(stripped.get("api_token").is_none());
+}
+
+#[test]
+fn apply_rejects_secret_bearing_filter_fields() {
+    let error = super::documents::reject_secret_bearing_callback_fields(
+        "bind-1",
+        Some(r#"{ api_token: { _eq: "x" } }"#),
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("secret-bearing"), "{error}");
+    assert!(super::documents::reject_secret_bearing_callback_fields(
+        "bind-1",
+        Some(r#"{ work_unit_id: { _eq: "TOKEN" } }"#),
+        None
+    )
+    .is_ok());
+}
+
+#[test]
+fn succeeded_without_result_repair_is_windowed_and_batched() {
+    let now = chrono::DateTime::parse_from_rfc3339("2026-08-21T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(succeeded_repair_cutoff(now), "2026-08-20T12:00:00Z");
+
+    let row = |id: &str| CallbackInvocationDoc {
+        invocation_id: id.into(),
+        owner_node_did: "deploy-1".into(),
+        callback_id: "cb-1".into(),
+        input: json!({}),
+        origin: crate::documents::CallbackInvocationOrigin::Event {
+            binding_id: "bind-1".into(),
+            source_collection: "WorkUnit".into(),
+            source_doc_id: id.into(),
+            source_version: Some("created".into()),
+        },
+        caused_by_correlation: None,
+        idempotency_key: format!("bind-1:{id}:created"),
+        lifecycle_state: LIFECYCLE_SUCCEEDED.into(),
+        attempts: Some(1),
+        action_plan: None,
+        action_journal: None,
+        error: None,
+        claimed_at: None,
+        created_at: None,
+    };
+    let missing = succeeded_missing_result(
+        vec![row("inv-ok"), row("inv-gap")],
+        &["inv-ok".to_string()].into_iter().collect(),
+    );
+    assert_eq!(
+        missing
+            .iter()
+            .map(|row| row.invocation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["inv-gap"]
+    );
+
+    let projected: Vec<CallbackResultInvocationRow> = serde_json::from_value(json!([
+        { "invocation_id": "inv-ok" },
+        { "invocation_id": "inv-gap" }
+    ]))
+    .expect("narrow CallbackResult projection should decode without provenance fields");
+    assert_eq!(
+        projected
+            .iter()
+            .map(|row| row.invocation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["inv-ok", "inv-gap"]
+    );
+}
+
+#[test]
+fn callback_handler_accepts_module_and_rejects_mixed_handlers() {
+    let mut value = serde_json::to_value(callback()).unwrap();
+    value["handler"] = json!({"kind":"module","module_id":"module-1"});
+    assert!(serde_json::from_value::<crate::documents::Callback>(value.clone()).is_ok());
+    value["handler"]["emitter"] = json!("create_workspace");
+    assert!(serde_json::from_value::<crate::documents::Callback>(value).is_err());
+}
+
+#[test]
+fn recovery_reuses_stored_action_plan() {
+    let source = json!({
+        "owned_files": [],
+        "work_unit_id": "unit-1",
+        "repository_id": "repo-1",
+        "base_sha": "abc",
+        "branch": "topic",
+        "workspace_id": "ws-stored"
+    });
+    let plan = emit_plan_from_source(&callback(), &source).unwrap();
+    let mut invocation = CallbackInvocationDoc {
+        invocation_id: "inv-1".into(),
+        owner_node_did: "deploy-1".into(),
+        callback_id: "cb-1".into(),
+        input: json!({}),
+        origin: crate::documents::CallbackInvocationOrigin::Event {
+            binding_id: "bind-1".into(),
+            source_collection: "WorkUnit".into(),
+            source_doc_id: "doc-1".into(),
+            source_version: Some("created".into()),
+        },
+        caused_by_correlation: None,
+        idempotency_key: "bind-1:doc-1:created".into(),
+        lifecycle_state: LIFECYCLE_RUNNING.into(),
+        attempts: Some(1),
+        action_plan: Some(serde_json::to_string(&plan).unwrap()),
+        action_journal: Some(
+            serde_json::to_string(&[ActionJournalEntry::new(0, ActionJournalState::Executing)])
+                .unwrap(),
+        ),
+        error: None,
+        claimed_at: None,
+        created_at: None,
+    };
+    let mutated = json!({
+        "owned_files": ["other.md"],
+        "work_unit_id": "unit-OTHER",
+        "repository_id": "repo-1",
+        "base_sha": "abc",
+        "branch": "topic-OTHER",
+        "workspace_id": "ws-mutated"
+    });
+    let resolved = resolve_action_plan(&invocation, &callback(), &mutated).unwrap();
+    match &resolved.actions[0] {
+        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+            assert_eq!(action.workspace_id, "ws-stored");
+            assert_eq!(
+                action.path_capability,
+                crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+                "recovery cannot expand the stored manifest from changed source content"
+            );
+            assert_eq!(action.branch, "topic");
+        }
+        crate::tools::workspace::HostAction::SealWorkspace(_)
+        | crate::tools::workspace::HostAction::FreezeWorkspaceBase(_)
+        | crate::tools::workspace::HostAction::IntegrateWorkspace(_)
+        | crate::tools::workspace::HostAction::CleanupWorkspace(_) => {
+            panic!("expected create_workspace")
+        }
+    }
+    invocation.action_plan = None;
+    let missing = resolve_action_plan(&invocation, &callback(), &mutated).unwrap_err();
+    assert!(missing.contains("missing stored ActionPlan"), "{missing}");
+}
+
+#[test]
+fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
+    let source = json!({
+        "owned_files": [],
+        "work_unit_id": "unit-1",
+        "repository_id": "repo-1",
+        "base_sha": "abc",
+        "branch": "topic",
+        "workspace_id": "ws-stored"
+    });
+    let plan = emit_plan_from_source(&callback(), &source).unwrap();
+    let journal = vec![ActionJournalEntry::new(0, ActionJournalState::Executing)];
+    let invocation = CallbackInvocationDoc {
+        invocation_id: "inv-wasm-recover".into(),
+        owner_node_did: "deploy-1".into(),
+        callback_id: "cb-1".into(),
+        input: json!({}),
+        origin: crate::documents::CallbackInvocationOrigin::Event {
+            binding_id: "bind-1".into(),
+            source_collection: "WorkUnit".into(),
+            source_doc_id: "doc-1".into(),
+            source_version: Some("created".into()),
+        },
+        caused_by_correlation: None,
+        idempotency_key: "bind-1:doc-1:created".into(),
+        lifecycle_state: LIFECYCLE_RUNNING.into(),
+        attempts: Some(1),
+        action_plan: Some(action_plan_canonical_json(&plan).unwrap()),
+        action_journal: Some(serde_json::to_string(&journal).unwrap()),
+        error: None,
+        claimed_at: None,
+        created_at: None,
+    };
+    let mut module_binding = callback();
+    module_binding.handler = crate::documents::CallbackHandler::Module {
+        module_id: "mod-gone".into(),
+    };
+    let mutated = json!({
+        "owned_files": ["other.md"],
+        "work_unit_id": "unit-OTHER",
+        "repository_id": "repo-1",
+        "base_sha": "abc",
+        "branch": "topic-OTHER",
+        "workspace_id": "ws-mutated"
+    });
+    let resolved =
+        resolve_action_plan_with_module(&invocation, &module_binding, &mutated, None).unwrap();
+    match &resolved.actions[0] {
+        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+            assert_eq!(action.workspace_id, "ws-stored");
+            assert_eq!(
+                action.path_capability,
+                crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+                "recovery cannot expand the stored manifest from changed source content"
+            );
+        }
+        crate::tools::workspace::HostAction::SealWorkspace(_)
+        | crate::tools::workspace::HostAction::FreezeWorkspaceBase(_)
+        | crate::tools::workspace::HostAction::IntegrateWorkspace(_)
+        | crate::tools::workspace::HostAction::CleanupWorkspace(_) => {
+            panic!("expected create_workspace")
+        }
+    }
+    let mut denied = invocation.clone();
+    apply_planner_deny(&mut denied, "CallbackModule mod-gone not found");
+    assert_eq!(denied.lifecycle_state, LIFECYCLE_FAILED);
+    assert_eq!(
+        denied.action_journal,
+        Some(
+            serde_json::to_string(&[ActionJournalEntry::new(0, ActionJournalState::Interrupted)])
+                .unwrap()
+        )
+    );
+    assert_eq!(denied.action_plan, invocation.action_plan);
+    assert!(denied.error.as_deref().unwrap().contains("mod-gone"));
+
+    let mut pre_exec = invocation.clone();
+    pre_exec.action_journal = Some("[]".into());
+    pre_exec.action_plan = None;
+    apply_planner_deny(&mut pre_exec, "CallbackModule missing");
+    assert_eq!(pre_exec.lifecycle_state, LIFECYCLE_DENIED);
+    assert_eq!(pre_exec.action_journal.as_deref(), Some("[]"));
+}
+
+#[test]
+fn builtin_emitter_accepts_assignment_and_base_revision_aliases() {
+    let source = json!({
+        "owned_files": [],
+        "assignment_id": "cluster:patch",
+        "repository_id": "defending_code",
+        "base_revision": "abc123"
+    });
+    let plan = emit_plan_from_source(&callback(), &source).expect("plan");
+    match &plan.actions[0] {
+        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+            assert_eq!(action.work_unit_id, "cluster:patch");
+            assert_eq!(action.base_sha, "abc123");
+            assert_eq!(action.branch, "gents/cluster-patch");
+            assert_eq!(action.workspace_id, "cluster:patch");
+        }
+        _ => panic!("expected create_workspace"),
+    }
+}
+
+#[test]
+fn builtin_emitter_builds_create_workspace_plan() {
+    let source = json!({
+        "owned_files": [],
+        "work_unit_id": "unit-1",
+        "repository_id": "repo-1",
+        "base_sha": "abc",
+        "branch": "topic",
+        "workspace_id": "ws-1"
+    });
+    let plan = emit_plan_from_source(&callback(), &source).expect("plan");
+    let encoded = serde_json::to_string(&plan).unwrap();
+    assert!(!encoded.contains("host_path"));
+    assert_eq!(plan.abi, 1);
+    match &plan.actions[0] {
+        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+            assert_eq!(action.workspace_id, "ws-1");
+            assert_eq!(action.work_unit_id, "unit-1");
+        }
+        crate::tools::workspace::HostAction::SealWorkspace(_)
+        | crate::tools::workspace::HostAction::FreezeWorkspaceBase(_)
+        | crate::tools::workspace::HostAction::IntegrateWorkspace(_)
+        | crate::tools::workspace::HostAction::CleanupWorkspace(_) => {
+            panic!("expected create_workspace")
+        }
+    }
+}
+
+fn git(cwd: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+struct GitFixture {
+    _root: TempDir,
+    repo: PathBuf,
+    base_sha: String,
+}
+
+impl GitFixture {
+    fn new() -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let repo = root.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["config", "user.email", "cb@example.com"]);
+        git(&repo, &["config", "user.name", "Callback Test"]);
+        fs::write(repo.join("README.md"), "hello\n").unwrap();
+        git(&repo, &["add", "README.md"]);
+        git(&repo, &["commit", "-m", "init"]);
+        let base_sha = git(&repo, &["rev-parse", "HEAD"]);
+        Self {
+            _root: root,
+            repo,
+            base_sha,
+        }
+    }
+}
+
+#[test]
+fn callback_result_only_after_workspace_docs_are_durable() {
+    let fx = GitFixture::new();
+    let mut docs = MemoryWorkspaceDocuments::default();
+    let action = CreateWorkspaceAction {
+        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new())
+            .unwrap(),
+        workspace_id: "ws-result".into(),
+        work_unit_id: "unit-1".into(),
+        repository_id: "repo-1".into(),
+        base_sha: fx.base_sha.clone(),
+        branch: "topic-result".into(),
+        creation_policy: CreationPolicy::GitWorktreeDiff,
+        adapter: WorkspaceAdapterKind::GitWorktree,
+        clone_artifacts: None,
+    };
+    let plan = emit_create_workspace_plan(action);
+    let caps: BTreeSet<String> = [CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let mut journal = Vec::new();
+    assert!(!can_emit_callback_result(
+        LIFECYCLE_RUNNING,
+        &journal,
+        docs.load_isolated_workspace("ws-result").unwrap().as_ref(),
+        docs.load_placement("ws-result").unwrap().as_ref(),
+    ));
+
+    let mut ctx = HostExecutorContext {
+        owner_node_did: "deploy-1".into(),
+        repository: RepositoryPlacementRef {
+            repository_id: "repo-1".into(),
+            owner_node_did: "deploy-1".into(),
+            host_path: fx.repo.clone(),
+            enabled: true,
+        },
+        ceiling: fx.repo.parent(),
+        capabilities: caps,
+        writer_principal: "did:key:zW".into(),
+        integrator_principal: "did:key:zI".into(),
+        caused_by_invocation_id: "inv-1".into(),
+        caused_by_correlation: "corr-1".into(),
+        documents: &mut docs,
+    };
+    let outcome = execute_create_workspace_plan(&plan, &mut journal, &mut ctx).expect("provision");
+    assert_eq!(
+        journal.last().map(|entry| entry.state),
+        Some(ActionJournalState::ResultDocsWritten)
+    );
+    assert!(!can_emit_callback_result(
+        LIFECYCLE_RUNNING,
+        &journal,
+        Some(&outcome.workspace),
+        Some(&outcome.placement)
+    ));
+    assert!(can_emit_callback_result(
+        LIFECYCLE_SUCCEEDED,
+        &journal,
+        Some(&outcome.workspace),
+        Some(&outcome.placement)
+    ));
+}
+
+async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node
+}
+
+#[tokio::test]
+async fn first_seen_source_create_materializes_owner_invocation() {
+    let node = test_node().await;
+    let owner_node_did = "did:key:zWriter".to_owned();
+    node.add_collection(
+        r#"
+        type WorkUnit {
+            work_unit_id: String
+            owned_files: String
+            repository_id: String
+            base_sha: String
+            branch: String
+        }
+        "#,
+    )
+    .await
+    .expect("WorkUnit schema");
+
+    let binding_mutation = r#"mutation {
+        create_Callback(input: {callback_id:"cb-scan",node_did:"did:key:zWriter",handler:{kind:"built_in",emitter:"create_workspace"},capabilities:["create_workspace","observe_dirty_base"],enabled:true}) {_docID}
+        create_EventSource(input: {event_source_id:"events-scan",node_did:"did:key:zWriter",source_collection:"WorkUnit",event_kind:"created"}) {_docID}
+        create_CallbackBinding(input: {binding_id:"bind-scan",node_did:"did:key:zWriter",event_source_id:"events-scan",callback_id:"cb-scan",input_fields:["work_unit_id","repository_id","base_sha","branch","owned_files"],enabled:true}) {_docID}
+    }"#;
+    let response = node.execute(binding_mutation).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .unwrap();
+    let source = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::documents::load_event_source(&node, "events-scan", &owner_node_did),
+    )
+    .await
+    .expect("callback configuration lookup must not wait for the mutation gate")
+    .unwrap()
+    .expect("configured event source");
+    assert_eq!(source.event_source_id, "events-scan");
+    held.discard().await.unwrap();
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let mut engine = super::CallbackEngine::new(node.clone(), owner_node_did.clone(), None, cancel);
+    engine.reconcile_bindings().await;
+
+    let create = r#"mutation {
+        create_WorkUnit(input: {
+            work_unit_id: "unit-scan",
+            owned_files: "[]",
+            repository_id: "repo-1",
+            base_sha: "abc",
+            branch: "topic"
+        }) { _docID }
+    }"#;
+    let created = node.execute(create).await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let doc_id = crate::store::graphql::single_mutation_document(&created, "create_WorkUnit")
+        .unwrap()
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .expect("WorkUnit doc id")
+        .to_string();
+
+    let mut projection = binding();
+    projection.input_fields.clear();
+    let mut cache = super::scan::SourceSchemaCache::default();
+    let empty = super::scan::fetch_source_doc(
+        node.as_ref(),
+        &mut cache,
+        "WorkUnit",
+        &doc_id,
+        None,
+        &projection,
+    )
+    .await
+    .unwrap();
+    assert_eq!(empty, json!({}), "empty input_fields grants no source data");
+    projection.input_fields = vec![
+        "work_unit_id".into(),
+        "repository_id".into(),
+        "base_sha".into(),
+        "branch".into(),
+    ];
+    let narrow = super::scan::fetch_source_doc(
+        node.as_ref(),
+        &mut cache,
+        "WorkUnit",
+        &doc_id,
+        None,
+        &projection,
+    )
+    .await
+    .unwrap();
+    assert!(narrow.get("owned_files").is_none());
+    assert!(
+        emit_plan_from_source(&callback(), &narrow).is_err(),
+        "omitted manifest cannot authorize workspace paths"
+    );
+    projection.input_fields.push("owned_files".into());
+    let admitted = super::scan::fetch_source_doc(
+        node.as_ref(),
+        &mut cache,
+        "WorkUnit",
+        &doc_id,
+        None,
+        &projection,
+    )
+    .await
+    .unwrap();
+    assert!(emit_plan_from_source(&callback(), &admitted).is_ok());
+
+    engine.deliver_arrivals(Some("WorkUnit")).await;
+
+    let query = format!(
+        r#"{{
+            CallbackInvocation(
+                filter: {{ owner_node_did: {{ _eq: "{owner}" }} }},
+                limit: 10
+            ) {{
+                invocation_id
+                owner_node_did
+                lifecycle_state
+                idempotency_key
+                input
+                origin
+            }}
+        }}"#,
+        owner = crate::store::graphql::escape_graphql_string(&owner_node_did),
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("CallbackInvocation"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["owner_node_did"], owner_node_did);
+    assert_eq!(rows[0]["origin"]["source_doc_id"], doc_id);
+    assert_eq!(rows[0]["input"]["work_unit_id"], "unit-scan");
+    assert!(rows[0]["input"].get("_docID").is_none());
+    engine.deliver_arrivals(Some("WorkUnit")).await;
+    let repeated = node.execute(&query).await;
+    assert_eq!(
+        crate::store::graphql::rows::<serde_json::Value>(&repeated, "CallbackInvocation")
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+fn artifact_bytes_for_id() -> Vec<u8> {
+    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(b"{}"))
+}
+
+fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackModuleDoc {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    let module_id = compute_module_id(wasm, args, 1).unwrap();
+    CallbackModuleDoc {
+        module_id,
+        node_did: "did:key:zWriter".into(),
+        tags: vec![],
+        abi_version: Some(1),
+        artifact_bytes: Some(STANDARD.encode(wasm)),
+        canonical_args: Some(serde_json::to_string(args).unwrap()),
+        signer_did: Some(signer.into()),
+        provenance: Some("fixture_create_workspace".into()),
+        enabled: true,
+        fuel_limit: Some(50_000_000),
+        memory_pages: Some(256),
+        max_input_bytes: Some(1_000_000),
+        max_output_bytes: Some(1_000_000),
+    }
+}
+
+fn trusted(signer: &str) -> BTreeSet<String> {
+    [signer.to_string()].into_iter().collect()
+}
+
+fn wat_returns_json(json: &str) -> Vec<u8> {
+    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        json.as_bytes(),
+    ))
+}
+
+fn tight_limits(fuel: u64, pages: u32, max_in: usize, max_out: usize) -> CallbackModuleLimits {
+    CallbackModuleLimits {
+        fuel_limit: fuel,
+        memory_pages: pages,
+        max_input_bytes: max_in,
+        max_output_bytes: max_out,
+    }
+}
+
+#[test]
+fn module_id_is_stable_across_host_paths_and_arg_key_order() {
+    let wasm = artifact_bytes_for_id();
+    let root = TempDir::new().unwrap();
+    let path_a = root.path().join("one").join("module.wasm");
+    let path_b = root.path().join("other-host").join("copy.wasm");
+    fs::create_dir_all(path_a.parent().unwrap()).unwrap();
+    fs::create_dir_all(path_b.parent().unwrap()).unwrap();
+    fs::write(&path_a, &wasm).unwrap();
+    fs::write(&path_b, &wasm).unwrap();
+
+    let id_a = compute_module_id(&fs::read(&path_a).unwrap(), &json!({"b": 1, "a": 2}), 1).unwrap();
+    let id_b = compute_module_id(&fs::read(&path_b).unwrap(), &json!({"a": 2, "b": 1}), 1).unwrap();
+    assert_eq!(id_a, id_b);
+    assert!(id_a.starts_with("sha256:"));
+    assert_ne!(
+        compute_module_id(path_a.to_string_lossy().as_bytes(), &json!({}), 1).unwrap(),
+        id_a,
+        "module_id must hash decoded bytes, not the host path"
+    );
+}
+
+#[test]
+fn signer_policy_fail_closes_when_missing_or_untrusted() {
+    let wasm = artifact_bytes_for_id();
+    let mut module = module_doc(&wasm, &json!({}), "did:key:zTrusted");
+    let empty = BTreeSet::new();
+    let error = validate_callback_module(&module, &empty).unwrap_err();
+    assert!(error.contains("no trusted principals"), "{error}");
+
+    module.signer_did = None;
+    let error = validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("signer_did is missing"), "{error}");
+
+    module.signer_did = Some("did:key:zTrusted".into());
+    module.provenance = None;
+    let error = validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("provenance is missing"), "{error}");
+
+    module.provenance = Some("fixture".into());
+    module.signer_did = Some("did:key:zStranger".into());
+    let error = validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("not a trusted installer"), "{error}");
+
+    module.signer_did = Some("did:key:zTrusted".into());
+    validate_callback_module(&module, &trusted("did:key:zTrusted")).expect("trusted signer");
+}
+
+#[test]
+fn planner_uses_shared_plugin_fuel_memory_and_output_limits() {
+    let infinite = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 1)
+          (func (export "_start") (loop $spin (br $spin))))"#,
+    );
+    let error = invoke_plugin_planner(&infinite, &tight_limits(100, 1, 1024, 1024), &json!({}))
+        .unwrap_err();
+    assert!(error.contains("OutOfFuel"), "{error}");
+    let memory = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 8) (func (export "_start")))"#,
+    );
+    assert!(
+        invoke_plugin_planner(&memory, &tight_limits(10_000, 1, 1024, 1024), &json!({})).is_err()
+    );
+    let output = wat_returns_json(r#"{"value":"long output"}"#);
+    let error = invoke_plugin_planner(
+        &output,
+        &tight_limits(100_000, 1, 4, 1024),
+        &json!({"input":"too long"}),
+    )
+    .unwrap_err();
+    assert!(error.contains("max_input_bytes"), "{error}");
+    let error =
+        invoke_plugin_planner(&output, &tight_limits(100_000, 1, 1024, 8), &json!({})).unwrap_err();
+    assert!(error.contains("BadOutput"), "{error}");
+}
+
+#[test]
+fn unknown_action_type_denies_the_entire_plan() {
+    let wasm = wat_returns_json(r#"{"abi":1,"actions":[{"type":"not_a_real_action"}]}"#);
+    let module = module_doc(&wasm, &json!({}), "did:key:zTrusted");
+    let caps: BTreeSet<String> = [CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let error = plan_from_module(&module, &json!({}), &caps).unwrap_err();
+    assert!(error.contains("unknown ActionPlan action type"), "{error}");
+}
+
+#[test]
+fn host_path_in_plan_is_denied() {
+    let error = parse_action_plan_json(
+        r#"{"abi":1,"actions":[{"type":"create_workspace","path_capability":{"mode":"exactPaths","paths":[]},"workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"/tmp/evil"}]}"#,
+    )
+    .unwrap_err();
+    assert!(error.contains("host path"), "{error}");
+    for branch in [
+        r"C:\Users\evil",
+        r"\\?\C:\foo",
+        "file:///tmp/foo",
+        "~/secret",
+        "topic/../escape",
+        r"topic\..\escape",
+        "C:foo",
+    ] {
+        let raw = serde_json::to_string(&json!({
+            "abi": 1,
+            "actions": [{
+                "type": "create_workspace",
+                "path_capability": {"mode": "exactPaths", "paths": []},
+                "workspace_id": "ws",
+                "work_unit_id": "u",
+                "repository_id": "r",
+                "base_sha": "s",
+                "branch": branch,
+            }]
+        }))
+        .unwrap();
+        let error = parse_action_plan_json(&raw).unwrap_err();
+        assert!(error.contains("host path"), "{branch}: {error}");
+    }
+}
+
+#[test]
+fn extra_action_fields_deny_the_plan() {
+    let error = parse_action_plan_json(
+        r#"{"abi":1,"actions":[{"type":"create_workspace","path_capability":{"mode":"exactPaths","paths":[]},"workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"topic","path":"relative"}]}"#,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("schema rejected")
+            || error.contains("unknown field")
+            || error.contains("host_path"),
+        "{error}"
+    );
+    let error = parse_action_plan_json(
+        r#"{"abi":1,"actions":[{"type":"create_workspace","path_capability":{"mode":"exactPaths","paths":[]},"workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"topic","host_path":"/tmp/ws"}]}"#,
+    )
+    .unwrap_err();
+    assert!(error.contains("host_path"), "{error}");
+}
+
+#[test]
+fn callback_requires_bounded_afterburner_artifact() {
+    let artifact = artifact_bytes_for_id();
+    let mut module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
+    module.fuel_limit = Some(i64::MAX);
+    let error = validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("host maximum"), "{error}");
+    let malformed = module_doc(b"not an artifact", &json!({}), "did:key:zTrusted");
+    let error = validate_callback_module(&malformed, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("Afterburner"), "{error}");
+    let oversized = module_doc(
+        &vec![0; MAX_ARTIFACT_BYTES + 1],
+        &json!({}),
+        "did:key:zTrusted",
+    );
+    let error = validate_callback_module(&oversized, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("max_artifact_bytes"), "{error}");
+}
+
+#[test]
+fn capability_miss_denies_create_workspace_plan() {
+    let Some(wasm) = fixture_create_workspace_artifact() else {
+        return;
+    };
+    let source = json!({
+        "owned_files": [],
+        "work_unit_id": "unit-1",
+        "repository_id": "repo-1",
+        "base_sha": "abc",
+        "branch": "topic",
+        "workspace_id": "ws-1"
+    });
+    let module = module_doc(wasm, &json!({}), "did:key:zTrusted");
+    validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap();
+    let caps: BTreeSet<String> = [CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let plan = plan_from_module(&module, &source, &caps).expect("plan");
+    let missing = BTreeSet::from([CAP_OBSERVE_DIRTY_BASE.to_string()]);
+    let error = plan.validate_against(&missing).unwrap_err().to_string();
+    assert!(
+        error.contains("missing capability create_workspace"),
+        "{error}"
+    );
+}
+
+#[test]
+fn fixture_artifact_emits_valid_create_workspace_plan() {
+    let Some(wasm) = fixture_create_workspace_artifact() else {
+        return;
+    };
+    let source = json!({
+        "owned_files": [],
+        "work_unit_id": "unit-1",
+        "repository_id": "repo-1",
+        "base_sha": "abc",
+        "branch": "topic",
+        "workspace_id": "ws-1",
+        "api_token": "should-be-stripped"
+    });
+    let module = module_doc(
+        wasm,
+        &json!({"adapter": "git_worktree"}),
+        "did:key:zTrusted",
+    );
+    validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap();
+    let caps: BTreeSet<String> = [CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let stripped = strip_secret_fields(source);
+    let plan = plan_from_module(&module, &stripped, &caps).expect("fixture plan");
+    let canonical = action_plan_canonical_json(&plan).expect("canonical");
+    assert!(!canonical.contains("host_path"), "{canonical}");
+    assert!(!canonical.contains("/tmp"), "{canonical}");
+    assert!(!canonical.contains("api_token"), "{canonical}");
+    assert_eq!(canonical, action_plan_canonical_json(&plan).unwrap());
+    assert!(canonical.contains("\"abi\":1"));
+    assert!(canonical.contains("\"adapter\":\"git_worktree\""));
+    match &plan.actions[0] {
+        HostAction::CreateWorkspace(action) => {
+            assert_eq!(action.workspace_id, "ws-1");
+            assert_eq!(action.work_unit_id, "unit-1");
+            assert_eq!(action.adapter.as_str(), "git_worktree");
+        }
+        HostAction::FreezeWorkspaceBase(_)
+        | HostAction::SealWorkspace(_)
+        | HostAction::IntegrateWorkspace(_)
+        | HostAction::CleanupWorkspace(_) => panic!("expected create_workspace"),
+    }
+    plan.validate_against(&caps).expect("capabilities");
+
+    let mut module_binding = callback();
+    module_binding.handler = crate::documents::CallbackHandler::Module {
+        module_id: module.module_id.clone(),
+    };
+    module_binding.capabilities = vec![CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()];
+    let via_binding = plan_from_callback(&module_binding, &stripped, Some(&module)).expect("wired");
+    assert_eq!(via_binding, plan);
+
+    let clone_caps: BTreeSet<String> = [
+        CAP_CREATE_WORKSPACE,
+        CAP_OBSERVE_DIRTY_BASE,
+        CAP_CLONE_ARTIFACTS,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    let builtin_binding = callback();
+    let builtin = emit_plan_from_source(&builtin_binding, &stripped).expect("builtin");
+    builtin.validate_against(&clone_caps).expect("builtin caps");
+}
+
+#[test]
+fn canonical_action_plan_sorts_object_keys() {
+    let plan = emit_plan_from_source(
+        &callback(),
+        &json!({
+            "owned_files": [],
+            "work_unit_id": "unit-1",
+            "repository_id": "repo-1",
+            "base_sha": "abc",
+            "branch": "topic",
+            "workspace_id": "ws-1"
+        }),
+    )
+    .unwrap();
+    let canonical = action_plan_canonical_json(&plan).unwrap();
+    let abi = canonical.find("\"abi\"").unwrap();
+    let actions = canonical.find("\"actions\"").unwrap();
+    assert!(abi < actions, "{canonical}");
+    let parsed = parse_action_plan_json(&canonical).unwrap();
+    assert_eq!(parsed, plan);
+}
+
+/// Absent optional fields render as GraphQL `null`, never `""`: the empty
+/// string is a real value, so a later query must be able to tell the two apart.
+#[test]
+fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_string() {
+    let result = CallbackResultDoc {
+        result_id: "res-1".to_owned(),
+        invocation_id: "inv-1".to_owned(),
+        binding_id: None,
+        owner_node_did: "did:key:zWriter".to_owned(),
+        workspace_id: None,
+        work_unit_id: None,
+        caused_by_correlation: None,
+        created_at: Some("2024-01-01T00:00:00Z".to_owned()),
+    };
+    let mutation = create_callback_result_mutation(&result);
+    assert!(mutation.contains("binding_id: null,"), "{mutation}");
+    assert!(mutation.contains("workspace_id: null,"), "{mutation}");
+    assert!(mutation.contains("work_unit_id: null,"), "{mutation}");
+    assert!(
+        mutation.contains("caused_by_correlation: null,"),
+        "{mutation}"
+    );
+    assert!(!mutation.contains(r#""""#), "{mutation}");
+
+    let present = CallbackResultDoc {
+        binding_id: Some("bind-1".to_owned()),
+        workspace_id: Some("ws-1".to_owned()),
+        work_unit_id: Some("unit-1".to_owned()),
+        caused_by_correlation: Some("corr-1".to_owned()),
+        ..result
+    };
+    let mutation = create_callback_result_mutation(&present);
+    assert!(mutation.contains(r#"binding_id: "bind-1","#), "{mutation}");
+    assert!(mutation.contains(r#"workspace_id: "ws-1","#), "{mutation}");
+    assert!(
+        mutation.contains(r#"work_unit_id: "unit-1","#),
+        "{mutation}"
+    );
+    assert!(
+        mutation.contains(r#"caused_by_correlation: "corr-1","#),
+        "{mutation}"
+    );
+}
+
+#[test]
+fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
+    let origin = crate::documents::CallbackInvocationOrigin::Event {
+        binding_id: "bind-1".into(),
+        source_collection: "WorkUnit".into(),
+        source_doc_id: "doc-1".into(),
+        source_version: Some("created".into()),
+    };
+    let invocation = CallbackInvocationDoc {
+        invocation_id: "inv-1".into(),
+        owner_node_did: "did:key:zWriter".into(),
+        callback_id: "cb-1".into(),
+        input: json!({}),
+        origin: origin.clone(),
+        caused_by_correlation: None,
+        idempotency_key: "key-1".into(),
+        lifecycle_state: LIFECYCLE_PENDING.into(),
+        attempts: Some(1),
+        action_plan: None,
+        action_journal: None,
+        error: None,
+        claimed_at: None,
+        created_at: None,
+    };
+    let mutation = update_invocation_mutation(&invocation, None);
+    assert!(mutation.contains("action_plan: null,"), "{mutation}");
+    assert!(mutation.contains("error: null,"), "{mutation}");
+    assert!(mutation.contains("claimed_at: null,"), "{mutation}");
+    assert!(!mutation.contains(r#""""#), "{mutation}");
+
+    let failed = CallbackInvocationDoc {
+        origin,
+        lifecycle_state: LIFECYCLE_FAILED.into(),
+        attempts: Some(2),
+        action_plan: Some("[]".into()),
+        action_journal: Some("[]".into()),
+        error: Some("boom".into()),
+        claimed_at: Some("2024-01-01T00:00:00Z".into()),
+        ..invocation
+    };
+    let mutation = update_invocation_mutation(&failed, Some("running"));
+    assert!(mutation.contains(r#"action_plan: "[]","#), "{mutation}");
+    assert!(mutation.contains(r#"error: "boom","#), "{mutation}");
+    assert!(
+        mutation.contains(r#"claimed_at: "2024-01-01T00:00:00Z","#),
+        "{mutation}"
+    );
+}
+
+/// Workspace packs select one binding's results with
+/// `{ binding_id: { _eq: ... } }`, so the stored result must carry it.
+#[tokio::test]
+async fn callback_results_are_selectable_by_their_binding() {
+    let node = test_node().await;
+    for (invocation_id, binding_id) in [
+        ("inv-a", "maintenance-execute-workspace"),
+        ("inv-b", "other"),
+    ] {
+        let stored = super::documents::create_callback_result(
+            &node,
+            &super::documents::CallbackResultDoc {
+                result_id: format!("res-{invocation_id}"),
+                invocation_id: invocation_id.to_owned(),
+                binding_id: Some(binding_id.to_owned()),
+                owner_node_did: "did:key:zWriter".to_owned(),
+                workspace_id: None,
+                work_unit_id: None,
+                caused_by_correlation: None,
+                created_at: None,
+            },
+        )
+        .await
+        .expect("result stored");
+        assert_eq!(stored.binding_id.as_deref(), Some(binding_id));
+    }
+
+    let response = node
+        .execute(
+            r#"{ CallbackResult(filter: { binding_id: { _eq: "maintenance-execute-workspace" } }) { invocation_id } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_value(response.data.expect("data")["CallbackResult"].clone())
+            .expect("rows");
+    assert_eq!(rows, vec![json!({"invocation_id": "inv-a"})]);
+}
+
+#[test]
+fn every_invocation_origin_names_its_binding() {
+    use crate::documents::CallbackInvocationOrigin;
+    let event = CallbackInvocationOrigin::Event {
+        binding_id: "one".to_owned(),
+        source_collection: "WorkUnit".to_owned(),
+        source_doc_id: "doc".to_owned(),
+        source_version: None,
+    };
+    let group = CallbackInvocationOrigin::EventGroup {
+        binding_id: "two".to_owned(),
+        group_key: "key".to_owned(),
+    };
+    assert_eq!(event.binding_id(), "one");
+    assert_eq!(group.binding_id(), "two");
+}
+
+struct Backlog {
+    _identity: crate::store::identity::KeyIdentity,
+    _home: TempDir,
+    node: Arc<defra_node::EmbeddedNode>,
+    access: crate::store::config_client::ConfigAccess,
+    history: String,
+}
+
+const BACKLOG_OWNER: &str = crate::request::lifecycle::test_support::PIN_FIXED_DID;
+
+impl Backlog {
+    async fn registered() -> Self {
+        use crate::store::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        use crate::Collection;
+        let home = tempfile::tempdir().unwrap();
+        let identity =
+            crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path());
+        let node = test_node().await;
+        let access = ConfigAccess::local(node.clone());
+        access
+            .add_collection("type BacklogWork { label: String }")
+            .await
+            .unwrap();
+        let mut backlog = Self {
+            _identity: identity,
+            _home: home,
+            node,
+            access,
+            history: String::new(),
+        };
+        backlog.history = backlog.create("history").await;
+        let documents = [
+            (
+                Collection::Callback,
+                json!({"callback_id":"cb-backlog","handler":{"kind":"built_in","emitter":"create_workspace"},
+                    "capabilities":["create_workspace"],"enabled":true}),
+            ),
+            (
+                Collection::EventSource,
+                json!({"event_source_id":"backlog","source_collection":"BacklogWork","event_kind":"created"}),
+            ),
+            (
+                Collection::CallbackBinding,
+                json!({"binding_id":"bind-backlog","event_source_id":"backlog","callback_id":"cb-backlog",
+                    "input_fields":["label"],"enabled":true}),
+            ),
+        ]
+        .into_iter()
+        .map(|(collection, mut value)| {
+            value["node_did"] = json!(BACKLOG_OWNER);
+            DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            }
+        })
+        .collect();
+        let plan = DesiredStateApplyPlan::new(documents).unwrap();
+        backlog
+            .access
+            .transact_write("test.backlog_config", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+        backlog
+    }
+
+    async fn add_binding(&self, binding_id: &str) {
+        use crate::store::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        let value = json!({"binding_id":binding_id,"event_source_id":"backlog","callback_id":"cb-backlog",
+            "input_fields":["label"],"enabled":true,"node_did":BACKLOG_OWNER});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::CallbackBinding,
+            add: value.clone(),
+            update: value,
+        }])
+        .unwrap();
+        self.access
+            .transact_write("test.backlog_binding", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn create(&self, label: &str) -> String {
+        let response = self
+            .access
+            .write(
+                "test.backlog_work",
+                &format!(
+                    "mutation {{ create_BacklogWork(input: {{label: \"{label}\"}}) {{ _docID }} }}"
+                ),
+            )
+            .await
+            .unwrap();
+        crate::store::graphql::created_doc_id(&response, "BacklogWork").unwrap()
+    }
+
+    fn engine(&self) -> super::CallbackEngine {
+        let mut engine = super::CallbackEngine::new(
+            self.node.clone(),
+            BACKLOG_OWNER.into(),
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        engine.plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(None));
+        engine
+    }
+
+    async fn start_engine(&self) {
+        let mut engine = self.engine();
+        engine.reconcile_bindings().await;
+        engine.deliver_arrivals(None).await;
+    }
+
+    async fn invoked(&self) -> Vec<String> {
+        let response = self.node.execute("{ CallbackInvocation { origin } }").await;
+        let mut docs =
+            crate::store::graphql::rows::<serde_json::Value>(&response, "CallbackInvocation")
+                .unwrap()
+                .into_iter()
+                .map(|row| row["origin"]["source_doc_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+        docs.sort();
+        docs
+    }
+
+    async fn cursor(&self) -> String {
+        self.access
+            .transact_write("test.backlog_cursor", |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        crate::store::config_client::event_source_cursor::load_or_seed(
+                            txn,
+                            BACKLOG_OWNER,
+                            &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
+                                binding_id: "bind-backlog".into(),
+                            },
+                        )
+                        .await?
+                        .cursor
+                        .after,
+                    )
+                })
+            })
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn document_written_before_engine_start_fires_once_across_restarts() {
+    let backlog = Backlog::registered().await;
+    let pending = backlog.create("pending").await;
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, vec![pending.clone()]);
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, vec![pending]);
+    assert!(!backlog.invoked().await.contains(&backlog.history));
+    backlog.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn one_delivery_pass_drains_a_backlog_beyond_one_journal_page() {
+    let backlog = Backlog::registered().await;
+    let mut written = Vec::new();
+    for index in 0..130 {
+        written.push(backlog.create(&format!("work-{index}")).await);
+    }
+    written.sort();
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, written);
+    backlog.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
+    let backlog = Backlog::registered().await;
+    let pending = backlog.create("pending").await;
+    let seeded = backlog.cursor().await;
+    let mut crashed = backlog.engine();
+    crashed.reconcile_bindings().await;
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(crashed
+        .materialize_for_binding(&binding, "BacklogWork", &pending, false)
+        .await
+        .unwrap());
+    drop(crashed);
+    assert_eq!(
+        backlog.cursor().await,
+        seeded,
+        "the crash precedes the checkpoint"
+    );
+    backlog
+        .access
+        .write(
+            "test.backlog_edit",
+            &format!(
+                "mutation {{ update_BacklogWork(docID: \"{}\", input: {{label: \"edited\"}}) {{ _docID }} }}",
+                crate::store::graphql::escape_graphql_string(&pending)
+            ),
+        )
+        .await
+        .unwrap();
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, vec![pending]);
+    assert_ne!(
+        backlog.cursor().await,
+        seeded,
+        "the recovered arrival is checkpointed"
+    );
+    backlog.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
+    let backlog = Backlog::registered().await;
+    let pending = backlog.create("pending").await;
+    let snapshot = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+        .await
+        .unwrap()
+        .unwrap();
+    backlog
+        .access
+        .write(
+            "test.backlog_disable",
+            r#"mutation { update_CallbackBinding(filter: {binding_id: {_eq: "bind-backlog"}}, input: {enabled: false}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let mut engine = backlog.engine();
+    assert!(!engine
+        .materialize_for_binding(&snapshot, "BacklogWork", &pending, false)
+        .await
+        .unwrap());
+    assert!(backlog.invoked().await.is_empty());
+    backlog.node.shutdown().await;
+}
+
+#[test]
+fn callback_artifact_identity_and_output_are_host_validated() {
+    let artifact = wat_returns_json(r#"{"abi":1,"actions":[]}"#);
+    let mut module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
+    validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap();
+    module.canonical_args = Some(r#"{"forged":true}"#.into());
+    assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
+    module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
+    module.abi_version = Some(99);
+    assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
+
+    let trap = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#,
+    );
+    let module = module_doc(&trap, &json!({}), "did:key:zTrusted");
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
+    let malformed = wat_returns_json("not JSON");
+    let module = module_doc(&malformed, &json!({}), "did:key:zTrusted");
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
+}
+
+#[tokio::test]
+async fn retired_reserved_bindings_do_not_scan() {
+    let backlog = Backlog::registered().await;
+    let reserved = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
+    backlog.add_binding(&reserved).await;
+    backlog.add_binding("ordinary").await;
+    let ids: Vec<String> = super::documents::list_enabled_bindings(&backlog.node, BACKLOG_OWNER)
+        .await
+        .expect("bindings")
+        .into_iter()
+        .map(|binding| binding.binding_id)
+        .collect();
+    assert_eq!(ids, vec!["bind-backlog".to_owned(), "ordinary".to_owned()]);
+}

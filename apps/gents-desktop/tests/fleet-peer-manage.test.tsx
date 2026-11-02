@@ -44,7 +44,6 @@ function makeDeployment(overrides: Partial<DeploymentView> = {}): DeploymentView
     toolServiceRegistries: [],
     agentTargets: [],
     datastoreToolSurfaces: [],
-    chainKeyBindings: [],
     sessions: [],
     mailboxItems: [],
     runtime: null,

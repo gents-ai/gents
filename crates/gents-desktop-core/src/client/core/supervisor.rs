@@ -27,12 +27,15 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RouteReconcileFence {
     record: PeerRecord,
-    enrollment: Option<super::enrollment::EnrollmentAuthorizationGeneration>,
+    enrollment: Option<super::enrollment::reconcile::EnrollmentAuthorizationGeneration>,
 }
 
 fn route_reconcile_fence(
     record: &PeerRecord,
-    enrollment_authority: &BTreeMap<String, super::enrollment::EnrollmentAuthorizationGeneration>,
+    enrollment_authority: &BTreeMap<
+        String,
+        super::enrollment::reconcile::EnrollmentAuthorizationGeneration,
+    >,
 ) -> RouteReconcileFence {
     RouteReconcileFence {
         record: record.clone(),
@@ -90,7 +93,7 @@ pub(super) fn spawn_p2p_supervisor_task(
             }
 
             let enrollment_authority =
-                match super::enrollment::reconcile_status_enrollment_approvals(
+                match super::enrollment::reconcile::reconcile_status_enrollment_approvals(
                     &node,
                     &p2p,
                     &remote_admin_actor,
@@ -230,7 +233,10 @@ async fn run_saved_peer_repair_cycle(
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
     route_reconciled_at: &mut BTreeMap<String, (RouteReconcileFence, Instant)>,
-    enrollment_authority: &BTreeMap<String, super::enrollment::EnrollmentAuthorizationGeneration>,
+    enrollment_authority: &BTreeMap<
+        String,
+        super::enrollment::reconcile::EnrollmentAuthorizationGeneration,
+    >,
 ) {
     let records = sync_state.records();
     route_reconciled_at.retain(|peer_id, (expected, _)| {
@@ -240,7 +246,7 @@ async fn run_saved_peer_repair_cycle(
     });
 
     for saved_record in &records {
-        if super::enrollment::enrollment_record_lacks_current_authority(
+        if super::enrollment::reconcile::enrollment_record_lacks_current_authority(
             saved_record,
             enrollment_authority,
         ) {

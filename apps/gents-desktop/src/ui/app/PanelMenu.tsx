@@ -18,10 +18,12 @@ import { useDock } from "./workspace";
 export function PanelMenu({
   routeName,
   finalFocus,
+  onOpenChange,
   children,
 }: {
   routeName: string;
   finalFocus?: ComponentProps<typeof DropdownMenuContent>["finalFocus"];
+  onOpenChange?: (open: boolean) => void;
   /** the items of what the pane shows, before its panels */
   children?: ReactNode;
 }) {
@@ -32,7 +34,7 @@ export function PanelMenu({
   const showing =
     dock.open && dock.tabs.some((id) => surfaces.some((s) => s.id === id));
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={onOpenChange}>
       <Hint label="More">
         <DropdownMenuTrigger
           render={

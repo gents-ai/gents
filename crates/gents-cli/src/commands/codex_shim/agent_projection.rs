@@ -1,6 +1,6 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 
-use gents::toolset::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
+use gents::tools::native::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
 use gents_codex_protocol as codex;
 use serde_json::Value;
 
@@ -139,10 +139,10 @@ mod tests {
         assert_eq!(projection.tool, AgentTool::Message);
         assert_eq!(projection.receiver_thread_id.as_deref(), Some("child"));
         for name in [
-            gents::toolset::AGENT_INTERRUPT_TOOL_NAME,
-            gents::toolset::AGENT_LIST_TOOL_NAME,
-            gents::toolset::AGENT_SESSION_LIST_TOOL_NAME,
-            gents::toolset::AGENT_SESSION_READ_TOOL_NAME,
+            gents::tools::native::AGENT_INTERRUPT_TOOL_NAME,
+            gents::tools::native::AGENT_LIST_TOOL_NAME,
+            gents::tools::native::AGENT_SESSION_LIST_TOOL_NAME,
+            gents::tools::native::AGENT_SESSION_READ_TOOL_NAME,
         ] {
             assert!(agent_projection(&tool(name, "completed", "{}", "")).is_none());
         }

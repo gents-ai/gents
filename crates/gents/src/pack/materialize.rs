@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 ///
 /// The caller holds `FileLock::shared(cache_lock(root.parent()))` so prune and
 /// remove cannot delete `root` mid-write.
-pub fn materialize(pack: &crate::pack_archive::PackArchive, root: &std::path::Path) -> Result<()> {
+pub fn materialize(pack: &crate::pack::archive::PackArchive, root: &std::path::Path) -> Result<()> {
     use std::io::Write;
     for path in std::iter::once("manifest.json")
         .chain(pack.manifest().metadata.assets.iter().map(String::as_str))
@@ -171,17 +171,17 @@ pub fn cache_root(
         "invalid pack coordinate {namespace}/{name}"
     );
     Ok(home
-        .join(crate::home::PACKS_DIR_NAME)
+        .join(crate::store::local::home::PACKS_DIR_NAME)
         .join(".materialized")
         .join(namespace)
         .join(name)
-        .join(crate::pack_archive::digest_hex(digest)?))
+        .join(crate::pack::archive::digest_hex(digest)?))
 }
 
 pub fn cached(
     home: &std::path::Path,
-    pack: &crate::pack_archive::PackArchive,
-) -> Result<(std::path::PathBuf, crate::file_lock::FileLock)> {
+    pack: &crate::pack::archive::PackArchive,
+) -> Result<(std::path::PathBuf, crate::store::local::file_lock::FileLock)> {
     let root = cache_root(
         home,
         &pack.manifest().metadata.namespace,
@@ -190,7 +190,7 @@ pub fn cached(
     )?;
     let parent = root.parent().context("pack cache parent")?;
     std::fs::create_dir_all(parent)?;
-    let lock = crate::file_lock::FileLock::shared(
+    let lock = crate::store::local::file_lock::FileLock::shared(
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -265,8 +265,10 @@ pub fn prune_stale_asset_cache(
     Ok(removed)
 }
 
-pub fn lock_exclusive(parent: &std::path::Path) -> Result<crate::file_lock::FileLock> {
-    match crate::file_lock::FileLock::try_exclusive(cache_lock(parent)?) {
+pub fn lock_exclusive(
+    parent: &std::path::Path,
+) -> Result<crate::store::local::file_lock::FileLock> {
+    match crate::store::local::file_lock::FileLock::try_exclusive(cache_lock(parent)?) {
         Ok(lock) => Ok(lock),
         Err(std::fs::TryLockError::WouldBlock) => {
             anyhow::bail!("pack cache is in use; stop active pack operations and retry")
@@ -316,11 +318,11 @@ pub fn cache_root_disposition(
 mod tests {
     use super::*;
 
-    fn assets_archive() -> crate::pack_archive::PackArchive {
+    fn assets_archive() -> crate::pack::archive::PackArchive {
         let (_guard, dir) =
             crate::test_support::fixture_pack_copy("assets_fixture", &serde_json::json!({}));
-        let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     }
 
     #[test]

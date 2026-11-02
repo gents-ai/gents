@@ -292,8 +292,8 @@ fn elapsed_ms(started: Instant, now: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::background_tools::ProcessControlScope;
     use crate::plugin::data::StampContext;
+    use crate::tools::background::status::ProcessControlScope;
     use serde_json::json;
     use std::sync::Mutex;
     use std::time::Duration;

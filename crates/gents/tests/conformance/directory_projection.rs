@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use gents::agent::directory_projection::{derive_directory_entries, AgentInfo};
+use gents::runtime::agent::directory_projection::{derive_directory_entries, AgentInfo};
 
 fn node(did: &str, name: &str) -> (String, String, String) {
     (did.to_string(), name.to_string(), String::new())

@@ -28,7 +28,8 @@ def compactionProjectionJoinCaseJson (witness : Case) : String :=
     ",\"initial_projection_input\":" ++ natArray witness.source ++
     ",\"rebuilt_projection_input\":" ++ rebuiltInputJson (rebuiltInput witness) ++
     ",\"result\":" ++ jsonString (resultName (result witness)) ++
-    ",\"output_tokens\":" ++ jsonOptionalNat (outputTokens witness) ++ "}"
+    ",\"output_tokens\":" ++ jsonOptionalNat (outputTokens witness) ++
+    ",\"committed_reductions\":" ++ toString (committedReductions witness) ++ "}"
 
 def compactionProjectionJoinCasesJson : String :=
   jsonArray (cases.map compactionProjectionJoinCaseJson)

@@ -56,11 +56,10 @@ env:
   EXPECTED_TEAM_ID: NXJ753WW5X
   EXPECTED_BUNDLE_ID: com.source-inc.gents
   EXPECTED_CLI_NAME: gents
-  # The authentic 039e2299 candidate CLI is signed with Identifier=gents
-  # (checked with codesign -dv). release-macos.yml signs CLIs as
-  # com.source-inc.gents.cli; this workflow pins the candidate's actual
-  # identifier rather than re-signing it to match.
-  EXPECTED_CLI_IDENTIFIER: gents
+  # Match the exact identifier emitted by release-macos.yml for current
+  # candidates. Historical 039e2299 artifacts used Identifier=gents; their
+  # verification metadata remains separately pinned in the control tests.
+  EXPECTED_CLI_IDENTIFIER: com.source-inc.gents.cli
   # SHA-256 of the existing "Developer ID Application: John Zampolin
   # (NXJ753WW5X)" leaf certificate (SHA-1 4855F05BB34BFB227F828F9856DA05D2D02E7D0F).
   EXPECTED_LEAF_CERT_SHA256: ffe161226e3ba89575fbb2fa4e0ffc2f7b0a7c99de8fc2f696a24fb8d74f1baf

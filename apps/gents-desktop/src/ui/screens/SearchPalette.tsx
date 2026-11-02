@@ -38,6 +38,7 @@ import { useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
 import { SETTINGS_SECTIONS } from "./settings/sections";
 import { KIND, openItem } from "./MailboxItem";
+import { openInStack } from "./MailboxStack";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
 import { agentName } from "./behavior";
@@ -211,6 +212,7 @@ function PaletteBody({
   searchInput: RefObject<HTMLInputElement | null>;
 }) {
   const { actions } = useApp();
+  const selected = useSelectedNodeDid();
   const entries = useEntries();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SearchFilter>("all");
@@ -234,8 +236,13 @@ function PaletteBody({
 
   const run = (e: SearchEntry) => {
     closeSearch();
-    if (e.kind === "attention") void openItem(e.item, actions.openMailboxItem);
-    else if (e.kind === "session")
+    /* an item on the active node opens in the mailbox's dialog over this
+       page; one on another node is reached through its session, which
+       carries the switch to that node */
+    if (e.kind === "attention") {
+      if (e.item.nodeDid === selected) openInStack(e.item);
+      else void openItem(e.item, actions.openMailboxItem);
+    } else if (e.kind === "session")
       navigate({
         name: "session",
         sessionId: e.session.sessionId,

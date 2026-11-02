@@ -42,6 +42,7 @@ import { type WorkerActions } from "../WorkerActions";
 import { useSessionProvenance, useWorkers } from "../workers";
 import { ProviderRecovery } from "./ProviderRecovery";
 import { OpenSessionComposer } from "./OpenSessionComposer";
+import { openAt } from "@/app/messagePlaces";
 
 export function OpenSession() {
   const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
@@ -66,6 +67,19 @@ export function OpenSession() {
       });
     },
     [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
+  );
+  const openCompaction = useCallback(
+    (compaction: DesktopSessionSnapshot["context"]["compactions"][number]) => {
+      if (!session || compaction.messageSequence == null) return;
+      openAt({
+        sessionId: session.sessionId,
+        nodeDid: session.nodeDid,
+        sequence: compaction.messageSequence,
+        itemKey: compaction.itemKey,
+        open: true,
+      });
+    },
+    [session?.sessionId, session?.nodeDid],
   );
   const homeDid = useHomeDid();
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
@@ -223,13 +237,18 @@ export function OpenSession() {
                       <SessionContext
                         context={session.context}
                         loadDetails={loadContextDetails}
+                        onOpenCompaction={openCompaction}
                         compact
                       />
                     </div>
                   </div>
                 )}
                 <Slot area={SESSION_HEADER_ACTIONS_AREA} />
-                <PanelMenu routeName="session" finalFocus={rename.finalFocus}>
+                <PanelMenu
+                  routeName="session"
+                  finalFocus={rename.finalFocus}
+                  onOpenChange={rename.onOpenChange}
+                >
                   {summary && (
                     <SessionItems
                       session={summary}
@@ -287,6 +306,7 @@ export function OpenSession() {
                       <SessionContext
                         context={session.context}
                         loadDetails={loadContextDetails}
+                        onOpenCompaction={openCompaction}
                       />
                     )}
                   </div>

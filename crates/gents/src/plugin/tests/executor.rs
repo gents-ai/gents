@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use super::{build_plugin_pack, ECHO_WAT};
-use crate::document_config::PluginToolRef;
-use crate::llm::tool::ToolDyn;
+use crate::documents::PluginToolRef;
+use crate::inference::llm::tool::ToolDyn;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store::{self, InstalledPlugin};
 use crate::plugin::tool::PluginTool;
@@ -163,7 +163,9 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
         } else {
             assert_eq!(first.outcome.output, serde_json::json!({"read":true}));
         }
-        let permissions = home.path().join(crate::home::ALLOWED_DIRS_FILE_NAME);
+        let permissions = home
+            .path()
+            .join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME);
         std::fs::write(&permissions, "operator state").unwrap();
         std::fs::hard_link(&permissions, root.join("operator-alias")).unwrap();
         let error = executor
@@ -314,7 +316,7 @@ mod bound {
     use crate::plugin::executor::BindContext;
     use crate::plugin::tests::{create_file_wat, open_and_copy_wat};
     use crate::plugin::{allowed, approval};
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
 
@@ -689,7 +691,7 @@ mod bound {
             0,
             Mode::AutoReview,
             Some(&workspace::ReviewTaskSelection::for_task(
-                &crate::document_config::Task {
+                &crate::documents::Task {
                     task_id: "review-task".into(),
                     ..workspace::default_review_task("node", "agent")
                 },
@@ -1053,7 +1055,7 @@ mod bound {
                         Default::default(),
                         false,
                         async move {
-                            crate::tool_call_lifecycle::runtime::call_tool_managed(
+                            crate::tools::call::lifecycle::runtime::call_tool_managed(
                                 tool.as_ref(),
                                 args(&target),
                             )
@@ -1078,7 +1080,7 @@ mod bound {
         };
         let (outcome, ()) = tokio::join!(call, operator);
         assert!(
-            matches!(&outcome, crate::tool_call_lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
+            matches!(&outcome, crate::tools::call::lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
             "{outcome:?}"
         );
     }
@@ -1325,7 +1327,7 @@ async fn receipt_hashes_host_prepared_input_and_actual_http_grant() {
         } else {
             serde_json::json!({"http_calls":true,"value":1})
         };
-        let canonical = crate::workspace::canonical_json_string(&effective).unwrap();
+        let canonical = crate::tools::workspace::canonical_json_string(&effective).unwrap();
         assert_eq!(
             call.receipt.input_digest,
             format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
@@ -1393,9 +1395,9 @@ mod data_calls {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::config_client::ConfigAccess;
     use crate::plugin::data::DataCaller;
     use crate::plugin::PluginVerdict;
+    use crate::store::config_client::ConfigAccess;
 
     const NODE: &str = "did:key:z6Mknode";
 
@@ -1681,8 +1683,8 @@ mod tool_writes {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::published_spawn_parent;
+    use crate::store::config_client::ConfigAccess;
+    use crate::tools::call::lifecycle::admission_fixture::published_spawn_parent;
 
     const NODE: &str = "did:key:z6Mknode";
 
@@ -1822,21 +1824,21 @@ mod tool_writes {
         );
         call.stage_deferred_writes(Some(pending));
         if transient_terminal {
-            crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
+            crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
         }
         match &result {
             Ok(text) => call.complete(text).await.unwrap(),
             Err(text) => call
                 .fail(
                     text,
-                    crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                    crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
                 )
                 .await
                 .unwrap(),
         }
         assert!(
             !transient_terminal
-                || !crate::tool_call_lifecycle::delivery::terminal_failure_pending_for_test(
+                || !crate::tools::call::lifecycle::delivery::terminal_failure_pending_for_test(
                     &doc_id
                 ),
             "the first terminal transaction must have failed before the replay"
@@ -1975,19 +1977,19 @@ mod job_calls {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::background_tools::ProcessControlScope;
-    use crate::config_client::ConfigAccess;
     use crate::plugin::data::StampContext;
     use crate::plugin::executor::PluginCall;
     use crate::plugin::job_calls::JobCaller;
     use crate::plugin::PluginVerdict;
-    use crate::plugin_job::driver::{settle_plugin_job, Settlement};
-    use crate::plugin_job::input::tests::{completed_request, open};
-    use crate::plugin_job::keys::{job_session_id, job_spawn_key};
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::store::config_client::ConfigAccess;
+    use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
+    use crate::tools::background::job::input::tests::{completed_request, open};
+    use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
+    use crate::tools::background::status::ProcessControlScope;
+    use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, published_admission, PublishedAdmission, PublishedAdmissionOptions,
     };
-    use crate::tool_call_lifecycle::AwaitMode;
+    use crate::tools::call::lifecycle::AwaitMode;
 
     const CHAIN: &str = "chain-row";
 

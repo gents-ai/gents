@@ -5,6 +5,9 @@ import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
+import { Kbd } from "@gents/ui/components/kbd";
+import { MAILBOX_KEYS } from "@/screens/Shortcuts";
+import { TOOLTIP_KBD } from "@/screens/Hint";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
 import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
@@ -18,12 +21,14 @@ import {
 
 function RailItem({
   label,
+  keys,
   active,
   count,
   to,
   children,
 }: {
   label: string;
+  keys?: string;
   active?: boolean;
   count?: number;
   to: Route;
@@ -51,7 +56,10 @@ function RailItem({
           </span>
         ) : null}
       </TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
+      <TooltipContent side="right">
+        {label}
+        {keys && <Kbd className={TOOLTIP_KBD}>{keys}</Kbd>}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -59,7 +67,7 @@ function RailItem({
 function RailNode({ route }: { route: Route }) {
   const node = useSelectedNode();
   const online = useOnline();
-  const nodeName = node?.node.displayName ?? null;
+  const nodeName = node ? (node.node.displayName ?? node.label) : null;
   if (!node)
     return (
       <a
@@ -102,8 +110,10 @@ function RailSyncDot() {
     <div className="relative h-8 w-7">
       <div
         className={cn(
-          "absolute top-0 left-0 z-40",
-          flyoutOpen ? "left-[6px] w-[16.5rem]" : "w-7",
+          "absolute z-40",
+          /* the dot keeps its place as it becomes the row, which spans the
+             flyout's rows */
+          flyoutOpen ? "-top-0.5 -left-px w-[275px]" : "top-0 left-0 w-7",
         )}
       >
         <SyncHealth syncHealth={syncHealth} compact={!flyoutOpen} row={flyoutOpen} />
@@ -136,7 +146,8 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
     );
   };
   return (
-    <nav className="flex h-full flex-col items-center gap-2 pt-3">
+    /* the flyout and the pinned panel start their node at this height */
+    <nav className="flex h-full flex-col items-center gap-2 pt-[23px]">
       <RailNode route={route} />
       <div className="mb-1 h-px w-5 bg-border" />
       <RailItem
@@ -148,6 +159,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       </RailItem>
       <RailItem
         label="Mailbox"
+        keys={MAILBOX_KEYS}
         to={{ name: "mailbox" }}
         active={route.name === "mailbox"}
         count={mailboxCount}

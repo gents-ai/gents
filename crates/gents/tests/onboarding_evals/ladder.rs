@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gents::document_config::{EvalCapture, EvalDefinition};
+use gents::documents::{EvalCapture, EvalDefinition};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::{CaptureResult, ScriptedExecutor};
 use gents::eval::OutcomeKind;
@@ -140,7 +140,7 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
     ]});
     evidence.captures.insert("tools".into(), CaptureResult::Documents { rows: vec![
         serde_json::json!({"tools_id":"analyst-tools", "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}),
-        serde_json::to_value(serde_json::from_value::<gents::document_config::Tools>(serde_json::json!({
+        serde_json::to_value(serde_json::from_value::<gents::documents::Tools>(serde_json::json!({
             "node_did": "did:key:eval-owner",
             "tools_id": "engineer-tools",
             "host": {"bash": {"mode":"Off"}, "root":"/eval/workspace"},
@@ -178,7 +178,7 @@ fn delegation_requires_delivery_of_the_matching_child_reply() {
     let stage = definition
         .cases
         .iter()
-        .find(|c| c.split == gents::document_config::EvalSplit::Train)
+        .find(|c| c.split == gents::documents::EvalSplit::Train)
         .unwrap()
         .stages
         .iter()
@@ -314,7 +314,7 @@ fn parallel_automation_accepts_default_concurrency_and_still_checks_its_task() {
     let configured = &definition
         .cases
         .iter()
-        .find(|c| c.split == gents::document_config::EvalSplit::Train)
+        .find(|c| c.split == gents::documents::EvalSplit::Train)
         .unwrap()
         .stages[0];
     let registry = CheckRegistry::builtin();

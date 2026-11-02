@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use gents::config_client::GraphqlEndpoint;
 use gents::plugin::approval::{self, Answer, Request};
+use gents::store::config_client::GraphqlEndpoint;
 use tokio::sync::mpsc;
 
 use super::{approvals, GoalBackedSubmission};
@@ -109,7 +109,7 @@ pub(super) async fn run(
                     continue;
                 }
                 let submitted = async {
-                let input = gents::lifecycle::prepare_user_message_input(
+                let input = gents::request::lifecycle::prepare_user_message_input(
                     &gents::ConfigAccess::Graphql(graphql.clone()),
                     node, session, Default::default(), gents_protocol::request_input::QueueDelivery::Steer,
                 ).await?;

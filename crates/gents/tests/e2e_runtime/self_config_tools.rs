@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
-use gents::config_client::{
+use gents::documents::PackConfig;
+use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
-use gents::document_config::PackConfig;
-use gents::self_config::build_self_config_tools;
-use gents::tool_surface::{BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig};
+use gents::tools::builtin::self_config::build_self_config_tools;
+use gents::tools::surface::{
+    BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig,
+};
 use gents::Collection;
 use serde_json::{json, Value};
 
@@ -76,7 +78,7 @@ fn tool_config(categories: &[&str], no_lockout: bool, preview: bool) -> SelfConf
 }
 
 async fn call_tool(
-    tools: &[Box<dyn gents::llm::tool::ToolDyn>],
+    tools: &[Box<dyn gents::inference::llm::tool::ToolDyn>],
     name: &str,
     args: Value,
 ) -> Result<String, String> {

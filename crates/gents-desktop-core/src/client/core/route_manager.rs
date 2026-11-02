@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
-use gents::agent::p2p_reconcile::{
+use gents::runtime::agent::p2p_reconcile::{
     client_route_id, desired_route_is_applied, reconcile_peer_tick,
     teardown_owned_replicators_at_endpoint, ClientRouteIdentity, EmbeddedRemoteP2pAdmin,
     EnrollmentEndpointEntry, GraphqlPairingStateStore, PairingDesired, PairingDirection,
@@ -32,6 +32,7 @@ pub(super) struct ClientRouteManager {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     actor: Arc<PrincipalIdentity>,
+    local_peer_id: String,
     identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
     lifecycle: Mutex<()>,
 }
@@ -62,7 +63,7 @@ impl ClientRouteManager {
         force: bool,
     ) -> bool {
         let interval = if pairing_ready {
-            gents::agent::p2p_reconcile::PAIRING_SWEEP_INTERVAL
+            gents::runtime::agent::p2p_reconcile::PAIRING_SWEEP_INTERVAL
         } else {
             UNREADY_ROUTE_RETRY_INTERVAL
         };
@@ -73,12 +74,14 @@ impl ClientRouteManager {
         node: Arc<EmbeddedNode>,
         p2p: Arc<dyn P2POps>,
         actor: Arc<PrincipalIdentity>,
+        local_peer_id: String,
         identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
     ) -> Self {
         Self {
             node,
             p2p,
             actor,
+            local_peer_id,
             identity_interaction,
             lifecycle: Mutex::new(()),
         }
@@ -164,7 +167,7 @@ impl ClientRouteManager {
         if is_enrollment_peer(saved) {
             return saved.clone();
         }
-        let current = match gents::agent::p2p_reconcile::TransportEndpoint::parse(
+        let current = match gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(
             saved.addr.clone(),
         ) {
             Ok(current) => current,
@@ -461,64 +464,82 @@ impl ClientRouteManager {
         direction: PairingDirection,
         record: &PeerRecord,
     ) -> Result<()> {
-        use gents::agent::p2p_reconcile::templates::CLIENT_TEMPLATE;
+        use super::enrollment::{
+            load_status_enrollment_approvals_in_txn, reconcile::EnrollmentAuthorityOutcome,
+        };
+        use gents::runtime::agent::p2p_reconcile::materialize_enrollment_desired_in_txn;
 
-        let peer_id = escape_graphql_string(&route.desired_id(direction));
-        let node_did = escape_graphql_string(&route.owner_node_did);
-        let address = escape_graphql_string(route.transport.address());
-        let now = escape_graphql_string(
-            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        );
         anyhow::ensure!(
             record.is_enrollment(),
             "manual pairing desired authority is disabled"
         );
-        let request_digest = escape_graphql_string(
-            record
-                .enrollment_request_digest
-                .as_deref()
-                .context("enrollment record has no request digest")?,
-        );
-        let authorization_sequence = record
-            .enrollment_authorization_sequence
-            .context("enrollment record has no authorization sequence")?;
-        let authorization_expires_at = escape_graphql_string(
-            record
-                .enrollment_authorization_expires_at
-                .as_deref()
-                .context("enrollment record has no authorization expiry")?,
-        );
-        let mutation = format!(
-            r#"mutation {{ upsert_PeerPairingDesired(
-                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
-                    add: {{ peer_id: "{peer_id}", node_did: "{node_did}", collections: null,
-                        template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
-                        source: "enrollment", enrollment_request_digest: "{request_digest}",
-                        enrollment_authorization_sequence: {authorization_sequence},
-                        enrollment_authorization_expires_at: "{authorization_expires_at}",
-                        profiles: null, created_at: "{now}", updated_at: "{now}" }},
-                    update: {{ node_did: "{node_did}", collections: null,
-                        template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
-                        source: "enrollment", enrollment_request_digest: "{request_digest}",
-                        enrollment_authorization_sequence: {authorization_sequence},
-                        enrollment_authorization_expires_at: "{authorization_expires_at}",
-                        profiles: null, updated_at: "{now}" }}
-                ) {{ _docID }} }}"#
-        );
-        gents::config_client::ConfigAccess::write_local(
+        gents::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
+            None,
             "desktop.pairing_desired.upsert",
-            &mutation,
+            |txn| {
+                Box::pin(async move {
+                    let (mut current, _) = load_status_enrollment_approvals_in_txn(
+                        txn,
+                        self.actor.as_ref(),
+                        &self.local_peer_id,
+                    )
+                    .await?;
+                    let Some(EnrollmentAuthorityOutcome::Current(approval)) =
+                        current.remove(&record.peer_id)
+                    else {
+                        anyhow::bail!(
+                            "desired route has no current verified enrollment authorization"
+                        );
+                    };
+                    anyhow::ensure!(
+                        record.node_did == approval.owner_node
+                            && record.enrollment_request_id.as_deref()
+                                == Some(approval.request_id.as_str())
+                            && record.enrollment_request_digest.as_deref()
+                                == Some(approval.request_digest.as_str())
+                            && record.enrollment_admin_did.as_deref()
+                                == Some(approval.admin_did.as_str())
+                            && record.pairing_network_id.as_deref()
+                                == Some(approval.network_id.as_str())
+                            && record.enrollment_authorization_sequence
+                                == Some(approval.authorization_sequence)
+                            && record.enrollment_authorization_expires_at.as_deref()
+                                == Some(approval.authorization_expires_at.as_str()),
+                        "desired route enrollment generation was replaced or revoked"
+                    );
+                    let (transport_peer, _) = parse_public_peer_addr(route.transport.address())?;
+                    anyhow::ensure!(
+                        transport_peer.to_string() == approval.server_peer,
+                        "desired route address is not bound to the enrolled peer"
+                    );
+                    materialize_enrollment_desired_in_txn(
+                        txn,
+                        &route.owner_node_did,
+                        &EnrollmentEndpointEntry {
+                            desired_id: route.desired_id(direction),
+                            peer_id: approval.server_peer,
+                            node_did: approval.owner_node,
+                            address: route.transport.address().to_owned(),
+                            request_digest: approval.request_digest,
+                            authorization_sequence: approval.authorization_sequence,
+                            authorization_expires_at: approval.authorization_expires_at,
+                        },
+                        &Default::default(),
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     fn remote_admin(
         &self,
         record: &PeerRecord,
         graphql: &str,
-    ) -> gents::agent::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
+    ) -> gents::runtime::agent::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
         let admin = HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor))?;
         Ok(match self.identity_interaction.endpoint(record) {
             Some(endpoint) => admin.with_node_identity(endpoint),
@@ -569,7 +590,7 @@ impl ClientRouteManager {
                     applied: delete_PeerPairingApplied(filter: {{ peer_id: {{ _in: [{ids}] }} }}) {{ _docID }}
                 }}"#
         );
-        let response = gents::config_client::ConfigAccess::write_local(
+        let response = gents::store::config_client::ConfigAccess::write_local(
             &self.node,
             "desktop.pairing_state.delete",
             &mutation,
@@ -717,10 +738,12 @@ pub(super) async fn cleanup_saved_peer_p2p(
     let mut replicator_errors = Vec::new();
     if let Err(error) = p2p_remove_replicator(
         p2p,
-        gents::agent::p2p_reconcile::client_route_collections(PairingDirection::ClientToRuntime)
-            .iter()
-            .map(|collection| (*collection).to_string())
-            .collect(),
+        gents::runtime::agent::p2p_reconcile::client_route_collections(
+            PairingDirection::ClientToRuntime,
+        )
+        .iter()
+        .map(|collection| (*collection).to_string())
+        .collect(),
         &record.addr,
     )
     .await
@@ -790,8 +813,8 @@ pub(super) async fn cleanup_saved_peer_p2p(
 
 fn same_transport_peer(left: &PeerRecord, right: &PeerRecord) -> bool {
     match (
-        gents::agent::p2p_reconcile::TransportEndpoint::parse(left.addr.clone()),
-        gents::agent::p2p_reconcile::TransportEndpoint::parse(right.addr.clone()),
+        gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(left.addr.clone()),
+        gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(right.addr.clone()),
     ) {
         (Ok(left), Ok(right)) => left.peer_id() == right.peer_id(),
         _ => left.addr == right.addr,
@@ -844,14 +867,15 @@ pub(super) fn is_enrollment_peer(record: &PeerRecord) -> bool {
 }
 
 fn replacement_endpoint(
-    current: &gents::agent::p2p_reconcile::TransportEndpoint,
+    current: &gents::runtime::agent::p2p_reconcile::TransportEndpoint,
     addresses: impl IntoIterator<Item = String>,
 ) -> Option<String> {
     let authoritative = addresses
         .into_iter()
         .filter_map(|address| {
             let endpoint =
-                gents::agent::p2p_reconcile::TransportEndpoint::parse(address.clone()).ok()?;
+                gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
+                    .ok()?;
             (endpoint.peer_id() == current.peer_id()).then_some((address, endpoint))
         })
         .max_by_key(|(address, endpoint)| {
@@ -877,7 +901,7 @@ fn route_status(
         .and_then(|desired| desired.replicator_addresses.iter().next())
         .cloned();
     let transport_peer_id = address.as_ref().and_then(|address| {
-        gents::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
+        gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
             .ok()
             .map(|endpoint| endpoint.peer_id().to_string())
     });

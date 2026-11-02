@@ -161,7 +161,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     deployment.agent_configs.clear();
     deployment.agent_targets.clear();
     deployment.datastore_tool_surfaces.clear();
-    deployment.chain_key_bindings.clear();
     deployment.schedules.clear();
     deployment.event_sources.clear();
     deployment.triggers.clear();
@@ -276,6 +275,7 @@ mod tests {
                     push_retry_marker_count: Some(0),
                     exhausted_fetch_count: Some(0),
                     quarantined_dag_count: Some(0),
+                    activation_error_count: 0,
                 }),
                 enrollment_requests: Some(vec![EnrollmentRequestView {
                     request_id: "request_1".into(),
@@ -386,7 +386,6 @@ mod tests {
                     tools: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","tools_id":"tools","host":{"root":"/secret/tools"}})).unwrap()],
                     agent_targets: vec![],
                     datastore_tool_surfaces: vec![],
-                    chain_key_bindings: vec![],
                     tool_service_registries: vec![],
                     skills: vec![SkillView {
                         skill_id: "skill_a".into(),
@@ -426,7 +425,7 @@ mod tests {
                         updated_at: None,
                         turn_state: None,
                         message_count: Some(1),
-                        tool_call_count: Some(0), unreadable_reason: None, unsendable_reason: None,
+                        tool_call_count: Some(0), unreadable_reason: None, unsendable_reason: None, cwd: None,
                     }],
                     mailbox_items: vec![MailboxItemView {
                         item_id: "mailbox-1".into(),

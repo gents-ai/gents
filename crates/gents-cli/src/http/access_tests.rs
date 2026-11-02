@@ -217,7 +217,7 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
             .unwrap();
         assert_eq!(response.status(), expected, "{path}");
     }
-    let response = gents::config_client::GraphqlEndpoint::as_principal(
+    let response = gents::store::config_client::GraphqlEndpoint::as_principal(
         format!("{endpoint}/api/v0/graphql"),
         owner.did(),
     )
@@ -264,7 +264,7 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
             _ => panic!("unknown identity"),
         };
         if let Some(identity) = identity {
-            request = gents::config_client::GraphqlEndpoint::as_principal(
+            request = gents::store::config_client::GraphqlEndpoint::as_principal(
                 format!("{}/api/v0/graphql", f.endpoint),
                 identity.did(),
             )
@@ -342,7 +342,7 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
 #[tokio::test]
 async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work() {
     let f = Fixture::start().await;
-    let authorization = gents::config_client::GraphqlEndpoint::as_principal(
+    let authorization = gents::store::config_client::GraphqlEndpoint::as_principal(
         format!("{}/api/v0/graphql", f.endpoint),
         f.other.did(),
     )
@@ -493,7 +493,7 @@ async fn remote_pack_install_requires_the_runtime_operator_before_work() {
             .post(format!("{}/packs/install", fixture.endpoint))
             .json(&body);
         if let Some(identity) = identity {
-            request = gents::config_client::GraphqlEndpoint::as_principal(
+            request = gents::store::config_client::GraphqlEndpoint::as_principal(
                 format!("{}/api/v0/graphql", fixture.endpoint),
                 identity.did(),
             )
