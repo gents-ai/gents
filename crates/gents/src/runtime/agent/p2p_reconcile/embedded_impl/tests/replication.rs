@@ -138,11 +138,20 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
             Scope::PeerDid { .. } => {}
             Scope::ClientRoute => assert!(!filters.is_empty()),
         }
+        // Register the same collection set production installs: a client
+        // route carries a direction-specific set, not the template's.
+        let outbound_collections = match &template.scope {
+            Scope::ClientRoute => {
+                crate::runtime::agent::p2p_reconcile::policy::client_route_collections(
+                    crate::runtime::agent::p2p_reconcile::policy::PairingDirection::ClientToRuntime,
+                )
+            }
+            _ => template.collections,
+        };
         local_admin
             .add_replicator(
                 &remote_addresses,
-                &template
-                    .collections
+                &outbound_collections
                     .iter()
                     .map(|c| (*c).to_string())
                     .collect::<Vec<_>>(),
@@ -165,11 +174,12 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
             local_admin
                 .add_replicator(
                     &remote_addresses,
-                    &template
-                        .collections
-                        .iter()
-                        .map(|c| (*c).to_string())
-                        .collect::<Vec<_>>(),
+                    &crate::runtime::agent::p2p_reconcile::policy::client_route_collections(
+                        crate::runtime::agent::p2p_reconcile::policy::PairingDirection::RuntimeToClient,
+                    )
+                    .iter()
+                    .map(|c| (*c).to_string())
+                    .collect::<Vec<_>>(),
                     &returning,
                 )
                 .await

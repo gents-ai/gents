@@ -575,6 +575,33 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         tags.data.unwrap()["Agent"][0]["tags"],
         json!(["gents:pack:plugin_documents_fixture", "user:favorite"])
     );
+    let store = crate::pack::store::PackStore::new(home.path());
+    let installed_path = store
+        .path(output["effective"]["digest"].as_str().unwrap())
+        .unwrap();
+    let installed_bytes = std::fs::read(&installed_path).unwrap();
+    std::fs::remove_file(&installed_path).unwrap();
+    std::fs::remove_dir_all(home.path().join("packs").join("unpacked")).unwrap();
+    let listed: Value = serde_json::from_str(
+        &tool
+            .call(json!({"argv": ["pack", "list"]}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entry = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "fixture/plugin_documents_fixture")
+        .unwrap();
+    assert_eq!(entry["installed_digest"], output["effective"]["digest"]);
+    assert_eq!(entry["installable"], false);
+    assert!(entry["error"]
+        .as_str()
+        .unwrap()
+        .contains("could not be opened"));
+    std::fs::write(installed_path, installed_bytes).unwrap();
     let removed = tool
         .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
         .await
