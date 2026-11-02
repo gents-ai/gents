@@ -39,6 +39,7 @@ pub(crate) struct McpPoolService {
     pub(crate) lan_ip: Option<String>,
     pub(crate) mcp_port: Option<i64>,
     pub(crate) mcp_path: Option<String>,
+    pub(crate) endpoint_url: Option<String>,
     pub(crate) send_node_did: bool,
     pub(crate) status: Option<String>,
     pub(crate) version: Option<String>,
@@ -91,6 +92,7 @@ fn mcp_pool_query(node_did: &str) -> String {
                 lan_ip
                 mcp_port
                 mcp_path
+                endpoint_url
                 send_node_did
                 status
                 version
@@ -168,6 +170,7 @@ fn build_mcp_pool_snapshot(
             lan_ip: registry.lan_ip,
             mcp_port: registry.mcp_port,
             mcp_path: registry.mcp_path,
+            endpoint_url: registry.endpoint_url,
             send_node_did: registry.send_node_did,
             status: registry.status,
             version: registry.version,

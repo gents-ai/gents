@@ -8,6 +8,7 @@ type ToolServiceRegistry @branchable @index(fields: ["node_did", "service_id"], 
     lan_ip: String
     mcp_port: Int
     mcp_path: String
+    endpoint_url: String
     send_node_did: Boolean
     enabled: Boolean @index
     tags: [String]

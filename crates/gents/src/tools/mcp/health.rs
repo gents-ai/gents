@@ -295,10 +295,63 @@ pub struct McpHealthCheckService {
     pub mcp_path: String,
     #[serde(
         default,
+        deserialize_with = "crate::tools::mcp::registry::null_as_empty_string"
+    )]
+    pub endpoint_url: String,
+    #[serde(
+        default,
         deserialize_with = "crate::tools::mcp::registry::null_as_default"
     )]
     pub send_node_did: bool,
     pub updated_at: Option<String>,
+}
+
+impl From<crate::documents::ToolServiceRegistry> for McpHealthCheckService {
+    fn from(service: crate::documents::ToolServiceRegistry) -> Self {
+        Self {
+            service_id: service.service_id,
+            hostname: service.hostname.unwrap_or_default(),
+            tailscale_ip: service.tailscale_ip.unwrap_or_default(),
+            lan_ip: service.lan_ip.unwrap_or_default(),
+            mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
+            mcp_path: service.mcp_path.unwrap_or_default(),
+            endpoint_url: service.endpoint_url.unwrap_or_default(),
+            send_node_did: service.send_node_did,
+            updated_at: None,
+        }
+    }
+}
+
+impl McpHealthCheckService {
+    /// The one place a registry entry becomes a connectable URL. A configured
+    /// `endpoint_url` wins and is canonicalised; otherwise the address fields
+    /// select a plain-HTTP endpoint as before. Errors are registry defects.
+    pub fn endpoint(
+        &self,
+        local_hostname: &str,
+        local_subnet: Option<&str>,
+    ) -> std::result::Result<String, &'static str> {
+        if !self.endpoint_url.trim().is_empty() {
+            return crate::tools::mcp::registry::parse_endpoint_url(&self.endpoint_url)
+                .map(String::from)
+                .map_err(|_| "registry entry has invalid endpoint_url");
+        }
+        let Some(mcp_port) = self.mcp_port.filter(|port| *port != 0) else {
+            return Err("registry entry missing mcp_port");
+        };
+        if self.hostname.is_empty() && self.tailscale_ip.is_empty() && self.lan_ip.is_empty() {
+            return Err("registry entry missing address fields");
+        }
+        Ok(resolve_mcp_url(
+            &self.hostname,
+            &self.tailscale_ip,
+            &self.lan_ip,
+            mcp_port,
+            &self.mcp_path,
+            local_hostname,
+            local_subnet,
+        ))
+    }
 }
 
 #[expect(
@@ -416,16 +469,7 @@ async fn run_health_check_with_cancel(
         .await?
         .into_iter()
         .filter(|service| service.enabled)
-        .map(|service| McpHealthCheckService {
-            service_id: service.service_id,
-            hostname: service.hostname.unwrap_or_default(),
-            tailscale_ip: service.tailscale_ip.unwrap_or_default(),
-            lan_ip: service.lan_ip.unwrap_or_default(),
-            mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
-            mcp_path: service.mcp_path.unwrap_or_default(),
-            send_node_did: service.send_node_did,
-            updated_at: None,
-        })
+        .map(McpHealthCheckService::from)
         .collect();
     let mcp_pool = mcp_pool.for_agent(owner);
 
@@ -514,55 +558,27 @@ async fn run_health_check_cycle_with_cancel(
             continue;
         }
 
-        let Some(mcp_port) = service.mcp_port.filter(|port| *port != 0) else {
-            apply_probe_failure(
-                mcp_pool,
-                health_map,
-                ProbeFailure {
-                    service_id: &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    endpoint: previous_endpoint,
-                    tool_count: previous_tool_count,
-                    error: "registry entry missing mcp_port".to_string(),
-                },
-                now,
-                options,
-            )
-            .await;
-            continue;
+        let endpoint = match service.endpoint(local_hostname, local_subnet) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                apply_probe_failure(
+                    mcp_pool,
+                    health_map,
+                    ProbeFailure {
+                        service_id: &service_id,
+                        previous_model,
+                        previous_last_seen,
+                        endpoint: previous_endpoint,
+                        tool_count: previous_tool_count,
+                        error: error.to_string(),
+                    },
+                    now,
+                    options,
+                )
+                .await;
+                continue;
+            }
         };
-
-        if service.hostname.is_empty()
-            && service.tailscale_ip.is_empty()
-            && service.lan_ip.is_empty()
-        {
-            apply_probe_failure(
-                mcp_pool,
-                health_map,
-                ProbeFailure {
-                    service_id: &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    endpoint: previous_endpoint,
-                    tool_count: previous_tool_count,
-                    error: "registry entry missing address fields".to_string(),
-                },
-                now,
-                options,
-            )
-            .await;
-            continue;
-        }
-        let endpoint = resolve_mcp_url(
-            &service.hostname,
-            &service.tailscale_ip,
-            &service.lan_ip,
-            mcp_port,
-            &service.mcp_path,
-            local_hostname,
-            local_subnet,
-        );
 
         let is_stale = now
             .signed_duration_since(heartbeat_seen_at)
@@ -837,7 +853,10 @@ fn classify_last_error(error: &str) -> &'static str {
         "connection_refused"
     } else if lower.contains("no route") || lower.contains("unreachable") {
         "network_unreachable"
-    } else if lower.contains("missing mcp_port") || lower.contains("missing address") {
+    } else if lower.contains("missing mcp_port")
+        || lower.contains("missing address")
+        || lower.contains("invalid endpoint_url")
+    {
         "registry_invalid"
     } else if lower.contains("stream closed") || lower.contains("eof") {
         "stream_closed"
@@ -1293,6 +1312,7 @@ mod tests {
             lan_ip: String::new(),
             mcp_port: Some(9201),
             mcp_path: "/mcp".to_string(),
+            endpoint_url: String::new(),
             send_node_did: false,
             updated_at: Some(updated_at.to_rfc3339()),
         }

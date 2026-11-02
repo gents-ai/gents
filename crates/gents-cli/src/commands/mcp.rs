@@ -29,28 +29,31 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     if service_id.is_empty() {
         anyhow::bail!("SERVICE must be a non-empty service id");
     }
-    let endpoint = url::Url::parse(args.endpoint.trim()).context("parsing --endpoint URL")?;
-    if endpoint.scheme() != "http" {
-        anyhow::bail!("--endpoint must use http; the MCP registry currently stores HTTP endpoints");
-    }
-    if !endpoint.username().is_empty() || endpoint.password().is_some() {
-        anyhow::bail!("--endpoint must not contain credentials");
-    }
-    if endpoint.query().is_some() || endpoint.fragment().is_some() {
-        anyhow::bail!("--endpoint must not contain a query string or fragment");
-    }
+    let endpoint = gents::tools::mcp::registry::parse_endpoint_url(&args.endpoint)
+        .map_err(|error| anyhow::anyhow!("--endpoint: {error}"))?;
     let host = endpoint
         .host_str()
         .filter(|host| !host.trim().is_empty())
         .context("--endpoint must contain a host")?;
-    let port = endpoint
-        .port_or_known_default()
-        .context("--endpoint must contain a port")?;
-    let path = match endpoint.path().trim() {
-        "" | "/" => "/mcp",
-        path => path,
+    // HTTPS cannot be rebuilt from address fields (TLS names the host), so it is
+    // stored verbatim; plain HTTP keeps address selection across LAN and tailnet.
+    let endpoint_url = (endpoint.scheme() == "https").then(|| endpoint.to_string());
+    let port = match endpoint_url {
+        Some(_) => None,
+        None => Some(
+            endpoint
+                .port_or_known_default()
+                .context("--endpoint must contain a port")?,
+        ),
     };
-    let (hostname, lan_ip) = if host.parse::<std::net::Ipv4Addr>().is_ok() {
+    let path = match (&endpoint_url, endpoint.path().trim()) {
+        (Some(_), _) => None,
+        (None, "" | "/") => Some("/mcp"),
+        (None, path) => Some(path),
+    };
+    let (hostname, lan_ip) = if endpoint_url.is_some() {
+        (None, None)
+    } else if host.parse::<std::net::Ipv4Addr>().is_ok() {
         (None, Some(host))
     } else {
         (Some(host), None)
@@ -70,8 +73,9 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
       {hostname_add}
       tailscale_ip: null
       {lan_ip_add}
-      mcp_port: {port}
-      mcp_path: "{path}"
+      {port_field}
+      {path_field}
+      {endpoint_url_field}
       send_node_did: {send_node_did}
       status: "online"
       version: "{version}"
@@ -82,8 +86,9 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
       {hostname_add}
       tailscale_ip: null
       {lan_ip_add}
-      mcp_port: {port}
-      mcp_path: "{path}"
+      {port_field}
+      {path_field}
+      {endpoint_url_field}
       send_node_did: {send_node_did}
       status: "online"
       version: "{version}"
@@ -93,7 +98,12 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
         service_id = escape_graphql_string(service_id),
         display_name = escape_graphql_string(display_name),
         description = escape_graphql_string(description),
-        path = escape_graphql_string(path),
+        port_field = port.map_or_else(
+            || "mcp_port: null".to_string(),
+            |port| format!("mcp_port: {port}")
+        ),
+        path_field = nullable_graphql_string("mcp_path", path),
+        endpoint_url_field = nullable_graphql_string("endpoint_url", endpoint_url.as_deref()),
         send_node_did = args.send_node_did,
         version = escape_graphql_string(args.version.trim()),
     );
@@ -173,6 +183,7 @@ async fn load_mcp_services(
                 lan_ip
                 mcp_port
                 mcp_path
+                endpoint_url
                 send_node_did
                 updated_at
             }}

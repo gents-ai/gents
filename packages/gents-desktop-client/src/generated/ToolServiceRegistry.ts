@@ -11,7 +11,12 @@ service_id: string, node_did: string, display_name?: string | null, description?
 /**
  * Absent/empty uses the endpoint root (empty path).
  */
-mcp_path?: string | null, send_node_did?: boolean | null,
+mcp_path?: string | null,
+/**
+ * Full http(s) MCP URL. When set it is used verbatim and the address,
+ * port and path fields are ignored; HTTPS cannot be expressed otherwise.
+ */
+endpoint_url?: string | null, send_node_did?: boolean | null,
 /**
  * Operator availability gate, distinct from observed connectivity/health.
  */

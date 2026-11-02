@@ -77,6 +77,18 @@ fn candidate_installation_uses_existing_endpoint_and_path_requirements() {
         valid[address] = json!("host");
         validate(Collection::ToolServiceRegistry, valid).unwrap();
     }
+    let remote = json!({"service_id":"remote", "node_did":"owner",
+        "endpoint_url":"https://mcp.linear.app/mcp"});
+    validate(Collection::ToolServiceRegistry, remote.clone()).unwrap();
+    for bad_url in [
+        "ftp://host/mcp",
+        "https://user:pw@host/mcp",
+        "https://host/mcp?key=1",
+    ] {
+        let mut bad = remote.clone();
+        bad["endpoint_url"] = json!(bad_url);
+        assert!(validate(Collection::ToolServiceRegistry, bad).is_err());
+    }
     let placement = json!({"repository_id":"repo", "node_did":"owner", "host_path":"./checkout"});
     validate(Collection::RepositoryPlacement, placement.clone()).unwrap();
     let mut bad = placement;

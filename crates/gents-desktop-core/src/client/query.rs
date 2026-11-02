@@ -136,7 +136,7 @@ pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
 pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id node_did display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id node_did display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
 pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id node_did display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs provider_idle_timeout_secs deadline_duration_secs retry_policy_id tags";
-pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id node_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_node_did enabled tags";
+pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id node_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path endpoint_url send_node_did enabled tags";
 pub(super) const EVENT_SOURCE_FIELDS: &str = "event_source_id node_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
 pub(super) const AGENT_TARGET_FIELDS: &str =
     "target_id node_did target_node_did agent_id name description tags";
