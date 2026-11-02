@@ -57,10 +57,14 @@ const ABOVE_READER = 2;
 const BELOW_READER = 12;
 const UP_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 const DOWN_KEYS = new Set(["ArrowDown", "PageDown", " "]);
-/* keys typed into a field edit it; they never scroll the transcript */
+/* keys typed into a field edit it, and keys in a dialog, menu or list move
+   within it; they never scroll the transcript behind */
 const editing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
-  (target.isContentEditable || target.closest("input, textarea, select") !== null);
+  (target.isContentEditable ||
+    target.closest(
+      'input, textarea, select, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+    ) !== null);
 /* WebKit drops a position written while the reader's fling is moving; other
    engines take it */
 const DEFERS_WRITES =
@@ -614,7 +618,8 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
         editing(event.target)
       )
         return;
-      if (UP_KEYS.has(event.key)) release();
+      /* Shift+Space pages up */
+      if (UP_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) release();
       else if (event.key === "End") {
         setMode({ kind: "follow" });
         reconcile();
