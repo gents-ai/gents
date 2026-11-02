@@ -14,6 +14,8 @@ import { resetListViews } from "../src/ui/app/listViews";
 import { resetSessionViews } from "../src/ui/app/sessionViews";
 import { resetPreferences } from "../src/ui/preferences";
 import { sessionMarkdown } from "../src/ui/lib/session-markdown";
+import { closeFind } from "../src/ui/screens/session/find";
+import { MOD } from "../src/ui/screens/shortcutKeys";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { href, type Route } from "../src/ui/lib/router";
 import { node, renderRouted, testApp, withApp } from "./app-fixture";
@@ -524,7 +526,22 @@ describe("a session's menu in its header", () => {
     const items = within(menu)
       .getAllByRole("menuitem")
       .map((item) => item.textContent);
-    expect(items).toEqual(["Rename", "Pin", "Copy", "Archive"]);
+    expect(items).toEqual([
+      `Find in session…${MOD}F`,
+      "Rename",
+      "Pin",
+      "Copy",
+      "Archive",
+    ]);
+  });
+
+  it("opens find in the session, with the focus in its field", async () => {
+    renderHeader(first);
+    const { u, menu } = await openHeaderMenu();
+    await u.click(within(menu).getByRole("menuitem", { name: /Find in session/ }));
+    const field = await screen.findByRole("textbox", { name: "Find in session" });
+    await waitFor(() => expect(field).toHaveFocus());
+    act(() => closeFind());
   });
 
   it("starts the header's own rename", async () => {
