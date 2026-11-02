@@ -98,6 +98,7 @@ function SidebarPeek({
           mode="expanded"
           width={width}
           peek
+          peekOpen={open}
           settings={settings}
         />
       </div>

@@ -389,11 +389,27 @@ export function NavPanel({
 
 export const FlyoutOpenContext = createContext(false);
 
+/** A number that changes when `open` turns false while `within` holds an
+    open menu, popover or hover card. The panel's content is keyed by it, so
+    whatever opened from inside the panel closes with it: those popups
+    portal into the panel's container, but their open state is their own. */
+function useClosings(open: boolean, within: HTMLElement | null) {
+  const [closings, setClosings] = useState(0);
+  const was = useRef(open);
+  useEffect(() => {
+    if (was.current && !open && within?.querySelector("[data-open]"))
+      setClosings((n) => n + 1);
+    was.current = open;
+  }, [open, within]);
+  return closings;
+}
+
 export function RailFlyout({
   route,
   mode = "hover",
   width,
   peek = false,
+  peekOpen = false,
   settings,
   children,
 }: {
@@ -404,6 +420,8 @@ export function RailFlyout({
   /** drawn over the page from a hidden sidebar's edge: the panel alone,
       floating as the hover panel does, without the rail */
   peek?: boolean;
+  /** whether the peek shows now */
+  peekOpen?: boolean;
   settings: ReactNode;
   children?: ReactNode;
 }) {
@@ -421,8 +439,9 @@ export function RailFlyout({
     },
     [],
   );
-  if (mode === "collapsed") return <>{children}</>;
   const hover = mode === "hover" && !peek;
+  const closings = useClosings(peek ? peekOpen : hover ? open : true, portal);
+  if (mode === "collapsed") return <>{children}</>;
   const shown = mode === "expanded" || open || peek;
   const floating = hover || peek;
   return (
@@ -482,6 +501,7 @@ export function RailFlyout({
               content moves left by the rest, so each icon sits where the
               rail's does */}
           <NavMenu
+            key={closings}
             render={<div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-1" />}
           >
             <NavPanel
