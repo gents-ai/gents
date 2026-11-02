@@ -11,8 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, Copy } from "lucide-react";
-import { toast } from "sonner";
+import { Copy } from "lucide-react";
 import type {
   DerivedCancelCauseView,
   DesktopSessionSnapshot,
@@ -71,7 +70,7 @@ import {
   groupTranscript,
   type TranscriptEntry,
 } from "./transcript-groups";
-import { copyText, useCopied } from "@/lib/clipboard";
+import { copyText } from "@/lib/clipboard";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
 import { duration } from "@/lib/duration";

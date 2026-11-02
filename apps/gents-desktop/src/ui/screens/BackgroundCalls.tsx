@@ -280,11 +280,14 @@ function CallGroup({
   byDay?: boolean;
 }) {
   if (calls.length === 0) return null;
+  /* every day the rows open is marked, today's too, since the rows run newest
+     first; one day alone gets no marker */
   const opens = byDay
     ? dayOpenings(
         calls,
         (call) => call.key,
         (call) => call.tool?.startedAt,
+        Number.NaN,
       )
     : new Map<string, number>();
   const days = opens.size > 1 ? opens : new Map<string, number>();

@@ -12,7 +12,6 @@ import {
   ExternalLink,
   FolderOpen,
   Package,
-  Pencil,
   Plus,
   XIcon,
 } from "lucide-react";
