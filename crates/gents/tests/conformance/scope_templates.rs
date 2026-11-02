@@ -107,6 +107,30 @@ fn assert_eq_filter(predicate: &FilterPredicate, field: &str, value: &str) {
     assert_eq!(single_string_eq(predicate), Some((field, value)));
 }
 
+#[test]
+fn node_replication_matches_executable_scope_model() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().scope_node_route_cases;
+    assert_eq!(cases.len(), 4);
+    let template = resolve_template(CLIENT_TEMPLATE).expect("client template");
+    for case in cases {
+        let direction = PairingDirection::parse(case["direction"].as_str().unwrap()).unwrap();
+        let owner = case["owner"].as_str().unwrap();
+        assert_eq!(
+            client_route_collections(direction).contains(&"Node"),
+            case["allowed"].as_bool().unwrap(),
+        );
+        let filters = resolve_template_filters(template, direction, "did:key:reader", owner);
+        match case["node_did"].as_str() {
+            Some(expected) => assert_eq_filter(
+                filters.get("Node").expect("node filter"),
+                "node_did",
+                expected,
+            ),
+            None => assert!(!filters.contains_key("Node")),
+        }
+    }
+}
+
 fn assert_and_eq_filter(predicate: &FilterPredicate, expected: &[(&str, &str)]) {
     let conditions = filter_conditions(predicate).expect("predicate filter");
     let clauses = conditions
@@ -177,6 +201,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         .collect::<Vec<_>>();
     let client_to_runtime = client_to_runtime.as_slice();
     const RETURN_CONTROL_PLANE: &[&str] = &[
+        "Node",
         "Agent",
         "AgentContext",
         "CompactionConfig",
@@ -330,6 +355,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "node_did",
         owner,
     );
+    assert!(!outbound.contains_key("Node"));
     assert!(!outbound.contains_key("NodeReadiness"));
     for excluded in gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES
         .iter()

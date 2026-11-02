@@ -1410,6 +1410,26 @@ pub(super) mod tests {
                         template.id
                     )
                 });
+            if matches!(&template.scope, Scope::ClientRoute) {
+                let returning = super::super::policy::resolve_template_filters(
+                    template,
+                    super::super::policy::PairingDirection::RuntimeToClient,
+                    "did:key:z6MkPeerForFilterValidation",
+                    "did:key:z6MkSelfForFilterValidation",
+                );
+                local_admin
+                    .add_replicator(
+                        &remote_addresses,
+                        &template
+                            .collections
+                            .iter()
+                            .map(|c| (*c).to_string())
+                            .collect::<Vec<_>>(),
+                        &returning,
+                    )
+                    .await
+                    .expect("client return route filters must pass replicator validation");
+            }
         }
 
         local.shutdown().await;

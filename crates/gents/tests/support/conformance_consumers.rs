@@ -1162,6 +1162,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_routes_follow_executable_scope_filters",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::scope_templates::node_replication_matches_executable_scope_model",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/scope_templates.rs",
+            module_path: "conformance::scope_templates",
+            function: "node_replication_matches_executable_scope_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::file_image_hydration::tests::generated_completion_cases_gate_delivery_and_receipts",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/file_image_hydration/tests.rs",

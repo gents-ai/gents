@@ -303,6 +303,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) causal_hop_contract: LeanCausalHopContract,
     pub(crate) scope_collection_rules:
         std::collections::BTreeMap<String, Vec<LeanScopeCollectionRule>>,
+    pub(crate) scope_node_route_cases: Vec<serde_json::Value>,
     pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub(crate) title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
     pub(crate) title_text_cases: serde_json::Value,
