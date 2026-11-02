@@ -600,7 +600,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         // real clock rather than the paused-clock scripted collector.
         let stream = run_loop_stream(
             model,
-            None::<crate::hook::DefraSessionHook>,
+            None::<crate::tools::call::hook::DefraSessionHook>,
             TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
             Vec::new(),
             Arc::new(Vec::new()),
