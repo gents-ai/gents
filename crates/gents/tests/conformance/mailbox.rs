@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gents::defra_node::EmbeddedNode;
-use gents::mailbox::{
+use gents::session::mailbox::{
     dismiss_mailbox_item, load_mailbox_item, stamp_create, FileMailboxItemArgs, MailboxAction,
     MailboxKind, MailboxSourceKind, MailboxStampContext, MailboxStatus,
 };

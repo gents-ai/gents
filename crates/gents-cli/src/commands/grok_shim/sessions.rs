@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

@@ -111,6 +111,7 @@ import type {
 import type {
   FoundPack,
   InstalledPack,
+  PackInfo,
   PackEditedChoice,
   PackInstallRequest,
   PackPluginSlot,
@@ -471,6 +472,8 @@ export type DesktopApiAdapter = {
     query: string,
     page: number,
   ) => Promise<{ packs: FoundPack[]; has_more: boolean }>;
+  /** a registry pack's page: owner, homepage, plugins and versions */
+  packInfo: (pack: string) => Promise<PackInfo>;
   installPack: (request: PackInstallRequest) => Promise<void>;
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
   removePack: (pack: string) => Promise<void>;
@@ -515,6 +518,7 @@ export type PackCommand =
   | "listPackPluginSlots"
   | "readPackAccount"
   | "searchPacks"
+  | "packInfo"
   | "installPack"
   | "updatePack"
   | "removePack"

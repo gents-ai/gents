@@ -1,0 +1,420 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use defra_node::EmbeddedNode;
+use tokio_util::sync::CancellationToken;
+
+use crate::store::graphql::escape_graphql_string;
+
+use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_list_literal};
+use super::templates::resolve_template;
+
+pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+pub const REGISTRY_STALE_AFTER: Duration = Duration::from_secs(90);
+
+/// Resolve informational registry liveness without granting any pairing or
+/// routing authority.
+pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Duration) -> bool {
+    match now.signed_duration_since(ts).to_std() {
+        Ok(age) => age <= stale_after,
+        Err(_) => ts
+            .signed_duration_since(now)
+            .to_std()
+            .map(|ahead| ahead <= stale_after)
+            .unwrap_or(false),
+    }
+}
+
+pub const DEFAULT_NETWORK_ID: &str = "default";
+
+pub const NETWORK_ID_ENV: &str = "GENTS_NETWORK_ID";
+
+pub fn resolve_network_id() -> String {
+    std::env::var(NETWORK_ID_ENV)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_string())
+}
+
+pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["conversation", "agent-config"];
+
+pub fn validate_offered_templates<I, S>(offered: I) -> Result<Vec<String>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let offered = offered.into_iter().collect::<Vec<_>>();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for id in offered {
+        let id = id.as_ref().trim();
+        if id.is_empty() {
+            anyhow::bail!("offered scope template must not be blank");
+        }
+        if resolve_template(id).is_none() {
+            anyhow::bail!("unknown offered scope template {id:?}");
+        }
+        if seen.insert(id.to_string()) {
+            out.push(id.to_string());
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryEntry {
+    pub peer_id: String,
+    pub node_did: String,
+    pub addresses: Vec<String>,
+    pub templates: Vec<String>,
+    pub display_name: Option<String>,
+    pub status: String,
+    pub network_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpsertKind {
+    Full,
+    Heartbeat,
+}
+
+#[derive(Clone, Debug)]
+struct PublishedRegistryEntry {
+    entry: RegistryEntry,
+    at: Instant,
+}
+
+pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKind) -> String {
+    let peer_id = escape_graphql_string(&entry.peer_id);
+    let node_did = escape_graphql_string(&entry.node_did);
+    let addresses = graphql_string_list_literal(entry.addresses.iter().map(String::as_str));
+    let templates = graphql_string_list_literal(entry.templates.iter().map(String::as_str));
+    let display_name = graphql_nullable_string_literal(entry.display_name.as_deref());
+    let status = escape_graphql_string(&entry.status);
+    let network_id = escape_graphql_string(&entry.network_id);
+    let now = escape_graphql_string(now);
+
+    let update_block = match kind {
+        UpsertKind::Full => format!(
+            r#"update: {{
+                    node_did: "{node_did}",
+                    addresses: {addresses},
+                    templates: {templates},
+                    display_name: {display_name},
+                    status: "{status}",
+                    network_id: "{network_id}",
+                    updated_at: "{now}"
+                }}"#
+        ),
+        UpsertKind::Heartbeat => format!(
+            r#"update: {{
+                    addresses: {addresses},
+                    templates: {templates},
+                    status: "{status}",
+                    updated_at: "{now}"
+                }}"#
+        ),
+    };
+
+    format!(
+        r#"mutation {{
+            upsert_PeerRegistry(
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
+                add: {{
+                    peer_id: "{peer_id}",
+                    node_did: "{node_did}",
+                    addresses: {addresses},
+                    templates: {templates},
+                    display_name: {display_name},
+                    status: "{status}",
+                    network_id: "{network_id}",
+                    registered_at: "{now}",
+                    updated_at: "{now}"
+                }},
+                {update_block}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
+pub async fn run_registry_heartbeat(
+    node: Arc<EmbeddedNode>,
+    node_did: String,
+    network_id: String,
+    cancel: CancellationToken,
+) -> Result<()> {
+    registry_heartbeat(node, node_did, network_id, cancel).await
+}
+
+async fn registry_heartbeat(
+    node: Arc<EmbeddedNode>,
+    node_did: String,
+    network_id: String,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let Some(p2p) = crate::store::identity::node_p2p(&node) else {
+        tracing::debug!("registry heartbeat idle because embedded node has no P2P transport");
+        cancel.cancelled().await;
+        return Ok(());
+    };
+
+    let mut interval = tokio::time::interval(super::intervals::heartbeat_interval());
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let renewal_interval = super::intervals::lease_renewal_interval();
+    let mut published = None;
+
+    if let Err(error) = tick_registry(
+        &node,
+        &p2p,
+        &node_did,
+        &network_id,
+        "online",
+        &mut published,
+        renewal_interval,
+    )
+    .await
+    {
+        tracing::warn!(
+            node_did = %node_did,
+            network_id = %network_id,
+            error = %error,
+            "registry heartbeat: initial self-registration failed; will retry"
+        );
+    }
+
+    interval.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                if let Err(error) =
+                    tick_registry(
+                        &node,
+                        &p2p,
+                        &node_did,
+                        &network_id,
+                        "offline",
+                        &mut published,
+                        renewal_interval,
+                    ).await
+                {
+                    tracing::warn!(
+                        node_did = %node_did,
+                        error = %error,
+                        "registry heartbeat: offline status write failed during shutdown"
+                    );
+                }
+                return Ok(());
+            }
+            _ = interval.tick() => {
+                if let Err(error) =
+                    tick_registry(
+                        &node,
+                        &p2p,
+                        &node_did,
+                        &network_id,
+                        "online",
+                        &mut published,
+                        renewal_interval,
+                    ).await
+                {
+                    tracing::warn!(
+                        node_did = %node_did,
+                        error = %error,
+                        "registry heartbeat: heartbeat tick failed; will retry next interval"
+                    );
+                }
+            }
+        }
+    }
+}
+
+async fn tick_registry(
+    node: &std::sync::Arc<EmbeddedNode>,
+    p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
+    node_did: &str,
+    network_id: &str,
+    status: &str,
+    published: &mut Option<PublishedRegistryEntry>,
+    renewal_interval: Duration,
+) -> Result<()> {
+    let peer_id = p2p
+        .local_peer_id()
+        .await
+        .map_err(|e| anyhow::anyhow!("local_peer_id: {e}"))?;
+
+    let raw_addresses = p2p
+        .listen_addresses()
+        .await
+        .map_err(|e| anyhow::anyhow!("listen_addresses: {e}"))?;
+
+    let mut addresses: Vec<String> = raw_addresses
+        .into_iter()
+        .map(|addr| {
+            if addr.starts_with('/') {
+                format!("{addr}/p2p/{peer_id}")
+            } else {
+                addr
+            }
+        })
+        .collect();
+    addresses.sort();
+    addresses.dedup();
+
+    let entry = RegistryEntry {
+        peer_id: peer_id.clone(),
+        node_did: node_did.to_string(),
+        addresses,
+        templates: validate_offered_templates(DEFAULT_OFFERED_TEMPLATES.iter().copied())
+            .expect("built-in registry templates must resolve"),
+        display_name: None,
+        status: status.to_string(),
+        network_id: network_id.to_string(),
+    };
+    let observed_at = Instant::now();
+    let Some(publish_reason) =
+        registry_publish_reason(published.as_ref(), &entry, observed_at, renewal_interval)
+    else {
+        tracing::trace!(
+            peer_id = %entry.peer_id,
+            node_did = %node_did,
+            status = %status,
+            "registry heartbeat: unchanged lease is not yet due for renewal"
+        );
+        return Ok(());
+    };
+
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
+    crate::store::config_client::ConfigAccess::write_local_response(
+        node,
+        "p2p.upsert_registry_heartbeat",
+        &mutation,
+    )
+    .await?;
+    *published = Some(PublishedRegistryEntry {
+        entry,
+        at: Instant::now(),
+    });
+
+    tracing::debug!(
+        peer_id = %peer_id,
+        node_did = %node_did,
+        status = %status,
+        reason = publish_reason,
+        "registry heartbeat: self-registration written"
+    );
+
+    Ok(())
+}
+
+fn registry_publish_reason(
+    published: Option<&PublishedRegistryEntry>,
+    entry: &RegistryEntry,
+    now: Instant,
+    renewal_interval: Duration,
+) -> Option<&'static str> {
+    let Some(published) = published else {
+        return Some("initial");
+    };
+    if published.entry != *entry {
+        Some("binding_changed")
+    } else if now.duration_since(published.at) >= renewal_interval {
+        Some("renewal")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_upsert_update_block_omits_display_name_but_keeps_templates() {
+        let entry = RegistryEntry {
+            peer_id: "peer-hb".into(),
+            node_did: "did:key:hb".into(),
+            addresses: vec!["/ip4/1/tcp/9/p2p/peer-hb".into()],
+            templates: vec!["conversation".into()],
+            display_name: Some("should-not-appear-in-update".into()),
+            status: "online".into(),
+            network_id: "default".into(),
+        };
+        let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Heartbeat);
+
+        assert!(
+            m.contains(r#"display_name: "should-not-appear-in-update""#),
+            "add branch must still set display_name on first registration: {m}"
+        );
+        assert!(
+            m.contains(r#"templates: ["conversation"]"#),
+            "add branch must still set templates on first registration: {m}"
+        );
+
+        let update_portion = m
+            .split_once("update: {")
+            .expect("mutation must contain an update block")
+            .1;
+        assert!(
+            !update_portion.contains("display_name"),
+            "heartbeat update block must NOT contain display_name — it would clobber operator-set values: {update_portion}"
+        );
+        assert!(
+            update_portion.contains("templates:"),
+            "heartbeat update block must re-advertise templates: {update_portion}"
+        );
+    }
+
+    #[test]
+    fn operator_upsert_update_block_includes_display_name_and_templates() {
+        let entry = RegistryEntry {
+            peer_id: "peer-op".into(),
+            node_did: "did:key:op".into(),
+            addresses: vec!["/ip4/1/tcp/9/p2p/peer-op".into()],
+            templates: vec!["conversation".into()],
+            display_name: Some("my-node".into()),
+            status: "online".into(),
+            network_id: "default".into(),
+        };
+        let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Full);
+
+        let update_portion = m
+            .split_once("update: {")
+            .expect("mutation must contain an update block")
+            .1;
+        assert!(
+            update_portion.contains(r#"display_name: "my-node""#),
+            "operator update block must contain display_name: {update_portion}"
+        );
+        assert!(
+            update_portion.contains("templates:"),
+            "operator update block must contain templates: {update_portion}"
+        );
+    }
+
+    #[test]
+    fn validate_offered_templates_keeps_known_and_dedups() {
+        let out =
+            validate_offered_templates(["conversation", "agent-config", "conversation"]).unwrap();
+        assert_eq!(
+            out,
+            vec!["conversation".to_string(), "agent-config".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_offered_templates_preserves_an_empty_offer() {
+        let out = validate_offered_templates(Vec::<String>::new()).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn validate_offered_templates_rejects_unknown_and_blank_values() {
+        assert!(validate_offered_templates(["conversation", "nope"]).is_err());
+        assert!(validate_offered_templates(["conversation", "  "]).is_err());
+    }
+}

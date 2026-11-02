@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 
 use super::projection::{ProjectionEngine, UpdateTimestamps};
-use super::turn::{PromptSender, PromptSenderLine};
+use super::turn::sender::{PromptSender, PromptSenderLine};
 
 /// Run views loaded per observation tick. Each load is several queries on
 /// the session observer's shared loop, so a session that resumes with many

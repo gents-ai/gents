@@ -22,6 +22,14 @@ export const emptyFilter: SessionFilter = {
 export const hasFilter = (f: SessionFilter) =>
   f.states.length > 0 || f.sources.length > 0 || f.agents.length > 0;
 
+const sameChoices = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((v) => b.includes(v));
+
+export const sameFilter = (a: SessionFilter, b: SessionFilter) =>
+  sameChoices(a.states, b.states) &&
+  sameChoices(a.sources, b.sources) &&
+  sameChoices(a.agents, b.agents);
+
 const STATES: readonly string[] = [
   "working",
   "waiting",

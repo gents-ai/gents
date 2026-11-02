@@ -63,6 +63,26 @@ const readCount = (p: Extract<ToolPresentationView, { kind: "fileRead" }>) => {
   return `${p.returnedCount}${total}${p.truncated ? " · truncated" : ""}`;
 };
 
+/* the mailbox tool's own arguments say what it filed */
+const mailboxFiling = (
+  input: string | null,
+): { kind: string | null; title: string | null } => {
+  try {
+    const args = JSON.parse(input ?? "") as {
+      kind?: unknown;
+      title?: unknown;
+      question?: unknown;
+    };
+    return {
+      /* passing a question files an ask, whatever kind is named */
+      kind: args.question ? "ask" : typeof args.kind === "string" ? args.kind : null,
+      title: typeof args.title === "string" ? args.title : null,
+    };
+  } catch {
+    return { kind: null, title: null };
+  }
+};
+
 export function toolSummary(t: RenderedToolCallView): {
   kind: string;
   primary: string;
@@ -135,6 +155,15 @@ export function toolSummary(t: RenderedToolCallView): {
         secondary: p.serviceId,
       };
     default:
+      if (t.toolName === "file_mailbox_item" && p.kind === "generic") {
+        const filed = mailboxFiling(p.input);
+        return {
+          kind: "",
+          primary:
+            filed.kind === "ask" ? "Asked you a question" : "Sent to your mailbox",
+          secondary: filed.title,
+        };
+      }
       return { kind: "", primary: t.toolName, secondary: compact(p.summary) };
   }
 }

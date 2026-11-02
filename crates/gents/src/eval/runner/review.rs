@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use super::StageEvidence;
-use crate::document_config::{EvalCase, EvalCheckRef};
+use crate::documents::{EvalCase, EvalCheckRef};
 use crate::eval::checks::CheckRegistry;
 
 #[derive(Clone, Default, PartialEq)]

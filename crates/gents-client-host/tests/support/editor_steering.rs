@@ -39,7 +39,7 @@ pub async fn verify(
 
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
-        gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session), gents::SIGNED_REQUEST_FIELDS,
+        gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(session), gents::SIGNED_REQUEST_FIELDS,
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(result["data"]["AgentRequest"].clone())?;
@@ -118,7 +118,7 @@ pub async fn verify(
     );
     let rendered = access.execute(&format!(
         r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id turn_index }} }}"#,
-        gents::graphql::escape_graphql_string(&active.request_id),
+        gents::store::graphql::escape_graphql_string(&active.request_id),
     )).await?;
     let rendered = rendered["data"]["RenderedRequest"]
         .as_array()
@@ -175,7 +175,7 @@ pub async fn verify(
         );
         let result = access.execute(&format!(
             r#"{{ Goal(filter: {{ goal_id: {{ _eq: "{}" }} }}) {{ goal_id status continuation_sequence last_continued_from_request_id }} }}"#,
-            gents::graphql::escape_graphql_string(goal_id),
+            gents::store::graphql::escape_graphql_string(goal_id),
         )).await?;
         let goals = result["data"]["Goal"].as_array().context("Goal rows")?;
         ensure!(

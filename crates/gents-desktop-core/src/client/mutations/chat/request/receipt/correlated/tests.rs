@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use gents::identity::{KeyIdentity, NodeIdentity};
+use gents::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -240,8 +240,8 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
 #[tokio::test]
 async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result<()> {
     use super::super::journal;
-    use gents::config_client::ConfigAccess;
-    use gents::graphql::graphql_with_transaction_retry;
+    use gents::store::config_client::ConfigAccess;
+    use gents::store::graphql::graphql_with_transaction_retry;
     use std::sync::Arc;
 
     let cases = tokio::task::spawn_blocking(model_cases).await??;
@@ -468,7 +468,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
 #[tokio::test]
 async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
     use super::super::{delivery, journal, SubmissionNotDelivered};
-    use gents::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -646,7 +646,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
 async fn check_recovery_route(activate_route: bool) -> Result<()> {
     use super::super::{journal, SubmissionOutcomeUnknown};
     use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use std::sync::Arc;
 
     let cases = tokio::task::spawn_blocking(model_cases).await??;
@@ -786,7 +786,7 @@ async fn recovery_preserves_the_existing_ready_embedded_delivery_route() -> Resu
 async fn first_submission_uses_the_caller_identity_and_freezes_goal_assignment() -> Result<()> {
     use super::super::journal;
     use crate::client::{ClientStore, SubmitRequestOptions};
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::request_input::{GoalAssignmentInput, RequestInput};
     use std::sync::Arc;
 

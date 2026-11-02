@@ -168,7 +168,7 @@ pub struct CausedRequestView {
     pub node_did: String,
     pub session_id: String,
     pub requester_did: Option<String>,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     pub created_at: Option<String>,
 }
 

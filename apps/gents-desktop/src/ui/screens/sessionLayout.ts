@@ -1,16 +1,36 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { scrollParent } from "@gents/ui/conversation";
 
+/* while a session opens, its transcript can pass over the header for a
+   frame or two before it settles; a state that doesn't hold this long then
+   isn't drawn */
+const SETTLING_MS = 400;
+
 export function useHeaderScrolledOut(scroller: HTMLElement | null) {
   const [marker, setMarker] = useState<HTMLElement | null>(null);
   const [out, setOut] = useState(false);
   useEffect(() => {
     if (!marker || !scroller) return;
-    const io = new IntersectionObserver(([e]) => setOut(!e!.isIntersecting), {
-      root: scroller,
-    });
+    const opened = performance.now();
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const io = new IntersectionObserver(
+      ([e]) => {
+        const next = !e!.isIntersecting;
+        if (pending !== null) clearTimeout(pending);
+        pending = null;
+        const wait = SETTLING_MS - (performance.now() - opened);
+        if (wait <= 0) setOut(next);
+        else pending = setTimeout(() => setOut(next), wait);
+      },
+      {
+        root: scroller,
+      },
+    );
     io.observe(marker);
-    return () => io.disconnect();
+    return () => {
+      if (pending !== null) clearTimeout(pending);
+      io.disconnect();
+    };
   }, [marker, scroller]);
   return [out, setMarker] as const;
 }

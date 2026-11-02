@@ -21,6 +21,7 @@ export function createPackCommands(
     readPackAccount: () => invokeDesktop("desktop_pack_whoami"),
     searchPacks: (query: string, page: number) =>
       invokeDesktop("desktop_pack_search", { query, page }),
+    packInfo: (pack: string) => invokeDesktop("desktop_pack_info", { package: pack }),
     installPack: (request: PackInstallRequest) =>
       invokeDesktop("desktop_pack_install", { request }).then(() => undefined),
     updatePack: (pack: string, edited: PackEditedChoice) =>

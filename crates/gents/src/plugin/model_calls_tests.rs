@@ -489,6 +489,9 @@ fn only_an_enabled_chat_completions_backend_can_serve_a_slot() {
         json!({"openai_wire_api": "responses"}),
         json!({"provider_kind": "ChatGptCodex"}),
         json!({"auth": {"kind": "node_oauth"}}),
+        json!({"auth": {"kind": "aws_credentials", "access_key_id": "AKID", "secret_access_key": "s"}}),
+        json!({"provider_kind": "OpenRouter", "auth": {"kind": "aws_credentials", "access_key_id": "AKID", "secret_access_key": "s"}}),
+        json!({"auth": {"kind": "google_credentials", "credentials_json": "{}"}}),
         json!({"max_concurrent": 0}),
     ] {
         assert!(
@@ -545,8 +548,8 @@ fn binding_slots_survives_a_reinstall_and_unbinding_clears_it() {
 
 #[tokio::test]
 async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
-    use crate::document_config::PluginToolRef;
-    use crate::llm::tool::ToolDyn;
+    use crate::documents::PluginToolRef;
+    use crate::inference::llm::tool::ToolDyn;
     use crate::plugin::tool::PluginTool;
 
     let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);

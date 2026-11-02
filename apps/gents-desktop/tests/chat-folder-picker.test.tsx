@@ -18,7 +18,7 @@ const open = async (name: RegExp) => {
 describe("the chat folder picker", () => {
   it("reports a picker that failed to open", async () => {
     render(<ChatFolderPicker folder={null} onChange={vi.fn()} />);
-    fireEvent.click(await open(/No folder/));
+    fireEvent.click(await open(/Agent's folder/));
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
         "Couldn’t choose a folder: dialog unavailable",
@@ -59,7 +59,7 @@ describe("the chat folder picker", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "site" }));
     expect(onChange).toHaveBeenLastCalledWith("/work/site");
     await open(/notes/);
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "No folder" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Agent's folder" }));
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 });

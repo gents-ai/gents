@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::pack_registry::credentials;
+use gents::pack::registry::credentials;
 use serde_json::json;
 
 use super::registry::{

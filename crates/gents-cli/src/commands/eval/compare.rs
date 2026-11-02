@@ -187,9 +187,9 @@ mod tests {
 
         let path = fixture.ctx.home_dir.join("policy.json");
         std::fs::create_dir_all(&fixture.ctx.home_dir).unwrap();
-        let policy = gents::optimization::PolicyV2 {
+        let policy = gents::eval::optimization::PolicyV2 {
             min_pairs: 1,
-            ..gents::optimization::PolicyV2::uncalibrated()
+            ..gents::eval::optimization::PolicyV2::uncalibrated()
         };
         std::fs::write(&path, serde_json::to_vec(&policy).unwrap()).unwrap();
         let path_arg = path.display().to_string();
@@ -223,7 +223,7 @@ mod tests {
             &gents::eval::report::CompareOptions::default(),
         )
         .unwrap()
-        .with_policy(&gents::optimization::PolicyV2::uncalibrated());
+        .with_policy(&gents::eval::optimization::PolicyV2::uncalibrated());
         let gates = &mut comparison.policy.as_mut().unwrap().gates;
         gates.min_effect = None;
         gates.cost_ok = None;

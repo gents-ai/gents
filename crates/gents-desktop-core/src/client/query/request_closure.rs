@@ -77,7 +77,7 @@ pub(crate) async fn close_request_rows(
 }
 
 pub(crate) async fn close_request_rows_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     seeds: Vec<AgentRequestRow>,
 ) -> Result<Vec<AgentRequestRow>> {
     close_request_rows_with(seeds, |query| {
@@ -144,7 +144,7 @@ pub(super) async fn close_request_rows_with<'a>(
             let Some(scope) = Scope::from_row(row) else {
                 continue;
             };
-            let folded = gents::lifecycle::folded_into(row).is_some();
+            let folded = gents::request::lifecycle::folded_into(row).is_some();
             let predecessor = matches!(row.lifecycle_state, Some(
                 gents_protocol::request_lifecycle::RequestLifecycleState::Pending
                 | gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending
@@ -163,7 +163,7 @@ pub(super) async fn close_request_rows_with<'a>(
             let edges = [
                 (
                     Edge::Physical,
-                    if folded || gents::lifecycle::replaced_by(row).is_some() {
+                    if folded || gents::request::lifecycle::replaced_by(row).is_some() {
                         row.superseded_by_request_doc_id.as_deref()
                     } else {
                         None

@@ -58,7 +58,7 @@ fn plugin_pack(
     dir: &std::path::Path,
     afb: &afterburner_cloud::Afb,
     bytes: &[u8],
-) -> Result<(Vec<u8>, gents::pack_archive::PackHeader)> {
+) -> Result<(Vec<u8>, gents::pack::archive::PackHeader)> {
     let package = &afb.manifest.package;
     anyhow::ensure!(
         gents::pack::is_valid_pack_name(&package.name)
@@ -95,7 +95,7 @@ fn plugin_pack(
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest).context("encoding the plugin pack manifest")?,
     )?;
-    gents::pack_archive::pack_dir(dir)
+    gents::pack::archive::pack_dir(dir)
 }
 
 fn list(args: PluginListArgs) -> Result<()> {

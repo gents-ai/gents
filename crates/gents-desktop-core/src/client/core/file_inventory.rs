@@ -1,9 +1,9 @@
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::file_inventory::{
     admit_demand, begin_client_progress, load_client_progress_for_scope, receive_client_reply,
     resume_client_progress, verified_client_response,
 };
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::NodeIdentity;
 use gents_protocol::file_inventory::{
     FileInventoryAdmission, FileInventoryObservation, FileInventoryPageDemand,
@@ -356,7 +356,7 @@ mod tests {
                     "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
                     &json!({"input": {"node_did": owner, "session_id": session, "requester_did": owner,
                         "agent_id": "fixture", "created_at": "2026-10-24T00:00:00Z"}})).await?;
-                gents::graphql::created_doc_id(&result, "AgentSession")
+                gents::store::graphql::created_doc_id(&result, "AgentSession")
             })
         }).await?;
         let demand = FileInventoryPageDemand {
@@ -450,7 +450,7 @@ mod tests {
         let key = root.path().join("runtime.key");
         let file = key.clone();
         let did = tokio::task::spawn_blocking(move || -> Result<String> {
-            Ok(gents::identity::load_or_create_file_identity(&file)?
+            Ok(gents::store::identity::load_or_create_file_identity(&file)?
                 .did()?
                 .to_string())
         })
@@ -468,7 +468,7 @@ mod tests {
             "node_name":"Inventory runtime", "node_did":did, "graphql":endpoint, "p2p_transport":"iroh",
         }).to_string()).await?;
         let original = tokio::fs::read(&key).await?;
-        assert!(!gents::identity::can_mint_defradb_bearer(&did));
+        assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
         let mut core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(root.path().join("client")),
             ClientCoreOptions {
@@ -532,7 +532,7 @@ mod tests {
                 .await?,
             Some(first)
         );
-        let remained_cold = !gents::identity::can_mint_defradb_bearer(&did);
+        let remained_cold = !gents::store::identity::can_mint_defradb_bearer(&did);
         let unchanged_key = tokio::fs::read(&key).await? == original;
         let submitted = ConfigAccess::local(node)
             .execute("{ AgentRequest { _docID } FileInventoryRequest { _docID } }")
@@ -595,7 +595,7 @@ mod tests {
                     &json!({"input": {"node_did": source.did(), "session_id": "shared-received",
                         "requester_did": source.did(), "agent_id": "fixture", "created_at": "2026-10-28T00:00:00Z"}}),
                 ).await?;
-                gents::graphql::created_doc_id(&response, "AgentSession")
+                gents::store::graphql::created_doc_id(&response, "AgentSession")
             })
         }).await?;
         let first = core

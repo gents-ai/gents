@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::usage_observation::account_usage::{visible_windows, Freshness, STALE_AFTER};
-use gents::usage_observation::UsageObservation;
+use gents::inference::usage_observation::account_usage::{visible_windows, Freshness, STALE_AFTER};
+use gents::inference::usage_observation::UsageObservation;
 use gents::InferenceBackend;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
@@ -454,22 +454,22 @@ mod tests {
         label: &str,
         used_pct: f64,
         observed_at: DateTime<Utc>,
-    ) -> gents::usage_observation::account_usage::UsageWindow {
-        gents::usage_observation::account_usage::UsageWindow {
+    ) -> gents::inference::usage_observation::account_usage::UsageWindow {
+        gents::inference::usage_observation::account_usage::UsageWindow {
             label: label.to_string(),
             window_minutes: Some(300),
             used_pct,
             resets_at: None,
-            source: gents::usage_observation::account_usage::UsageSource::Header,
+            source: gents::inference::usage_observation::account_usage::UsageSource::Header,
             observed_at,
         }
     }
 
     fn stored(
-        windows: Vec<gents::usage_observation::account_usage::UsageWindow>,
+        windows: Vec<gents::inference::usage_observation::account_usage::UsageWindow>,
     ) -> UsageObservation {
         UsageObservation {
-            report: gents::usage_observation::account_usage::UsageReport {
+            report: gents::inference::usage_observation::account_usage::UsageReport {
                 windows,
                 ..Default::default()
             },
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn rate_limits_from_usage_maps_plan_and_credits() {
-        use gents::usage_observation::account_usage::{UsageCredits, UsagePlan};
+        use gents::inference::usage_observation::account_usage::{UsageCredits, UsagePlan};
         let now = Utc::now();
         let mut usage = stored(Vec::new());
         usage.report.plan = Some(UsagePlan {
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn rate_limits_from_usage_drops_stale_credits() {
-        use gents::usage_observation::account_usage::UsageCredits;
+        use gents::inference::usage_observation::account_usage::UsageCredits;
         let now = Utc::now();
         let mut usage = stored(Vec::new());
         usage.report.credits = Some(UsageCredits {
@@ -548,10 +548,12 @@ mod tests {
     #[test]
     fn account_read_with_a_stored_plan_is_chatgpt_with_no_email() {
         let mut usage = stored(Vec::new());
-        usage.report.plan = Some(gents::usage_observation::account_usage::UsagePlan {
-            name: "plus".into(),
-            observed_at: Utc::now(),
-        });
+        usage.report.plan = Some(
+            gents::inference::usage_observation::account_usage::UsagePlan {
+                name: "plus".into(),
+                observed_at: Utc::now(),
+            },
+        );
         assert_eq!(
             serde_json::to_value(account_from_usage(Some(&usage))).unwrap(),
             json!({ "type": "chatgpt", "email": "", "planType": "plus" })
@@ -562,10 +564,12 @@ mod tests {
     fn account_read_without_a_plan_is_api_key() {
         let api_key = json!({ "type": "apiKey" });
         let mut unknown = stored(Vec::new());
-        unknown.report.plan = Some(gents::usage_observation::account_usage::UsagePlan {
-            name: "not-a-codex-plan".into(),
-            observed_at: Utc::now(),
-        });
+        unknown.report.plan = Some(
+            gents::inference::usage_observation::account_usage::UsagePlan {
+                name: "not-a-codex-plan".into(),
+                observed_at: Utc::now(),
+            },
+        );
         for usage in [None, Some(stored(Vec::new())), Some(unknown)] {
             assert_eq!(
                 serde_json::to_value(account_from_usage(usage.as_ref())).unwrap(),

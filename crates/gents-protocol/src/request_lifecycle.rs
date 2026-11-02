@@ -3,7 +3,11 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// The TypeScript union is derived from the variant names, not from the
+/// manual serde impls; `typescript_union_matches_wire_tokens` binds it to `as_str`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(rename_all = "camelCase"))]
 pub enum RequestLifecycleState {
     WorkspaceBindingPending,
     Pending,
@@ -164,5 +168,21 @@ impl<'de> Deserialize<'de> for RequestLifecycleState {
     {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(all(test, feature = "typescript"))]
+mod tests {
+    use super::RequestLifecycleState;
+    use ts_rs::TS;
+
+    #[test]
+    fn typescript_union_matches_wire_tokens() {
+        let expected = RequestLifecycleState::ALL
+            .iter()
+            .map(|state| format!("\"{}\"", state.as_str()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert_eq!(RequestLifecycleState::inline(), expected);
     }
 }

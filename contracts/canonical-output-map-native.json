@@ -13,8 +13,8 @@
       "constructors": [],
       "generated_groups": ["canonical_dispatch_observation_cases", "canonical_spawned_target_rejection_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents/src/hook/persistence/prompt_hook.rs", "crates/gents/src/hook.rs", "crates/gents/src/tool_call_lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents/src/toolset/bash_tools.rs", "crates/gents/src/hook/persistence/background_tools.rs", "crates/gents/src/tool_call_lifecycle/recovery.rs"],
-      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/hook/tests/background_admission.rs"],
+      "native_owner_paths": ["crates/gents/src/tools/call/hook/persistence/prompt_hook.rs", "crates/gents/src/tools/call/hook.rs", "crates/gents/src/tools/call/lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents/src/tools/native/bash_tools.rs", "crates/gents/src/tools/call/hook/persistence/background_tools.rs", "crates/gents/src/tools/call/lifecycle/recovery.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/tools/call/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/tools/call/hook/tests/background_admission.rs"],
       "native_status": "pending",
       "required_cases": [
         "lost_receipt_then_replay preserves Running without either observation granting invocation authority",
@@ -57,8 +57,8 @@
       "generated_groups": ["request_execution_lease_cases", "request_execution_lease_trace_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
-        "crates/gents/src/lifecycle/execution_lease.rs",
-        "crates/gents/src/request_admission.rs"
+        "crates/gents/src/request/lifecycle/execution_lease.rs",
+        "crates/gents/src/request/admission.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/lean_vocab_test/request_execution_lease.rs",
@@ -141,15 +141,15 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/provider_input.rs",
+        "crates/gents/src/turn/provider_input.rs",
         "crates/gents-loop/src/provider_input_budget.rs",
-        "crates/gents/src/compaction.rs",
-        "crates/gents/src/agent/daemon/request.rs",
+        "crates/gents/src/inference/compaction.rs",
+        "crates/gents/src/runtime/agent/daemon/request.rs",
         "crates/gents-loop/src/loop_stream/request_assembly.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/provider_input/tests.rs",
-        "crates/gents/src/compaction/tests.rs",
+        "crates/gents/src/turn/provider_input/tests.rs",
+        "crates/gents/src/inference/compaction/tests.rs",
         "crates/gents/tests/conformance/compaction_gate.rs",
         "crates/gents/tests/e2e_runtime/rendered_request_capture.rs"
       ],
@@ -172,14 +172,14 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/config_client/txn.rs",
-        "crates/gents/src/defra_write/mod.rs",
-        "crates/gents/src/lifecycle/execution_lease.rs"
+        "crates/gents/src/store/config_client/txn.rs",
+        "crates/gents/src/tools/builtin/defra_write/mod.rs",
+        "crates/gents/src/request/lifecycle/execution_lease.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/config_client/txn_owner_tests.rs",
-        "crates/gents/src/defra_write/tests.rs",
-        "crates/gents/src/streaming/canonical_tests.rs"
+        "crates/gents/src/store/config_client/txn_owner_tests.rs",
+        "crates/gents/src/tools/builtin/defra_write/tests.rs",
+        "crates/gents/src/request/streaming/canonical_tests.rs"
       ],
       "native_status": "pending",
       "required_cases": [
@@ -196,12 +196,12 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/graphql.rs",
-        "crates/gents/src/streaming.rs",
-        "crates/gents/src/lifecycle/execution_lease.rs",
-        "crates/gents/src/request_admission.rs"
+        "crates/gents/src/store/graphql.rs",
+        "crates/gents/src/request/streaming.rs",
+        "crates/gents/src/request/lifecycle/execution_lease.rs",
+        "crates/gents/src/request/admission.rs"
       ],
-      "consumer_paths": ["crates/gents/src/agent/daemon/execution_lease_regression_tests.rs"],
+      "consumer_paths": ["crates/gents/src/runtime/agent/daemon/execution_lease_regression_tests.rs"],
       "native_status": "pending",
       "required_cases": [
         "race renewal, recovery, publication and dispatch through one node's mutation gate and observe one serial winner with unchanged losers",
@@ -216,8 +216,8 @@
       "constructors": [],
       "generated_groups": [],
       "fixture_status": "not_exported",
-      "native_owner_paths": ["crates/gents/src/lifecycle/execution_lease.rs"],
-      "consumer_paths": ["crates/gents/src/lifecycle/execution_lease/tests.rs"],
+      "native_owner_paths": ["crates/gents/src/request/lifecycle/execution_lease.rs"],
+      "consumer_paths": ["crates/gents/src/request/lifecycle/execution_lease/tests.rs"],
       "native_status": "pending",
       "required_cases": [
         "block provider and tool reads while an independent bounded-cadence timer renews",
@@ -235,11 +235,11 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/config_client/txn.rs",
-        "crates/gents/src/defra_write/mod.rs"
+        "crates/gents/src/store/config_client/txn.rs",
+        "crates/gents/src/tools/builtin/defra_write/mod.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/identity/tests.rs",
+        "crates/gents/src/store/identity/tests.rs",
         "crates/gents/tests/defradb_genesis_identity.rs"
       ],
       "native_status": "pending",
@@ -259,12 +259,12 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/document_config/projection_acp.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs",
+        "crates/gents/src/documents/projection_acp.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs",
         "crates/gents/src/session/fork.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs",
         "crates/gents/src/session/tests.rs"
       ],
       "native_status": "pending",
@@ -288,7 +288,7 @@
         "crates/gents-schemas/src/lib.rs",
         "crates/gents-protocol/src/schemas.rs"
       ],
-      "consumer_paths": ["crates/gents/src/config_client/schema_install.rs"],
+      "consumer_paths": ["crates/gents/src/store/config_client/schema_install.rs"],
       "native_status": "pending",
       "required_cases": [
         "fresh schema registration contains the segment collection and omits retired seal, response and spill collections",
@@ -304,7 +304,7 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": ["crates/gents-migration/src/registry.rs"],
-      "consumer_paths": ["crates/gents/src/config_client/schema_install.rs"],
+      "consumer_paths": ["crates/gents/src/store/config_client/schema_install.rs"],
       "native_status": "pending",
       "required_cases": [
         "remove obsolete response and spill baselines from the catalog",
@@ -321,12 +321,12 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/agent/p2p_reconcile/templates.rs",
-        "crates/gents/src/agent/p2p_reconcile/profiles.rs",
-        "crates/gents/src/agent/p2p_reconcile/policy.rs",
-        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs"
+        "crates/gents/src/runtime/agent/p2p_reconcile/templates.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/profiles.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/policy.rs",
+        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs"
       ],
-      "consumer_paths": ["crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs"],
+      "consumer_paths": ["crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs"],
       "native_status": "pending",
       "required_cases": [
         "replace response and spill routes with segment while preserving requester and agent filters and every route direction",

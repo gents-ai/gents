@@ -1,3 +1,4 @@
+import { Lock } from "lucide-react";
 import { href, navigate } from "@/lib/router";
 import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
@@ -68,12 +69,19 @@ function NodeSettings({
       {readOnly && (
         <p
           role="status"
-          className="mx-6 mt-4 rounded-lg border border-border/60 bg-raised px-3 py-2 text-xs text-muted-foreground"
+          className="mx-6 mt-4 flex items-center gap-1.5 text-xs text-muted-foreground"
         >
+          <Lock aria-hidden className="size-3 shrink-0" />
           {readOnly}
         </p>
       )}
-      <fieldset disabled={Boolean(readOnly)} className="m-0 min-w-0 border-0 p-0">
+      {/* read-only: values at full strength, and nothing offered that would
+          change them */}
+      <fieldset
+        disabled={Boolean(readOnly)}
+        data-readonly={readOnly ? "" : undefined}
+        className="m-0 min-w-0 border-0 p-0 data-readonly:[&_*:disabled]:opacity-100! data-readonly:[&_[data-disabled]]:opacity-100! data-readonly:[&_[data-readonly-hide]]:hidden"
+      >
         {Panel && <Panel deployment={deployment} item={item} />}
       </fieldset>
     </SectionedScreen>

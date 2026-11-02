@@ -12,7 +12,7 @@ struct ToolCallRow {
 }
 
 async fn wait_for_running_tool(node: &gents::defra_node::EmbeddedNode, session_id: &str) -> String {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     for _ in 0..100 {
         let response = node
             .execute(&format!(
@@ -86,11 +86,11 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         &node_did,
         agent_id,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{agent_id}:tools"),
             node_did: node_did.clone(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sleep".to_string()]),
                     background_enabled: true,
@@ -152,7 +152,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
 }
 
 async fn load_tool_call(node: &gents::defra_node::EmbeddedNode, tool_call_id: &str) -> ToolCallRow {
-    let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
+    let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
             AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
@@ -168,7 +168,7 @@ async fn load_messages(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
 ) -> Vec<MessageRow> {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -201,19 +201,19 @@ async fn load_messages(
         .await
         .expect("reconstruct recovery notification");
         let content = match message {
-            gents::llm::message::Message::System { content } => content,
-            gents::llm::message::Message::User { content } => content
+            gents::inference::llm::message::Message::System { content } => content,
+            gents::inference::llm::message::Message::User { content } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::llm::message::UserContent::Text(text) => Some(text.text),
+                    gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
-            gents::llm::message::Message::Assistant { content, .. } => content
+            gents::inference::llm::message::Message::Assistant { content, .. } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::llm::message::AssistantContent::Text(text) => Some(text.text),
+                    gents::inference::llm::message::AssistantContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -228,7 +228,7 @@ async fn load_wakes(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
 ) -> Vec<serde_json::Value> {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentRequest(
@@ -337,7 +337,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         "the spawned process must survive its runtime's crash"
     );
     let executions = gents::BackgroundExecutionRegistry::default().with_process_records(records);
-    let report = gents::tool_call_lifecycle::ToolCallLifecycle::recover_all_with_executions(
+    let report = gents::tools::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
         &node,
         &ready.node_did,
         &executions,

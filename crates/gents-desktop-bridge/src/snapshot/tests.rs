@@ -1,4 +1,4 @@
-use gents::agent::p2p_reconcile::session_hydration::{
+use gents::runtime::agent::p2p_reconcile::session_hydration::{
     ClientHydrationPhase, ClientHydrationProgress,
 };
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};

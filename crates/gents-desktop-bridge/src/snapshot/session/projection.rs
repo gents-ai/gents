@@ -476,7 +476,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
             interrupt_requested_at: normalize_optional(request.interrupt_requested_at.as_deref()),
         };
         let cancel_cause = crate::cause_derivation::derive_request_cause(
-            request.lifecycle_state.map(|state| state.as_str()),
+            request.lifecycle_state,
             &evidence,
             normalize_optional(request.terminalized_at.as_deref()),
         );
@@ -561,7 +561,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let input_owners: RapidHashMap<(String, String), &AgentRequestRow> = requests
         .iter()
         .filter_map(|request| {
-            gents::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
+            gents::request::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
         })
         .collect();
     let input_request_for_message = |row: &TranscriptMessageRow| {
@@ -620,7 +620,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     .filter_map(|request| {
         Some(crate::types::FoldedInputView {
             request_id: request.request_id.clone(),
-            folded_into_request_id: gents::lifecycle::folded_into(request)?.to_owned(),
+            folded_into_request_id: gents::request::lifecycle::folded_into(request)?.to_owned(),
         })
     })
     .collect::<Vec<_>>();
@@ -665,7 +665,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 .iter()
                 .filter(|later| {
                     later.requester_did == request.requester_did
-                        && !gents::lifecycle::is_runtime_control_message(
+                        && !gents::request::lifecycle::is_runtime_control_message(
                             &later.input.clone().unwrap_or_default(),
                             "",
                         )
@@ -1188,7 +1188,7 @@ mod tests {
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 superseded_by_request: Some("head".into()),
                 superseded_by_request_doc_id: Some("doc-head".into()),
-                failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+                failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
                 ..Default::default()
             },
         ];
@@ -1280,7 +1280,7 @@ mod tests {
         let folded = AgentRequestRow {
             superseded_by_request: Some("head".into()),
             superseded_by_request_doc_id: Some("doc-head".into()),
-            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
             ..request("folded", RequestLifecycleState::Superseded, 1)
         };
         let mut rows = ClientStoreRows {
@@ -1424,7 +1424,7 @@ mod tests {
                     lifecycle_state: Some(RequestLifecycleState::Superseded),
                     superseded_by_request: Some("skilled".into()),
                     superseded_by_request_doc_id: Some("doc-skilled".into()),
-                    failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+                    failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
                     ..request("steered", &["review"], 1)
                 },
                 request("plain", &[], 2),
@@ -1735,7 +1735,7 @@ pub(super) fn project_transcript_rows(
     let input_owners: RapidHashMap<(String, String), &AgentRequestRow> = requests
         .iter()
         .filter_map(|request| {
-            gents::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
+            gents::request::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
         })
         .collect();
     let input_request_for_message = |row: &TranscriptMessageRow| {
@@ -2042,7 +2042,7 @@ pub(super) fn project_transcript_rows(
                     Some(pin.handle.clone()),
                     row.lifecycle_state
                         .as_deref()
-                        .and_then(gents::tool_call_lifecycle::ToolCallState::from_persisted)
+                        .and_then(gents::tools::call::lifecycle::ToolCallState::from_persisted)
                         .map(|lifecycle| {
                             gents::plugin::job_calls::job_state(
                                 lifecycle,
@@ -2065,7 +2065,7 @@ pub(super) fn project_transcript_rows(
                         && row.plugin_parent_tool_call_doc_id.is_none()
                         && row.spawned_by_tool_call_doc_id.is_none()
                         && row.tool_name.as_deref().is_some_and(
-                            gents::background_tools::supports_foreground_backgrounding,
+                            gents::tools::background::status::supports_foreground_backgrounding,
                         ),
                 ),
                 tool_call_key: row.tool_call_key.clone(),
@@ -2134,7 +2134,7 @@ pub(crate) fn render_transcript_rows(
 }
 
 pub(crate) async fn render_transcript_rows_with_provenance(
-    access: &dyn gents::config_client::ConfigRead,
+    access: &dyn gents::store::config_client::ConfigRead,
     store: &ClientStore,
     page: &gents_desktop_core::client::SessionTranscriptQueryPage,
     node_did: &str,

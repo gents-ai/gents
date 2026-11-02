@@ -68,7 +68,7 @@ fn folded_into(id: &str, after: &str, head: &str, second: u32) -> AgentRequestRo
     AgentRequestRow {
         superseded_by_request: Some(head.into()),
         superseded_by_request_doc_id: Some(format!("doc-{head}")),
-        failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+        failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
         ..queued(id, after, RequestLifecycleState::Superseded, second)
     }
 }
@@ -222,7 +222,7 @@ fn a_queued_message_the_runtime_ends_unclaimed_keeps_its_terminal_state() {
     assert!(matches!(
         snapshot.timeline_items.last(),
         Some(RenderedTimelineItem::PendingUserTurn { request_id, lifecycle_state, .. })
-            if request_id == "dropped" && lifecycle_state.as_deref() == Some("interrupted")
+            if request_id == "dropped" && *lifecycle_state == Some(RequestLifecycleState::Interrupted)
     ));
 }
 
@@ -351,6 +351,52 @@ fn a_selected_message_the_head_never_published_is_queued_again_not_delivered() {
     assert!(failed.timeline_items.iter().any(|item| matches!(
         item,
         RenderedTimelineItem::PendingUserTurn { request_id, lifecycle_state, folded_into_request_id: None, .. }
-            if request_id == "selected" && lifecycle_state.as_deref() == Some("pending")
+            if request_id == "selected" && *lifecycle_state == Some(RequestLifecycleState::Pending)
     )));
+}
+
+#[test]
+fn an_edited_queued_message_the_local_store_has_not_seen_stays_queued() {
+    let running = request("running", RequestLifecycleState::Processing, 0);
+    let sent = queued("sent", "running", RequestLifecycleState::Pending, 1);
+    let edited = AgentRequestRow {
+        lifecycle_state: Some(RequestLifecycleState::Superseded),
+        failure_reason: Some(gents::request::lifecycle::REPLACED_REASON.into()),
+        superseded_by_request: Some("edit".into()),
+        superseded_by_request_doc_id: Some("doc-edit".into()),
+        ..sent.clone()
+    };
+    let replacement = queued("edit", "running", RequestLifecycleState::Pending, 2);
+    let fresh = vec![running.clone(), edited, replacement];
+    let lagging = vec![running, sent];
+    let mut snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session_observing(
+                "running",
+                RequestLifecycleState::Processing,
+            )],
+            requests: fresh.clone(),
+            ..ClientStoreRows::default()
+        }),
+        "sess-1",
+        None,
+    )
+    .expect("snapshot");
+    assert_eq!(
+        crate::snapshot::session::pending_queue_doc_ids(&lagging, Some("did:test:amy"), "sess-1"),
+        vec!["doc-sent".to_owned()],
+    );
+
+    let arrivals =
+        crate::snapshot::session::pending_queue_doc_ids(&fresh, Some("did:test:amy"), "sess-1");
+    crate::snapshot::session::order_queued_turns(&mut snapshot, &arrivals);
+
+    assert_eq!(
+        snapshot
+            .queued_turns
+            .iter()
+            .map(|turn| turn.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["edit"],
+    );
 }

@@ -31,7 +31,7 @@ pub fn awaiting_goal_question_ids(
     }) else {
         return Vec::new();
     };
-    let ids = crate::mailbox::awaiting_question_ids(items, parent, now);
+    let ids = crate::session::mailbox::awaiting_question_ids(items, parent, now);
     if ids.is_empty() {
         return ids;
     }
@@ -115,7 +115,7 @@ mod tests {
         })).unwrap();
         for items in [Vec::new(), vec![unrelated]] {
             let (ids, verifications) =
-                crate::request_admission::count_request_receipt_verifications(|| {
+                crate::request::admission::count_request_receipt_verifications(|| {
                     awaiting_goal_question_ids(&observation, &latest, &requests, &items, now)
                 });
             assert!(ids.is_empty());

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { PendingTray } from "../src/ui/screens/PendingTray";
 import { SentText } from "../src/ui/screens/SkillChips";
 
 vi.mock("@/hooks/useClient", () => ({
@@ -8,6 +9,11 @@ vi.mock("@/hooks/useClient", () => ({
       { skillId: "review", displayName: "Review", description: "Looks it over" },
     ],
   }),
+}));
+
+vi.mock("../src/ui/hooks/useFleet", () => ({
+  useFleet: (select: (state: unknown) => unknown) =>
+    select({ nodes: {}, byNodeSessionId: {} }),
 }));
 
 const chips = () =>
@@ -38,9 +44,84 @@ describe("a sent message's skills", () => {
     expect(container.textContent).toBe("use /review, then ship");
   });
 
+  it("sit beside the message's session references, each drawn as its own chip", () => {
+    const { container } = render(
+      <SentText
+        content="/review compare with [Lexer work](gents:session/s-1)"
+        skills={["review"]}
+      />,
+    );
+    expect(chips()).toEqual(["/review"]);
+    expect(
+      [...document.querySelectorAll('[data-slot="session-chip"]')].map(
+        (chip) => chip.textContent,
+      ),
+    ).toEqual(["Lexer work"]);
+    expect(container.textContent).toBe("/review compare with Lexer work");
+  });
+
   it("leave a message without selected skills as plain text, slash words and all", () => {
     render(<SentText content="see /review and /etc" skills={[]} />);
     expect(chips()).toEqual([]);
     expect(screen.getByText("see /review and /etc")).toBeInTheDocument();
+  });
+});
+
+describe("a queued message's skills", () => {
+  it("show as chips in the tray, as they will once it is sent", () => {
+    const entry = {
+      requestDocId: "doc-q",
+      requestId: "q",
+      content: "fix it",
+      selectedSkillIds: ["review"],
+      editable: true,
+      steerable: true,
+      editGroup: "same",
+    };
+    render(
+      <PendingTray
+        queued={[
+          {
+            requestId: "q",
+            content: "fix it",
+            selectedSkillIds: ["review"],
+            lifecycleState: "pending",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: "2026-10-30T00:00:00Z",
+          },
+        ]}
+        queue={[entry]}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(chips()).toEqual(["/review"]);
+    expect(screen.getByText("fix it")).toBeTruthy();
+  });
+
+  it("show a session reference as a chip without any skill", () => {
+    const { container } = render(
+      <PendingTray
+        queued={[
+          {
+            requestId: "q",
+            content: "compare with [Lexer work](gents:session/s-1)",
+            selectedSkillIds: [],
+            lifecycleState: "pending",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: "2026-10-30T00:00:00Z",
+          },
+        ]}
+        queue={[]}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(
+      [...document.querySelectorAll('[data-slot="session-chip"]')].map(
+        (chip) => chip.textContent,
+      ),
+    ).toEqual(["Lexer work"]);
+    expect(container.textContent).not.toContain("gents:session");
   });
 });

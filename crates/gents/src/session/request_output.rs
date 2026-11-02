@@ -11,7 +11,7 @@ use gents_protocol::output::{
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_message;
 
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 
 use super::canonical_rows::{
     decode_scoped_canonical_rows, decode_scoped_request_output_segments,

@@ -59,4 +59,7 @@ zstd = { version = "0.13", optional = true }
 [dev-dependencies]
 proptest = "1"
 gents-lean-contract.workspace = true
+# Loopback reset fixtures use zero-duration `SO_LINGER` for abortive close via
+# `SockRef`; no positive linger duration is used.
+socket2 = "0.6"
 tokio = { workspace = true }

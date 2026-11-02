@@ -25,7 +25,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
 use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
@@ -79,7 +79,7 @@ pub struct ClientCoreOptions {
     pub rate_limit_rate: f64,
     pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
-    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    pub store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
     pub store_key_provider: Option<Arc<dyn ClientStoreKeyProvider>>,
     /// Headless observation must not open platform credential dialogs. Explicit
     /// user commands retain their existing operator authority requirements.
@@ -96,17 +96,17 @@ pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
     /// Retained stores and pending upgrades always use `load`.
     async fn create(
         &self,
-        record: &gents::store_key::StoreEncryption,
+        record: &gents::store::local::store_key::StoreEncryption,
         key_file: &std::path::Path,
         data_path: &std::path::Path,
-    ) -> Result<gents::store_key::StoreKey>;
+    ) -> Result<gents::store::local::store_key::StoreKey>;
 
     async fn load(
         &self,
-        record: &gents::store_key::StoreEncryption,
+        record: &gents::store::local::store_key::StoreEncryption,
         key_file: &std::path::Path,
         data_path: &std::path::Path,
-    ) -> Result<gents::store_key::StoreKey>;
+    ) -> Result<gents::store::local::store_key::StoreKey>;
 }
 
 impl Default for ClientCoreOptions {
@@ -124,7 +124,7 @@ impl Default for ClientCoreOptions {
             rate_limit_rate: DESKTOP_P2P_RATE_LIMIT_RATE,
             max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
             install_replicators_on_bootstrap: true,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::default(),
             store_key_provider: None,
             operator_identity_interaction: Default::default(),
         }
@@ -137,7 +137,7 @@ impl ClientCoreOptions {
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             relay_mode: IrohRelayModeConfig::Disabled,
             discovery: IrohDiscoveryConfig::Disabled,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
             ..Self::default()
         }
     }

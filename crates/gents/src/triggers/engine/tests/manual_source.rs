@@ -1,0 +1,599 @@
+use super::*;
+
+fn resolved_task_for_test(task_id: &str, agent_id: &str, prompt_template: &str) -> ResolvedTask {
+    ResolvedTask {
+        emit_outcome: false,
+        task_id: task_id.to_string(),
+        name: None,
+        agent_id: agent_id.to_string(),
+        prompt_template: prompt_template.to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
+        output_schema_ref: None,
+        hooks: Vec::new(),
+    }
+}
+
+fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
+    let mut tasks = RapidHashMap::new();
+    tasks.insert(task.task_id.clone(), task);
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        "general".to_string(),
+        vec![integration_test_agent("general")],
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+    )
+    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        tasks,
+        ..Default::default()
+    })
+    .with_node(stub_principal());
+    Arc::new(resolved.activate(1, RapidHashMap::new()))
+}
+
+#[tokio::test]
+async fn manual_source_run_task_now_yields_intent_with_args_vars() {
+    let snapshot = snapshot_with_active_task(resolved_task_for_test(
+        "greet-user",
+        "behavior-1",
+        "hello {{ args.name }}",
+    ));
+    let cancel = CancellationToken::new();
+    let (mut source, handle) = ManualSource::new(cancel.clone());
+
+    let pull = tokio::spawn(async move { source.next_fire().await });
+
+    let _result_rx = handle
+        .run_task_now(
+            snapshot.as_ref(),
+            "greet-user",
+            serde_json::json!({"name": "Amy"}),
+        )
+        .await
+        .unwrap();
+
+    let intent = pull.await.unwrap().expect("next_fire returned None");
+    assert_eq!(intent.trigger_kind, TriggerKind::Manual);
+    assert_eq!(intent.trigger_id, None);
+    assert_eq!(intent.concurrency, ConcurrencyMode::Parallel);
+    assert_eq!(
+        intent.args_vars.as_ref().and_then(|v| v["name"].as_str()),
+        Some("Amy"),
+    );
+    assert_eq!(intent.task.task_id, "greet-user");
+    assert_eq!(intent.event_vars["trigger_kind"].as_str(), Some("manual"));
+    assert!(intent.doc_vars.is_none());
+    let invocation_id = intent
+        .durable_fire_key
+        .strip_prefix("6:manual:36:")
+        .expect("length-delimited manual fire key prefix");
+    uuid::Uuid::parse_str(invocation_id).expect("manual invocation key must be a UUID");
+}
+
+#[tokio::test]
+async fn production_materializer_persists_event_source_document_lineage() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = integration_test_agent("general");
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did();
+    crate::test_support::install_test_agent(&node, owner, "general").await;
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner},
+        "tasks":[{"node_did":owner,"task_id":"task-event","agent_id":"general","prompt_template":"event body"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
+        "triggers":[{"node_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
+    })).unwrap();
+    let plan =
+        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.manual_source.fixture",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Trigger,
+                    owner,
+                    "event-trigger",
+                )
+                .await?
+                .expect("created trigger");
+                Ok::<_, anyhow::Error>(id)
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-event", "general", "event body");
+
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("event-trigger"),
+            TriggerKind::Event,
+            Some(&trigger_doc_id),
+            Some("source-doc-exact"),
+            None,
+            None,
+            "event body",
+            None,
+            "event-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect("Event materialize should succeed");
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ _docID caused_by_trigger_kind caused_by_trigger_doc_id caused_by_source_doc_id }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentRequest query failed: {:?}",
+        response.errors
+    );
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("event AgentRequest row");
+    assert_eq!(
+        row.get("caused_by_trigger_kind")
+            .and_then(serde_json::Value::as_str),
+        Some("event")
+    );
+    assert_eq!(
+        row.get("caused_by_trigger_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some(trigger_doc_id.as_str())
+    );
+    assert_eq!(
+        row.get("caused_by_source_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some("source-doc-exact")
+    );
+    let request_doc_id = row["_docID"].as_str().unwrap();
+    let queued =
+        crate::request::admission::load_request_for_admission_test(node.as_ref(), request_doc_id)
+            .await
+            .unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    );
+    verifier.verify_fresh(&queued, "general").await.unwrap();
+}
+
+#[tokio::test]
+async fn production_event_fire_into_a_paired_client_session_adopts_its_requester() {
+    use crate::store::identity::NodeIdentity;
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = integration_test_agent("general");
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did().to_owned();
+    crate::test_support::install_test_agent(&node, &owner, "general").await;
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner},
+        "tasks":[{"node_did":owner,"task_id":"task-lead","agent_id":"general","prompt_template":"continue the lead"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"outcomes","source_collection":"AgentRequest","event_kind":"created"}],
+        "triggers":[{"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
+    })).unwrap();
+    let plan =
+        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.paired_session_fire.fixture",
+        |txn| {
+            let plan = &plan;
+            let owner = &owner;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Trigger,
+                    owner,
+                    "lead-outcomes",
+                )
+                .await?
+                .expect("created trigger");
+                Ok::<_, anyhow::Error>(id)
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let desktop = KeyIdentity::load_or_create(
+        std::env::temp_dir().join(format!("paired-desktop-{}.key", uuid::Uuid::new_v4())),
+        None,
+    )
+    .unwrap();
+    let session_id = "paired-client-console";
+    crate::session::ensure_session_with_agent_id_and_requester_did(
+        &node,
+        session_id,
+        &owner,
+        "general",
+        Some(desktop.did()),
+    )
+    .await
+    .unwrap();
+    let fire_identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: owner.clone(),
+        trigger_id: "lead-outcomes".into(),
+        source_collection: "AgentRequest".into(),
+        source_doc_id: "outcome-doc".into(),
+    };
+    let fire = gents_protocol::trigger_delivery::TriggerFire {
+        request_id: fire_identity.request_id(),
+        fire_key: fire_identity.fire_key(),
+        identity: fire_identity,
+        task_id: "task-lead".into(),
+        session_id: session_id.into(),
+        goal_id: None,
+        goal_objective: None,
+        goal_token_budget: None,
+        goal_assignment_applied: false,
+        emit_outcome: false,
+        queued_serial: false,
+        source_handoff_id: None,
+        reply_session_id: None,
+        shard_id: None,
+        attempt: None,
+        created_at: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+    };
+    let prepared = crate::triggers::engine::durable::PreparedFire {
+        replace_prior: false,
+        receipt: fire.clone(),
+        target_existing: true,
+    };
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-lead", "general", "continue the lead");
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("lead-outcomes"),
+            TriggerKind::Event,
+            Some(&trigger_doc_id),
+            Some("outcome-doc"),
+            None,
+            None,
+            "continue the lead",
+            None,
+            &fire.fire_key,
+            Some(&prepared),
+            None,
+        )
+        .await
+        .expect("a fire into the paired client's session is delivered");
+    assert_eq!(request_id, fire.request_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID requester_did session_id }} }}"#,
+            escape_graphql_string(&request_id)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = &response.data.unwrap()["AgentRequest"][0];
+    assert_eq!(row["requester_did"], desktop.did());
+    assert_eq!(row["session_id"], session_id);
+    let queued = crate::request::admission::load_request_for_admission_test(
+        node.as_ref(),
+        row["_docID"].as_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verified = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    )
+    .verify_fresh(&queued, "general")
+    .await
+    .unwrap();
+    let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        &owner,
+        verified.clone(),
+        60,
+        crate::request::lifecycle::ExecutionOrigin::Scheduled,
+        "backend-test",
+    );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        crate::request::lifecycle::ClaimOutcome::Claimed
+    );
+    crate::tools::call::hook::DefraSessionHook::resume_with_identity_policy(
+        node.clone(),
+        session_id,
+        &owner,
+        verified.requester_did.as_deref(),
+        crate::tools::call::hook::FailurePolicy::FailClosed,
+    )
+    .await
+    .expect("the fire resumes the paired client's session");
+}
+
+#[tokio::test]
+async fn production_schedule_materialization_passes_final_exact_config_admission() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = integration_test_agent("general");
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did();
+    crate::test_support::install_test_agent(&node, owner, "general").await;
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner},
+        "tasks":[{"node_did":owner,"task_id":"task-schedule","agent_id":"general","prompt_template":"schedule body"}],
+        "schedules":[{"node_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
+        "triggers":[{"node_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
+    })).unwrap();
+    let plan =
+        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.manual_source.fixture",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Trigger,
+                    owner,
+                    "schedule-trigger",
+                )
+                .await?
+                .expect("created trigger");
+                Ok::<_, anyhow::Error>(id)
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-schedule", "general", "schedule body");
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("schedule-trigger"),
+            TriggerKind::Schedule,
+            Some(&trigger_doc_id),
+            None,
+            None,
+            None,
+            "schedule body",
+            None,
+            "schedule-test-fire",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID caused_by_trigger_doc_id caused_by_source_doc_id }} }}"#,
+            escape_graphql_string(&request_id),
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "load schedule request: {:?}",
+        response.errors
+    );
+    let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
+    assert_eq!(row["caused_by_trigger_doc_id"], trigger_doc_id);
+    assert!(row["caused_by_source_doc_id"].is_null());
+    let queued = crate::request::admission::load_request_for_admission_test(
+        node.as_ref(),
+        row["_docID"].as_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    );
+    verifier.verify_fresh(&queued, "general").await.unwrap();
+}
+
+#[tokio::test]
+async fn production_materializer_rejects_incoherent_source_document_lineage() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let snapshot =
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node, rx);
+    let task = resolved_task_for_test("task-lineage-input", "general", "body");
+
+    let missing = materializer
+        .materialize(
+            &task,
+            Some("event-trigger"),
+            TriggerKind::Event,
+            Some("event-trigger-config-doc"),
+            None,
+            None,
+            None,
+            "body",
+            None,
+            "invalid-event-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect_err("Event materialization without a source document must fail closed");
+    assert!(missing.to_string().contains("requires source_doc_id"));
+
+    let misplaced = materializer
+        .materialize(
+            &task,
+            Some("schedule-trigger"),
+            TriggerKind::Schedule,
+            Some("schedule-trigger-config-doc"),
+            Some("event-doc-on-schedule"),
+            None,
+            None,
+            "body",
+            None,
+            "invalid-schedule-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect_err("non-Event materialization must reject source document lineage");
+    assert!(misplaced.to_string().contains("Only Event"));
+}
+
+#[tokio::test]
+async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let snapshot = snapshot_with_schedules(RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node, rx);
+    let task = resolved_task_for_test("task-manual", "general", "manual body");
+
+    let err = materializer
+        .materialize(
+            &task,
+            Some("manual-must-not-have-id"),
+            TriggerKind::Manual,
+            None,
+            None,
+            None,
+            None,
+            "manual body",
+            None,
+            "invalid-manual-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect_err("Manual materialize with trigger_id must fail before persistence");
+
+    assert!(err.to_string().contains("must not carry trigger_id"));
+}
+
+#[tokio::test]
+async fn dispatch_manual_intent_renders_with_args_and_materializes() {
+    let task = resolved_task_for_test("greet-user", "general", "hello {{ args.name }}");
+    let snapshot = snapshot_with_active_task(task.clone());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+    let intent = FireIntent {
+        trigger_id: None,
+        trigger_kind: TriggerKind::Manual,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
+        args_vars: Some(serde_json :: json ! ({ "name" : "Amy" })),
+        durable_fire_key: "manual-test-fire".to_string(),
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+    let result = engine.dispatch(intent).await;
+    match result {
+        FireResult::Fired { request_id } => assert_eq!(
+            request_id, "req-0",
+            "spy materializer hands back sequentially-numbered ids starting at req-0"
+        ),
+        other => panic!("expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"),
+    }
+    let calls = materializer.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "exactly one materialize call expected for Manual dispatch"
+    );
+    let (trigger_id, kind, rendered) = &calls[0];
+    assert!(
+        trigger_id.is_none(),
+        "Manual intents carry trigger_id = None; got {trigger_id:?}"
+    );
+    assert_eq!(*kind, TriggerKind::Manual);
+    assert_eq!(
+        rendered, "hello Amy",
+        "dispatch must render the `args.name` template against args_vars"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_rejects_manual_intent_with_trigger_id() {
+    let task = resolved_task_for_test("greet-user", "general", "hello");
+    let snapshot = snapshot_with_active_task(task.clone());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+    let result_captured: Arc<Mutex<Option<FireResult>>> = Arc::new(Mutex::new(None));
+    let capture = result_captured.clone();
+    let intent = FireIntent {
+        trigger_id: Some("manual-must-not-have-id".to_string()),
+        trigger_kind: TriggerKind::Manual,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
+        args_vars: Some(serde_json::json!({})),
+        durable_fire_key: "manual-invalid-fire".to_string(),
+        pre_materialized_request_id: None,
+        on_result: Box::new(move |r| {
+            *capture.lock().unwrap() = Some(r);
+        }),
+    };
+    let result = engine.dispatch(intent).await;
+    match result {
+        FireResult::Rejected { error } => assert!(
+            error.contains("must not carry trigger_id"),
+            "unexpected manual well-formedness error: {error}"
+        ),
+        other => panic!("expected Rejected for malformed Manual intent, got {other:?}"),
+    }
+    assert!(
+        materializer.calls().is_empty(),
+        "malformed Manual intent must not reach the materializer"
+    );
+    assert!(
+        matches ! (result_captured . lock () . unwrap () . as_ref () , Some (FireResult :: Rejected { error }) if error . contains ("must not carry trigger_id")),
+        "on_result should receive the same malformed Manual error"
+    );
+}

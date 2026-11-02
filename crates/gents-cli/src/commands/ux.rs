@@ -31,7 +31,7 @@ async fn module(args: UxModuleArgs) -> Result<()> {
 fn lint(args: UxLintArgs) -> Result<()> {
     let source = std::fs::read_to_string(&args.file)
         .with_context(|| format!("reading {}", args.file.display()))?;
-    let findings = gents::ux_plugin::lint::lint(&source);
+    let findings = gents::plugin::ux::lint::lint(&source);
     crate::print_json(&serde_json::json!({
         "file": args.file,
         "admitted": findings.is_empty(),
@@ -41,7 +41,7 @@ fn lint(args: UxLintArgs) -> Result<()> {
         findings.is_empty(),
         "{} is refused by the static lint:\n{}",
         args.file.display(),
-        gents::ux_plugin::lint::describe(&findings)
+        gents::plugin::ux::lint::describe(&findings)
     );
     Ok(())
 }

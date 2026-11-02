@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type {
   DesktopSessionSnapshot,
@@ -16,22 +16,13 @@ import { cn } from "@gents/ui/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { InfoTip } from "./InfoTip";
+import { compactTokens } from "@/lib/tokens";
+import { fullTime, shortTime } from "./TranscriptMarker";
 
 type LastRequest = NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>;
 
 function formatPercent(value: number) {
   return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-}
-
-function trimFixed(value: number, digits: number) {
-  return value.toFixed(digits).replace(/\.0$/, "");
-}
-
-function compactTokens(tokens: number) {
-  if (tokens < 1000) return tokens.toLocaleString();
-  const thousands = tokens / 1000;
-  if (thousands < 999.5) return `${trimFixed(thousands, thousands < 99.95 ? 1 : 0)}k`;
-  return `${trimFixed(tokens / 1_000_000, 1)}M`;
 }
 
 type InputPart = { label: string; tokens: number; color: string };
@@ -330,12 +321,23 @@ export function SessionContext({
   context,
   compact = false,
   loadDetails,
+  onOpenCompaction,
 }: {
   context: DesktopSessionSnapshot["context"];
   compact?: boolean;
   loadDetails?: (input: LastRequest) => Promise<SessionContextDetails | null>;
+  /* shows a compaction where it happened in the transcript */
+  onOpenCompaction?: (
+    compaction: DesktopSessionSnapshot["context"]["compactions"][number],
+  ) => void;
 }) {
-  const popover = useExclusivePopover();
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+  }, []);
+  const popover = useExclusivePopover(clearHoverTimer);
+  useEffect(() => clearHoverTimer, [clearHoverTimer]);
   const lastRequest = context.lastRequest;
   const callKey = lastRequest
     ? JSON.stringify([
@@ -396,21 +398,29 @@ export function SessionContext({
     sessionCompactionCount == null
       ? "Session compactions unavailable"
       : `${sessionCompactionCount} session ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`;
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* A press pins the details open; only hover previews close on pointer exit */
   const pinned = useRef(false);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
     if (!canHover()) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => popover.onOpenChange(true), 150);
+    clearHoverTimer();
+    if (popover.open) return;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      popover.onOpenChange(true);
+    }, 150);
   };
   const hoverClose = () => {
-    if (!canHover() || pinned.current) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => onOpenChange(false), 200);
+    if (!canHover()) return;
+    clearHoverTimer();
+    if (pinned.current) return;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      onOpenChange(false);
+    }, 200);
   };
   const onOpenChange = (next: boolean) => {
+    clearHoverTimer();
     if (!next) pinned.current = false;
     popover.onOpenChange(next);
   };
@@ -449,7 +459,7 @@ export function SessionContext({
           )
         }
         onClick={() => {
-          if (hoverTimer.current) clearTimeout(hoverTimer.current);
+          clearHoverTimer();
           pinned.current = true;
         }}
         /* a move, not an enter: the meter can render under a resting pointer */
@@ -580,21 +590,49 @@ export function SessionContext({
               {context.compactions
                 .slice(-5)
                 .reverse()
-                .map((entry) => (
-                  <li key={entry.compactionKey} className="flex justify-between gap-3">
-                    <span>
-                      {entry.createdAt ? `${entry.createdAt} · ` : ""}
-                      {entry.messagesCompacted == null
-                        ? "Message count unavailable"
-                        : `${entry.messagesCompacted.toLocaleString()} messages`}
-                    </span>
-                    <span className="text-right tabular-nums">
-                      {entry.originalTokens == null || entry.compactedTokens == null
-                        ? "Token estimates unavailable"
-                        : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
-                    </span>
-                  </li>
-                ))}
+                .map((entry) => {
+                  const row = (
+                    <>
+                      <span>
+                        {entry.createdAt && shortTime(entry.createdAt) ? (
+                          <time
+                            dateTime={entry.createdAt}
+                            title={fullTime(entry.createdAt)}
+                          >
+                            {shortTime(entry.createdAt)}
+                          </time>
+                        ) : (
+                          "Compacted"
+                        )}
+                      </span>
+                      <span className="text-right tabular-nums">
+                        {entry.originalTokens == null || entry.compactedTokens == null
+                          ? "Token estimates unavailable"
+                          : `${compactTokens(entry.originalTokens)} → ${compactTokens(entry.compactedTokens)}`}
+                      </span>
+                    </>
+                  );
+                  const opens = onOpenCompaction && entry.messageSequence != null;
+                  return (
+                    <li key={entry.compactionKey}>
+                      {opens ? (
+                        <button
+                          type="button"
+                          title="Show it in the transcript"
+                          onClick={() => {
+                            onOpenChange(false);
+                            onOpenCompaction(entry);
+                          }}
+                          className="-mx-1 flex w-[calc(100%+0.5rem)] cursor-pointer justify-between gap-3 rounded px-1 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                        >
+                          {row}
+                        </button>
+                      ) : (
+                        <div className="flex justify-between gap-3">{row}</div>
+                      )}
+                    </li>
+                  );
+                })}
             </ul>
           )}
         </div>

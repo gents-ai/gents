@@ -60,8 +60,20 @@ export interface UxDataCallResult {
   output: unknown;
 }
 
+/** the plugin a host verb acts for: its id and the name the inventory shows */
+export interface UxCaller {
+  id: string;
+  name: string;
+}
+
+/** the host's shell: `send` takes the caller, which the plugin's context
+    binds, so a plugin never names its own sender */
+export type UxHostShell = Omit<UxShell, "send"> & {
+  send: (content: string, caller: UxCaller) => Promise<void>;
+};
+
 export interface UxHost {
-  shell: UxShell;
+  shell: UxHostShell;
   /** run a pack's .afb plugin `name`, keyed by the runtime listing
       (`<ns>/<pack>/<name>`) of the UX plugin calling; the bridge resolves
       the pack from the listing. Absent where no runtime is reachable. */
@@ -279,6 +291,8 @@ export interface CreateContextOptions {
       plugin: the key ctx.plugin calls under, which the bridge resolves to
       the pack; absent for a plugin outside a pack */
   listing?: string;
+  /** the display name the send confirmation shows; the id when absent */
+  name?: string;
 }
 
 export function createUxContext(
@@ -309,6 +323,8 @@ export function createUxContext(
     return dispose;
   };
   const host = () => hostOrThrow();
+  const caller: UxCaller = { id: pluginId, name: options.name ?? pluginId };
+  const send = (content: string) => host().shell.send(content, caller);
   return {
     source,
     pluginId,
@@ -326,9 +342,9 @@ export function createUxContext(
       }
       return h.plugin(options.listing, name, input);
     },
-    send: (content) => host().shell.send(content),
-    get shell() {
-      return host().shell;
+    send,
+    get shell(): UxShell {
+      return { ...host().shell, send };
     },
     storage: createStorage(pluginId),
     get os() {

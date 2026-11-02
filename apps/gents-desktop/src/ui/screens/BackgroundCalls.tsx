@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { SurfaceContext } from "@/app/surfaces";
-import { ArrowLeft, Ban, CircleCheck, CircleX, TriangleAlert } from "lucide-react";
+import {
+  ArrowLeft,
+  Ban,
+  CircleCheck,
+  CircleX,
+  MessageSquareText,
+  Terminal,
+  TriangleAlert,
+} from "lucide-react";
+import { PanelEmpty } from "./PanelEmpty";
+import { DayMarker, dayOpenings } from "./TranscriptMarker";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -9,6 +19,8 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
+import { openAt } from "@/app/messagePlaces";
+import { useSelectedSessionValue, useSessionFacts } from "@/hooks/useSelectedSession";
 import { toastFailure } from "@/lib/failure";
 import { configIsRead } from "@/lib/firstRun";
 import {
@@ -22,8 +34,11 @@ import {
   useAskedLog,
   backgroundPlace,
   rememberBackgroundPlace,
-  briefStateOf,
+  rowStateOf,
+  transcriptPlaceOf,
 } from "./background";
+import { Hint } from "./Hint";
+import { useNow } from "@/lib/clock";
 import { openTerminal, type LogTerminal } from "./terminal";
 import { useMinute } from "./time";
 import { StopButton } from "./WorkerActions";
@@ -106,13 +121,37 @@ function Stop({ call, sessionId }: { call: BackgroundCall; sessionId: string | n
   return <StopButton name={call.runs} onStop={() => void stop()} />;
 }
 
+const SHOW = "Show in transcript";
+
+/* opens the transcript at the step that started the call, when the
+   session's rows place it */
+function useShowInTranscript(call: BackgroundCall, sessionId: string | null) {
+  const facts = useSessionFacts();
+  const nodeDid = useSelectedSessionValue((s) =>
+    s?.sessionId === sessionId ? (s.nodeDid ?? null) : null,
+  );
+  const place = facts ? transcriptPlaceOf(call, facts.tools, facts.toolMessages) : null;
+  if (!sessionId || !place) return null;
+  return () =>
+    openAt({
+      sessionId,
+      nodeDid,
+      sequence: place.sequence,
+      itemKey: place.itemKey,
+      open: true,
+    });
+}
+
 export function BackgroundGroup({
   calls,
   sessionId,
+  returned,
   onOpen,
 }: {
   calls: readonly BackgroundCall[];
   sessionId: string | null;
+  /* the call whose output the reader just left */
+  returned: string | null;
   onOpen: (key: string) => void;
 }) {
   const now = useMinute();
@@ -125,6 +164,7 @@ export function BackgroundGroup({
         calls={running}
         now={now}
         sessionId={sessionId}
+        returned={returned}
         onOpen={onOpen}
       />
       <CallGroup
@@ -132,10 +172,90 @@ export function BackgroundGroup({
         calls={finished}
         now={now}
         sessionId={sessionId}
+        returned={returned}
         onOpen={onOpen}
         quiet
+        byDay
       />
     </>
+  );
+}
+
+function CallRow({
+  call,
+  minute,
+  sessionId,
+  returned,
+  onOpen,
+  quiet,
+  day,
+}: {
+  call: BackgroundCall;
+  minute: number;
+  sessionId: string | null;
+  returned: boolean;
+  onOpen: (key: string) => void;
+  quiet: boolean;
+  /** the day this row opens, when the list spans more than one */
+  day?: number;
+}) {
+  const running = isActive(call);
+  const second = useNow(running);
+  const now = running && second ? second : minute;
+  const state = stateOf(call, now);
+  const line = rowStateOf(call, now);
+  const show = useShowInTranscript(call, sessionId);
+  return (
+    <li>
+      {day !== undefined && <DayMarker day={day} />}
+      <div
+        title={`${call.runs}\n${state.text}`}
+        data-returned={returned || undefined}
+        className={cn(
+          "group/row relative grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-lg px-2 py-2 text-sm transition-colors duration-500 hover:bg-accent motion-reduce:transition-none",
+          returned && "bg-accent",
+        )}
+      >
+        <ToneIcon tone={state.tone} className="mt-0.5" />
+        <div className="min-w-0">
+          <button
+            type="button"
+            onClick={() => onOpen(call.key)}
+            className={cn(
+              "block w-full truncate text-left font-mono text-xs leading-5 outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring",
+              quiet && "text-muted-foreground",
+            )}
+          >
+            {call.runs}
+          </button>
+          <p
+            data-testid="background-state"
+            className="truncate text-xs text-muted-foreground tabular-nums"
+          >
+            <span className={cn(warns(state.tone) && "text-destructive")}>
+              {line.state}
+            </span>
+            {line.more && ` · ${line.more}`}
+          </p>
+        </div>
+        <span className="relative z-10 flex items-center gap-0.5 self-center">
+          {show && (
+            <Hint label={SHOW}>
+              <Button
+                variant="quiet"
+                size="icon-xs"
+                aria-label={SHOW}
+                onClick={show}
+                className="opacity-0 transition-opacity group-hover/row:opacity-100 group-has-focus-visible/row:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100"
+              >
+                <MessageSquareText className="size-3.5" />
+              </Button>
+            </Hint>
+          )}
+          <Stop call={call} sessionId={sessionId} />
+        </span>
+      </div>
+    </li>
   );
 }
 
@@ -144,56 +264,49 @@ function CallGroup({
   calls,
   now,
   sessionId,
+  returned,
   onOpen,
   quiet = false,
+  byDay = false,
 }: {
   title: string;
   calls: readonly BackgroundCall[];
   now: number;
   sessionId: string | null;
+  returned: string | null;
   onOpen: (key: string) => void;
   quiet?: boolean;
+  /** marks where each day starts, once the calls span more than one */
+  byDay?: boolean;
 }) {
   if (calls.length === 0) return null;
+  /* every day the rows open is marked, today's too, since the rows run newest
+     first; one day alone gets no marker */
+  const opens = byDay
+    ? dayOpenings(
+        calls,
+        (call) => call.key,
+        (call) => call.tool?.startedAt,
+        Number.NaN,
+      )
+    : new Map<string, number>();
+  const days = opens.size > 1 ? opens : new Map<string, number>();
   return (
     <section aria-label={title} className="mb-3">
       <h3 className="px-1 pb-1 text-xs font-medium text-muted-foreground">{title}</h3>
       <ul className="space-y-0.5">
-        {calls.map((call) => {
-          const state = stateOf(call, now);
-          return (
-            <li key={call.key}>
-              <div
-                title={`${call.runs}\n${state.text}`}
-                className="relative flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm hover:bg-accent"
-              >
-                <ToneIcon tone={state.tone} />
-                <button
-                  type="button"
-                  onClick={() => onOpen(call.key)}
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-left font-mono text-xs outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring",
-                    quiet && "text-muted-foreground",
-                  )}
-                >
-                  {call.runs}
-                </button>
-                <span
-                  data-testid="background-state"
-                  className={cn(
-                    "shrink-0 text-xs tabular-nums",
-                    warns(state.tone) ? "text-destructive" : "text-muted-foreground",
-                  )}
-                >
-                  {briefStateOf(call, now)}
-                </span>
-                <span className="relative z-10">
-                  <Stop call={call} sessionId={sessionId} />
-                </span>
-              </div>
-            </li>
-          );
-        })}
+        {calls.map((call) => (
+          <CallRow
+            key={call.key}
+            call={call}
+            minute={now}
+            sessionId={sessionId}
+            returned={call.key === returned}
+            onOpen={onOpen}
+            quiet={quiet}
+            day={days.get(call.key)}
+          />
+        ))}
       </ul>
     </section>
   );
@@ -221,6 +334,7 @@ export function BackgroundLog({
   const now = useMinute();
   const state = stateOf(call, now);
   const output = useKeptOutput(call);
+  const show = useShowInTranscript(call, sessionId);
   const p = call.tool?.presentation;
   const cwd = p?.kind === "command" ? p.cwd : null;
   return (
@@ -235,6 +349,12 @@ export function BackgroundLog({
           <ArrowLeft className="size-3.5" />
           Back
         </Button>
+        {show && (
+          <Button variant="ghost" size="sm" className="h-7 gap-1 px-1.5" onClick={show}>
+            <MessageSquareText className="size-3.5" />
+            {SHOW}
+          </Button>
+        )}
         <span className="flex-1" />
         <Stop call={call} sessionId={sessionId} />
       </div>
@@ -371,6 +491,58 @@ function Output({
   );
 }
 
+const RETURNED_MS = 1600;
+
+function BackgroundList({
+  calls,
+  sessionId,
+  returned,
+  onOpen,
+}: {
+  calls: readonly BackgroundCall[];
+  sessionId: string | null;
+  returned: string | null;
+  onOpen: (key: string) => void;
+}) {
+  const content = useRef<HTMLDivElement>(null);
+  const listed = calls.length > 0;
+  /* the list's place outlives it, as the log's does: opening a call, another
+     tab, the dock closed or another session */
+  useLayoutEffect(() => {
+    const viewport = content.current?.closest<HTMLElement>(
+      "[data-slot=scroll-area-viewport]",
+    );
+    if (!viewport || !listed) return;
+    viewport.scrollTop = backgroundPlace(sessionId).listTop;
+    /* a log opened from the transcript may be of a row out of view */
+    content.current
+      ?.querySelector("[data-returned]")
+      ?.scrollIntoView?.({ block: "nearest" });
+    const keep = () =>
+      rememberBackgroundPlace(sessionId, { listTop: viewport.scrollTop });
+    viewport.addEventListener("scroll", keep, { passive: true });
+    return () => viewport.removeEventListener("scroll", keep);
+  }, [sessionId, listed]);
+  if (!listed)
+    return (
+      <PanelEmpty icon={Terminal} title="Nothing running">
+        Commands and jobs the agent leaves running show here.
+      </PanelEmpty>
+    );
+  return (
+    <ScrollArea className="h-full">
+      <div ref={content} className="px-3 py-2">
+        <BackgroundGroup
+          calls={calls}
+          sessionId={sessionId}
+          returned={returned}
+          onOpen={onOpen}
+        />
+      </div>
+    </ScrollArea>
+  );
+}
+
 export function BackgroundSurface({ sessionId }: SurfaceContext) {
   const calls = useBackgroundCalls(sessionId);
   /* whose output is open; the dock can stay up while another session opens */
@@ -395,18 +567,29 @@ export function BackgroundSurface({ sessionId }: SurfaceContext) {
       [sessionId],
     ),
   );
+  const [returned, setReturned] = useState<string | null>(null);
+  useEffect(() => {
+    if (!returned) return;
+    const done = setTimeout(() => setReturned(null), RETURNED_MS);
+    return () => clearTimeout(done);
+  }, [returned]);
   if (log)
-    return <BackgroundLog call={log} sessionId={sessionId} onBack={() => show(null)} />;
+    return (
+      <BackgroundLog
+        call={log}
+        sessionId={sessionId}
+        onBack={() => {
+          setReturned(log.key);
+          show(null);
+        }}
+      />
+    );
   return (
-    <ScrollArea className="h-full">
-      <div className="px-3 py-2">
-        {calls.length === 0 && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Nothing is running in the background.
-          </p>
-        )}
-        <BackgroundGroup calls={calls} sessionId={sessionId} onOpen={show} />
-      </div>
-    </ScrollArea>
+    <BackgroundList
+      calls={calls}
+      sessionId={sessionId}
+      returned={returned}
+      onOpen={show}
+    />
   );
 }

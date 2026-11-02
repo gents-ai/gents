@@ -134,13 +134,15 @@ tokio::task_local! {
     static CAPTURE_SCOPE: Arc<RequestCaptureScope>;
 }
 
-/// Keep the task-local scope active through stream construction and polling;
-/// provider SSE clients connect lazily on first poll.
-pub async fn scope_request<T>(
+/// Poll and drop started work with its request capture scope. Large consumer
+/// futures must be heap-owned before callers embed this wrapper in other async
+/// or task-local frames. Unpolled work still drops in its caller's scope.
+pub fn scope_request<T>(
     scope: Arc<RequestCaptureScope>,
     future: impl std::future::Future<Output = T>,
-) -> T {
-    CAPTURE_SCOPE.scope(scope, future).await
+) -> impl std::future::Future<Output = T> {
+    let future = Box::pin(future);
+    async move { CAPTURE_SCOPE.scope(scope, future).await }
 }
 
 pub fn current_scope() -> Option<Arc<RequestCaptureScope>> {
@@ -721,5 +723,101 @@ mod tests {
             assert!(!flush_received_auxiliary_partial().await.unwrap());
         })
         .await;
+    }
+
+    struct DropScope(Arc<Mutex<Vec<Option<String>>>>);
+
+    impl Drop for DropScope {
+        fn drop(&mut self) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(current_scope().map(|scope| scope.context().request_id.clone()));
+        }
+    }
+
+    fn named_scope(name: &str) -> Arc<RequestCaptureScope> {
+        let mut context = context();
+        context.request_id = name.to_owned();
+        test_scope(context, noop_sink())
+    }
+
+    #[tokio::test]
+    async fn nested_capture_scope_restores_parent_across_yields_and_completion() {
+        let parent = named_scope("parent");
+        let child = named_scope("child");
+        let dropped = Arc::new(Mutex::new(Vec::new()));
+        scope_request(parent.clone(), async {
+            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
+            let probe = DropScope(dropped.clone());
+            scope_request(child.clone(), async move {
+                let _probe = probe;
+                assert!(Arc::ptr_eq(&current_scope().unwrap(), &child));
+                tokio::task::yield_now().await;
+                assert!(Arc::ptr_eq(&current_scope().unwrap(), &child));
+                assert!(tokio::spawn(async { current_scope().is_none() })
+                    .await
+                    .unwrap());
+            })
+            .await;
+            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
+        })
+        .await;
+        assert!(current_scope().is_none());
+        assert_eq!(*dropped.lock().unwrap(), vec![Some("child".to_owned())]);
+    }
+
+    #[tokio::test]
+    async fn cancelling_started_capture_work_drops_it_in_its_scope_without_leaking() {
+        let parent = named_scope("parent");
+        let dropped = Arc::new(Mutex::new(Vec::new()));
+        scope_request(parent.clone(), async {
+            let probe = DropScope(dropped.clone());
+            let mut work = Box::pin(scope_request(named_scope("child"), async move {
+                let _probe = probe;
+                std::future::pending::<()>().await;
+            }));
+            assert!(work.as_mut().now_or_never().is_none());
+            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
+            drop(work);
+            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
+        })
+        .await;
+        assert_eq!(*dropped.lock().unwrap(), vec![Some("child".to_owned())]);
+        assert!(current_scope().is_none());
+    }
+
+    #[tokio::test]
+    async fn dropping_unpolled_capture_work_never_enters_its_scope() {
+        let parent = named_scope("parent");
+        let dropped = Arc::new(Mutex::new(Vec::new()));
+        scope_request(parent.clone(), async {
+            let probe = DropScope(dropped.clone());
+            let work = scope_request(named_scope("never-entered"), async move {
+                let _probe = probe;
+                std::future::pending::<()>().await;
+            });
+            drop(work);
+            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
+        })
+        .await;
+        assert_eq!(*dropped.lock().unwrap(), vec![Some("parent".to_owned())]);
+        assert!(current_scope().is_none());
+    }
+
+    #[tokio::test]
+    async fn capture_scope_accepts_borrowed_non_send_work() {
+        let value = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut borrowed = 0;
+        scope_request(named_scope("borrowed"), async {
+            tokio::task::yield_now().await;
+            value.set(7);
+            borrowed = 9;
+            assert_eq!(current_scope().unwrap().context().request_id, "borrowed");
+        })
+        .await;
+        assert_eq!(value.get(), 7);
+        assert_eq!(borrowed, 9);
+        assert!(current_scope().is_none());
     }
 }

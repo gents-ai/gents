@@ -65,6 +65,9 @@ if [[ "${mode}" != "build" ]]; then
 fi
 
 cargo_args=()
+if [[ "${suite}" == support ]]; then
+  cargo_args+=(--features "gents-claude/transport,gents-protocol/typescript")
+fi
 for package in "${packages[@]}"; do
   cargo_args+=(-p "${package}")
 done

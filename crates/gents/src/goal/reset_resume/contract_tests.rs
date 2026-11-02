@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::lifecycle::queue::goal_continuation_identity;
+use crate::request::lifecycle::queue::goal_continuation_identity;
 use gents_loop::provider_limit::{
     classify_provider_limit, persisted_failure_reason, ProviderLimit, ProviderLimitHeaders,
 };
@@ -133,7 +133,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
                 .unwrap();
         }
         if !facts.profile_names_account {
-            crate::config_client::switch_profile_account(
+            crate::store::config_client::switch_profile_account(
                 &accounts.access,
                 did,
                 PROFILE,
@@ -145,7 +145,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             .unwrap();
         }
         if !facts.account_enabled {
-            crate::oauth_credential::set_account_enabled(
+            crate::inference::auth::credential::set_account_enabled(
                 &accounts.access,
                 did,
                 &accounts.a_credential,

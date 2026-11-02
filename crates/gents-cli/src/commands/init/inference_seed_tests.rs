@@ -84,15 +84,17 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 .await;
         let Some(expected) = &case.expected else {
             assert!(initialized.is_err(), "{case:?}");
-            assert!(gents::backend_registry::list_all_backends(&node)
-                .await?
-                .is_empty());
+            assert!(
+                gents::inference::backends::registry::list_all_backends(&node)
+                    .await?
+                    .is_empty()
+            );
             assert!(load_node(&node, owner).await?.is_none());
             node.shutdown().await;
             continue;
         };
         let summary = initialized.with_context(|| format!("{case:?}"))?;
-        let backends = gents::backend_registry::list_all_backends(&node).await?;
+        let backends = gents::inference::backends::registry::list_all_backends(&node).await?;
         assert_eq!(backends.len(), 1, "{case:?}");
         let backend = &backends[0];
         assert_eq!(backend.enabled, expected.enabled, "{case:?}");
@@ -101,13 +103,10 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             backend.effective_max_concurrent(),
             expected.effective_concurrent
         );
-        let profile = gents::document_config::load_inference_profile(
-            &node,
-            owner,
-            &summary.inference_profile_id,
-        )
-        .await?
-        .expect("the agent's profile exists even before model selection");
+        let profile =
+            gents::documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
+                .await?
+                .expect("the agent's profile exists even before model selection");
         assert_eq!(
             (!profile.model_name.is_empty()).then_some(profile.model_name.as_str()),
             expected.model.as_deref(),
@@ -121,10 +120,13 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             profile.max_output_tokens, expected.output_override,
             "{case:?}"
         );
-        let observation =
-            gents::backend_registry::lookup_backend_observation(&node, owner, &summary.backend_id)
-                .await?
-                .expect("the backend exists");
+        let observation = gents::inference::backends::registry::lookup_backend_observation(
+            &node,
+            owner,
+            &summary.backend_id,
+        )
+        .await?
+        .expect("the backend exists");
         assert_eq!(
             observation.probe_status.is_some(),
             expected.records_probe,
@@ -217,11 +219,11 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let summary =
         initialize_runtime_home(&access, &args, owner, resolve_initial_tool_package(&args)?)
             .await?;
-    let mut backend = gents::backend_registry::list_all_backends(&node)
+    let mut backend = gents::inference::backends::registry::list_all_backends(&node)
         .await?
         .remove(0);
     let mut profile =
-        gents::document_config::load_inference_profile(&node, owner, &summary.inference_profile_id)
+        gents::documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
             .await?
             .unwrap();
     backend.enabled = true;
@@ -239,7 +241,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         ],
     )
     .await?;
-    let advertised = gents::document_config::AdvertisedModel {
+    let advertised = gents::documents::AdvertisedModel {
         model_name: profile.model_name.clone(),
         display_name: None,
         context_window: Some(1_048_576),
@@ -247,13 +249,13 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         max_output_tokens: Some(65_536),
         reasoning_efforts: None,
     };
-    gents::backend_registry::record_discovered_catalog_on(
+    gents::inference::backends::registry::record_discovered_catalog_on(
         &access,
         &backend,
         vec![advertised.clone()],
     )
     .await?;
-    gents::backend_registry::set_backend_probe_status_with_last_probe(
+    gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
         &node,
         owner,
         &backend.backend_id,

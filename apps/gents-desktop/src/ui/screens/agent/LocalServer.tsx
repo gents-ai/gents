@@ -23,6 +23,63 @@ import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadi
 import { useStartup } from "@/hooks/useClient";
 import { errorText } from "../../../lib/errorText";
 
+/** Starting and stopping the local node, for the node page's header. */
+export function useLocalServerRun() {
+  const { stores, actions } = useApp();
+  const { incompatibleHome } = useStartup();
+  const status = stores.localServer.use.status();
+  const operating = stores.localServer.use.operation() !== null;
+  const [acting, setActing] = useState(false);
+  const run = async (label: string, op: () => Promise<unknown>) => {
+    setActing(true);
+    try {
+      await op();
+      await actions.refreshSnapshot();
+      toast(label);
+    } catch (e) {
+      if (!(await incompatibleHome?.adopt(e))) toast(`${label} failed: ${String(e)}`);
+    } finally {
+      setActing(false);
+    }
+  };
+  return {
+    offered: actions.localServerOffers.status,
+    running: status?.state === "running" || status?.state === "external",
+    external: status?.state === "external",
+    starting: status?.state === "starting",
+    busy: acting || operating,
+    start: () =>
+      void run("Node started", () =>
+        actions.startLocalServer(status?.nodeName ?? "gents"),
+      ),
+    stop: () => void run("Node stopped", () => actions.stopLocalServer()),
+  };
+}
+
+export function RunNodeButton() {
+  const node = useLocalServerRun();
+  if (!node.offered) return null;
+  return node.running ? (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={node.busy || node.external}
+      onClick={node.stop}
+    >
+      {node.busy ? <Spinner /> : null} Stop node
+    </Button>
+  ) : (
+    <Button
+      size="sm"
+      variant="brand"
+      disabled={node.busy || node.starting}
+      onClick={node.start}
+    >
+      {node.busy || node.starting ? <Spinner /> : null} Start node
+    </Button>
+  );
+}
+
 export function LocalServer() {
   const { stores, actions } = useApp();
   const { refreshSnapshot } = actions;
@@ -112,32 +169,7 @@ export function LocalServer() {
     }
   };
   return (
-    <Group
-      title="Local server"
-      action={
-        running ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy || status?.state === "external"}
-            onClick={() => void act("Node stopped", () => actions.stopLocalServer())}
-          >
-            {busy ? <Spinner /> : null} Stop node
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="brand"
-            disabled={busy || status?.state === "starting"}
-            onClick={() =>
-              void act("Node started", () => actions.startLocalServer(name))
-            }
-          >
-            {busy || status?.state === "starting" ? <Spinner /> : null} Start node
-          </Button>
-        )
-      }
-    >
+    <Group title="Local server">
       <Row
         label="State"
         description={

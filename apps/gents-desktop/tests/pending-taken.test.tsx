@@ -1,17 +1,11 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   PendingQueueEntryView,
   PendingTurnView,
 } from "@source-inc/gents-desktop-client";
 import { PendingTray } from "../src/ui/screens/PendingTray";
+import { renderIn, testApp } from "./app-fixture";
 
 const entry = (id: string): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -37,7 +31,8 @@ describe("a message the agent takes", () => {
   it("shows as picked up once the runtime stops listing it", () => {
     const queue = [entry("a"), entry("b")];
     const onEdit = vi.fn();
-    const view = render(
+    const view = renderIn(
+      testApp(),
       <PendingTray queued={queue.map(turn)} queue={queue} onEdit={onEdit} />,
     );
     view.rerender(
@@ -51,14 +46,20 @@ describe("a message the agent takes", () => {
 
   it("is not picked up when the runtime never listed it", () => {
     const queue = [entry("b")];
-    render(<PendingTray queued={[turn(entry("a")), turn(entry("b"))]} queue={queue} />);
+    renderIn(
+      testApp(),
+      <PendingTray queued={[turn(entry("a")), turn(entry("b"))]} queue={queue} />,
+    );
     expect(screen.queryByText("Picked up")).toBeNull();
   });
 
   it("folds out of the tray when it leaves, then is gone", () => {
     vi.useFakeTimers();
     const queue = [entry("a"), entry("b")];
-    const view = render(<PendingTray queued={queue.map(turn)} queue={queue} />);
+    const view = renderIn(
+      testApp(),
+      <PendingTray queued={queue.map(turn)} queue={queue} />,
+    );
     view.rerender(<PendingTray queued={[turn(entry("b"))]} queue={[entry("b")]} />);
     expect(screen.getByTestId("leaving-input")).toHaveTextContent("message a");
     expect(screen.getAllByTestId("queued-input")).toHaveLength(1);
@@ -69,7 +70,10 @@ describe("a message the agent takes", () => {
   it("keeps the tray until the last message has folded away", () => {
     vi.useFakeTimers();
     const queue = [entry("a")];
-    const view = render(<PendingTray queued={queue.map(turn)} queue={queue} />);
+    const view = renderIn(
+      testApp(),
+      <PendingTray queued={queue.map(turn)} queue={queue} />,
+    );
     view.rerender(<PendingTray queued={[]} queue={[]} />);
     expect(screen.getByTestId("queued-inputs")).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(250));
@@ -77,7 +81,8 @@ describe("a message the agent takes", () => {
   });
 
   it("does not fold away a message another takes the place of", () => {
-    const view = render(
+    const view = renderIn(
+      testApp(),
       <PendingTray queued={[turn(entry("a"))]} queue={[entry("a")]} />,
     );
     view.rerender(<PendingTray queued={[turn(entry("a2"))]} queue={[entry("a2")]} />);
@@ -87,7 +92,8 @@ describe("a message the agent takes", () => {
   it("does not fold away a message the person removed", async () => {
     const queue = [entry("a"), entry("b")];
     const onEdit = vi.fn().mockResolvedValue(undefined);
-    const view = render(
+    const view = renderIn(
+      testApp(),
       <PendingTray queued={queue.map(turn)} queue={queue} onEdit={onEdit} />,
     );
     fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]!);

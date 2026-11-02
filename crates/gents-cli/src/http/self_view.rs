@@ -1,8 +1,8 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -315,7 +315,7 @@ fn build_agents(
                 context_window: profile.and_then(|profile| profile.context_window),
                 compaction_threshold: compaction
                     .and_then(|config| config.threshold)
-                    .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD),
+                    .unwrap_or(gents::inference::resolved::DEFAULT_COMPACTION_THRESHOLD),
             })
         })
         .collect()

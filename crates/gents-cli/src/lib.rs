@@ -38,6 +38,7 @@ mod process_resources;
 mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;
+mod service_update;
 mod shared;
 mod telemetry;
 
@@ -66,8 +67,14 @@ const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.7";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 #[cfg(all(debug_assertions, feature = "native-e2e"))]
 const DEFAULT_HTTP_PORT: u16 = 21919;
+#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
+#[cfg(all(debug_assertions, feature = "native-e2e"))]
+const DEFAULT_CODEX_SHIM_PORT: u16 = 21929;
+#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
+#[cfg(all(debug_assertions, feature = "native-e2e"))]
+const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:21929/";
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 86_400;
 const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
 const TOKIO_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
@@ -80,19 +87,19 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
     "gents_server::commands::serve=info,",
     "gents::shutdown=info,",
-    "gents::agent::runtime=info,",
-    "gents::agent::daemon=info,",
-    "gents::agent::reconcile=info,",
-    "gents::agent::loop_stream=info,",
-    "gents::provider_input=info,",
-    "gents::chatgpt_codex=info,",
-    "gents::hook=info,",
+    "gents::runtime::agent::runtime=info,",
+    "gents::runtime::agent::daemon=info,",
+    "gents::runtime::agent::reconcile=info,",
+    "gents::runtime::agent::loop_stream=info,",
+    "gents::turn::provider_input=info,",
+    "gents::inference::clients::chatgpt_codex=info,",
+    "gents::tools::call::hook=info,",
     "gents::session::sessions=info,",
-    "gents::streaming=info,",
-    "gents::trigger_engine=info"
+    "gents::request::streaming=info,",
+    "gents::triggers::engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
+const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
 const CLI_AFTER_HELP: &str = "\
 Quick start:
   gents init
@@ -450,11 +457,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args, runtime).await,
         Command::PrepareRuntime(args) => commands::prepare_runtime::prepare(args, runtime).await,
-        Command::Service { command } => {
-            tokio::task::spawn_blocking(move || service_command(command))
-                .await
-                .context("running the service command")?
-        }
+        Command::Service { command } => service_command(command).await,
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
@@ -489,7 +492,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Goal { command } => commands::goal::dispatch(command).await,
         Command::Job { command } => commands::job::dispatch(command).await,
-        Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Eval { command } => commands::eval::dispatch(command, runtime).await,
         Command::Optimization { command } => {
@@ -501,45 +503,60 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     result
 }
 
-fn service_command(command: ServiceCommand) -> Result<()> {
+async fn service_command(command: ServiceCommand) -> Result<()> {
+    let command = match command {
+        ServiceCommand::Update(args) => return service_update::submit(args).await,
+        ServiceCommand::UpdateStatus { home, operation_id } => {
+            return service_update::status(home, operation_id).await
+        }
+        ServiceCommand::UpdateRun { home, operation_id } => {
+            return service_update::run(home, operation_id).await
+        }
+        ServiceCommand::UpdateCheck { home } => return service_update::check(home).await,
+        command => command,
+    };
     use native_service::{NativeServiceConfig, NativeServiceManager};
 
-    let (home, executable, action) = command.into_parts();
-    let home = absolutize(resolve_home_dir(home.as_deref()))?;
-    let executable = match executable {
-        Some(path) => absolutize(path)?,
-        None => std::env::current_exe().context("resolving the gents executable")?,
-    };
-    let config = NativeServiceConfig::new(home, executable)?;
-    let home = config.home.clone();
-    let manager = NativeServiceManager::new(config)?;
-    match action {
-        ServiceAction::Install {
-            network,
-            environment_file,
-        } => {
-            let environment = environment_file
-                .as_deref()
-                .map(native_service::read_environment_file)
-                .transpose()?;
-            network_settings::install_service(&manager, &home, &network, environment.as_ref())
-                .map(drop)
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let (home, executable, action) = command.into_parts();
+        let home = absolutize(resolve_home_dir(home.as_deref()))?;
+        let executable = match executable {
+            Some(path) => absolutize(path)?,
+            None => std::env::current_exe().context("resolving the gents executable")?,
+        };
+        let config = NativeServiceConfig::new(home, executable)?;
+        let home = config.home.clone();
+        let manager = NativeServiceManager::new(config)?;
+        service_update::refuse_self_disruption(&home, &action)?;
+        match action {
+            ServiceAction::Install {
+                network,
+                environment_file,
+            } => {
+                let environment = environment_file
+                    .as_deref()
+                    .map(native_service::read_environment_file)
+                    .transpose()?;
+                network_settings::install_service(&manager, &home, &network, environment.as_ref())
+                    .map(drop)
+            }
+            ServiceAction::Start { enable } => manager.start(enable),
+            ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
+            ServiceAction::Restart => manager.restart(),
+            ServiceAction::Enable => manager.set_enabled(true),
+            ServiceAction::Disable => manager.set_enabled(false),
+            ServiceAction::Status => {
+                print!(
+                    "{}\n{}\n",
+                    manager.status()?.summary(),
+                    network_settings::NetworkSettings::read(&home)?.summary()
+                );
+                Ok(())
+            }
+            ServiceAction::Uninstall => manager.uninstall(),
         }
-        ServiceAction::Start { enable } => manager.start(enable),
-        ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
-        ServiceAction::Restart => manager.restart(),
-        ServiceAction::Enable => manager.set_enabled(true),
-        ServiceAction::Disable => manager.set_enabled(false),
-        ServiceAction::Status => {
-            print!(
-                "{}\n{}\n",
-                manager.status()?.summary(),
-                network_settings::NetworkSettings::read(&home)?.summary()
-            );
-            Ok(())
-        }
-        ServiceAction::Uninstall => manager.uninstall(),
-    }
+    })
+    .await?
 }
 
 fn absolutize(path: PathBuf) -> Result<PathBuf> {
@@ -624,7 +641,7 @@ pub(crate) async fn resolve_config_access(
     let data_dir = default_data_dir(&home_dir);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let claim = gents::home::lock_store(&home_dir, &data_dir)?;
+    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
     let node = std::sync::Arc::new(
         persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
             .await?
@@ -636,10 +653,12 @@ pub(crate) async fn resolve_config_access(
     );
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local(node, claim)?;
-    gents::migration::ensure_all_runtime_migrations(migration_node)
+    gents::store::schema::migration::ensure_all_runtime_migrations(migration_node)
         .await
-        .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
-    gents::store_key::upgrade::finish(&data_dir)?;
+        .map_err(|error| {
+            gents::store::local::storage_backend::classify_store_error(error, &data_dir)
+        })?;
+    gents::store::local::store_key::upgrade::finish(&data_dir)?;
     Ok((access, home_dir))
 }
 
@@ -647,9 +666,11 @@ pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
 ) -> Result<NodeBuilder> {
-    gents::storage_backend::reject_legacy_store(data_dir)?;
-    let key = gents::store_key::open_home_store_key(home_dir, data_dir).await?;
-    Ok(gents::store_key::persistent_builder(data_dir, &key)?)
+    gents::store::local::storage_backend::reject_legacy_store(data_dir)?;
+    let key = gents::store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
+    Ok(gents::store::local::store_key::persistent_builder(
+        data_dir, &key,
+    )?)
 }
 
 pub(crate) async fn persistent_node_builder_with_stored_identity(
@@ -793,9 +814,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store_key::StoreEncryption::prepare(
-                        gents::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store_key::home_key_file(&home),
+                    gents::store::local::store_key::StoreEncryption::prepare(
+                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents::store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -821,7 +842,7 @@ mod tests {
         config.store_encryption = None;
         write_init_config(&home, &config).unwrap();
         let data = default_data_dir(&home);
-        let key_file = gents::store_key::home_key_file(&home);
+        let key_file = gents::store::local::store_key::home_key_file(&home);
         let before = std::fs::read(&key_file).unwrap();
 
         let error = match persistent_node_builder_with_stored_identity(&home, &data).await {
@@ -852,9 +873,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store_key::StoreEncryption::prepare(
-                        gents::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store_key::home_key_file(&home),
+                    gents::store::local::store_key::StoreEncryption::prepare(
+                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents::store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -868,7 +889,7 @@ mod tests {
             .store_encryption
             .unwrap()
             .initialize(
-                &gents::store_key::home_key_file(&home),
+                &gents::store::local::store_key::home_key_file(&home),
                 &default_data_dir(&home),
             )
             .unwrap();
@@ -886,7 +907,7 @@ mod tests {
             .expect("an offline home opens its store");
         let node = std::sync::Arc::downgrade(node);
 
-        let error = gents::home::lock_store(&home, &default_data_dir(&home))
+        let error = gents::store::local::home::lock_store(&home, &default_data_dir(&home))
             .expect_err("an opened store excludes another runtime");
         assert!(
             error.lock_held().is_some(),
@@ -908,7 +929,7 @@ mod tests {
     async fn an_offline_access_names_the_holder_of_a_claimed_store() {
         let temp = tempfile::tempdir().unwrap();
         let home = initialized_home(temp.path());
-        let _held = gents::home::lock_home_store(&home).unwrap();
+        let _held = gents::store::local::home::lock_home_store(&home).unwrap();
 
         let error = match resolve_config_access(Some(&home), None).await {
             Ok(_) => panic!("a claimed store must not be opened a second time"),
@@ -916,7 +937,7 @@ mod tests {
         };
 
         assert!(
-            gents::home::store_lock_held(error.as_ref()).is_some(),
+            gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
     }
@@ -947,7 +968,7 @@ mod tests {
             let mut input = service.clone();
             input[field] = value;
             assert!(
-                gents::config_client::config_projection(
+                gents::store::config_client::config_projection(
                     gents::Collection::ToolServiceRegistry,
                     Some(&input)
                 )
@@ -960,7 +981,7 @@ mod tests {
     #[test]
     fn canonical_service_import_preserves_optional_endpoint_and_exact_values() {
         let input = serde_json::json!({"node_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
-        let projected = gents::config_client::config_projection(
+        let projected = gents::store::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&input),
         )
@@ -973,7 +994,7 @@ mod tests {
         assert_eq!(projected["node_did"], "owner");
         let mut missing_owner = input;
         missing_owner.as_object_mut().unwrap().remove("node_did");
-        assert!(gents::config_client::config_projection(
+        assert!(gents::store::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&missing_owner)
         )

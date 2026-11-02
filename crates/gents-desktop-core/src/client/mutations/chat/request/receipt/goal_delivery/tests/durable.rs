@@ -1,7 +1,7 @@
 use super::*;
 use crate::client::mutations::submission_journal as journal;
-use gents::config_client::ConfigAccess;
-use gents::graphql::graphql_with_transaction_retry;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::graphql_with_transaction_retry;
 use std::sync::Arc;
 
 async fn stored(node: &defra_node::EmbeddedNode) -> Result<Vec<Record>> {

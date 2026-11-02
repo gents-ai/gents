@@ -1,5 +1,5 @@
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -441,23 +441,23 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        let message = gents::tool_call_lifecycle::load_tool_call_result(
-            &gents::config_client::ConfigAccess::local(node),
+        let message = gents::tools::call::lifecycle::load_tool_call_result(
+            &gents::store::config_client::ConfigAccess::local(node),
             &self.doc_id,
             &self.node_did,
             &self.session_id,
             self.requester_did.as_deref(),
         )
         .await?;
-        gents::tool_call_lifecycle::render_tool_result(&message)
+        gents::tools::call::lifecycle::render_tool_result(&message)
     }
 
     pub async fn try_load_arguments(
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        gents::tool_call_lifecycle::load_tool_call_arguments(
-            &gents::config_client::ConfigAccess::local(node),
+        gents::tools::call::lifecycle::load_tool_call_arguments(
+            &gents::store::config_client::ConfigAccess::local(node),
             &self.doc_id,
             &self.node_did,
             &self.session_id,
