@@ -481,7 +481,7 @@ export function CustomizeNavDialog() {
         }}
       >
         <DialogHeader>
-          <DialogTitle>Customize navigation</DialogTitle>
+          <DialogTitle>Customize sidebar</DialogTitle>
           <DialogDescription>
             Drag to reorder, remove what you don't use, and add it back from Add. Saved
             on this device.
@@ -495,7 +495,7 @@ export function CustomizeNavDialog() {
             newDivider={() => newDividerId(layout.order)}
           />
           <NavGroup
-            title="Sections · in the expanded nav"
+            title="Sections · in the expanded sidebar"
             entries={entries("sections", true)}
             onChange={change("sections")}
             newDivider={() => newDividerId(layout.order, "sections")}

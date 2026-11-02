@@ -95,8 +95,8 @@ export function GeneralPanel() {
         />
         {customizableNav && (
           <Row
-            label="Navigation items"
-            description="Reorder the side nav's items, hide them, or add pages of the node to it."
+            label="Sidebar items"
+            description="Reorder the sidebar's items, hide them, or add pages of the node to it."
           >
             <Button variant="outline" size="sm" onClick={openCustomizeNav}>
               Customize…

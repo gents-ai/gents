@@ -445,7 +445,7 @@ describe("the expanded nav's mailbox sections", () => {
     act(() => openCustomizeNav());
     const sheet = within(screen.getByTestId("customize-nav"));
     fireEvent.click(
-      sheet.getByRole("button", { name: "Add to Sections · in the expanded nav" }),
+      sheet.getByRole("button", { name: "Add to Sections · in the expanded sidebar" }),
     );
     (await screen.findByRole("menuitem", { name: "Mailbox" })).focus();
     await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");

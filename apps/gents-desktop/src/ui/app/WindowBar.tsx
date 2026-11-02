@@ -178,7 +178,7 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
           if ((e.target as HTMLElement).closest("a[href]")) sheet.onOpenChange(false);
         }}
       >
-        <SheetTitle className="sr-only">Navigation</SheetTitle>
+        <SheetTitle className="sr-only">Sidebar</SheetTitle>
         <button
           type="button"
           onClick={() => {
