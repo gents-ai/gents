@@ -4,7 +4,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
 import { Kbd } from "@gents/ui/components/kbd";
 import { TOOLTIP_KBD } from "@/screens/Hint";
-import { PAGE_KEYS } from "@/screens/shortcutKeys";
+import { useKeysHint } from "@/commands/commands";
 import { KeyHint } from "./RailFlyout";
 
 /** the way to the app's settings screen: an icon on the rail, a row in the
@@ -18,6 +18,7 @@ export function SettingsLink({
 }) {
   const active = route.name === "settings";
   const to = href({ name: "settings" });
+  const keys = useKeysHint("page.settings");
   if (variant === "rail")
     return (
       <Tooltip>
@@ -38,9 +39,7 @@ export function SettingsLink({
         </TooltipTrigger>
         <TooltipContent side="right">
           Settings
-          {PAGE_KEYS.settings && (
-            <Kbd className={TOOLTIP_KBD}>{PAGE_KEYS.settings}</Kbd>
-          )}
+          {keys && <Kbd className={TOOLTIP_KBD}>{keys}</Kbd>}
         </TooltipContent>
       </Tooltip>
     );
@@ -61,7 +60,7 @@ export function SettingsLink({
         <SlidersHorizontal className="size-4" />
       </span>
       <span className="min-w-0 flex-1 truncate">Settings</span>
-      <KeyHint keys={PAGE_KEYS.settings} />
+      <KeyHint keys={keys} />
     </a>
   );
 }

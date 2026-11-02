@@ -9,10 +9,19 @@ type Icon = ComponentType<{ className?: string }>;
 
 export type SearchTarget =
   | { kind: "attention"; item: MailboxItemView }
-  | { kind: "node"; nodeDid: string; name: string }
+  | {
+      kind: "node";
+      nodeDid: string;
+      name: string;
+      /** the node the app works with now */
+      current?: boolean;
+      /** the one before it, which the last-node key goes back to */
+      last?: boolean;
+    }
   | { kind: "session"; session: SessionSummary }
   | { kind: "agent"; route: Route; agentId: string; nodeDid: string }
-  | { kind: "setting" | "action"; route: Route; icon: Icon };
+  | { kind: "setting"; route: Route; icon: Icon }
+  | { kind: "action"; run: () => void; icon: Icon; keys?: string };
 
 export type SearchEntry = SearchTarget & {
   key: string;
@@ -82,8 +91,16 @@ export type SearchSources = {
     node: string;
     pack: string | null;
   }[];
-  /** every node, with what it is to this app and whether it answers */
-  nodes: readonly { nodeDid: string; name: string; place: string; offline: boolean }[];
+  /** every node, with what it is to this app and whether it answers, in the
+      order a Nodes view lists them before anything is typed */
+  nodes: readonly {
+    nodeDid: string;
+    name: string;
+    place: string;
+    offline: boolean;
+    current?: boolean;
+    last?: boolean;
+  }[];
   agentName: (session: SessionSummary) => string;
   nodeName: (nodeDid: string) => string;
   places: readonly {
@@ -93,7 +110,13 @@ export type SearchSources = {
     route: Route;
     icon: Icon;
   }[];
-  actions: readonly { key: string; title: string; route: Route; icon: Icon }[];
+  actions: readonly {
+    key: string;
+    title: string;
+    run: () => void;
+    icon: Icon;
+    keys?: string;
+  }[];
 };
 
 export function searchEntries(src: SearchSources): SearchEntry[] {
@@ -110,7 +133,13 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
     ),
     ...src.nodes.map((n) =>
       entry(
-        { kind: "node", nodeDid: n.nodeDid, name: n.name },
+        {
+          kind: "node",
+          nodeDid: n.nodeDid,
+          name: n.name,
+          current: n.current,
+          last: n.last,
+        },
         `node:${n.nodeDid}`,
         n.name,
         [n.place, n.offline && "Offline"].filter(Boolean).join(" · "),
@@ -158,7 +187,13 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
       ),
     ),
     ...src.actions.map((a) =>
-      entry({ kind: "action", route: a.route, icon: a.icon }, a.key, a.title, "", []),
+      entry(
+        { kind: "action", run: a.run, icon: a.icon, keys: a.keys },
+        a.key,
+        a.title,
+        "",
+        [],
+      ),
     ),
   ];
 }

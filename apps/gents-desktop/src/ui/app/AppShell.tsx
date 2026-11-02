@@ -10,6 +10,7 @@ import { CustomizeNavDialog } from "./CustomizeNav";
 import { Rail } from "./Rail";
 import { RailFlyout } from "./RailFlyout";
 import { SettingsLink } from "./SettingsLink";
+import { PanelPicker, usePanelCommands } from "./panelCommands";
 import { DockColumn, DockSheet } from "./ShellDock";
 import { SwipeHandles } from "./SwipeHandles";
 import { useShellLayout } from "./useShellLayout";
@@ -50,6 +51,7 @@ export function AppShell({
   children: ReactNode;
 }) {
   const layout = useShellLayout(route);
+  usePanelCommands(route, layout);
   const { shellRef, columns, wide, docked, dockVisible, paneCol, paneWidth, shownNav } =
     layout;
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
@@ -104,6 +106,7 @@ export function AppShell({
         {docked && <DockColumn route={route} layout={layout} />}
         <DockSheet route={route} layout={layout} />
         <CustomizeNavDialog />
+        <PanelPicker route={route} />
       </div>
     </PaneBarSlotContext.Provider>
   );

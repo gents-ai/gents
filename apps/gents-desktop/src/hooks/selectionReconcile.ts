@@ -1,6 +1,6 @@
 import { selectedAgentIdForDeployment } from "@source-inc/gents-desktop-client";
 
-import { rememberedNode, rememberNode } from "./activeNode";
+import { noteActiveNode, rememberedNode, rememberNode } from "./activeNode";
 import { firstNode, nodeOf } from "./fleetStore";
 import { selection } from "./selectionStore";
 import type { ShellStores } from "./shellProjection";
@@ -31,10 +31,12 @@ export function reconcileSelection(
   stores.fleet.subscribe(settle);
   store.subscribe(settle);
   let kept = store.getState().nodeDid;
+  if (kept) noteActiveNode(kept);
   store.subscribe(({ nodeDid }) => {
     if (!nodeDid || nodeDid === kept) return;
     kept = nodeDid;
     rememberNode(nodeDid);
+    noteActiveNode(nodeDid);
   });
   settle();
 }

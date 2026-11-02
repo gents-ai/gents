@@ -27,7 +27,6 @@ import {
   type NavLayout,
   type RecentCount,
 } from "@/preferences";
-import { MAILBOX_KEYS, PAGE_KEYS } from "@/screens/shortcutKeys";
 import { TRIAGE, type Triage } from "@/screens/mailbox-triage";
 import {
   isListed,
@@ -38,7 +37,8 @@ import {
 import { useNavItems, type NavContext, type NavItem } from "./navRegistry";
 
 export type NavRow = NavItem & {
-  keys?: string;
+  /** the command whose key its tooltip names */
+  command?: string;
   /** drawn only once chosen on this device */
   optional?: boolean;
   /** the rail has no list of sessions, so it also counts an open session
@@ -99,7 +99,7 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
   {
     id: "new-session",
     label: "New session",
-    keys: PAGE_KEYS.newSession,
+    command: "page.new-session",
     icon: <Plus className="size-4" />,
     to: { name: "session", sessionId: null },
     active: (route) => route.name === "session" && route.sessionId === null,
@@ -109,7 +109,7 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
   {
     id: "mailbox",
     label: "Mailbox",
-    keys: MAILBOX_KEYS,
+    command: "mailbox.stack",
     icon: <Inbox className="size-4" />,
     to: { name: "mailbox" },
     active: (route) => route.name === "mailbox",
@@ -120,7 +120,7 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
   {
     id: "sessions",
     label: "Sessions",
-    keys: PAGE_KEYS.sessions,
+    command: "page.sessions",
     icon: <ScrollText className="size-4" />,
     to: { name: "sessions" },
     active: sessionLists,
@@ -235,7 +235,7 @@ export const APP_FOOTER_ROWS: readonly NavRow[] = [
   {
     id: "nodes",
     label: "Nodes",
-    keys: PAGE_KEYS.nodes,
+    command: "page.nodes",
     icon: <Waypoints className="size-4" />,
     to: { name: "nodes" },
     active: (route) => route.name === "nodes" || route.name === "agents",
