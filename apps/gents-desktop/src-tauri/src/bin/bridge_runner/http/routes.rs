@@ -39,11 +39,10 @@ use gents_desktop_bridge::tauri_commands::inference_setup::{
 use gents_desktop_bridge::tauri_commands::operations::list_backends_with_health_for_core;
 use gents_desktop_bridge::types::{
     AgentSaveRequest, BackendRotationSetRequest, BackendSaveRequest, ChatSendRequest,
-    DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshot,
-    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
-    DesktopSessionProvenanceRequest, EnrollmentRequestView, EnrollmentStatusRequest,
-    EventSourceDeleteRequest, EventSourceSaveRequest, InferenceProfileSaveRequest,
-    NativeExecutorStatusView, NodeConfigSaveRequest, PeerStatusFetchRequest, RuntimeLivenessView,
+    DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshotRequest,
+    DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
+    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
+    InferenceProfileSaveRequest, NodeConfigSaveRequest, PeerStatusFetchRequest,
     ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
     SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
     ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
