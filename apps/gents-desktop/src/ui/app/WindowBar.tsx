@@ -54,7 +54,15 @@ function HistoryNav({ history }: { history: History }) {
   );
 }
 
-function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
+function NavSheet({
+  route,
+  settings,
+  history,
+}: {
+  route: Route;
+  settings: ReactNode;
+  history?: History;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -78,18 +86,49 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
         }}
       >
         <SheetTitle className="sr-only">Navigation</SheetTitle>
-        <MarkLink className="mx-3" />
-        <button
-          type="button"
-          onClick={() => {
-            setOpen(false);
-            openSearch();
-          }}
-          className="mx-3 flex h-8 items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <Search className="size-4" />
-          <span className="flex-1 text-left">Search</span>
-        </button>
+        <div className="mx-3 flex items-center gap-0.5 pr-10">
+          <MarkLink />
+          <div className="flex-1" />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Search"
+            onClick={() => {
+              setOpen(false);
+              openSearch();
+            }}
+          >
+            <Search />
+          </Button>
+          {history && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Back"
+                disabled={!history.canBack}
+                onClick={() => {
+                  setOpen(false);
+                  history.back();
+                }}
+              >
+                <ArrowLeft />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Forward"
+                disabled={!history.canForward}
+                onClick={() => {
+                  setOpen(false);
+                  history.forward();
+                }}
+              >
+                <ArrowRight />
+              </Button>
+            </>
+          )}
+        </div>
         <NavPanel route={route} settings={settings} syncRow />
       </SheetContent>
     </Sheet>
@@ -142,7 +181,7 @@ export function WindowBar({
         aria-hidden={paneHidden || undefined}
         data-tauri-drag-region={drag}
       >
-        <NavSheet route={route} settings={settings} />
+        <NavSheet route={route} settings={settings} history={history} />
         {/* on a phone the logo is in the menu sheet and the node in its node card */}
         <MarkLink className="max-sm:hidden md:hidden" />
         {history && <HistoryNav history={history} />}
