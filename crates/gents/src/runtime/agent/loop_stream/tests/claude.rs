@@ -177,18 +177,6 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
     let expected_content = crate::lean_vocab_test::native_claude_replay_content(&case.blocks);
     let blocks = gents_loop::claude_messages_body::encode_assistant_content(&expected_content)
         .expect("modeled canonical blocks render as Messages input");
-    let input = crate::inference::clients::claude_messages::build_messages_body_native(
-        "claude-sonnet-5",
-        None,
-        Some(128),
-        &[Message::Assistant {
-            id: None,
-            request_id: None,
-            content: expected_content.clone(),
-        }],
-        &[],
-    )
-    .expect("modeled canonical blocks render as Messages input");
     let expected = case
         .replay
         .iter()
