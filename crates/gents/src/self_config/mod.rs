@@ -1349,12 +1349,13 @@ impl PackInstaller {
             let kind = current
                 .map(|(_, kind)| kind)
                 .or_else(|| manifest.map(|manifest| &manifest.metadata.kind));
-            let installable = kind.is_some_and(|kind| {
-                matches!(
-                    kind,
-                    crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
-                )
-            });
+            let installable = manifest.is_some()
+                && kind.is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
+                    )
+                });
             items.push(json!({
                 "name": coordinate,
                 "version": listing.installed.as_ref().map(|entry| &entry.version),
