@@ -37,7 +37,7 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
     let node = initialized_node(tempdir.path(), &node_home, "mcp-register-read").await?;
     let query = format!(
         r#"{{ ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{service_id}" }} }}) {{
-            service_id display_name hostname lan_ip mcp_port mcp_path send_node_did status
+            service_id node_did display_name hostname lan_ip mcp_port mcp_path send_node_did status
         }} }}"#
     );
     let response = node.execute(&query).await;
@@ -49,6 +49,11 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .context("registered row")?;
+    assert_eq!(
+        row.get("node_did").and_then(Value::as_str),
+        node.node_identity_did(),
+        "register must stamp the owning node so the runtime reads the row"
+    );
     assert_eq!(row.get("lan_ip").and_then(Value::as_str), Some("127.0.0.1"));
     assert_eq!(row.get("mcp_port").and_then(Value::as_i64), Some(9213));
     assert_eq!(row.get("mcp_path").and_then(Value::as_str), Some("/mcp"));
@@ -145,7 +150,7 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
     {
         let node = initialized_node(tempdir.path(), &node_home, "mcp-probe-test").await?;
         ensure_runtime_schemas(&node).await?;
-        seed_mcp_service(&node, &service_id, "fixture-host", "", "", 0, "online").await?;
+        seed_mcp_service(&node, &service_id, "fixture-host", "", "", 0, true).await?;
         node.shutdown().await;
     }
 
@@ -203,19 +208,21 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
 }
 
 #[tokio::test]
-async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
+async fn mcp_probe_all_json_lists_each_enabled_service_of_the_node() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let node_home = tempdir.path().join("node-home");
     let missing_port_id = format!("a-fixture-mcp-{}", Uuid::new_v4().simple());
     let missing_address_id = format!("b-fixture-mcp-{}", Uuid::new_v4().simple());
     let offline_id = format!("z-fixture-mcp-{}", Uuid::new_v4().simple());
+    let foreign_id = format!("c-foreign-mcp-{}", Uuid::new_v4().simple());
 
     {
         let node = initialized_node(tempdir.path(), &node_home, "mcp-probe-all").await?;
         ensure_runtime_schemas(&node).await?;
-        seed_mcp_service(&node, &missing_port_id, "fixture-host", "", "", 0, "online").await?;
-        seed_mcp_service(&node, &missing_address_id, "", "", "", 9201, "online").await?;
-        seed_mcp_service(&node, &offline_id, "offline-host", "", "", 0, "offline").await?;
+        seed_mcp_service(&node, &missing_port_id, "fixture-host", "", "", 0, true).await?;
+        seed_mcp_service(&node, &missing_address_id, "", "", "", 9201, true).await?;
+        seed_mcp_service(&node, &offline_id, "offline-host", "", "", 0, false).await?;
+        seed_foreign_mcp_service(&node, &foreign_id).await?;
         node.shutdown().await;
     }
 
@@ -273,7 +280,7 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
         &["mcp", "probe", "--home", node_home, "missing-service"],
     )?;
     assert!(
-        stderr.contains("no online MCP service matched missing-service"),
+        stderr.contains("no enabled MCP service matched missing-service"),
         "missing service failure should identify the service:\n{stderr}"
     );
 
@@ -311,6 +318,7 @@ fn assert_last_error_contains(row: &Value, needle: &str) -> Result<()> {
     Ok(())
 }
 
+/// Seeds a row the way config writes it: owned by the node, no `status`.
 async fn seed_mcp_service(
     node: &EmbeddedNode,
     service_id: &str,
@@ -318,17 +326,58 @@ async fn seed_mcp_service(
     tailscale_ip: &str,
     lan_ip: &str,
     mcp_port: u16,
-    status: &str,
+    enabled: bool,
 ) -> Result<()> {
+    let node_did = node.node_identity_did().context("node identity DID")?;
+    seed_owned_mcp_service(
+        node,
+        node_did,
+        service_id,
+        hostname,
+        tailscale_ip,
+        lan_ip,
+        mcp_port,
+        enabled,
+    )
+    .await
+}
+
+/// A row with the same shape owned by another node must never be probed here.
+async fn seed_foreign_mcp_service(node: &EmbeddedNode, service_id: &str) -> Result<()> {
+    seed_owned_mcp_service(
+        node,
+        "did:key:z6MkForeignNode",
+        service_id,
+        "foreign-host",
+        "",
+        "",
+        0,
+        true,
+    )
+    .await
+}
+
+#[expect(clippy::too_many_arguments, reason = "fixture row fields")]
+async fn seed_owned_mcp_service(
+    node: &EmbeddedNode,
+    node_did: &str,
+    service_id: &str,
+    hostname: &str,
+    tailscale_ip: &str,
+    lan_ip: &str,
+    mcp_port: u16,
+    enabled: bool,
+) -> Result<()> {
+    let node_did = escape_graphql_string(node_did);
     let service_id = escape_graphql_string(service_id);
     let hostname = escape_graphql_string(hostname);
     let tailscale_ip = escape_graphql_string(tailscale_ip);
     let lan_ip = escape_graphql_string(lan_ip);
-    let status = escape_graphql_string(status);
     let mutation = format!(
         r#"mutation {{
             create_ToolServiceRegistry(input: {{
                 service_id: "{service_id}",
+                node_did: "{node_did}",
                 display_name: "Fixture MCP",
                 description: "MCP probe fixture",
                 hostname: "{hostname}",
@@ -336,7 +385,7 @@ async fn seed_mcp_service(
                 lan_ip: "{lan_ip}",
                 mcp_port: {mcp_port},
                 mcp_path: "/mcp",
-                status: "{status}",
+                enabled: {enabled},
                 version: "test",
                 updated_at: "2026-05-20T12:00:00Z"
             }}) {{ _docID }}

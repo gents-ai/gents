@@ -12,10 +12,8 @@ use serde::Serialize;
 use crate::cli::args::{McpCommand, McpProbeArgs, McpRegisterArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
-use crate::{
-    graphql_rows_or_empty_if_collection_missing, normalize_optional_string, parse_duration_suffix,
-    print_json, resolve_config_access,
-};
+use crate::home_state::resolve_node_did;
+use crate::{normalize_optional_string, parse_duration_suffix, print_json, resolve_config_access};
 
 pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
     match command {
@@ -58,6 +56,8 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     } else {
         (Some(host), None)
     };
+    // The runtime reads only the node's own rows, so the row must carry its owner.
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let display_name = args.display_name.as_deref().unwrap_or(service_id);
     let description = args.description.as_deref().unwrap_or("");
     let hostname_add = nullable_graphql_string("hostname", hostname);
@@ -65,9 +65,10 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     let mutation = format!(
         r#"mutation {{
   upsert_ToolServiceRegistry(
-    filter: {{ service_id: {{ _eq: "{service_id}" }} }}
+    filter: {{ node_did: {{ _eq: "{node_did}" }}, service_id: {{ _eq: "{service_id}" }} }}
     add: {{
       service_id: "{service_id}"
+      node_did: "{node_did}"
       display_name: "{display_name}"
       description: "{description}"
       {hostname_add}
@@ -96,6 +97,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
   ) {{ _docID service_id }}
 }}"#,
         service_id = escape_graphql_string(service_id),
+        node_did = escape_graphql_string(&node_did),
         display_name = escape_graphql_string(display_name),
         description = escape_graphql_string(description),
         port_field = port.map_or_else(
@@ -130,11 +132,12 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
         anyhow::bail!("--timeout must be greater than zero");
     }
 
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let services = load_mcp_services(&access, target.service_id()).await?;
+    let services = load_mcp_services(&access, &node_did, target.service_id()).await?;
     if matches!(target, ProbeTarget::Single(_)) && services.is_empty() {
         anyhow::bail!(
-            "no online MCP service matched {}",
+            "no enabled MCP service matched {} on node {node_did}",
             target.service_id().unwrap_or_default()
         );
     }
@@ -163,38 +166,23 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     }
 }
 
+/// Reads the probe set with the runtime's own loader, so the CLI probes exactly
+/// what the health checker would: the node's enabled services, whatever wrote them.
 async fn load_mcp_services(
     access: &ConfigAccess,
+    node_did: &str,
     service_id: Option<&str>,
 ) -> Result<Vec<McpHealthCheckService>> {
-    let registry_args = match service_id {
-        Some(service_id) => format!(
-            r#"filter: {{ _and: [{{ status: {{ _eq: "online" }} }}, {{ service_id: {{ _eq: "{}" }} }}] }}, limit: 1"#,
-            escape_graphql_string(service_id)
-        ),
-        None => r#"filter: { status: { _eq: "online" } }, order: { service_id: ASC }"#.to_string(),
-    };
-    let query = format!(
-        r#"{{
-            ToolServiceRegistry({registry_args}) {{
-                service_id
-                hostname
-                tailscale_ip
-                lan_ip
-                mcp_port
-                mcp_path
-                endpoint_url
-                send_node_did
-                updated_at
-            }}
-        }}"#
-    );
-    let rows = graphql_rows_or_empty_if_collection_missing(access, "ToolServiceRegistry", &query)
+    let mut services = gents::tools::mcp::registry::configured_mcp_services_on(access, node_did)
         .await
-        .context("loading online MCP service registry rows")?;
-    rows.into_iter()
-        .map(|row| serde_json::from_value(row).context("parsing ToolServiceRegistry row"))
-        .collect()
+        .context("loading the node's MCP service registry")?
+        .into_iter()
+        .filter(|service| service.enabled)
+        .filter(|service| service_id.is_none_or(|id| service.service_id == id))
+        .map(McpHealthCheckService::from)
+        .collect::<Vec<_>>();
+    services.sort_by(|left, right| left.service_id.cmp(&right.service_id));
+    Ok(services)
 }
 
 async fn probe_services(
@@ -403,7 +391,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    async fn registry_with_an_offline_twin() -> (ConfigAccess, String) {
+    async fn registry_with_twins_on_other_nodes() -> ConfigAccess {
         let node = Arc::new(
             crate::shared::test_support::node_builder()
                 .build()
@@ -412,65 +400,46 @@ mod tests {
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let access = ConfigAccess::local(node);
-        for host in ["twin-a", "twin-b", "twin-c"] {
-            let host = escape_graphql_string(host);
+        for (owner, service, enabled) in [
+            ("did:key:owner", "svc-1", true),
+            ("did:key:other", "svc-1", true),
+            ("did:key:owner", "svc-2", false),
+            ("did:key:owner", "svc-0", true),
+        ] {
             access
                 .write(
                     "test.mcp.seed",
                     &format!(
-                        r#"mutation {{ create_ToolServiceRegistry(input: {{ service_id: "svc-1", node_did: "did:key:{host}", hostname: "{host}", status: "pending", mcp_port: 1, mcp_path: "/mcp", enabled: true }}) {{ _docID }} }}"#
+                        r#"mutation {{ create_ToolServiceRegistry(input: {{ service_id: "{service}", node_did: "{owner}", hostname: "{owner}", mcp_port: 1, mcp_path: "/mcp", enabled: {enabled} }}) {{ _docID }} }}"#
                     ),
                 )
                 .await
                 .unwrap();
         }
-        let response = access
-            .execute(
-                r#"{ ToolServiceRegistry(filter: { service_id: { _eq: "svc-1" } }) { _docID hostname } }"#,
-            )
-            .await
-            .unwrap();
-        let mut rows: Vec<(String, String)> = response["data"]["ToolServiceRegistry"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|row| {
-                (
-                    row["_docID"].as_str().unwrap().to_string(),
-                    row["hostname"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect();
-        rows.sort();
-        assert_eq!(rows.len(), 3);
-        for (doc_id, status) in [
-            (rows.first().unwrap().0.clone(), "offline"),
-            (rows.last().unwrap().0.clone(), "online"),
-        ] {
-            let doc_id = escape_graphql_string(&doc_id);
-            let status = escape_graphql_string(status);
-            access
-                .write(
-                    "test.mcp.status",
-                    &format!(
-                        r#"mutation {{ update_ToolServiceRegistry(docID: "{doc_id}", input: {{ status: "{status}" }}) {{ _docID }} }}"#
-                    ),
-                )
-                .await
-                .unwrap();
-        }
-        let online_hostname = rows.last().unwrap().1.clone();
-        (access, online_hostname)
+        access
     }
 
     #[tokio::test]
-    async fn exact_service_read_finds_the_online_row_behind_an_offline_twin() {
-        let (access, online_hostname) = registry_with_an_offline_twin().await;
-        let services = load_mcp_services(&access, Some("svc-1")).await.unwrap();
-        let hostnames: Vec<&str> = services
+    async fn probe_set_is_the_nodes_enabled_services_without_a_status_gate() {
+        let access = registry_with_twins_on_other_nodes().await;
+        let all = load_mcp_services(&access, "did:key:owner", None)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = all
             .iter()
-            .map(|service| service.hostname.as_str())
+            .map(|service| service.service_id.as_str())
             .collect();
-        assert_eq!(hostnames, [online_hostname.as_str()]);
+        assert_eq!(ids, ["svc-0", "svc-1"]);
+        assert!(all
+            .iter()
+            .all(|service| service.hostname == "did:key:owner"));
+        let single = load_mcp_services(&access, "did:key:owner", Some("svc-1"))
+            .await
+            .unwrap();
+        assert_eq!(single.len(), 1);
+        assert!(load_mcp_services(&access, "did:key:owner", Some("svc-2"))
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
