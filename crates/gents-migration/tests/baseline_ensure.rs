@@ -30,6 +30,17 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         )
         .collect::<Vec<_>>();
 
+    // A collection changed since v1.0.0-rc0 is registered at its rc0 root and reaches the
+    // live SDL through the same patches an upgraded rc0 store takes.
+    let expected = expected
+        .into_iter()
+        .map(
+            |(name, sdl)| match gents_migration::canonical_schema_plan(name).unwrap() {
+                Some(plan) => (name, plan.root_sdl),
+                None => (name, sdl),
+            },
+        )
+        .collect::<Vec<_>>();
     assert_eq!(actual, expected, "baseline must use the canonical live SDL");
     assert!(gents_migration::DEFAULT_STEPS.is_empty());
     let stepped_client_collections = gents_migration::DEFAULT_STEPS
@@ -807,10 +818,17 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
             .unwrap()
             .is_branchable
     );
+    let canonical = gents_migration::canonical_versions().unwrap();
     for (name, version) in versions {
+        // A collection stored at its rc0 root moves on to its canonical version; every other
+        // lineage is left exactly where it was.
+        let expected = match gents_migration::canonical_schema_plan(name).unwrap() {
+            Some(plan) if plan.root_version == version => canonical[name].clone(),
+            _ => version,
+        };
         assert_eq!(
             node.get_collection(name).unwrap().unwrap().version_id,
-            version,
+            expected,
             "{name}"
         );
     }
@@ -1030,6 +1048,12 @@ async fn node_avatar_schema_pins_match() {
             "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey",
             "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli"
         )
+    );
+    // Registering the current SDL directly lands off the canonical lineage.
+    assert!(gents_migration::is_known_off_lineage("Node", &fresh_id));
+    assert_eq!(
+        gents_migration::canonical_versions().unwrap()["Node"],
+        patched.version_id
     );
     fresh.shutdown().await;
     old.shutdown().await;

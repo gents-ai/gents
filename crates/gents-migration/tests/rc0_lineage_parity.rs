@@ -282,6 +282,7 @@ async fn rc0_store_upgraded_by_rc1_starts_and_reports_agent_message() {
 #[test]
 fn client_authored_collections_keep_their_rc0_schema() {
     let rc0 = rc0_baseline();
+    let canonical = canonical_versions().unwrap();
     for name in CLIENT_AUTHORED_COLLECTIONS {
         let head = DEFAULT_BASELINE
             .iter()
@@ -296,9 +297,83 @@ fn client_authored_collections_keep_their_rc0_schema() {
             "client-authored {name} changed its schema since v1.0.0-rc0"
         );
         assert_eq!(head.expected_version, Some(then.version.as_str()), "{name}");
+        // No versioned step may move it either: every store, phones included, holds the rc0
+        // version (a step would move nodes and the desktop but never a phone).
+        assert_eq!(
+            canonical.get(*name).map(String::as_str),
+            Some(then.version.as_str()),
+            "client-authored {name} must stay on its v1.0.0-rc0 version"
+        );
         assert!(
             canonical_schema_plan(name).unwrap().is_none(),
             "client-authored {name} must not chain from an rc0 root"
         );
     }
+}
+
+/// The default registry registers each collection changed since v1.0.0-rc0 at its rc0 root,
+/// never at a version a direct registration of the current SDL produces (which is off the
+/// lineage). Any store built from the baseline starts where an rc0 store is.
+#[test]
+fn the_baseline_is_the_rc0_root_of_every_changed_collection() {
+    let rc0 = rc0_baseline();
+    for (name, _) in CANONICAL {
+        let Some(plan) = canonical_schema_plan(name).unwrap() else {
+            continue;
+        };
+        let entry = DEFAULT_BASELINE.iter().find(|e| e.name == *name).unwrap();
+        let then = rc0.iter().find(|c| c.name == *name).unwrap();
+        assert_eq!(
+            entry.sdl, then.sdl,
+            "{name} baseline SDL is not its rc0 SDL"
+        );
+        assert_eq!(
+            entry.expected_version,
+            Some(then.version.as_str()),
+            "{name}"
+        );
+        assert_eq!(plan.root_version, then.version, "{name}");
+        assert!(!plan.patches.is_empty(), "{name}");
+        assert!(!is_known_off_lineage(name, entry.expected_version.unwrap()));
+    }
+}
+
+/// A `Node` registered from the current SDL directly (a #3353 build before the canonical
+/// lineage) still starts, is never patched, and is named off the lineage.
+#[tokio::test]
+async fn node_registered_from_the_current_sdl_starts_and_is_reported() {
+    const NODE_UNPATCHED_FRESH: &str =
+        "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey";
+    let node = fresh_node().await;
+    node.add_collection(schemas::NODE).await.unwrap();
+    assert_eq!(
+        node.get_collection(schemas::NODE_NAME)
+            .unwrap()
+            .unwrap()
+            .version_id,
+        NODE_UNPATCHED_FRESH
+    );
+    let report = ensure_migrations(node.as_ref()).await.unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.starts_with(schemas::NODE_NAME)),
+        "{:?}",
+        report.warnings
+    );
+    assert_eq!(
+        node.get_collection(schemas::NODE_NAME)
+            .unwrap()
+            .unwrap()
+            .version_id,
+        NODE_UNPATCHED_FRESH
+    );
+    assert!(is_known_off_lineage(
+        schemas::NODE_NAME,
+        NODE_UNPATCHED_FRESH
+    ));
+    let rerun = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(rerun.steps_applied, 0);
+    node.shutdown().await;
 }

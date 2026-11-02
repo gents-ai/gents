@@ -364,6 +364,20 @@ async fn canonical_catalog_pins_for_authoring() {
             .get_collection(name)
             .expect("get")
             .unwrap_or_else(|| panic!("missing {name}"));
+        // A collection changed since v1.0.0-rc0 is pinned to its rc0 root; registering its
+        // current SDL directly lands off the canonical lineage, and must be known to.
+        if gents_migration::canonical_schema_plan(name)
+            .unwrap()
+            .is_some()
+        {
+            if !gents_migration::is_known_off_lineage(name, &cv.version_id) {
+                mismatches.push(format!(
+                    "{name}: current SDL registers {}, not a known off-lineage version",
+                    cv.version_id
+                ));
+            }
+            continue;
+        }
         let expected = gents_migration::DEFAULT_BASELINE
             .iter()
             .find(|entry| entry.name == name)
