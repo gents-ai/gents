@@ -66,6 +66,14 @@ pub(crate) fn include_existing_by_version(
             &["readers"][..],
         ),
         (
+            "ToolServiceRegistry",
+            "bafyreigckps33q33zvnrodzqlz72ri4osyodxleniwy6txwkfhnq7tgg3q",
+            "bafyreibvc5vydfmb6swugrjjff5c7eqfymcw6ckm5kn62wqz6tfmlvir2y",
+            "tool-service-registry-add-endpoint-url",
+            r#"[{"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"endpoint_url","Kind":"String"}}]"#,
+            &["endpoint_url"][..],
+        ),
+        (
             "CallbackResult",
             "bafyreiay7i7erfmg4o56oqrzbbwrohw253x7yme4plut46t4tgpzujdcq4",
             "bafyreiavdoikuwav2vgp4lxpnulwqlm6tvlqkmw7tugwb7gtjs5twd7kpq",
