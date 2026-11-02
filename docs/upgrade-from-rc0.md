@@ -31,20 +31,29 @@ manual migration command exists or is needed. Measured on a clone of a real
   register `AgentMessage`, `AgentRequest`, `AgentSession` and the other
   client-authored collections from the SDL they were built with, so those never
   change: every node, desktop and phone, RC0 or this release, holds the same
-  versions. The provider request id v1.0.0-rc1 stored as an `AgentMessage`
-  column is carried inside its `publication` JSON instead, and is not written
-  yet (an RC0-era reader refuses the extra key); this release reads it either
-  way.
+  versions. v1.0.0-rc1's `AgentMessage.native_request_id` column is gone: this
+  release neither selects nor writes it, so request ids an RC1 store recorded
+  are not read back (RC1-created stores are re-created anyway, see below). The
+  provider request id has a slot inside the `publication` JSON instead; this
+  release reads it there but does not write it yet, because an RC0-era reader
+  refuses the extra key (`PERSIST_NATIVE_REQUEST_ID` in
+  `gents-protocol/src/output/storage.rs`). Until then Claude replays lack the
+  previous request id after a reload, as on RC0.
 - **One canonical lineage for the rest.** DefraDB derives a patched schema
   version from the version it patches, so a fresh store that registered the new
   SDL directly would never match an upgraded RC0 store. This build registers the
   RC0 schema of every runtime-authored collection changed since RC0
-  (`InferenceBackend`, `Node`) on a fresh store and replays the same patches
-  (`CANONICAL_ROOTS` in `crates/gents-migration/src/upgrades.rs`), so upgraded
-  RC0 stores and new stores land on the same versions.
+  (`InferenceBackend`, `Node`) and replays the same patches: the default
+  registry's baseline is that RC0 root (`CANONICAL_ROOTS` in
+  `crates/gents-migration/src/upgrades.rs`), so upgraded RC0 stores, new nodes
+  and new desktop stores all land on the same versions. `Node` replicates to
+  desktops, so this matters for every pairing. A client that registers SDL
+  itself instead of running `gents_migration::ensure_migrations` must replay
+  `gents_migration::canonical_schema_plan` for these two collections.
 - **Stores v1.0.0-rc1 created or upgraded** (main between 2026-11-02 13:40Z and
   this change) are on a different lineage for `AgentMessage` (and, if rc1
-  created them, `InferenceBackend`). They still start, but log an error naming
+  created them, `InferenceBackend`); so is a `Node` that an RC2 build from
+  before the canonical lineage registered. They still start, but log an error naming
   each affected collection and how to re-create the store, and report them
   under `non_canonical_lineages` in `gents service update-check` (every managed
   collection) and `/status` (the replicated collections it advertises). A
@@ -62,7 +71,10 @@ manual migration command exists or is needed. Measured on a clone of a real
   started with `--http-port` or `--http-addr` flags that were never persisted.
   `gents service install` persists them.
 - A Tools document that sets `integrations.eth_tool_ids` keeps loading; the
-  field is ignored with a warning because Ethereum tools left core. Data in
+  field is ignored with a warning because Ethereum tools left core. It is
+  removed from that document the next time it is written (by any upgraded node
+  or app, and the write replicates), and rolling a node back does not bring it
+  back. Data in
   the removed `EthTool`, `ChainKeyBinding` and `EthSubmission` collections stays
   on disk untouched.
 
