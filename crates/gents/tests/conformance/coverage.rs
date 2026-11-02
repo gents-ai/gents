@@ -872,6 +872,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_image_hydration_route_cases,
         ),
         (
+            "scope_node_route_cases",
+            "ScopeNodeRouteCases",
+            &snapshot.scope_node_route_cases,
+        ),
+        (
             "file_review_subscription_cases",
             "FileReviewSubscriptionCases",
             &snapshot.file_review_subscription_cases,

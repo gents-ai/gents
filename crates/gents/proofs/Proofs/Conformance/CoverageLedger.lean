@@ -1499,6 +1499,11 @@ def caseCoverage : List CoverageEntry :=
       "FileImageHydrationRouteCases"
       "runtime::agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "scope_node_route_cases"
+      "ScopeNodeRouteCases"
+      "conformance::scope_templates::node_replication_matches_executable_scope_model")
+      "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_window_cases"
       "FileInventoryOrderWindowCases"

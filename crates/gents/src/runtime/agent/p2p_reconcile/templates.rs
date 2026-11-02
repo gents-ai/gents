@@ -242,6 +242,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "FileInventoryRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
+    "Node",
     "Agent",
     "AgentContext",
     "CompactionConfig",

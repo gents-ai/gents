@@ -128,7 +128,7 @@ import Proofs.Conformance.Contracts.Json.CausalHop
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
-import Proofs.ScopeTemplates.State
+import Proofs.ScopeTemplates.Derivation
 
 namespace Conformance.Contracts
 
@@ -140,6 +140,18 @@ def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
       ++ ",\"field\":" ++ jsonString rule.field
       ++ ",\"source\":" ++ jsonString (match rule.source with
           | .localDid => "localDid" | .peerDid => "peerDid" | .homeDid => "homeDid") ++ "}")
+
+def nodeRouteCasesJson : String :=
+  jsonArray (([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
+    ["did:key:owner", "did:key:quoted\"owner"].map fun owner =>
+      let predicate := (ScopeTemplates.clientRouteFilters direction "did:key:reader" owner).find?
+        (fun item => item.collection == "Node")
+      "{\"direction\":" ++ jsonString (match direction with
+        | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
+      ",\"owner\":" ++ jsonString owner ++
+      ",\"allowed\":" ++ boolJson ((ScopeTemplates.clientRouteCollections direction).contains "Node") ++
+      ",\"node_did\":" ++ (predicate.bind fun item =>
+        (item.clauses.find? fun clause => clause.field == "node_did").map (fun clause => jsonString clause.value)).getD "null" ++ "}")
 
 /-- The end of `snapshotJson`, split so its concatenation chain stays within
 the interpreter's recursion limit. -/
@@ -726,6 +738,7 @@ def snapshotJson : String :=
       ++ "\"agentTargetCallerRules\":"
         ++ scopeRulesJson ScopeTemplates.agentTargetCallerRules
       ++ ",\"agentTargetHostRules\":" ++ scopeRulesJson ScopeTemplates.agentTargetHostRules ++ "},"
+    ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"
