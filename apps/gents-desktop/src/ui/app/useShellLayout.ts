@@ -39,10 +39,16 @@ export function useShellLayout(route: Route) {
   /* what is left beside the dock once the page has its minimum, as of the
      last layout, which a dragged sidebar may not take */
   const room = useRef(Infinity);
-  const navResize = useNavResize(useNavWidth(), room.current);
-  /* while its edge is dragged toward the rail, the sidebar shows as it
-     will be let go: icons only */
-  const drawnNav: NavMode = navResize.collapsing ? "collapsed" : shownNav;
+  const navResize = useNavResize(useNavWidth(), room.current, shownNav !== "expanded");
+  /* while its edge is dragged, the sidebar shows as it will be let go:
+     icons only nearer the rail, expanded past that */
+  const drawnNav: NavMode = !navResize.dragging
+    ? shownNav
+    : navResize.collapsing
+      ? shownNav === "expanded"
+        ? "collapsed"
+        : shownNav
+      : "expanded";
   const rail =
     !wide || navHidden ? 0 : drawnNav === "expanded" ? navResize.width : RAIL_WIDTH;
   /* with no column beside it, the page keeps the window's margin itself */

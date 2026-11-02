@@ -135,7 +135,6 @@ export function AppShell({
     paneCol,
     paneWidth,
     paneInset,
-    shownNav,
     drawnNav,
     navHidden,
   } = layout;
@@ -169,7 +168,7 @@ export function AppShell({
             >
               <Rail route={route} settings={settings("rail")} />
             </RailFlyout>
-            {shownNav === "expanded" && <NavResizeHandle layout={layout} />}
+            <NavResizeHandle layout={layout} />
           </div>
         )}
         {navHidden && (

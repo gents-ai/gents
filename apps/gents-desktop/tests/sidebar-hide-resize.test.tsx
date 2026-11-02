@@ -23,9 +23,12 @@ const state = () => {
 };
 
 function Handle({ most = Infinity }: { most?: number }) {
+  /* the rail's edge while the sidebar isn't expanded, as the shell has it */
+  const nav = usePreferences((p) => p.nav);
   const resize = useNavResize(
     usePreferences((p) => p.navWidth),
     most,
+    nav === "collapsed",
   );
   return <div {...resize.handleProps} aria-label="Resize sidebar" />;
 }
@@ -64,8 +67,19 @@ describe("the sidebar", () => {
     expect(read().navWidth).toBe(420);
     fireEvent.keyDown(handle, { key: "Home" });
     expect(read().navWidth).toBe(220);
+  });
+
+  it("goes to icons only past its minimum, and comes out again from the rail", () => {
+    const read = state();
+    act(() => preferences.setNav("expanded"));
+    render(<Handle />);
+    const handle = screen.getByRole("separator", { name: "Resize sidebar" });
+    fireEvent.keyDown(handle, { key: "Home" });
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(read().nav).toBe("collapsed");
     expect(read().navWidth).toBe(220);
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(read().nav).toBe("expanded");
   });
 
   it("goes back to its first width on a double-click", () => {

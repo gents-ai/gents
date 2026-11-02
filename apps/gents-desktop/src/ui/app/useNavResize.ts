@@ -6,19 +6,20 @@ import { NAV_WIDTH, preferences } from "@/preferences";
 /** the rail's column, which a sidebar dragged narrow enough gives way to */
 export const RAIL_WIDTH = 56;
 
-/** The expanded sidebar's width as its edge is dragged, from its minimum
-    up to `most`, and the edge's handle. The width never goes below the
-    minimum, so its rows never squeeze and wrap: dragged nearer the rail
-    than that, the sidebar shows as icons only (`collapsing`) and expands
-    again when dragged back out. On release the width is kept for this
-    device; let go while collapsing, the sidebar stays icons only and the
-    width stays for next time. */
-export function useNavResize(width: number, most: number) {
+/** The sidebar's width as its edge is dragged, from its minimum up to
+    `most`, and the edge's handle. The width never goes below the minimum,
+    so its rows never squeeze and wrap: dragged nearer the rail than that,
+    the sidebar shows as icons only (`collapsing`), and dragged back out it
+    expands again. The rail's own edge pulls the sidebar out the same way
+    while it shows as icons (`onRail`). On release the width is kept for
+    this device; let go while collapsing, an expanded sidebar stays icons
+    only, and a rail stays as it was. */
+export function useNavResize(width: number, most: number, onRail: boolean) {
   const [live, setLive] = useState<number | null>(null);
   const [collapsing, setCollapsing] = useState(false);
   const collapsingRef = useRef(false);
   const liveRef = useRef<number | null>(null);
-  const drag = useRef<{ x: number; from: number } | null>(null);
+  const drag = useRef<{ x: number; from: number; fromRail: boolean } | null>(null);
   const max = Math.max(NAV_WIDTH.min, Math.min(NAV_WIDTH.max, most));
   const shown = Math.min(width, max);
   const clamp = (w: number) => Math.min(max, Math.max(NAV_WIDTH.min, w));
@@ -32,8 +33,9 @@ export function useNavResize(width: number, most: number) {
     if (e.button !== 0 || drag.current) return;
     e.preventDefault();
     document.documentElement.dataset.dragging = "divider";
-    drag.current = { x: e.clientX, from: shown };
-    follow(shown);
+    const from = onRail ? RAIL_WIDTH : shown;
+    drag.current = { x: e.clientX, from, fromRail: onRail };
+    follow(from, onRail);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent<HTMLElement>) => {
@@ -44,15 +46,31 @@ export function useNavResize(width: number, most: number) {
     else follow(clamp(to));
   };
   const onPointerUp = () => {
-    if (!drag.current) return;
+    const d = drag.current;
+    if (!d) return;
     drag.current = null;
     delete document.documentElement.dataset.dragging;
-    if (collapsingRef.current) preferences.setNav("collapsed");
-    else preferences.setNavWidth(clamp(liveRef.current ?? shown));
+    if (collapsingRef.current) {
+      if (!d.fromRail) preferences.setNav("collapsed");
+    } else {
+      preferences.setNavWidth(clamp(liveRef.current ?? shown));
+      if (d.fromRail) preferences.setNav("expanded");
+    }
     follow(null);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     const step = e.shiftKey ? 64 : 16;
+    if (onRail) {
+      if (e.key !== "ArrowRight") return;
+      e.preventDefault();
+      preferences.setNav("expanded");
+      return;
+    }
+    if (e.key === "ArrowLeft" && shown <= NAV_WIDTH.min) {
+      e.preventDefault();
+      preferences.setNav("collapsed");
+      return;
+    }
     const to =
       e.key === "ArrowRight"
         ? shown + step
@@ -74,9 +92,9 @@ export function useNavResize(width: number, most: number) {
     handleProps: {
       role: "separator" as const,
       "aria-orientation": "vertical" as const,
-      "aria-valuemin": NAV_WIDTH.min,
+      "aria-valuemin": RAIL_WIDTH,
       "aria-valuemax": max,
-      "aria-valuenow": Math.round(clamp(live ?? shown)),
+      "aria-valuenow": Math.round(live ?? (onRail ? RAIL_WIDTH : shown)),
       tabIndex: 0,
       onPointerDown,
       onPointerMove,
@@ -84,7 +102,10 @@ export function useNavResize(width: number, most: number) {
       onPointerCancel: onPointerUp,
       onLostPointerCapture: onPointerUp,
       onKeyDown,
-      onDoubleClick: () => preferences.setNavWidth(NAV_WIDTH.initial),
+      onDoubleClick: () => {
+        preferences.setNavWidth(NAV_WIDTH.initial);
+        if (onRail) preferences.setNav("expanded");
+      },
     },
   };
 }

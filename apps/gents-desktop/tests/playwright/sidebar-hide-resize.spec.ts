@@ -87,12 +87,22 @@ test.describe("the sidebar", () => {
     await page.mouse.move(ex - 220, y, { steps: 6 });
     await page.mouse.up();
     await expect.poll(() => paneX(page)).toBeLessThan(80);
-    await expect(handle).toHaveCount(0);
     /* let go there, it stays icons only, with no panel on hover */
-    const saved = await page.evaluate(
-      () => JSON.parse(localStorage.getItem("gents-preferences")!).state,
-    );
-    expect(saved.nav).toBe("collapsed");
+    const saved = async () =>
+      page.evaluate(() => JSON.parse(localStorage.getItem("gents-preferences")!).state);
+    expect((await saved()).nav).toBe("collapsed");
+
+    /* the rail's edge pulls it out again */
+    const rail = (await handle.boundingBox())!;
+    const rx = rail.x + rail.width / 2;
+    await page.mouse.move(rx, y);
+    await page.mouse.down();
+    await page.mouse.move(rx + 60, y, { steps: 6 });
+    await expect.poll(() => paneX(page)).toBeLessThan(80);
+    await page.mouse.move(rx + 200, y, { steps: 6 });
+    await expect.poll(() => paneX(page)).toBeGreaterThan(200);
+    await page.mouse.up();
+    expect((await saved()).nav).toBe("expanded");
   });
 
   test("its toggle's context menu chooses how it shows", async ({ page }) => {
