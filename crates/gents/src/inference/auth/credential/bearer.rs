@@ -35,12 +35,14 @@ pub fn apply_refreshed_tokens(credential: &mut OAuthCredential, refreshed: Refre
 
 fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) -> Option<String> {
     match kind {
-        OAuthRefreshKind::ChatGpt => crate::chatgpt_oauth_refresh::chatgpt_account_key(
+        OAuthRefreshKind::ChatGpt => crate::inference::auth::chatgpt_refresh::chatgpt_account_key(
             &credential.access_token,
             credential.id_token.as_deref(),
             credential.account_id.as_deref(),
         ),
-        OAuthRefreshKind::Xai => crate::xai_oauth_login::xai_account_key(&credential.access_token),
+        OAuthRefreshKind::Xai => {
+            crate::inference::auth::xai_login::xai_account_key(&credential.access_token)
+        }
         OAuthRefreshKind::Claude => None,
         OAuthRefreshKind::Gateway => credential.provider_account_key.clone(),
     }
@@ -298,13 +300,22 @@ impl DbCredentialBearer {
         let refresh_token = credential.refresh_token.as_str();
         match self.refresh_kind {
             OAuthRefreshKind::ChatGpt => {
-                crate::chatgpt_oauth_refresh::refresh_chatgpt_token(refresh_token, &self.http).await
+                crate::inference::auth::chatgpt_refresh::refresh_chatgpt_token(
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Claude => {
-                crate::claude_oauth_refresh::refresh_claude_token(refresh_token, &self.http).await
+                crate::inference::auth::claude_refresh::refresh_claude_token(
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Xai => {
-                crate::xai_oauth_refresh::refresh_xai_token(refresh_token, &self.http).await
+                crate::inference::auth::xai_refresh::refresh_xai_token(refresh_token, &self.http)
+                    .await
             }
             OAuthRefreshKind::Gateway => {
                 crate::claude_gateway_login::refresh_gateway_token(

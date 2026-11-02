@@ -56,10 +56,10 @@ fn claude(label: &str, account_uuid: &str, refresh_token: &str) -> OAuthCredenti
 }
 
 fn grok(access_claims: Value, refresh_token: &str) -> OAuthCredential {
-    crate::xai_oauth_login::credential_from_login_tokens(
+    crate::inference::auth::xai_login::credential_from_login_tokens(
         DID,
         crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
-        &crate::xai_oauth_login::XaiLoginTokens {
+        &crate::inference::auth::xai_login::XaiLoginTokens {
             access_token: unsigned_jwt(access_claims),
             refresh_token: refresh_token.into(),
             id_token: None,

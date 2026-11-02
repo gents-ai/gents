@@ -2,7 +2,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::documents::AdvertisedModel;
-use crate::documents::AdvertisedModel;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::ReasoningEffort;
 use crate::openai_wire::OpenAiWireApi;

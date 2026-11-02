@@ -188,7 +188,7 @@ async fn resolver_missing_account_keeps_the_missing_guidance() {
         &OAuthAuthProblem::Missing,
     );
     let bootstrap = |pick| {
-        crate::oauth_http::bootstrap_oauth_client(
+        crate::inference::auth::http::bootstrap_oauth_client(
             node.clone(),
             DID,
             PROVIDER,

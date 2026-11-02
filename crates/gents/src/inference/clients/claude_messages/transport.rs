@@ -234,6 +234,7 @@ pub(crate) fn url_parts(url: &str) -> Result<UrlParts, ClaudeTransportError> {
     })
 }
 
+/// A request as the transport needs it: where it goes and the headers to render.
 struct Outgoing {
     method: String,
     target: Target,

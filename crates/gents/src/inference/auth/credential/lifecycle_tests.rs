@@ -59,10 +59,10 @@ impl Product {
                 },
                 Utc::now(),
             ),
-            Self::Grok => crate::xai_oauth_login::credential_from_login_tokens(
+            Self::Grok => crate::inference::auth::xai_login::credential_from_login_tokens(
                 did,
                 XAI_OAUTH_PROVIDER,
-                &crate::xai_oauth_login::XaiLoginTokens {
+                &crate::inference::auth::xai_login::XaiLoginTokens {
                     access_token: unsigned_jwt(json!({
                         "principal_type": "user",
                         "principal_id": format!("principal-{who}"),
@@ -139,10 +139,10 @@ fn claude(did: &str, label: &str, account: Option<&str>, refresh_token: &str) ->
 }
 
 fn grok(did: &str, principal_id: &str, refresh_token: &str) -> OAuthCredential {
-    crate::xai_oauth_login::credential_from_login_tokens(
+    crate::inference::auth::xai_login::credential_from_login_tokens(
         did,
         XAI_OAUTH_PROVIDER,
-        &crate::xai_oauth_login::XaiLoginTokens {
+        &crate::inference::auth::xai_login::XaiLoginTokens {
             access_token: unsigned_jwt(
                 json!({ "principal_type": "user", "principal_id": principal_id }),
             ),
@@ -202,14 +202,16 @@ async fn backends(access: &ConfigAccess, did: &str) -> Vec<crate::InferenceBacke
         .collect()
 }
 
-fn preset(product: Product) -> crate::inference_setup::InferenceConnectionSpec {
-    use crate::inference_setup::{InferenceAuthMethod as Auth, InferenceProviderId as Id};
+fn preset(product: Product) -> crate::inference::backends::setup::InferenceConnectionSpec {
+    use crate::inference::backends::setup::{
+        InferenceAuthMethod as Auth, InferenceProviderId as Id,
+    };
     let (provider, auth) = match product {
         Product::ChatGpt => (Id::OpenAi, Auth::ChatGptOauth),
         Product::Claude => (Id::Anthropic, Auth::ClaudeOauth),
         Product::Grok => (Id::Grok, Auth::GrokOauth),
     };
-    crate::inference_setup::connection_spec(provider, auth, "").unwrap()
+    crate::inference::backends::setup::connection_spec(provider, auth, "").unwrap()
 }
 
 async fn remove(access: &ConfigAccess, did: &str, credential_id: &str) -> Result<()> {

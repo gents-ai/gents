@@ -17,7 +17,7 @@ async fn failed_refresh_is_not_retried_during_the_cooldown() {
     // Process-global; hold TOKEN_URL_ENV while it is set.
     let _env = TOKEN_URL_ENV.lock().await;
     std::env::set_var(
-        crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+        crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
     let bearer = DbCredentialBearer::new(
@@ -32,7 +32,7 @@ async fn failed_refresh_is_not_retried_during_the_cooldown() {
     let first = bearer.current_bearer().await.expect_err("revoked");
     let request = handle.await.expect("server");
     let second = bearer.current_bearer().await.expect_err("cooldown");
-    std::env::remove_var(crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+    std::env::remove_var(crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
 
     assert!(request.contains("grant_type=refresh_token"), "{request}");
     assert!(
@@ -108,13 +108,13 @@ async fn revoked_twice(bearer: &DbCredentialBearer) -> (String, String, String) 
     let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
     let _env = TOKEN_URL_ENV.lock().await;
     std::env::set_var(
-        crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+        crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
     let first = bearer.current_bearer().await.expect_err("revoked");
     let request = handle.await.expect("server");
     let second = bearer.current_bearer().await.expect_err("cooldown");
-    std::env::remove_var(crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+    std::env::remove_var(crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     (first.to_string(), second.to_string(), request)
 }
 

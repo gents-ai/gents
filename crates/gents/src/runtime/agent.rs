@@ -366,13 +366,14 @@ impl Gents {
     /// scope. The admission guard prevents publication racing retirement.
     pub async fn publish_runtime_notice(
         &self,
-        notice: crate::mailbox::RuntimeNotice,
-    ) -> Result<crate::mailbox::MailboxItem, crate::mailbox::RuntimeNoticeError> {
+        notice: crate::session::mailbox::RuntimeNotice,
+    ) -> Result<crate::session::mailbox::MailboxItem, crate::session::mailbox::RuntimeNoticeError>
+    {
         let _work = self
             .service_admission()
             .admit()
             .map_err(anyhow::Error::new)?;
-        crate::mailbox::publish_runtime_notice(&self.node, self.node_did(), notice).await
+        crate::session::mailbox::publish_runtime_notice(&self.node, self.node_did(), notice).await
     }
 
     pub fn usage_cache(&self) -> &Arc<crate::inference::usage_observation::UsageCache> {
@@ -540,7 +541,7 @@ pub(crate) struct AgentDocumentInputs<'a> {
     pub(crate) tool_selection: ResolvedToolSelection,
     pub(crate) agent_tools: AgentToolConfig,
     pub(crate) tool_ceiling: &'a ToolCeiling,
-    pub(crate) skills: Vec<crate::skills::Skill>,
+    pub(crate) skills: Vec<crate::documents::skills::Skill>,
     pub(crate) oauth_pool: Vec<String>,
 }
 

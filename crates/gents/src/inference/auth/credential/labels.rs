@@ -8,8 +8,8 @@ pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
     let claims = credential
         .id_token
         .as_deref()
-        .and_then(crate::chatgpt_oauth_refresh::jwt_payload)
-        .or_else(|| crate::chatgpt_oauth_refresh::jwt_payload(&credential.access_token));
+        .and_then(crate::inference::auth::chatgpt_refresh::jwt_payload)
+        .or_else(|| crate::inference::auth::chatgpt_refresh::jwt_payload(&credential.access_token));
     let field = |key: &str| {
         claims
             .as_ref()

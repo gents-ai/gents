@@ -320,8 +320,8 @@ async fn with_capture<F>(future: F) -> usize
 where
     F: std::future::Future<Output = ()>,
 {
-    use crate::rendered_request::scope::{arm, scope_request, test_scope};
-    use crate::rendered_request::{
+    use crate::inference::rendered_request::scope::{arm, scope_request, test_scope};
+    use crate::inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, CaptureScopeKind, RenderedRequestCaptureSink,
         RenderedRequestContext,
     };
@@ -537,7 +537,7 @@ fn replay_is_bounded_by_the_retry_budget_and_the_unchanged_token_count() {
 
 #[tokio::test]
 async fn usage_headers_are_observed_on_success_and_on_error() {
-    use crate::usage_observation::{UsageAccount, UsageCache, UsageReporter};
+    use crate::inference::usage_observation::{UsageAccount, UsageCache, UsageReporter};
     use gents_loop::account_usage::UsageSource;
     let node = crate::inference::auth::credential::test_support::test_node().await;
     let cache: Arc<UsageCache> = Arc::default();
@@ -571,9 +571,11 @@ async fn usage_headers_are_observed_on_success_and_on_error() {
         let _ = client
             .send_streaming(first_party_request(server.port, "{}"))
             .await;
-        let stored = crate::provider_http::tests::stored_usage_eventually(&cache, &node, &account)
-            .await
-            .expect("usage recorded");
+        let stored = crate::inference::clients::provider_http::tests::stored_usage_eventually(
+            &cache, &node, &account,
+        )
+        .await
+        .expect("usage recorded");
         let window = &stored.report.windows[0];
         assert_eq!((window.label.as_str(), window.used_pct), ("5h", 50.0));
         assert_eq!(window.source, source);

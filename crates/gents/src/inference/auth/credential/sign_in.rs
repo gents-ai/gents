@@ -71,14 +71,14 @@ pub async fn store_sign_in(
 fn identity_keys(credential: &OAuthCredential) -> Vec<String> {
     let keys = match credential.provider.as_str() {
         crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
-            crate::chatgpt_oauth_refresh::chatgpt_account_keys(
+            crate::inference::auth::chatgpt_refresh::chatgpt_account_keys(
                 &credential.access_token,
                 credential.id_token.as_deref(),
                 credential.account_id.as_deref(),
             )
         }
         crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => {
-            crate::xai_oauth_login::xai_account_key(&credential.access_token)
+            crate::inference::auth::xai_login::xai_account_key(&credential.access_token)
                 .into_iter()
                 .collect()
         }

@@ -38,7 +38,7 @@ pub async fn stream_messages<S>(
     account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+    usage: Option<Arc<crate::inference::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
@@ -81,7 +81,7 @@ pub(crate) async fn stream_messages_at<S>(
     account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+    usage: Option<Arc<crate::inference::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
@@ -108,7 +108,7 @@ pub(crate) async fn stream_messages_routed<S>(
     account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+    usage: Option<Arc<crate::inference::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
@@ -264,7 +264,7 @@ pub(crate) async fn open_messages_at<S>(
     account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+    usage: Option<Arc<crate::inference::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     MessagesOpenError,
@@ -288,7 +288,7 @@ async fn open_messages<S>(
     account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+    usage: Option<Arc<crate::inference::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     MessagesOpenError,

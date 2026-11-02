@@ -20,7 +20,9 @@ pub(crate) fn preset_account_backend(
     account_ref: Option<&str>,
     name: String,
 ) -> Result<crate::InferenceBackend> {
-    use crate::inference_setup::{InferenceAuthMethod as Auth, InferenceProviderId as Id};
+    use crate::inference::backends::setup::{
+        InferenceAuthMethod as Auth, InferenceProviderId as Id,
+    };
     let (provider_id, auth) = match provider {
         crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
             (Id::OpenAi, Auth::ChatGptOauth)
@@ -29,7 +31,7 @@ pub(crate) fn preset_account_backend(
         crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
         other => anyhow::bail!("no backend reads sign-ins of provider {other:?}"),
     };
-    let spec = crate::inference_setup::connection_spec(provider_id, auth, "")?;
+    let spec = crate::inference::backends::setup::connection_spec(provider_id, auth, "")?;
     Ok(crate::InferenceBackend {
         node_did: node_did.to_owned(),
         backend_id: match account_ref {

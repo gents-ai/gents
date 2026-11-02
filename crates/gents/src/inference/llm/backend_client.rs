@@ -1025,7 +1025,7 @@ mod tests {
     #[tokio::test]
     async fn a_signed_in_gateway_builds_from_its_stored_account() {
         let node = test_node().await;
-        crate::migration::ensure_all_runtime_migrations(node.clone())
+        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .unwrap();
         let mut gateway = test_agent(

@@ -8,7 +8,7 @@ use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
 use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
 use crate::store::config_client::ConfigAccess;
 
-const XAI_ENV: &str = crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
+const XAI_ENV: &str = crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
 const CHATGPT_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 
 fn token_response(access_claims: Value) -> &'static str {
@@ -209,10 +209,10 @@ async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
     let did = "did:key:z6MkTestRaceSignIn";
     seed_expired_grok(&node, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-    let sign_in = crate::xai_oauth_login::credential_from_login_tokens(
+    let sign_in = crate::inference::auth::xai_login::credential_from_login_tokens(
         did,
         XAI_OAUTH_PROVIDER,
-        &crate::xai_oauth_login::XaiLoginTokens {
+        &crate::inference::auth::xai_login::XaiLoginTokens {
             access_token: unsigned_jwt(
                 json!({ "principal_type": "user", "principal_id": "principal-1" }),
             ),
@@ -257,10 +257,10 @@ async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
     let did = "did:key:z6MkTestRaceReplaced";
     seed_expired_grok(&node, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-    let sign_in = crate::xai_oauth_login::credential_from_login_tokens(
+    let sign_in = crate::inference::auth::xai_login::credential_from_login_tokens(
         did,
         XAI_OAUTH_PROVIDER,
-        &crate::xai_oauth_login::XaiLoginTokens {
+        &crate::inference::auth::xai_login::XaiLoginTokens {
             access_token: unsigned_jwt(
                 json!({ "principal_type": "user", "principal_id": "principal-2" }),
             ),
@@ -394,7 +394,7 @@ async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
         assert_eq!(before.provider_account_key, None);
         let default = resolve(AccountPick::ProviderDefault).await.unwrap();
         assert_eq!(default.as_ref(), Some(&before));
-        let (_, bootstrapped) = crate::oauth_http::bootstrap_oauth_client(
+        let (_, bootstrapped) = crate::inference::auth::http::bootstrap_oauth_client(
             node.clone(),
             did,
             provider,
