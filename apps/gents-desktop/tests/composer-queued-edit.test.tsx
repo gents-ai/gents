@@ -308,4 +308,42 @@ describe("queued composer edits", () => {
       onEdit.mock.calls[0]![0].messages[0].authoredInput.selected_skill_ids,
     ).toEqual(["gone", "review"]);
   });
+
+  it("saves an edit that keeps only skills, and still refuses an empty one", async () => {
+    const entry: PendingQueueEntryView & { selectedSkillIds: string[] } = {
+      requestDocId: "doc",
+      requestId: "request",
+      content: "old",
+      editable: true,
+      steerable: true,
+      editGroup: "group",
+      selectedSkillIds: ["gone"],
+    };
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useComposerEditing({
+        queue: [entry],
+        onEdit,
+        setDraft: vi.fn(),
+        send: vi.fn(),
+        textarea: { current: null },
+        commands: ["review"],
+      }),
+    );
+    act(() => result.current.begin(entry));
+    expect(result.current.editing).toMatchObject({ text: "old", skills: ["gone"] });
+
+    /* the text cleared, the skill beside the field kept */
+    await act(async () => result.current.save("", [], "/gone", ["gone"]));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(
+      onEdit.mock.calls[0]![0].messages[0].authoredInput.selected_skill_ids,
+    ).toEqual(["gone"]);
+
+    /* no text, no skills, no attachments or context: nothing to send */
+    act(() => result.current.begin(entry));
+    act(() => result.current.removeSkill("gone"));
+    await act(async () => result.current.save("", [], "", []));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
 });
