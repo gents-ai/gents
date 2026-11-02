@@ -391,10 +391,13 @@ fn a_gateway_accepts_node_oauth_but_not_a_pool() {
         json!({"kind": "node_oauth_pool"}),
         Value::Null,
     );
+    // RC1 refuses a pool on any provider but the Claude subscription, with the
+    // pool's own reason, rather than as an auth/provider mismatch.
     assert!(
         pool.validation_violations()
             .iter()
-            .any(|violation| violation == mismatch),
+            .any(|violation| violation
+                .starts_with("account pools rotate Claude subscription accounts")),
         "{:?}",
         pool.validation_violations()
     );

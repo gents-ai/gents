@@ -1004,6 +1004,8 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents/src/inference/clients/claude_messages/mod.rs",
     "crates/gents/src/inference/clients/claude_messages/send.rs",
     "crates/gents/src/inference/clients/claude_messages/sse.rs",
+    "crates/gents/src/inference/clients/claude_messages/sse_body.rs",
+    "crates/gents/src/inference/clients/claude_messages/sse_state.rs",
     "crates/gents/src/inference/clients/claude_messages/transport.rs",
     "crates/gents/src/inference/clients/claude_subscription.rs",
     "crates/gents/src/inference/clients/inference_http.rs",

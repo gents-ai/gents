@@ -846,7 +846,10 @@ mod tests {
     const CASE_TIMEOUT: Duration = Duration::from_secs(60);
     const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 
-    async fn bounded<F: std::future::Future>(label: &str, future: F) -> F::Output {
+    async fn bounded<F>(label: &str, future: F) -> F::Output
+    where
+        F: std::future::Future,
+    {
         tokio::time::timeout(CASE_TIMEOUT, future)
             .await
             .unwrap_or_else(|_| panic!("{label} exceeded {CASE_TIMEOUT:?}"))

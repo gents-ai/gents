@@ -679,35 +679,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_platform_without_a_send_path_or_with_cloud_credentials_fails_to_build_with_the_reason(
-    ) {
-        let node = test_node().await;
-        let mut bedrock = test_agent(
-            BackendProviderKind::ClaudeBedrock,
-            crate::OpenAiWireApi::ChatCompletions,
-        );
-        bedrock.backend_endpoint = "https://bedrock-runtime.us-west-2.amazonaws.com".into();
-        bedrock.claude_platform =
-            Some(serde_json::from_value(serde_json::json!({"region": "us-west-2"})).unwrap());
-        let error = build_backend_client(
-            std::sync::Arc::default(),
-            node,
-            &bedrock,
-            "placeholder-key",
-            Duration::from_secs(1),
-        )
-        .await
-        .err()
-        .expect("bedrock has no send path yet");
-        let text = format!("{error:#}");
-        assert!(
-            text.contains("Amazon Bedrock backends are not available yet"),
-            "{text}"
-        );
-        assert!(!text.contains("placeholder-key"), "{text}");
-    }
-
     async fn seed_oauth_credential(
         node: &std::sync::Arc<EmbeddedNode>,
         agent: &ResolvedAgent,

@@ -196,11 +196,9 @@ impl BackendAuth {
             Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. } => {
                 anyhow::bail!("node OAuth requires the invoking node's OAuthCredential")
             }
-            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => {
-                anyhow::bail!(
-                    "AWS and Google credentials sign requests, which this build does not do yet; use an API key or bearer token"
-                )
-            }
+            // AWS credentials sign each request and Google credentials mint
+            // tokens; neither is a key to send.
+            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => Ok(None),
         }
     }
 }
