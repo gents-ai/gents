@@ -1305,9 +1305,10 @@ mod tests {
         );
 
         let staged = documents_pack_dir("1.1.0");
-        let (bytes, _) = gents::pack_archive::pack_dir(staged.path()).unwrap();
-        gents::pack_store::PackStore::new(home.path())
-            .import(&bytes[..], None)
+        let mut preview = document_install_args(home.path(), staged.path(), Vec::new());
+        preview.preview = true;
+        crate::request_helpers::capture_report(install(preview))
+            .await
             .unwrap();
         let listed = list_packs(home.path()).unwrap();
         let entry = listed["packs"]
