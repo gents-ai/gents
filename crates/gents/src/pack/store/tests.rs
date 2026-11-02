@@ -1,5 +1,30 @@
 use super::*;
 
+#[test]
+fn version_listing_uses_installed_digest_and_keeps_other_stored_artifacts() {
+    let installed = StoredName {
+        version: "1.0.0".into(),
+        digest: "sha256:installed".into(),
+    };
+    let revised = StoredName {
+        version: "1.0.0".into(),
+        digest: "sha256:revised".into(),
+    };
+    let newer = StoredName {
+        version: "1.1.0".into(),
+        digest: "sha256:newer".into(),
+    };
+    let listed = list_pack_versions(
+        &[newer.clone(), revised.clone(), installed.clone()],
+        Some(installed.clone()),
+    );
+    assert_eq!(listed.installed, Some(installed.clone()));
+    assert_eq!(listed.other_stored, vec![newer, revised]);
+    let absent = list_pack_versions(&[], Some(installed.clone()));
+    assert_eq!(absent.installed, Some(installed));
+    assert!(absent.other_stored.is_empty());
+}
+
 fn store_test_pack() -> (Vec<u8>, PackHeader) {
     test_pack_named("store_import_fixture", "1.0.0")
 }

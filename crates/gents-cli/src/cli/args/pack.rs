@@ -26,7 +26,7 @@ pub(crate) struct PackShowArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackListArgs {
-    #[arg(long, help = "Home whose pack store to list")]
+    #[arg(long, help = "Home whose installed and stored packs to list")]
     pub(crate) home: Option<PathBuf>,
 }
 
