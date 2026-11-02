@@ -210,6 +210,6 @@ describe("settings polish", () => {
     const card = await screen.findByTestId("agent-hover-card");
     const limit = await within(card).findByText("5h 81%");
     expect(limit).toHaveClass("text-warning");
-    expect(limit.closest("dd")).toHaveAttribute("title", "5h 81% · 7d 38%");
+    expect(limit.closest("[title]")).toHaveAttribute("title", "5h 81% · 7d 38%");
   });
 });
