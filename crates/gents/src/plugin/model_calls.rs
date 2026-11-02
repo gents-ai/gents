@@ -126,6 +126,13 @@ pub fn endpoint_for(
         "profile {:?} needs an OpenAI-compatible backend on the chat completions wire",
         profile.profile_id
     );
+    // Cloud credentials resolve to no key because they sign or mint per
+    // request; on this chat-completions path they would send unauthenticated.
+    anyhow::ensure!(
+        backend.auth.suits_provider(backend.provider_kind),
+        "the backend of profile {:?} has credentials its provider cannot use",
+        profile.profile_id
+    );
     let api_key = backend.auth.resolve_api_key()?;
     let max_concurrent = usize::try_from(backend.effective_max_concurrent())
         .ok()

@@ -489,6 +489,9 @@ fn only_an_enabled_chat_completions_backend_can_serve_a_slot() {
         json!({"openai_wire_api": "responses"}),
         json!({"provider_kind": "ChatGptCodex"}),
         json!({"auth": {"kind": "node_oauth"}}),
+        json!({"auth": {"kind": "aws_credentials", "access_key_id": "AKID", "secret_access_key": "s"}}),
+        json!({"provider_kind": "OpenRouter", "auth": {"kind": "aws_credentials", "access_key_id": "AKID", "secret_access_key": "s"}}),
+        json!({"auth": {"kind": "google_credentials", "credentials_json": "{}"}}),
         json!({"max_concurrent": 0}),
     ] {
         assert!(
