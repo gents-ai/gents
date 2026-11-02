@@ -179,9 +179,6 @@ export const preferences = {
   setNav(nav: NavMode) {
     store.setState({ nav });
   },
-  toggleNavHidden() {
-    store.setState({ navHidden: !store.getState().navHidden });
-  },
   /** one of the nav's modes, which shows the sidebar again, or hidden */
   setSidebarMode(mode: SidebarMode) {
     store.setState(

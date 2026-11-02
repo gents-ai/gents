@@ -197,14 +197,14 @@ export function Shortcuts() {
   });
   useCommand({
     id: "sidebar.toggle",
-    title: "Show or hide the sidebar",
+    title: "Expand or collapse the sidebar",
     group: "Pages",
     keys: {
       mac: { key: "s", mod: true, ctrl: true },
       other: { key: "s", mod: true, shift: true },
     },
     icon: PanelLeft,
-    run: () => sidebar.toggleHidden(),
+    run: () => sidebar.toggle(),
   });
   useCommand({
     id: "help.shortcuts",

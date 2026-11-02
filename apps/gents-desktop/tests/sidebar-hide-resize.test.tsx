@@ -34,23 +34,28 @@ function Handle({ most = Infinity }: { most?: number }) {
 }
 
 describe("the sidebar", () => {
-  it("is hidden and shown again by its key in any nav mode", () => {
+  it("is expanded or collapsed by its key, and expanded from hidden or hover", () => {
     const read = state();
     renderIn(testApp(), <Shortcuts />);
-    for (const nav of ["hover", "expanded", "collapsed"] as const) {
-      act(() => preferences.setNav(nav));
+    const press = () =>
       fireEvent.keyDown(window, { key: "S", ctrlKey: true, shiftKey: true });
-      expect(read().navHidden).toBe(true);
-      fireEvent.keyDown(window, { key: "S", ctrlKey: true, shiftKey: true });
-      expect(read().navHidden).toBe(false);
-    }
+    act(() => preferences.setNav("expanded"));
+    press();
     expect(read().nav).toBe("collapsed");
+    press();
+    expect(read().nav).toBe("expanded");
+    act(() => preferences.setNav("hover"));
+    press();
+    expect(read().nav).toBe("expanded");
+    act(() => preferences.setSidebarMode("hidden"));
+    press();
+    expect(read()).toMatchObject({ nav: "expanded", navHidden: false });
   });
 
   it("is named in the shortcuts reference", () => {
     renderIn(testApp(), <Shortcuts />);
     fireEvent.keyDown(window, { key: "/", ctrlKey: true });
-    expect(screen.getByText("Show or hide the sidebar")).toBeVisible();
+    expect(screen.getByText("Expand or collapse the sidebar")).toBeVisible();
     expect(screen.getByText("Ctrl+Shift+S")).toBeVisible();
   });
 

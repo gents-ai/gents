@@ -15,6 +15,20 @@ async function withNav(page: Page, state: Record<string, unknown>) {
   await expect(page.getByTestId("app-shell")).toBeVisible();
 }
 
+/* a view transition draws over the page while it runs, so a press waits
+   for it to end */
+const settled = (page: Page) =>
+  page.waitForFunction(
+    () =>
+      !document
+        .getAnimations()
+        .some((a) =>
+          (a.effect as KeyframeEffect | null)?.pseudoElement?.startsWith(
+            "::view-transition",
+          ),
+        ),
+  );
+
 const paneX = async (page: Page) => (await page.getByTestId("pane").boundingBox())!.x;
 
 test.describe("the sidebar", () => {
@@ -24,7 +38,10 @@ test.describe("the sidebar", () => {
     await withNav(page, { nav: "expanded" });
     const rail = page.getByTestId("window-bar").getByRole("link", { name: "Nodes" });
     await expect(rail).toBeVisible();
-    await page.getByRole("button", { name: "Hide sidebar" }).click();
+    await page
+      .getByRole("button", { name: "Collapse sidebar" })
+      .click({ button: "right" });
+    await page.getByRole("menuitemradio", { name: "Hidden" }).click();
 
     /* the page takes the window's width, keeping its own margin */
     await expect.poll(() => paneX(page)).toBeLessThan(16);
@@ -41,10 +58,10 @@ test.describe("the sidebar", () => {
     await page.mouse.move(900, 400);
     await expect(peek).toHaveAttribute("aria-hidden", "true");
 
-    /* kept across a reload, and shown again from the same button */
+    /* kept across a reload, and shown again, always open, from its toggle */
     await page.reload();
-    await expect(page.getByRole("button", { name: "Show sidebar" })).toBeVisible();
-    await page.getByRole("button", { name: "Show sidebar" }).click();
+    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
     await expect.poll(() => paneX(page)).toBeGreaterThan(280);
     await expect(rail).toBeVisible();
   });
@@ -109,7 +126,7 @@ test.describe("the sidebar", () => {
     await withNav(page, { nav: "expanded" });
     const choose = async (name: string) => {
       await page
-        .getByRole("button", { name: /(Hide|Show) sidebar/ })
+        .getByRole("button", { name: /(Collapse|Expand) sidebar/ })
         .click({ button: "right" });
       await page.getByRole("menuitemradio", { name }).click();
     };
@@ -119,5 +136,46 @@ test.describe("the sidebar", () => {
     await expect.poll(() => paneX(page)).toBeLessThan(20);
     await choose("Always open");
     await expect.poll(() => paneX(page)).toBeGreaterThan(200);
+  });
+
+  test("its toggle collapses and expands on a click, and a held press opens its modes", async ({
+    page,
+  }) => {
+    await withNav(page, { nav: "expanded" });
+    const toggle = page.getByRole("button", { name: /(Collapse|Expand) sidebar/ });
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect.poll(() => paneX(page)).toBeLessThan(80);
+    await settled(page);
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await expect.poll(() => paneX(page)).toBeGreaterThan(200);
+    await settled(page);
+
+    /* held, it opens the menu of modes without toggling */
+    const box = (await toggle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    const hidden = page.getByRole("menuitemradio", { name: "Hidden" });
+    await expect(hidden).toBeVisible();
+    await page.mouse.up();
+    await expect(hidden).toBeVisible();
+    expect(await paneX(page)).toBeGreaterThan(200);
+    await hidden.click();
+    await expect.poll(() => paneX(page)).toBeLessThan(20);
+    await settled(page);
+
+    /* held and dragged onto a choice, letting go chooses it */
+    const shown = (await toggle.boundingBox())!;
+    await page.mouse.move(shown.x + shown.width / 2, shown.y + shown.height / 2);
+    await page.mouse.down();
+    const icons = page.getByRole("menuitemradio", { name: "Icons only" });
+    await expect(icons).toBeVisible();
+    const item = (await icons.boundingBox())!;
+    await page.mouse.move(item.x + item.width / 2, item.y + item.height / 2, {
+      steps: 5,
+    });
+    await page.mouse.up();
+    await expect(icons).toBeHidden();
+    await expect.poll(() => paneX(page)).toBeLessThan(80);
+    expect(await paneX(page)).toBeGreaterThan(20);
   });
 });

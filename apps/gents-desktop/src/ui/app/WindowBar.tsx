@@ -1,11 +1,12 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Menu, PanelLeft, Search } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-} from "@gents/ui/components/context-menu";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
 import {
   Sheet,
   SheetContent,
@@ -19,6 +20,7 @@ import { useSyncHealth } from "@/hooks/useClient";
 import { Hint } from "@/screens/Hint";
 import { openSearch, SearchButton } from "@/screens/SearchPalette";
 import { SIDEBAR_KEYS } from "@/screens/shortcutKeys";
+import { useSidebarMode } from "@/preferences";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { DockTabs } from "./Dock";
 import { MarkLink } from "./Mark";
@@ -62,35 +64,89 @@ function HistoryNav({ history }: { history: History }) {
   );
 }
 
+/* how long a press on the toggle is held before it opens the mode menu, as
+   a held Back button opens its history */
+const HOLD_MS = 450;
+
 /* on an expanded sidebar's inside edge, with its other controls; with the
    sidebar hidden or icons only, first in the page's bar, where a hidden
    sidebar is brought back */
-function SidebarToggle({ hidden }: { hidden: boolean }) {
-  const label = hidden ? "Show sidebar" : "Hide sidebar";
-  /* a click shows or hides it; its context menu (a right-click, or a long
-     press) chooses how it shows */
+function SidebarToggle() {
+  const expanded = useSidebarMode() === "expanded";
+  const label = expanded ? "Collapse sidebar" : "Expand sidebar";
+  const [menu, setMenu] = useState(false);
+  const hold = useRef<number | null>(null);
+  /* a hold opened the menu, so the click its release makes is not a toggle */
+  const held = useRef(false);
+  const cancelHold = () => {
+    if (hold.current !== null) window.clearTimeout(hold.current);
+    hold.current = null;
+  };
+  useEffect(() => cancelHold, []);
+  const startHold = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    held.current = false;
+    cancelHold();
+    hold.current = window.setTimeout(() => {
+      hold.current = null;
+      held.current = true;
+      setMenu(true);
+      /* released over one of its choices, the hold chooses it */
+      window.addEventListener(
+        "pointerup",
+        (up) => {
+          document
+            .elementFromPoint(up.clientX, up.clientY)
+            ?.closest<HTMLElement>("[data-sidebar-modes] [role=menuitemradio]")
+            ?.click();
+          window.setTimeout(() => (held.current = false));
+        },
+        { once: true, capture: true },
+      );
+    }, HOLD_MS);
+  };
+  /* a click switches between always open and icons only; a held press or
+     a right-click opens the menu of every mode */
   return (
-    <ContextMenu>
+    <DropdownMenu
+      open={menu}
+      onOpenChange={(open, details) => {
+        if (open && details.reason.startsWith("trigger")) return;
+        setMenu(open);
+      }}
+    >
       <Hint label={label} keys={SIDEBAR_KEYS}>
-        <ContextMenuTrigger
+        <DropdownMenuTrigger
           render={
             <Button
               variant="ghost"
               size="icon-sm"
               aria-label={label}
-              aria-pressed={!hidden}
+              aria-pressed={expanded}
               className="shrink-0"
-              onClick={sidebar.toggleHidden}
+              onPointerDown={startHold}
+              onPointerUp={cancelHold}
+              onPointerLeave={cancelHold}
+              onPointerCancel={cancelHold}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                cancelHold();
+                setMenu(true);
+              }}
+              onClick={() => {
+                if (held.current) held.current = false;
+                else sidebar.toggle();
+              }}
             />
           }
         >
           <PanelLeft />
-        </ContextMenuTrigger>
+        </DropdownMenuTrigger>
       </Hint>
-      <ContextMenuContent className="min-w-44">
-        <SidebarModeItems />
-      </ContextMenuContent>
-    </ContextMenu>
+      <DropdownMenuContent className="w-auto min-w-44" data-sidebar-modes="">
+        <SidebarModeItems item={DropdownMenuItem} />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -187,7 +243,7 @@ export function WindowBar({
           {navHoldsHistory && history && <HistoryNav history={history} />}
           {navHoldsHistory && (
             <div className="ml-auto pr-2" data-tauri-drag-region={drag}>
-              <SidebarToggle hidden={false} />
+              <SidebarToggle />
             </div>
           )}
         </div>
@@ -203,7 +259,7 @@ export function WindowBar({
         data-tauri-drag-region={drag}
       >
         <NavSheet route={route} settings={settings} />
-        {wide && !navHoldsHistory && <SidebarToggle hidden={navHidden} />}
+        {wide && !navHoldsHistory && <SidebarToggle />}
         <MarkLink className="md:hidden" current={onNodes} />
         {history && !navHoldsHistory && <HistoryNav history={history} />}
         <ActiveNodeLabel />

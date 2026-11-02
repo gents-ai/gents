@@ -42,8 +42,9 @@ export const sidebar = {
   setMode: (mode: SidebarMode) => change(mode, () => preferences.setSidebarMode(mode)),
   setNav: (nav: NavMode) =>
     change(sidebarMode() === "hidden" ? "hidden" : nav, () => preferences.setNav(nav)),
-  toggleHidden: () => {
-    const to = sidebarMode() === "hidden" ? "expanded" : "hidden";
-    change(to, () => preferences.toggleNavHidden());
-  },
+  /** the toggle's click and its key: open between always open and icons
+      only, and always open from hidden or open on hover; hidden is chosen
+      from the mode menus alone */
+  toggle: () =>
+    sidebar.setMode(sidebarMode() === "expanded" ? "collapsed" : "expanded"),
 };
