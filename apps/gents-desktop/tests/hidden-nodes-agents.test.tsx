@@ -17,7 +17,7 @@ import { selection } from "../src/hooks/selectionStore";
 import { NodeSwitcher } from "../src/ui/app/NodeSwitcher";
 import { bindNav } from "../src/ui/lib/router";
 import type { Nav } from "@gents/shell";
-import { preferences } from "../src/ui/preferences";
+import { openOnNode, preferences } from "../src/ui/preferences";
 import { AgentsScreen } from "../src/ui/screens/AgentsScreen";
 import { AgentPicker } from "../src/ui/screens/BehaviorPicker";
 import { openSearch, SearchPalette } from "../src/ui/screens/SearchPalette";
@@ -289,6 +289,47 @@ describe("the settings' Nodes group", () => {
     );
     expect(within(listbox).getByRole("group", { name: "Remote" })).toHaveTextContent(
       "JunoVega",
+    );
+  });
+
+  it("still names a startup node that is no longer listed", async () => {
+    preferences.setOpenOn("did:key:gone");
+    renderIn(testApp({ deployments: fleet() }), <NodesGroup />);
+    const field = screen.getByRole("combobox", { name: "Startup node" });
+    expect(field).toHaveTextContent("Node …key:gone (not listed)");
+    await userEvent.click(field);
+    expect(
+      await screen.findByRole("option", { name: "Node …key:gone (not listed)" }),
+    ).toBeVisible();
+  });
+
+  it("finds a startup node by name, dropping an empty group and keeping Last used", async () => {
+    renderIn(testApp({ deployments: fleet() }), <NodesGroup />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Startup node" }));
+    await user.type(
+      await screen.findByRole("combobox", { name: "Search nodes" }),
+      "ju",
+    );
+    const listbox = screen.getByRole("listbox");
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Last used", "Juno"]);
+    expect(within(listbox).queryByRole("group", { name: "Local" })).toBeNull();
+    await user.click(within(listbox).getByRole("option", { name: "Juno" }));
+    expect(openOnNode()).toBe("did:key:juno");
+    expect(screen.getByRole("combobox", { name: "Startup node" })).toHaveTextContent(
+      "Juno",
+    );
+
+    /* Last used clears the choice */
+    await user.click(screen.getByRole("combobox", { name: "Startup node" }));
+    await user.click(await screen.findByRole("option", { name: "Last used" }));
+    expect(openOnNode()).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Startup node" })).toHaveTextContent(
+      "Last used",
     );
   });
 
