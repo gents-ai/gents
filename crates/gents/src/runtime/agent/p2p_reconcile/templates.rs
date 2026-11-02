@@ -571,8 +571,8 @@ pub fn compare_client_replicated_schema(
     compare_replicated_schema(CLIENT_COLLECTIONS, local, remote).map_err(|mut skew| {
         // Name the side that is off the canonical lineage, so the fix offered is re-creating
         // that store rather than "update to the same version", which cannot help.
-        let off_lineage = |schema: &ReplicatedSchema| {
-            skew.collections
+        fn off_lineage(collections: &[String], schema: &ReplicatedSchema) -> Vec<String> {
+            collections
                 .iter()
                 .filter(|name| {
                     schema.get(*name).is_some_and(|identity| {
@@ -583,10 +583,12 @@ pub fn compare_client_replicated_schema(
                     })
                 })
                 .cloned()
-                .collect::<Vec<_>>()
-        };
-        skew.local_off_lineage = off_lineage(local);
-        skew.remote_off_lineage = remote.map(off_lineage).unwrap_or_default();
+                .collect()
+        }
+        skew.local_off_lineage = off_lineage(&skew.collections, local);
+        skew.remote_off_lineage = remote
+            .map(|schema| off_lineage(&skew.collections, schema))
+            .unwrap_or_default();
         skew
     })
 }

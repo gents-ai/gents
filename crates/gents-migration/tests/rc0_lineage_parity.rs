@@ -7,6 +7,7 @@
 //! - A runtime-authored collection changed since rc0 is registered at its rc0 root on a fresh
 //!   store and takes the same patches an upgraded rc0 store takes
 //!   (`upgrades::CANONICAL_ROOTS`).
+//!
 //! These tests hold a store born on rc0 and one born on this build to the same versions for
 //! every managed collection, and keep the stores v1.0.0-rc1 produced starting.
 

@@ -592,7 +592,7 @@ mod tests {
         // The stored row keeps exactly the v1.0.0-rc0 AgentMessage fields: with the write gate
         // off the request id is stored nowhere, even for a header that carries one.
         let row = serde_json::to_value(&header).unwrap();
-        assert!(!PERSIST_NATIVE_REQUEST_ID);
+        const { assert!(!PERSIST_NATIVE_REQUEST_ID) };
         assert!(row.get("native_request_id").is_none(), "{row}");
         assert!(
             row["publication"].get("native_request_id").is_none(),
@@ -610,11 +610,13 @@ mod tests {
 
     #[test]
     fn the_request_id_is_not_published_while_the_write_gate_is_off() {
-        assert!(
-            !PERSIST_NATIVE_REQUEST_ID,
-            "the write gate is off until no rc0-era reader remains; update this test and the \
-             runbook when it is turned on"
-        );
+        const {
+            assert!(
+                !PERSIST_NATIVE_REQUEST_ID,
+                "the write gate is off until no rc0-era reader remains; update this test and the \
+                 runbook when it is turned on"
+            )
+        };
         let native = Message::Assistant {
             id: Some("msg_1".into()),
             request_id: Some("req_1".into()),

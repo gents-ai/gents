@@ -391,11 +391,13 @@ mod stored_message_tests {
 
     #[test]
     fn an_rc0_reader_decodes_every_message_this_build_writes() {
-        assert!(
-            !PERSIST_NATIVE_REQUEST_ID,
-            "persisting the request id makes rc0-era readers refuse every reply that carries \
-             one; update this test and the runbook when an rc0-era reader no longer exists"
-        );
+        const {
+            assert!(
+                !PERSIST_NATIVE_REQUEST_ID,
+                "persisting the request id makes rc0-era readers refuse every reply that carries \
+                 one; update this test and the runbook when an rc0-era reader no longer exists"
+            )
+        };
         for written in [message(Some("req_1")), message(None)] {
             let row = serde_json::to_value(&written).unwrap();
             assert!(

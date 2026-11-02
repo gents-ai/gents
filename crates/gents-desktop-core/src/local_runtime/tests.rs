@@ -170,7 +170,7 @@ async fn peer_status_fetches_a_mixed_case_http_endpoint() {
         "Node",
         "iroh://peer",
         "did:key:node",
-        &format!("{endpoint}/api/v0/graphql"),
+        format!("{endpoint}/api/v0/graphql"),
     );
     let status = super::http::peer_status(&record).await.unwrap().unwrap();
     assert_eq!(status["node_did"], "did:key:node");
