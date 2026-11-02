@@ -34,8 +34,25 @@ pub fn regolith_options() -> storage::RegolithStoreOptions {
         .engine
         .write_buffer_size(32 * 1024 * 1024)
         .max_write_buffer_number(2)
-        .block_cache_size(64 * 1024 * 1024);
+        .block_cache_size(block_cache_size(
+            std::env::var("GENTS_BLOCK_CACHE_MB").ok().as_deref(),
+        ));
     options
+}
+
+/// Default Regolith block cache per store. Live stores hold single blocks of
+/// tens of megabytes, which a 64 MiB cache cannot keep resident: a busy node
+/// spent most of its worker time re-reading, decrypting and decompressing
+/// evicted blocks.
+pub const DEFAULT_BLOCK_CACHE_BYTES: usize = 512 * 1024 * 1024;
+
+/// The block cache size `GENTS_BLOCK_CACHE_MB` asks for (whole MiB, at least
+/// one), else [`DEFAULT_BLOCK_CACHE_BYTES`].
+fn block_cache_size(mib: Option<&str>) -> usize {
+    mib.and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|mib| *mib > 0)
+        .and_then(|mib| mib.checked_mul(1024 * 1024))
+        .unwrap_or(DEFAULT_BLOCK_CACHE_BYTES)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,12 +370,25 @@ mod tests {
     }
 
     #[test]
+    fn block_cache_size_defaults_and_honors_override() {
+        assert_eq!(block_cache_size(None), DEFAULT_BLOCK_CACHE_BYTES);
+        assert_eq!(block_cache_size(Some("2048")), 2048 * 1024 * 1024);
+        assert_eq!(block_cache_size(Some(" 128 ")), 128 * 1024 * 1024);
+        for invalid in ["", "0", "-1", "lots", "1.5"] {
+            assert_eq!(block_cache_size(Some(invalid)), DEFAULT_BLOCK_CACHE_BYTES);
+        }
+    }
+
+    #[test]
     fn in_process_budget_preserves_server_acceptance_and_commit_settings() {
         let server = storage::RegolithStoreOptions::default();
         let local = regolith_options();
         assert_eq!(local.engine.get_write_buffer_size(), 32 * 1024 * 1024);
         assert_eq!(local.engine.get_max_write_buffer_number(), 2);
-        assert_eq!(local.engine.get_block_cache_size(), 64 * 1024 * 1024);
+        assert_eq!(
+            local.engine.get_block_cache_size(),
+            block_cache_size(std::env::var("GENTS_BLOCK_CACHE_MB").ok().as_deref())
+        );
         assert_eq!(
             local.engine.get_max_key_size(),
             server.engine.get_max_key_size()
