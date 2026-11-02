@@ -1,26 +1,45 @@
 //! One canonical lineage per collection. DefraDB mints a patched version ID over the
 //! previous version's heads, so a store that registers the current SDL directly never
 //! shares a version with a v1.0.0-rc0 store patched to that SDL, and stores on different
-//! versions cannot merge each other's blocks (`gents_protocol::peer_schema`). Fresh stores
-//! therefore register the rc0 root of every collection changed since rc0 and replay the
-//! same patches (`upgrades::CANONICAL_ROOTS`). These tests hold a store born on rc0 and one
-//! born on this build to the same versions for every managed collection.
+//! versions cannot merge each other's blocks (`gents_protocol::peer_schema`).
+//! - Client-authored collections never change schema: phones and apps register them from
+//!   their own SDL, so their version is the v1.0.0-rc0 one everywhere (#1123/#1125).
+//! - A runtime-authored collection changed since rc0 is registered at its rc0 root on a fresh
+//!   store and takes the same patches an upgraded rc0 store takes
+//!   (`upgrades::CANONICAL_ROOTS`).
+//! These tests hold a store born on rc0 and one born on this build to the same versions for
+//! every managed collection, and keep the stores v1.0.0-rc1 produced starting.
 
 use gents_migration::{
     canonical_schema_plan, canonical_versions, ensure_migrations, is_known_off_lineage,
-    non_canonical_store_lineages,
+    non_canonical_store_lineages, CLIENT_AUTHORED_COLLECTIONS, DEFAULT_BASELINE,
 };
 use gents_protocol::schemas;
 
 mod common;
 use common::fresh_node;
 
+const MESSAGE_RC0: &str = "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a";
+/// v1.0.0-rc1's AgentMessage: patched onto an rc0 store, and registered fresh.
+const MESSAGE_RC1_PATCHED: &str = "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4";
+const MESSAGE_RC1_FRESH: &str = "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm";
+const MESSAGE_RC1_PATCH: &str = r#"[{"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"native_request_id","Kind":"String","Immutable":true}}]"#;
+const BACKEND_RC1_FRESH: &str = "bafyreibyanrs5nrmpd6dp5pa74agyp5njjfztpctt3ls5qyl5pt2mkojd4";
+
+/// The AgentMessage SDL v1.0.0-rc1 shipped: this release's plus `native_request_id`.
+fn rc1_agent_message_sdl() -> String {
+    let anchor = "    blocks: JSON @immutable\n";
+    assert!(schemas::AGENT_MESSAGE.contains(anchor));
+    assert!(!schemas::AGENT_MESSAGE.contains("native_request_id"));
+    schemas::AGENT_MESSAGE.replace(
+        anchor,
+        &format!("    native_request_id: String @immutable\n{anchor}"),
+    )
+}
+
 /// Where both an upgraded rc0 store and a fresh store land.
 const CANONICAL: &[(&str, &str)] = &[
-    (
-        schemas::AGENT_MESSAGE_NAME,
-        "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4",
-    ),
+    (schemas::AGENT_MESSAGE_NAME, MESSAGE_RC0),
     (
         schemas::INFERENCE_BACKEND_NAME,
         "bafyreic7xg6tbg3rooyghvyy7tho52yynp7yqsu4tqbvjmsfnyouv2ieme",
@@ -144,15 +163,21 @@ async fn rc0_born_store_upgrades_onto_every_fresh_version() {
     fresh.shutdown().await;
 }
 
-/// A store born on v1.0.0-rc1 registered the patched SDL directly. It must still start,
-/// and say which collections it cannot sync.
+/// A store born on v1.0.0-rc1 registered rc1's SDL directly. It must still start, and say
+/// which collections it cannot sync.
 #[tokio::test]
 async fn rc1_born_store_starts_and_reports_its_lineage_split() {
     let node = fresh_node().await;
-    node.add_collection(schemas::AGENT_MESSAGE).await.unwrap();
+    node.add_collection(&rc1_agent_message_sdl()).await.unwrap();
     node.add_collection(schemas::INFERENCE_BACKEND)
         .await
         .unwrap();
+    let registered = |name: &str| node.get_collection(name).unwrap().unwrap().version_id;
+    assert_eq!(registered(schemas::AGENT_MESSAGE_NAME), MESSAGE_RC1_FRESH);
+    assert_eq!(
+        registered(schemas::INFERENCE_BACKEND_NAME),
+        BACKEND_RC1_FRESH
+    );
 
     let report = ensure_migrations(node.as_ref()).await.unwrap();
     let flagged = |name: &str| report.warnings.iter().any(|w| w.starts_with(name));
@@ -176,10 +201,10 @@ async fn rc1_born_store_starts_and_reports_its_lineage_split() {
             .collect::<Vec<_>>(),
         vec![schemas::AGENT_MESSAGE_NAME, schemas::INFERENCE_BACKEND_NAME]
     );
-    assert_eq!(
-        mismatches[0].active,
-        "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm"
-    );
+    assert_eq!(mismatches[0].active, MESSAGE_RC1_FRESH);
+    assert_eq!(mismatches[0].canonical, MESSAGE_RC0);
+    let rerun = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(rerun.steps_applied, 0);
     // A peer is judged only by versions known to be off the lineage, never by being
     // another release.
     for mismatch in &mismatches {
@@ -194,11 +219,86 @@ async fn rc1_born_store_starts_and_reports_its_lineage_split() {
     }
     assert!(!is_known_off_lineage(
         schemas::AGENT_MESSAGE_NAME,
-        "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a"
+        MESSAGE_RC0
     ));
     assert!(!is_known_off_lineage(
         schemas::AGENT_SESSION_NAME,
         "bafyother"
     ));
     node.shutdown().await;
+}
+
+/// An rc0 store that v1.0.0-rc1 upgraded took rc1's `AgentMessage.native_request_id` patch.
+/// It must still start, take no step back or forward, and say it cannot sync AgentMessage.
+#[tokio::test]
+async fn rc0_store_upgraded_by_rc1_starts_and_reports_agent_message() {
+    let node = fresh_node().await;
+    let rc0 = rc0_baseline();
+    let message = rc0
+        .iter()
+        .find(|c| c.name == schemas::AGENT_MESSAGE_NAME)
+        .unwrap();
+    node.add_collection(&message.sdl).await.unwrap();
+    let patched = node
+        .patch_collection(schemas::AGENT_MESSAGE_NAME, MESSAGE_RC1_PATCH)
+        .await
+        .unwrap();
+    node.set_active_collection_version(&patched.version_id)
+        .await
+        .unwrap();
+    assert_eq!(patched.version_id, MESSAGE_RC1_PATCHED);
+
+    let report = ensure_migrations(node.as_ref()).await.unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.starts_with(schemas::AGENT_MESSAGE_NAME)),
+        "{:?}",
+        report.warnings
+    );
+    let active = node
+        .get_collection(schemas::AGENT_MESSAGE_NAME)
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.version_id, MESSAGE_RC1_PATCHED);
+    let versions = node.get_all_collection_versions().await.unwrap();
+    let mismatches = non_canonical_store_lineages(&versions).unwrap();
+    assert_eq!(
+        mismatches
+            .iter()
+            .map(|m| (m.collection.as_str(), m.active.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(schemas::AGENT_MESSAGE_NAME, MESSAGE_RC1_PATCHED)]
+    );
+    let rerun = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(rerun.steps_applied, 0);
+    node.shutdown().await;
+}
+
+/// Phones and apps register client-authored collections from the SDL they were built with,
+/// so changing one splits every client built before the change off the fleet (#1123/#1125).
+/// An intended change needs a mobile plan, and then an update to this test.
+#[test]
+fn client_authored_collections_keep_their_rc0_schema() {
+    let rc0 = rc0_baseline();
+    for name in CLIENT_AUTHORED_COLLECTIONS {
+        let head = DEFAULT_BASELINE
+            .iter()
+            .find(|entry| entry.name == *name)
+            .unwrap_or_else(|| panic!("{name} is not in the baseline"));
+        let then = rc0
+            .iter()
+            .find(|collection| collection.name == *name)
+            .unwrap_or_else(|| panic!("{name} is not in the v1.0.0-rc0 baseline"));
+        assert_eq!(
+            head.sdl, then.sdl,
+            "client-authored {name} changed its schema since v1.0.0-rc0"
+        );
+        assert_eq!(head.expected_version, Some(then.version.as_str()), "{name}");
+        assert!(
+            canonical_schema_plan(name).unwrap().is_none(),
+            "client-authored {name} must not chain from an rc0 root"
+        );
+    }
 }

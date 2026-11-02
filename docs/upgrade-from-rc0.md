@@ -15,31 +15,41 @@ before the node reported ready (later starts: about 70 seconds).
 ## Before you start
 
 - **Upgrade every node and every desktop client in one window.** After the
-  upgrade a node's `AgentMessage` and `InferenceBackend` collections (and
-  `Node`, once the avatar change ships) are on a new schema version. Peers
-  still on RC0 cannot merge what upgraded peers write, and the desktop refuses
-  to sync with a runtime whose replicated schema differs from its own.
-- **One canonical lineage.** DefraDB derives a patched schema version from the
-  version it patches, so a fresh store that registered the new SDL directly
-  would never match an upgraded RC0 store. This build registers the RC0 schema
-  of every collection changed since RC0 on a fresh store and replays the same
-  patches (`CANONICAL_ROOTS` in `crates/gents-migration/src/upgrades.rs`), so
-  upgraded RC0 stores and new stores land on the same versions.
-- **Stores created by v1.0.0-rc1** (main between 2026-11-02 13:40Z and this
-  change) registered the new SDL directly and are on a different lineage. They
-  still start, but log an error naming each affected collection and how to
-  re-create the store, and report them under `non_canonical_lineages` in
-  `gents service update-check` (every managed collection) and `/status` (the
-  replicated collections it advertises). A desktop that pairs with one says
-  which side is off the lineage instead of asking for matching versions.
-  They cannot sync those collections with canonical peers; re-create them (see
-  "Re-creating an off-lineage store") to rejoin. Every node that reported its
-  pins on 2026-11-02 (all RC0, plus one v0.21.0 home) is on the RC0 pins and
-  upgrades onto the canonical lineage in place.
-- **Phones** that apply bundled SDL through the FFI must replay
-  `gents_migration::canonical_schema_plan(collection)` for `AgentMessage`
-  (register the rc0 root SDL, then apply each patch and make it active) instead
-  of registering the current SDL.
+  upgrade a node's `InferenceBackend` and `Node` collections are on new schema
+  versions. Peers and desktops still on RC0 cannot merge what upgraded peers
+  write to those, and the desktop refuses to sync with a runtime whose
+  replicated schema differs from its own. Transcripts (`AgentMessage`) and the
+  other client-authored collections keep their RC0 versions, so phones keep
+  working throughout.
+- **Client-authored collections keep their RC0 schema.** Phones and apps
+  register `AgentMessage`, `AgentRequest`, `AgentSession` and the other
+  client-authored collections from the SDL they were built with, so those never
+  change: every node, desktop and phone, RC0 or this release, holds the same
+  versions. The provider request id v1.0.0-rc1 stored as an `AgentMessage`
+  column is carried inside its `publication` JSON instead, and is not written
+  yet (an RC0-era reader refuses the extra key); this release reads it either
+  way.
+- **One canonical lineage for the rest.** DefraDB derives a patched schema
+  version from the version it patches, so a fresh store that registered the new
+  SDL directly would never match an upgraded RC0 store. This build registers the
+  RC0 schema of every runtime-authored collection changed since RC0
+  (`InferenceBackend`, `Node`) on a fresh store and replays the same patches
+  (`CANONICAL_ROOTS` in `crates/gents-migration/src/upgrades.rs`), so upgraded
+  RC0 stores and new stores land on the same versions.
+- **Stores v1.0.0-rc1 created or upgraded** (main between 2026-11-02 13:40Z and
+  this change) are on a different lineage for `AgentMessage` (and, if rc1
+  created them, `InferenceBackend`). They still start, but log an error naming
+  each affected collection and how to re-create the store, and report them
+  under `non_canonical_lineages` in `gents service update-check` (every managed
+  collection) and `/status` (the replicated collections it advertises). A
+  desktop that pairs with one says which side is off the lineage instead of
+  asking for matching versions. Every node that reported its pins on
+  2026-11-02 is on the RC0 pins and upgrades onto the canonical lineage in
+  place.
+- **workstation-2 runs v0.21.0, not RC0.** Its store holds exactly the RC0
+  pins, but its upgrade path from v0.21.0 straight to this release is
+  unverified (home layout and config documents were not compared). Take a
+  backup of its home first.
 - Check `<home>/network.json` matches how the service is started. The managed
   update preflight compares the running endpoint with it and refuses with
   "recorded endpoint must match this home's HTTP listener" when a node was

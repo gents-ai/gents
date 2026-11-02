@@ -9,8 +9,26 @@ const NODE_MEMORY_TEXT_TARGET: &str = "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkh
 const NODE_MEMORY_TEXT_PATCH: &str = r#"[{"op":"add","path":"/NodeMemory/Fields/-","value":{"Name":"value_text","Kind":"String","Typ":6}}]"#;
 
 const MESSAGE_ROOT: &str = "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a";
+/// An rc0 `AgentMessage` after v1.0.0-rc1's `native_request_id` patch.
 const MESSAGE_REQUEST_ID_TARGET: &str =
     "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4";
+/// `AgentMessage` as a store created by v1.0.0-rc1 registered it (with `native_request_id`).
+const MESSAGE_RC1_FRESH: &str = "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm";
+const MESSAGE_REQUEST_ID_PATCH: &str = r#"[{"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"native_request_id","Kind":"String","Immutable":true}}]"#;
+/// `InferenceBackend` as a store created by v1.0.0-rc1 registered it (its SDL directly).
+const BACKEND_RC1_FRESH: &str = "bafyreibyanrs5nrmpd6dp5pa74agyp5njjfztpctt3ls5qyl5pt2mkojd4";
+
+/// Versions only v1.0.0-rc1 produced, off this release's lineage: a store holding one starts,
+/// takes no step for that collection, and reports it (`non_canonical_store_lineages`).
+/// `AgentMessage` is client-authored and keeps its v1.0.0-rc0 schema (#1123/#1125), so rc1's
+/// `native_request_id` column is off the lineage whether a store was created by rc1 or
+/// patched by it; an `InferenceBackend` rc1 registered fresh never matches the canonical
+/// rc0-root-plus-patches version.
+pub(crate) const KNOWN_OFF_LINEAGE: &[(&str, &str)] = &[
+    ("AgentMessage", MESSAGE_REQUEST_ID_TARGET),
+    ("AgentMessage", MESSAGE_RC1_FRESH),
+    ("InferenceBackend", BACKEND_RC1_FRESH),
+];
 
 const INFERENCE_CALL_ROOT: &str = "bafyreibbbdmb7au32traw5ufp6rqytb3jv63bmjflykfhize2u6bwvqiwe";
 const INFERENCE_CALL_TARGET: &str = "bafyreie6maihybat7mu2hbygehkkcsb7x6h5bcdcvg53ygjhfcoikfdfau";
@@ -78,11 +96,6 @@ const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/F
 /// here with its rc0 SDL vendored under `schemas/rc0/` (copied from tag v1.0.0-rc0).
 /// `tests/rc0_lineage_parity.rs` fails until it is.
 pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[
-    (
-        "AgentMessage",
-        include_str!("../schemas/rc0/agent_message.graphql"),
-        MESSAGE_ROOT,
-    ),
     (
         "InferenceBackend",
         include_str!("../schemas/rc0/inference_backend.graphql"),
@@ -247,14 +260,6 @@ pub(crate) fn include_existing_by_version(
             &["background_requested_at"][..],
         ),
         (
-            "AgentMessage",
-            MESSAGE_ROOT,
-            MESSAGE_REQUEST_ID_TARGET,
-            "agent-message-add-native-request-id",
-            r#"[{"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"native_request_id","Kind":"String","Immutable":true}}]"#,
-            &["native_request_id"][..],
-        ),
-        (
             "AgentSession",
             SESSION_ROOT,
             SESSION_TARGET,
@@ -333,6 +338,30 @@ pub(crate) fn include_existing_by_version(
                 expected_state: CollectionExpectation::fields(fields),
             });
         }
+    }
+    // An `AgentMessage` v1.0.0-rc1 changed stays where it is: verified at its own version,
+    // never patched further or back. `non_canonical_store_lineages` names it.
+    match get_version("AgentMessage")?.as_deref() {
+        Some(MESSAGE_REQUEST_ID_TARGET) => {
+            if let Some(entry) = baseline.iter_mut().find(|e| e.name == "AgentMessage") {
+                entry.expected_version = Some(MESSAGE_ROOT);
+                steps.push(MigrationStep::PatchVersioned {
+                    id: "agent-message-add-native-request-id",
+                    collection: "AgentMessage",
+                    patch: MESSAGE_REQUEST_ID_PATCH,
+                    lens: None,
+                    expected_version: Some(MESSAGE_REQUEST_ID_TARGET),
+                    expected_transform: None,
+                    expected_state: CollectionExpectation::fields(&["native_request_id"]),
+                });
+            }
+        }
+        Some(MESSAGE_RC1_FRESH) => {
+            if let Some(entry) = baseline.iter_mut().find(|e| e.name == "AgentMessage") {
+                entry.expected_version = Some(MESSAGE_RC1_FRESH);
+            }
+        }
+        _ => {}
     }
     if let Some(current) = get_version("NodeMemory")? {
         if [NODE_MEMORY_ROOT, NODE_MEMORY_TEXT_TARGET].contains(&current.as_str()) {

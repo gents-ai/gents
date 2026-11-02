@@ -1,6 +1,164 @@
-use super::{MediaData, MessageBlock, PayloadRef, ReasoningPart, ToolResultPart};
-use serde::{Deserialize, Deserializer, Serialize};
+use super::{
+    MediaData, MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef,
+    ReasoningPart, ToolResultPart, TranscriptMessage,
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+
+/// Key of the provider request id inside a stored `publication` (see [`TranscriptMessage`]).
+pub const NATIVE_REQUEST_ID_KEY: &str = "native_request_id";
+
+/// The stored `AgentMessage` document. Its fields are exactly the v1.0.0-rc0 `AgentMessage`
+/// schema, plus a top-level `native_request_id` read (never written) from rows a store
+/// created by v1.0.0-rc1 holds.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TranscriptMessageWire {
+    message_key: String,
+    session_id: String,
+    node_did: String,
+    #[serde(default)]
+    requester_did: Option<String>,
+    #[serde(default)]
+    request_doc_id: Option<String>,
+    publication: StoredPublication,
+    outcome: OutputOutcome,
+    sequence: u32,
+    role: MessageRole,
+    #[serde(default)]
+    native_id: Option<String>,
+    #[serde(default)]
+    native_request_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_blocks")]
+    blocks: Vec<MessageBlock>,
+    created_at: String,
+}
+
+impl TryFrom<TranscriptMessageWire> for TranscriptMessage {
+    type Error = String;
+
+    fn try_from(wire: TranscriptMessageWire) -> Result<Self, Self::Error> {
+        let native_request_id = match (wire.publication.native_request_id, wire.native_request_id) {
+            (Some(nested), Some(column)) if nested != column => {
+                return Err(format!(
+                    "AgentMessage carries two provider request ids ({nested} in publication, \
+                     {column} as a field)"
+                ));
+            }
+            (nested, column) => nested.or(column),
+        };
+        Ok(Self {
+            message_key: wire.message_key,
+            session_id: wire.session_id,
+            node_did: wire.node_did,
+            requester_did: wire.requester_did,
+            request_doc_id: wire.request_doc_id,
+            publication: wire.publication.publication,
+            outcome: wire.outcome,
+            sequence: wire.sequence,
+            role: wire.role,
+            native_id: wire.native_id,
+            native_request_id,
+            blocks: wire.blocks,
+            created_at: wire.created_at,
+        })
+    }
+}
+
+impl Serialize for TranscriptMessage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Stored<'a> {
+            message_key: &'a str,
+            session_id: &'a str,
+            node_did: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            requester_did: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            request_doc_id: Option<&'a str>,
+            publication: Value,
+            outcome: &'a OutputOutcome,
+            sequence: u32,
+            role: &'a MessageRole,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            native_id: Option<&'a str>,
+            #[serde(skip_serializing_if = "<[MessageBlock]>::is_empty")]
+            blocks: &'a [MessageBlock],
+            created_at: &'a str,
+        }
+        let publication =
+            StoredPublication::encode(&self.publication, self.native_request_id.as_deref())
+                .map_err(serde::ser::Error::custom)?;
+        Stored {
+            message_key: &self.message_key,
+            session_id: &self.session_id,
+            node_did: &self.node_did,
+            requester_did: self.requester_did.as_deref(),
+            request_doc_id: self.request_doc_id.as_deref(),
+            publication,
+            outcome: &self.outcome,
+            sequence: self.sequence,
+            role: &self.role,
+            native_id: self.native_id.as_deref(),
+            blocks: &self.blocks,
+            created_at: &self.created_at,
+        }
+        .serialize(serializer)
+    }
+}
+
+/// A stored `publication`: the tagged [`MessagePublication`] object, optionally carrying
+/// [`NATIVE_REQUEST_ID_KEY`].
+struct StoredPublication {
+    publication: MessagePublication,
+    native_request_id: Option<String>,
+}
+
+impl StoredPublication {
+    fn encode(
+        publication: &MessagePublication,
+        native_request_id: Option<&str>,
+    ) -> serde_json::Result<Value> {
+        let mut value = serde_json::to_value(publication)?;
+        if let Some(id) = native_request_id {
+            value
+                .as_object_mut()
+                .ok_or_else(|| {
+                    <serde_json::Error as serde::ser::Error>::custom(
+                        "publication is not a JSON object",
+                    )
+                })?
+                .insert(
+                    NATIVE_REQUEST_ID_KEY.to_owned(),
+                    Value::String(id.to_owned()),
+                );
+        }
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for StoredPublication {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let mut value = Value::deserialize(deserializer)?;
+        let native_request_id = match value
+            .as_object_mut()
+            .and_then(|object| object.remove(NATIVE_REQUEST_ID_KEY))
+        {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) => Some(id),
+            Some(other) => {
+                return Err(D::Error::custom(format!(
+                    "publication.{NATIVE_REQUEST_ID_KEY} is not a string: {other}"
+                )))
+            }
+        };
+        Ok(Self {
+            publication: serde_json::from_value(value).map_err(D::Error::custom)?,
+            native_request_id,
+        })
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,5 +324,92 @@ mod tests {
             invalid["blocks"][0]["parts"][0]["text"]["close_doc_id"] = json!(slot);
             assert!(decode_blocks(invalid).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod stored_message_tests {
+    use super::*;
+    use crate::output::{MessagePublication, OutputOutcome};
+
+    fn message(native_request_id: Option<&str>) -> TranscriptMessage {
+        TranscriptMessage {
+            message_key: "provider-turn".into(),
+            session_id: "session".into(),
+            node_did: "did:key:node".into(),
+            requester_did: None,
+            request_doc_id: Some("request".into()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: 1,
+            role: MessageRole::Assistant,
+            native_id: Some("msg_1".into()),
+            native_request_id: native_request_id.map(str::to_owned),
+            blocks: Vec::new(),
+            created_at: "2026-11-02T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn request_id_travels_inside_the_publication_and_the_rc0_fields_stay_exact() {
+        let row = serde_json::to_value(message(Some("req_1"))).unwrap();
+        let keys: Vec<&str> = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert!(!keys.contains(&NATIVE_REQUEST_ID_KEY), "{row}");
+        assert_eq!(
+            row["publication"],
+            serde_json::json!({"kind": "request_execution", "execution_generation": "generation",
+                "native_request_id": "req_1"})
+        );
+        let back: TranscriptMessage = serde_json::from_value(row).unwrap();
+        assert_eq!(back, message(Some("req_1")));
+
+        let without = serde_json::to_value(message(None)).unwrap();
+        assert!(without["publication"].get(NATIVE_REQUEST_ID_KEY).is_none());
+        assert_eq!(
+            serde_json::from_value::<TranscriptMessage>(without).unwrap(),
+            message(None)
+        );
+    }
+
+    #[test]
+    fn rc1_column_is_read_and_conflicts_or_garbage_are_refused() {
+        let mut rc1 = serde_json::to_value(message(None)).unwrap();
+        rc1["native_request_id"] = "req_1".into();
+        assert_eq!(
+            serde_json::from_value::<TranscriptMessage>(rc1.clone()).unwrap(),
+            message(Some("req_1"))
+        );
+
+        let mut both = rc1.clone();
+        both["publication"][NATIVE_REQUEST_ID_KEY] = "req_2".into();
+        assert!(serde_json::from_value::<TranscriptMessage>(both).is_err());
+
+        let mut agreeing = rc1;
+        agreeing["publication"][NATIVE_REQUEST_ID_KEY] = "req_1".into();
+        assert_eq!(
+            serde_json::from_value::<TranscriptMessage>(agreeing).unwrap(),
+            message(Some("req_1"))
+        );
+
+        let mut number = serde_json::to_value(message(None)).unwrap();
+        number["publication"][NATIVE_REQUEST_ID_KEY] = 7.into();
+        assert!(serde_json::from_value::<TranscriptMessage>(number).is_err());
+
+        let mut unknown = serde_json::to_value(message(None)).unwrap();
+        unknown["publication"]["surprise"] = true.into();
+        assert!(serde_json::from_value::<TranscriptMessage>(unknown.clone()).is_err());
+        unknown["publication"]
+            .as_object_mut()
+            .unwrap()
+            .remove("surprise");
+        unknown["surprise"] = true.into();
+        assert!(serde_json::from_value::<TranscriptMessage>(unknown).is_err());
     }
 }

@@ -254,6 +254,32 @@ fn media_plan(
     }
 }
 
+/// Whether a provider assistant message persists its request id (inside the `AgentMessage`
+/// `publication`, see `gents_protocol::output::TranscriptMessage`). Off: v1.0.0-rc0 readers (a
+/// node not yet upgraded, a client built on rc0's protocol) refuse an unknown `publication`
+/// key, so storing it would make every such reply unreadable to them. This release already
+/// reads the key; turn this on once no rc0-era reader remains. Without it, Claude replays
+/// lack the previous request id after the message is reloaded, as they did on rc0.
+pub(crate) const PERSIST_NATIVE_REQUEST_ID: bool = false;
+
+/// The native message exactly as publication stores it, so a message reconstructed from the
+/// stored rows equals it.
+pub(crate) fn persisted_native_message(message: &Message) -> std::borrow::Cow<'_, Message> {
+    match message {
+        Message::Assistant {
+            request_id: Some(_),
+            ..
+        } if !PERSIST_NATIVE_REQUEST_ID => {
+            let mut stored = message.clone();
+            if let Message::Assistant { request_id, .. } = &mut stored {
+                *request_id = None;
+            }
+            std::borrow::Cow::Owned(stored)
+        }
+        _ => std::borrow::Cow::Borrowed(message),
+    }
+}
+
 pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMessage> {
     if let Message::User { content } = message {
         let mut streams = Vec::new();
@@ -563,10 +589,24 @@ mod tests {
         );
         assert_eq!(segment.payload.matches(r#"{ "path": "é" }"#).count(), 1);
 
-        // A row written before the request id existed has no such key.
+        // Stored inside the publication, so the row keeps the v1.0.0-rc0 AgentMessage fields.
         let mut row = serde_json::to_value(&header).unwrap();
-        assert_eq!(row["native_request_id"], "req_α");
-        row.as_object_mut().unwrap().remove("native_request_id");
+        assert!(row.get("native_request_id").is_none(), "{row}");
+        assert_eq!(row["publication"]["native_request_id"], "req_α");
+        // A store created by v1.0.0-rc1 kept it as a field of its own.
+        let mut rc1_row = row.clone();
+        rc1_row["publication"]
+            .as_object_mut()
+            .unwrap()
+            .remove("native_request_id");
+        rc1_row["native_request_id"] = "req_α".into();
+        let rc1: TranscriptMessage = serde_json::from_value(rc1_row).unwrap();
+        assert_eq!(rc1, header);
+        // A row written before the request id existed has no such key.
+        row["publication"]
+            .as_object_mut()
+            .unwrap()
+            .remove("native_request_id");
         let old: TranscriptMessage = serde_json::from_value(row).unwrap();
         let Message::Assistant { request_id, .. } =
             reconstruct_message(&observed, &[], &[], &old).unwrap()
@@ -574,5 +614,30 @@ mod tests {
             panic!("assistant message expected");
         };
         assert_eq!(request_id, None);
+    }
+
+    #[test]
+    fn publication_stores_the_request_id_only_when_persisting_it() {
+        let native = Message::Assistant {
+            id: Some("msg_1".into()),
+            request_id: Some("req_1".into()),
+            content: vec![AssistantContent::Text(gents_protocol::message::Text {
+                text: "hi".into(),
+            })],
+        };
+        let stored = persisted_native_message(&native);
+        let Message::Assistant { request_id, id, .. } = stored.as_ref() else {
+            panic!("assistant message expected");
+        };
+        assert_eq!(id.as_deref(), Some("msg_1"));
+        assert_eq!(
+            request_id.as_deref(),
+            PERSIST_NATIVE_REQUEST_ID.then_some("req_1")
+        );
+        let encoded = encode_native_message(&stored).unwrap();
+        assert_eq!(
+            encoded.native_request_id.as_deref(),
+            PERSIST_NATIVE_REQUEST_ID.then_some("req_1")
+        );
     }
 }

@@ -828,11 +828,12 @@ impl std::fmt::Display for LineageMismatch {
         write!(
             f,
             "{} is on a non-canonical schema lineage (active {}, canonical {}): this store \
-             cannot sync {} with peers or apps on the canonical lineage. It was created by a \
-             build that registered a newer schema directly (v1.0.0-rc1). Re-create it from \
-             this release: for a node, move its home aside and run `gents init` with the same \
+             cannot sync {} with peers or apps on the canonical lineage. v1.0.0-rc1 created or \
+             upgraded it with a schema this release does not use. Re-create it from this \
+             release: for a node, move its home aside and run `gents init` with the same \
              identity key (`--key-path`), then re-enroll; for the desktop app, reset its local \
-             data. Data only this store holds is not carried over. See docs/upgrade-from-rc0.md",
+             data. Data only this store holds is not carried over. See \
+             docs/upgrade-from-rc0.md",
             self.collection, self.active, self.canonical, self.collection
         )
     }
@@ -899,22 +900,13 @@ pub fn canonical_schema_plan(collection: &str) -> Result<Option<CanonicalSchemaP
     }))
 }
 
-/// Whether `version` is one this build knows a store reaches only by registering a
-/// collection's post-rc0 SDL directly (what v1.0.0-rc1 did), off the canonical lineage.
-/// Unlike [`non_canonical_lineages`], a version from an older or newer release is not
-/// flagged: use this to judge a peer, which may run a different build.
+/// Whether `version` of `collection` is one only v1.0.0-rc1 produced, off this release's
+/// lineage. Unlike [`non_canonical_lineages`], a version from another release is not flagged:
+/// use this to judge a peer, which may run a different build.
 pub fn is_known_off_lineage(collection: &str, version: &str) -> bool {
-    crate::upgrades::CANONICAL_ROOTS
+    crate::upgrades::KNOWN_OFF_LINEAGE
         .iter()
-        .any(|(name, _, root)| *name == collection && *root != version)
-        && DEFAULT_REGISTRY
-            .baseline
-            .iter()
-            .any(|entry| entry.name == collection && entry.expected_version == Some(version))
-        && canonical_versions()
-            .ok()
-            .and_then(|canonical| canonical.get(collection).cloned())
-            .is_some_and(|canonical| canonical != version)
+        .any(|(name, off)| *name == collection && *off == version)
 }
 
 /// Managed collections among `active` (name, active version) whose version differs from
