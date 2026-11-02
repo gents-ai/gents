@@ -485,8 +485,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_REGISTRY_NAME,
-        gents_protocol::schemas::TOOL_SERVICE_REGISTRY,
-        "bafyreig6mtnbxpflm6cxrolzx6hb2a2x3nljjpcwv6p3mg3touwxer753e"
+        crate::upgrades::TOOL_SERVICE_REGISTRY_RC0_SDL,
+        "bafyreigckps33q33zvnrodzqlz72ri4osyodxleniwy6txwkfhnq7tgg3q"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE_NAME,

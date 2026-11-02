@@ -53,6 +53,10 @@ const NODE_UNPATCHED_FRESH: &str = "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuyd
 /// are what [`crate::DEFAULT_BASELINE`] registers on a fresh store.
 pub(crate) const NODE_RC0_SDL: &str = include_str!("../schemas/rc0/node.graphql");
 pub(crate) const BACKEND_RC0_SDL: &str = include_str!("../schemas/rc0/inference_backend.graphql");
+pub(crate) const TOOL_SERVICE_REGISTRY_RC0_SDL: &str =
+    include_str!("../schemas/rc0/tool_service_registry.graphql");
+pub(crate) const TOOL_SERVICE_REGISTRY_ROOT: &str =
+    "bafyreigckps33q33zvnrodzqlz72ri4osyodxleniwy6txwkfhnq7tgg3q";
 const NODE_AVATAR_TARGET: &str = "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli";
 const NODE_AVATAR_PATCH: &str =
     r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#;
@@ -114,6 +118,11 @@ const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/F
 pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[
     ("InferenceBackend", BACKEND_RC0_SDL, BACKEND_FRESHNESS_FRESH),
     ("Node", NODE_RC0_SDL, NODE_ROOT),
+    (
+        "ToolServiceRegistry",
+        TOOL_SERVICE_REGISTRY_RC0_SDL,
+        TOOL_SERVICE_REGISTRY_ROOT,
+    ),
 ];
 
 fn canonical_root(name: &str) -> Option<&'static str> {

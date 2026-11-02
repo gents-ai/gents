@@ -50,18 +50,15 @@ async fn endpoint_url_extends_a_registry_created_before_it() {
 
 #[tokio::test]
 async fn a_fresh_store_registers_the_current_registry_baseline() {
-    let fresh = common::fresh_node().await;
-    fresh
-        .add_collection(schemas::TOOL_SERVICE_REGISTRY)
-        .await
-        .unwrap();
-    let version = fresh
-        .get_collection("ToolServiceRegistry")
-        .unwrap()
-        .unwrap();
     let expected = gents_migration::DEFAULT_BASELINE
         .iter()
         .find(|entry| entry.name == "ToolServiceRegistry")
+        .unwrap();
+    let fresh = common::fresh_node().await;
+    fresh.add_collection(expected.sdl).await.unwrap();
+    let version = fresh
+        .get_collection("ToolServiceRegistry")
+        .unwrap()
         .unwrap();
     assert_eq!(Some(version.version_id.as_str()), expected.expected_version);
     fresh.shutdown().await;
