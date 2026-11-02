@@ -113,7 +113,7 @@ pub(super) fn prepare(
     anyhow::ensure!(
         helper_probe.success,
         "staged updater cannot execute; runtime unchanged: {}",
-        gents::failure_text::bounded_text(&helper_probe.stderr)
+        gents::request::failure_text::bounded_text(&helper_probe.stderr)
     );
     let helper_metadata: serde_json::Value = serde_json::from_str(&helper_probe.stdout)?;
     anyhow::ensure!(
@@ -132,7 +132,7 @@ pub(super) fn prepare(
     anyhow::ensure!(
         probe.success,
         "candidate preflight refused; runtime unchanged: {}",
-        gents::failure_text::bounded_text(&probe.stderr)
+        gents::request::failure_text::bounded_text(&probe.stderr)
     );
     let probe: serde_json::Value = serde_json::from_str(&probe.stdout)?;
     anyhow::ensure!(

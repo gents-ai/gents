@@ -78,7 +78,7 @@ async fn publish_one(runtime: &gents::Gents, directory: PathBuf, id: uuid::Uuid)
     let lock_path = directory.join("notice.lock");
     let _lock = tokio::task::spawn_blocking(move || files::lock(&lock_path)).await??;
     let result = runtime
-        .publish_runtime_notice(gents::mailbox::RuntimeNotice {
+        .publish_runtime_notice(gents::session::mailbox::RuntimeNotice {
             source_id: format!("service-update:{id}"),
             session_id,
             request_id,
@@ -94,13 +94,13 @@ async fn publish_one(runtime: &gents::Gents, directory: PathBuf, id: uuid::Uuid)
         .await;
     match result {
         Ok(_) => {}
-        Err(gents::mailbox::RuntimeNoticeError::Scope(error)) => {
+        Err(gents::session::mailbox::RuntimeNoticeError::Scope(error)) => {
             let unavailable = directory.join("notice-unavailable.json");
             let reason = error.to_string();
             tokio::task::spawn_blocking(move || files::write_json(&unavailable, &reason)).await??;
             return Ok(());
         }
-        Err(gents::mailbox::RuntimeNoticeError::Unavailable(error)) => return Err(error),
+        Err(gents::session::mailbox::RuntimeNoticeError::Unavailable(error)) => return Err(error),
     }
     tokio::task::spawn_blocking(move || files::write_json(&marker, &true)).await??;
     Ok(())
