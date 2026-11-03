@@ -162,7 +162,12 @@ pub(crate) struct QueryArgs {
     pub(crate) filter: Option<String>,
     #[arg(
         long,
-        help = "Maximum rows to return (find defaults to 50; search to 10; maximum 1000)"
+        help = "Recover a String field page as JSON (doc_id, field, offset_bytes, expected_hash)"
+    )]
+    pub(crate) field_page: Option<String>,
+    #[arg(
+        long,
+        help = "Maximum rows (find defaults to 50; search to 10; maximum 1000); String fields are capped at 2000 bytes"
     )]
     pub(crate) limit: Option<u32>,
     #[arg(

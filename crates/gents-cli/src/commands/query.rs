@@ -85,6 +85,12 @@ fn command_from_args(
     if let Some(offset) = args.offset {
         command.options.insert("offset".into(), json!(offset));
     }
+    if let Some(page) = args.field_page {
+        command.options.insert(
+            "field_page".into(),
+            serde_json::from_str(&page).context("parsing --field-page as JSON")?,
+        );
+    }
     if let Some(text) = args.text {
         command.options.insert("text".into(), json!(text));
     }
@@ -140,6 +146,45 @@ mod tests {
         assert!(scope.ensure_allowed("OtherReport").is_err());
     }
 
+    #[test]
+    fn query_field_page_preserves_continuation_and_filter() {
+        use crate::cli::args::{Cli, Command};
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "gents",
+            "query",
+            "find",
+            "--collection",
+            "Record",
+            "--field",
+            "body",
+            "--filter",
+            r#"{"kind":{"_eq":"note"}}"#,
+            "--field-page",
+            r#"{"doc_id":"doc","field":"body","offset_bytes":2000,"expected_hash":"sha256:abc"}"#,
+        ])
+        .unwrap();
+        let Command::Query(args) = cli.command else {
+            panic!("expected query")
+        };
+        let (command, _) = command_from_args(args).unwrap();
+        assert_eq!(command.options["filter"], json!({"kind":{"_eq":"note"}}));
+        assert_eq!(
+            command.options["field_page"],
+            json!({
+                "doc_id":"doc", "field":"body", "offset_bytes":2000, "expected_hash":"sha256:abc"
+            })
+        );
+    }
+
+    #[test]
+    fn query_field_page_rejects_invalid_json() {
+        let mut args = protected_args(vec!["body".into()]);
+        args.field_page = Some("{".into());
+        let error = command_from_args(args).unwrap_err();
+        assert!(format!("{error:#}").contains("parsing --field-page as JSON"));
+    }
+
     fn protected_args(fields: Vec<String>) -> QueryArgs {
         QueryArgs {
             text: None,
@@ -153,6 +198,7 @@ mod tests {
             collection: EVAL_VERDICT_NAME.into(),
             fields,
             filter: None,
+            field_page: None,
             limit: None,
             allow_collections: Vec::new(),
         }
