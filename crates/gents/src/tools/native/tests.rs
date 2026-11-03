@@ -803,6 +803,46 @@ async fn read_only_workspace_authority_denies_file_writes() {
 }
 
 #[tokio::test]
+async fn command_definition_uses_the_current_workspace_policy() {
+    let root = temp_root("gents-workspace-definition");
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root.clone(), true).unwrap(),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        DEFAULT_MAX_COMMAND_CHARS,
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
+    );
+    let describe = || crate::inference::llm::tool::Tool::definition(&tool, String::new());
+    assert!(describe().await.description.contains("unrestricted policy"));
+    let description = crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            runtime_home: None,
+            workspace_cwd: Some(root.clone()),
+            workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
+            workspace_authority: Some(WorkspaceAuthority::ReadWrite),
+            workspace_artifact: None,
+        },
+        None, None, None, Default::default(), false,
+        async { describe().await.description },
+    ).await;
+    assert!(
+        description.contains("workspace_write policy"),
+        "{description}"
+    );
+    assert!(
+        description.contains("network access is disabled"),
+        "{description}"
+    );
+    assert!(
+        description.contains("saved credentials are protected"),
+        "{description}"
+    );
+    assert!(describe().await.description.contains("unrestricted policy"));
+}
+
+#[tokio::test]
 async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
     let root = temp_root("gents-workspace-rw-bash");
     let policy =
