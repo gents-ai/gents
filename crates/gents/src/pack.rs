@@ -36,11 +36,11 @@ pub(crate) use installation::sdl_paths;
 pub use installation::{
     apply_prepared_dependency_schemas, document_pack_schema_paths, ensure_plugins_unreferenced,
     install_documents_with_plugins, install_prepared_document_graph,
-    install_prepared_document_pack, installed_pack_documents, installed_packs,
+    install_prepared_document_pack, installed_catalog, installed_pack_documents, installed_packs,
     list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
     read_installed_pack, record_plugin_store_change, record_plugin_store_change_as,
-    referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledPack,
-    InstalledPackPlugin, PackIdentity, PluginStoreChangeError, PreparedDependency,
+    referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledCatalogEntry,
+    InstalledPack, InstalledPackPlugin, PackIdentity, PluginStoreChangeError, PreparedDependency,
     PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub use loader::{
