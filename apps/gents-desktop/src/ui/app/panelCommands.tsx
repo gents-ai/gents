@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
-import { Maximize2, PanelRight, Rows3 } from "lucide-react";
+import { Maximize2, PanelRight, Rows3, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
@@ -126,6 +126,24 @@ export function usePanelCommands(route: Route, layout: ShellLayout) {
       if (!panel) return false;
       if (!view.shown) returnTo.current = document.activeElement;
       openPanel(panel.surface.id);
+    },
+  });
+  /* no key: ⌘W always closes the window, as the menu's Close Window does */
+  useCommand({
+    id: "panel.close-tab",
+    title: "Close panel tab",
+    group: "Panel",
+    icon: X,
+    when: () => view.active !== null,
+    run: () => {
+      const closing = view.active;
+      if (!closing) return false;
+      workspace.closeTab(scope, closing.id);
+      /* the last tab closed leaves the panel on what it can open, as an
+         empty panel shows it, rather than hiding it */
+      const after = workspace.dock(scope);
+      if (after.tabs.length === 0) workspace.reopenDock(scope);
+      focusPanel(after.active);
     },
   });
   useCommand({

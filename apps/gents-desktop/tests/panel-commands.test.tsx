@@ -167,6 +167,32 @@ describe("the panel's commands", () => {
     expect(await screen.findByRole("combobox", { name: "Find a panel" })).toBeVisible();
   }, 20_000);
 
+  it("leaves ⌘W to the window, even with focus in the panel", async () => {
+    const { workspace } = await load();
+    act(() => workspace.openSurface(SCOPE, "changes"));
+    const tab = await screen.findByRole("tab", { name: /Changes/ });
+    act(() => tab.focus());
+    /* not taken: the window's own Close Window gets it */
+    expect(fireEvent.keyDown(tab, { key: "w", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(tab, { key: "w", metaKey: true })).toBe(true);
+    expect(workspace.dock(SCOPE).tabs).toEqual(["changes"]);
+  }, 20_000);
+
+  it("closes the panel's active tab from its command, keeping the panel open on the last", async () => {
+    const { workspace, commands } = await load();
+    act(() => workspace.openSurface(SCOPE, "background"));
+    act(() => workspace.openSurface(SCOPE, "changes"));
+    await screen.findByRole("tab", { name: /Changes/ });
+    act(() => void commands.getCommand("panel.close-tab")!.run(0));
+    expect(workspace.dock(SCOPE)).toMatchObject({
+      open: true,
+      tabs: ["background"],
+      active: "background",
+    });
+    act(() => void commands.getCommand("panel.close-tab")!.run(0));
+    expect(workspace.dock(SCOPE)).toMatchObject({ open: true, tabs: [] });
+  }, 20_000);
+
   it("goes straight to a panel by its number", async () => {
     const { workspace } = await load();
     press("2", { altKey: true });
