@@ -20,7 +20,7 @@ import {
 } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group, Unfold } from "./rows";
-import { ToolsSummary } from "./ToolsSummary";
+import { ToolsSummary, ToolsUsedBy } from "./ToolsSummary";
 import {
   BASH_OUTPUT_LIMIT,
   FILE_LIMITS,
@@ -340,6 +340,7 @@ export function ToolsEditor({
           </Unfold>
         </>
       )}
+      {!page && <ToolsUsedBy deployment={deployment} tools={tools} />}
       <Group title={page ? "Files and commands" : undefined}>
         {!page && identity}
         <PathRow
