@@ -22,6 +22,7 @@ fn packaged_host_exposes_the_owned_runtime_cli_without_changing_host_flags() {
     assert!(output.status.success());
     let description: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(description["localRuntimeCli"], true);
+    assert_eq!(description["runtimeToolRootChange"], true);
     assert_eq!(
         description["runtimePreparationVersion"],
         gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION
@@ -44,6 +45,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
 
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("runtime");
+    let initial_root = root.path().join("initial-workspace");
+    std::fs::create_dir(&initial_root).unwrap();
     let executable = env!("CARGO_BIN_EXE_gents-client-host");
     let init = Command::new(executable)
         .args(["init", "--store-key-custody", "file", "--home"])
@@ -53,8 +56,10 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             "Gents",
             "--engineer",
             "--tool-package",
-            "minimal",
+            "write",
+            "--tool-root",
         ])
+        .arg(&initial_root)
         .output()
         .unwrap();
     assert!(
@@ -70,6 +75,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         tokio::process::Command::new(executable)
             .args(["prepare-runtime", "--home"])
             .arg(&home)
+            .arg("--change-tool-root")
+            .arg(root.path())
             .args(["--http-port", &port.to_string(), "--http-addr", "127.0.0.1"])
             .kill_on_drop(true)
             .output(),
@@ -161,6 +168,64 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             assert!(child.try_wait().unwrap().is_none());
         }
     }
+    let changed_root = root.path().canonicalize().unwrap();
+    let mut changed = tokio::process::Command::new(executable)
+        .args(["prepare-runtime", "--home"])
+        .arg(&home)
+        .arg("--change-tool-root")
+        .arg(&changed_root)
+        .args(["--no-keychain-prompts"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log.try_clone().unwrap()))
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let changed_result = preparation_receipt(&mut changed).await;
+    let RuntimePreparationResult::Ready {
+        outcome: RuntimePreparationOutcome::Replaced,
+        node_did: changed_did,
+        ..
+    } = changed_result
+    else {
+        panic!(
+            "{changed_result:?}\n{}",
+            std::fs::read_to_string(&log_path).unwrap()
+        );
+    };
+    let RuntimePreparationResult::Ready { node_did, .. } = &results[0] else {
+        unreachable!();
+    };
+    assert_eq!(&changed_did, node_did);
+    let before: serde_json::Value = serde_json::from_slice(&initial_config).unwrap();
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
+    assert_eq!(
+        after["tool_root"],
+        changed_root.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert_eq!(after["tool_ceiling"], before["tool_ceiling"]);
+    let identity =
+        gents::KeyIdentity::load_or_create(before["key_path"].as_str().unwrap(), None).unwrap();
+    use gents::NodeIdentity as _;
+    assert_eq!(identity.did(), changed_did);
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://127.0.0.1:{port}/api/v0/graphql"),
+        identity.did(),
+    );
+    let status: serde_json::Value = endpoint
+        .authorize(reqwest::Client::new().get(format!("http://127.0.0.1:{port}/status")))
+        .unwrap()
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["tool_root"], changed_root.to_str().unwrap());
+    assert_eq!(status["tool_ceiling"], "readwrite");
     let paths = DesktopPaths::from_root(root.path().join("client"));
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
@@ -213,7 +278,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     reopened.close().await;
     installation.shutdown().await.unwrap();
     core.shutdown().await.unwrap();
-    for child in [&mut service, &mut contender] {
+    for child in [&mut service, &mut contender, &mut changed] {
         if child.try_wait().unwrap().is_none() {
             child.kill().await.unwrap();
         }

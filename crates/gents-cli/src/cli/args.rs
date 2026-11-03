@@ -96,7 +96,7 @@ pub(crate) enum Command {
     )]
     Server(ServeArgs),
     #[command(about = "Prepare an initialized local runtime and serve until shutdown")]
-    PrepareRuntime(ServeArgs),
+    PrepareRuntime(PrepareRuntimeArgs),
     #[command(about = "Install and control the per-user native Gents runtime service")]
     Service {
         #[command(subcommand)]

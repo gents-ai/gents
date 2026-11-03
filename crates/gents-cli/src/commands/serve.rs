@@ -1210,6 +1210,9 @@ async fn serve_foreground(
                     p2p_admission: p2p_admission_state,
                 },
             )?;
+            if let Some((expected, updated)) = startup.as_ref().and_then(|startup| startup.pending_config.as_ref()) {
+                super::prepare_runtime::commit_root_change(&home_dir, expected, updated)?;
+            }
             serve_lifecycle.mark_ready();
 
             #[cfg(unix)]
@@ -1275,7 +1278,7 @@ async fn serve_foreground(
                 "apply_root": pack_apply,
             });
             drop(native_reservation.take());
-            if let Some(super::prepare_runtime::PreparedStartup { reservation, outcome }) = startup.take() {
+            if let Some(super::prepare_runtime::PreparedStartup { reservation, outcome, .. }) = startup.take() {
                 let report = gents_protocol::serve_lifecycle::preparation::RuntimePreparationResult::Ready {
                     outcome,
                     home: home_dir.to_string_lossy().into_owned(),
