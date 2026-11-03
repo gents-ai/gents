@@ -97,8 +97,8 @@ pub use schema_install::{
 pub use tools::write_tools_document;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{
-    ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess, NativeOperationAbandoned,
-    ReceiptWriteError, ReentrantEmbeddedWrite,
+    ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
+    NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
 };
 
 pub use error::{ConfigClientError, TransactionConflict};

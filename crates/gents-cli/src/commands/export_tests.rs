@@ -133,3 +133,54 @@ async fn native_export_retains_relationship_ids() {
     assert_eq!(author_row["books"][0]["_docID"], book_id);
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn native_export_preserves_fields_beyond_selection_width_limit() {
+    let node = Arc::new(
+        gents::defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    let access = ConfigAccess::local(node.clone());
+    let fields = (0..130)
+        .map(|index| format!("f_{index}: String"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    access
+        .add_collection(&format!("type ExportWide {{ {fields} }}"))
+        .await
+        .unwrap();
+    let values = (0..130)
+        .map(|index| format!("f_{index}:\"value_{index}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    ConfigAccess::write_local(
+        &node,
+        "test.export.wide.seed",
+        &format!("mutation {{ create_ExportWide(input:{{{values}}}) {{_docID}} }}"),
+    )
+    .await
+    .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let collections = BTreeSet::from(["ExportWide".to_owned()]);
+    let files = access
+        .transact_readonly("test.export.wide", |txn| {
+            let collections = &collections;
+            let directory = output.path();
+            Box::pin(async move { stage_export(txn, collections, "", directory).await })
+        })
+        .await
+        .unwrap();
+    publish(files, output.path()).unwrap();
+    let row: Value = serde_json::from_str(
+        std::fs::read_to_string(output.path().join("ExportWide.jsonl"))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    for index in 0..130 {
+        assert_eq!(row[format!("f_{index}")], format!("value_{index}"));
+    }
+    node.shutdown().await;
+}

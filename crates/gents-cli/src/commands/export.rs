@@ -117,8 +117,33 @@ pub(super) async fn stage_export(
             NamedTempFile::new_in(output_dir).context("creating temporary export file")?;
         let mut writer = DigestWriter::new(BufWriter::new(file.as_file_mut()));
         let mut rows = 0u64;
-        txn.visit_cursor_pages(collection, &selection.query, filter, |page| {
-            for row in page {
+        let mut cursor = txn.cursor_scan(collection, &selection.chunks[0].query, filter);
+        while let Some(mut page) = cursor.next_page().await? {
+            if page.is_empty() {
+                continue;
+            }
+            let ids: Vec<String> = page
+                .iter()
+                .map(|row| {
+                    row["_docID"]
+                        .as_str()
+                        .context("cursor row omitted its identity")
+                        .map(str::to_owned)
+                })
+                .collect::<Result<_>>()?;
+            for chunk in selection.chunks.iter().skip(1) {
+                let query = format!(
+                    "{{ {collection}(filter: {{_docID: {{_in: {}}}}}) {{ {} }} }}",
+                    gents_protocol::graphql::graphql_string_list_literal(&ids),
+                    chunk.query
+                );
+                let result = txn.execute(&query).await?;
+                let rows = result["data"][collection]
+                    .as_array()
+                    .context("export projection omitted collection rows")?;
+                merge_projection(&mut page, rows, &chunk.fields, collection)?;
+            }
+            for row in &page {
                 let object = row.as_object().context("export row is not an object")?;
                 for field in &selection.fields {
                     ensure!(
@@ -133,9 +158,7 @@ pub(super) async fn stage_export(
                 writer.write_all(b"\n")?;
                 rows = rows.checked_add(1).context("export row count overflow")?;
             }
-            Ok::<(), anyhow::Error>(())
-        })
-        .await?;
+        }
         writer.flush()?;
         let bytes = writer.bytes;
         let sha256 = format!("{:x}", writer.hash.clone().finalize());
@@ -152,9 +175,14 @@ pub(super) async fn stage_export(
 }
 
 struct FieldSelection {
-    query: String,
+    chunks: Vec<FieldChunk>,
     fields: Vec<String>,
     relations: Vec<String>,
+}
+
+struct FieldChunk {
+    query: String,
+    fields: Vec<String>,
 }
 
 fn field_selection(schema: &Value, collection: &str) -> Result<FieldSelection> {
@@ -202,27 +230,96 @@ fn field_selection(schema: &Value, collection: &str) -> Result<FieldSelection> {
             }
         }
     }
-    let query = selected
-        .iter()
-        .map(|(name, relation)| {
-            if *relation {
-                format!("{name} {{ _docID }}")
-            } else {
-                name.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
     let fields = selected.keys().cloned().collect();
     let relations = selected
-        .into_iter()
-        .filter_map(|(name, relation)| relation.then_some(name))
+        .iter()
+        .filter_map(|(name, relation)| relation.then_some(name.clone()))
         .collect();
+    let remaining: Vec<_> = selected
+        .into_iter()
+        .filter(|(name, _)| name != "_docID")
+        .collect();
+    let chunks: Vec<_> = if remaining.is_empty() {
+        vec![FieldChunk {
+            query: "_docID".into(),
+            fields: vec!["_docID".into()],
+        }]
+    } else {
+        remaining
+            .chunks(60)
+            .map(|part| {
+                let mut fields = vec!["_docID".to_owned()];
+                let mut query = vec!["_docID".to_owned()];
+                for (name, relation) in part {
+                    fields.push(name.clone());
+                    query.push(if *relation {
+                        format!("{name} {{ _docID }}")
+                    } else {
+                        name.clone()
+                    });
+                }
+                FieldChunk {
+                    query: query.join(" "),
+                    fields,
+                }
+            })
+            .collect()
+    };
     Ok(FieldSelection {
-        query,
+        chunks,
         fields,
         relations,
     })
+}
+
+fn merge_projection(
+    page: &mut [Value],
+    projected: &[Value],
+    fields: &[String],
+    collection: &str,
+) -> Result<()> {
+    let mut indexed = BTreeMap::new();
+    for row in projected {
+        let object = row
+            .as_object()
+            .context("export projection row is not an object")?;
+        let id = object
+            .get("_docID")
+            .and_then(Value::as_str)
+            .context("export projection omitted document identity")?;
+        ensure!(
+            indexed.insert(id.to_owned(), object).is_none(),
+            "export projection repeated a document in {collection}"
+        );
+    }
+    ensure!(
+        indexed.len() == page.len(),
+        "export projection returned an incomplete document set for {collection}"
+    );
+    for row in page {
+        let object = row.as_object_mut().context("export row is not an object")?;
+        let id = object
+            .get("_docID")
+            .and_then(Value::as_str)
+            .context("export row omitted identity")?;
+        let projection = indexed
+            .remove(id)
+            .context("export projection omitted a document")?;
+        for field in fields.iter().filter(|field| field.as_str() != "_docID") {
+            let value = projection
+                .get(field)
+                .with_context(|| format!("export projection omitted {collection}.{field}"))?;
+            ensure!(
+                object.insert(field.clone(), value.clone()).is_none(),
+                "export projection repeated {collection}.{field}"
+            );
+        }
+    }
+    ensure!(
+        indexed.is_empty(),
+        "export projection returned an unexpected document for {collection}"
+    );
+    Ok(())
 }
 
 fn validate_relation(
@@ -342,8 +439,8 @@ mod tests {
             {"name":"COUNT","type":{"kind":"SCALAR","name":"Int"}}
         ]});
         assert_eq!(
-            field_selection(&schema, "Record").unwrap().query,
-            "_authorID _docID author { _docID } body children { _docID } tags"
+            field_selection(&schema, "Record").unwrap().chunks[0].query,
+            "_docID _authorID author { _docID } body children { _docID } tags"
         );
         let unresolved = json!({"author":null,"_authorID":"hidden"});
         assert!(validate_relation(unresolved.as_object().unwrap(), "Record", "author").is_err());
@@ -351,6 +448,64 @@ mod tests {
         assert!(validate_relation(matching.as_object().unwrap(), "Record", "author").is_ok());
         let mismatch = json!({"author":{"_docID":"other"},"_authorID":"known"});
         assert!(validate_relation(mismatch.as_object().unwrap(), "Record", "author").is_err());
+    }
+
+    #[test]
+    fn wide_schema_is_split_and_projection_requires_exact_identity_set() {
+        let fields: Vec<_> = (0..130).map(|index| json!({"name":format!("field_{index}"),"type":{"kind":"SCALAR","name":"String"}})).collect();
+        let selection = field_selection(&json!({"fields":fields}), "Wide").unwrap();
+        assert_eq!(selection.chunks.len(), 3);
+        assert!(selection
+            .chunks
+            .iter()
+            .all(|chunk| chunk.fields.len() <= 61));
+        let names = vec!["_docID".to_owned(), "extra".to_owned()];
+        let mut page = vec![json!({"_docID":"one"}), json!({"_docID":"two"})];
+        merge_projection(
+            &mut page,
+            &[
+                json!({"_docID":"two","extra":2}),
+                json!({"_docID":"one","extra":1}),
+            ],
+            &names,
+            "Wide",
+        )
+        .unwrap();
+        assert_eq!(
+            page,
+            vec![
+                json!({"_docID":"one","extra":1}),
+                json!({"_docID":"two","extra":2})
+            ]
+        );
+        let mut page = vec![json!({"_docID":"one"}), json!({"_docID":"two"})];
+        assert!(merge_projection(
+            &mut page,
+            &[json!({"_docID":"one","extra":1})],
+            &names,
+            "Wide"
+        )
+        .is_err());
+        assert!(merge_projection(
+            &mut page,
+            &[
+                json!({"_docID":"one","extra":1}),
+                json!({"_docID":"one","extra":2})
+            ],
+            &names,
+            "Wide"
+        )
+        .is_err());
+        assert!(merge_projection(
+            &mut page,
+            &[
+                json!({"_docID":"one","extra":1}),
+                json!({"_docID":"other","extra":2})
+            ],
+            &names,
+            "Wide"
+        )
+        .is_err());
     }
 
     #[test]
