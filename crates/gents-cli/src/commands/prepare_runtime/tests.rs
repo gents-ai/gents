@@ -1,6 +1,10 @@
 use std::sync::{Arc, Mutex};
 
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use clap::Parser as _;
 use gents::{KeyIdentity, NodeIdentity as _};
 
@@ -62,6 +66,17 @@ async fn control_node_with_build(tamper: bool, build: String) -> ControlNode {
     let identity = Arc::new(KeyIdentity::load_or_create(home.path().join("key"), None).unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()
+        .route(
+            "/status",
+            get(|State((identity, _, _)): State<ControlState>| async move {
+                Json(serde_json::json!({
+                    "node_did": identity.did(),
+                    "tool_ceiling": "meta-only",
+                    "tool_root_error": null,
+                    "cli_tools": [],
+                }))
+            }),
+        )
         .route(
             RUNTIME_CONTROL_PATH,
             post(
@@ -310,6 +325,69 @@ fn changed_root_requires_an_existing_absolute_directory() {
         validate_requested_root(root.path().to_path_buf()).unwrap(),
         root.path().canonicalize().unwrap()
     );
+}
+
+#[tokio::test]
+async fn live_authority_must_match_the_saved_ceiling_before_retirement() {
+    let node = control_node(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let config = record_home(&node, home.path());
+    let valid = serde_json::json!({
+        "node_did": config.node_did.as_str(),
+        "tool_ceiling": "meta-only",
+        "tool_root_error": null,
+        "cli_tools": [],
+    });
+    assert!(validate_running_authority(&valid, &config).is_ok());
+    for field in ["node_did", "tool_ceiling", "tool_root_error", "cli_tools"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            validate_running_authority(&missing, &config).is_err(),
+            "{field}"
+        );
+    }
+    let mut mismatch = valid.clone();
+    mismatch["tool_ceiling"] = serde_json::json!("readonly");
+    assert!(validate_running_authority(&mismatch, &config).is_err());
+    mismatch["tool_ceiling"] = serde_json::json!("meta-only");
+    mismatch["cli_tools"] = serde_json::json!(["custom"]);
+    assert!(validate_running_authority(&mismatch, &config).is_err());
+}
+
+#[tokio::test]
+async fn changed_root_does_not_retire_a_runtime_with_stricter_live_access() {
+    let node = control_node(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    let mut config = record_home(&node, &home);
+    config.tool_ceiling = crate::cli::ToolCeilingArg::Readwrite;
+    crate::home_state::write_init_config(&home, &config).unwrap();
+    let before = std::fs::read(home.join("init.json")).unwrap();
+    let cli = crate::cli::Cli::try_parse_from([
+        "gents",
+        "prepare-runtime",
+        "--home",
+        home.to_str().unwrap(),
+        "--change-tool-root",
+        root.path().to_str().unwrap(),
+    ])
+    .unwrap();
+    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+        panic!("prepare-runtime command");
+    };
+    let error = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&error),
+        RuntimePreparationRefusal::Unavailable
+    );
+    assert_eq!(std::fs::read(home.join("init.json")).unwrap(), before);
+    let commands = node.seen.lock().unwrap();
+    assert_eq!(commands.len(), 1);
+    assert!(matches!(commands[0].operation, RuntimeOperation::Observe));
 }
 
 #[test]

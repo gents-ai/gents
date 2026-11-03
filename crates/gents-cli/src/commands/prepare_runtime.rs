@@ -224,6 +224,15 @@ async fn prepare_inner(
                 credentials_checked = true;
                 let authorization =
                     GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did());
+                if requested_root.is_some() {
+                    let status = super::status::fetch_local_operator_status(&authorization, CONTROL_TIMEOUT)
+                        .await
+                        .map_err(|error| refusal(
+                            RuntimePreparationRefusal::Unavailable,
+                            format!("Could not confirm the running runtime's access settings: {error:#}"),
+                        ))?;
+                    validate_running_authority(&status, &config)?;
+                }
                 let retired = control(&client, &endpoint, &config.node_did, RuntimeOperation::Retire { expected_build: observation.build }, Some(&authorization)).await?
                     .ok_or_else(|| refusal(RuntimePreparationRefusal::Unavailable, "The runtime closed before retirement could be confirmed. Retry to inspect its state."))?;
                 match retired.disposition {
@@ -358,6 +367,30 @@ fn validate_requested_root(root: PathBuf) -> Result<PathBuf> {
     anyhow::ensure!(root.is_dir(), "The tool root must be an existing directory");
     anyhow::ensure!(root.to_str().is_some(), "The tool root is not valid UTF-8");
     Ok(root)
+}
+
+fn validate_running_authority(status: &serde_json::Value, config: &StoredInitConfig) -> Result<()> {
+    let expected_ceiling = crate::format_tool_ceiling(config.tool_ceiling);
+    let matches = status.get("node_did").and_then(serde_json::Value::as_str)
+        == Some(config.node_did.as_str())
+        && status
+            .get("tool_ceiling")
+            .and_then(serde_json::Value::as_str)
+            == Some(expected_ceiling)
+        && status
+            .get("tool_root_error")
+            .is_some_and(serde_json::Value::is_null)
+        && status
+            .get("cli_tools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty);
+    if !matches {
+        return Err(refusal(
+            RuntimePreparationRefusal::Unavailable,
+            "The running runtime's access settings differ from its saved configuration. Stop it through its owner and reconcile access before changing the workspace root.",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn commit_root_change(
