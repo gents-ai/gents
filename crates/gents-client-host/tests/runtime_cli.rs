@@ -22,6 +22,7 @@ fn packaged_host_exposes_the_owned_runtime_cli_without_changing_host_flags() {
     assert!(output.status.success());
     let description: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(description["localRuntimeCli"], true);
+    assert_eq!(description["runtimeToolRootChange"], true);
     assert_eq!(
         description["runtimePreparationVersion"],
         gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION
@@ -161,6 +162,44 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             assert!(child.try_wait().unwrap().is_none());
         }
     }
+    let changed_root = root.path().join("workspace");
+    std::fs::create_dir(&changed_root).unwrap();
+    let mut changed = tokio::process::Command::new(executable)
+        .args(["prepare-runtime", "--home"])
+        .arg(&home)
+        .arg("--change-tool-root")
+        .arg(&changed_root)
+        .args(["--no-keychain-prompts"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log.try_clone().unwrap()))
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let changed_result = preparation_receipt(&mut changed).await;
+    let RuntimePreparationResult::Ready {
+        outcome: RuntimePreparationOutcome::Replaced,
+        node_did: changed_did,
+        ..
+    } = changed_result
+    else {
+        panic!(
+            "{changed_result:?}\n{}",
+            std::fs::read_to_string(&log_path).unwrap()
+        );
+    };
+    let RuntimePreparationResult::Ready { node_did, .. } = &results[0] else {
+        unreachable!();
+    };
+    assert_eq!(&changed_did, node_did);
+    let before: serde_json::Value = serde_json::from_slice(&initial_config).unwrap();
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
+    assert_eq!(
+        after["tool_root"],
+        changed_root.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert_eq!(after["tool_ceiling"], before["tool_ceiling"]);
     let paths = DesktopPaths::from_root(root.path().join("client"));
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
@@ -213,7 +252,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     reopened.close().await;
     installation.shutdown().await.unwrap();
     core.shutdown().await.unwrap();
-    for child in [&mut service, &mut contender] {
+    for child in [&mut service, &mut contender, &mut changed] {
         if child.try_wait().unwrap().is_none() {
             child.kill().await.unwrap();
         }

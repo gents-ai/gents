@@ -25,7 +25,7 @@ pub async fn prepare_runtime_after_unlock(
     let crate::cli::Command::PrepareRuntime(mut args) = cli.command else {
         unreachable!("the explicit entry point selects runtime preparation");
     };
-    args.keychain_startup_approval = true;
+    args.serve.keychain_startup_approval = true;
     let telemetry = crate::telemetry::init(crate::DEFAULT_LOG_FILTER)?;
     let result = super::prepare(args, runtime).await;
     telemetry.shutdown();

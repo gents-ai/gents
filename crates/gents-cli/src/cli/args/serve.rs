@@ -7,6 +7,19 @@ use super::{
 use crate::cli::output_format::OutputFormat;
 
 #[derive(clap::Args)]
+pub(crate) struct PrepareRuntimeArgs {
+    #[command(flatten)]
+    pub(crate) serve: ServeArgs,
+    #[arg(
+        long,
+        value_name = "DIRECTORY",
+        conflicts_with_all = ["tool_root", "tool_ceiling"],
+        help = "Explicitly change the managed runtime's tool root after safely retiring idle work"
+    )]
+    pub(crate) change_tool_root: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct ServeArgs {
     #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,

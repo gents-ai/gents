@@ -1,5 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -17,8 +17,10 @@ use gents_protocol::serve_lifecycle::{
 };
 use tokio::io::AsyncWriteExt as _;
 
-use crate::cli::{P2pTransportArg, ServeArgs};
-use crate::home_state::{load_initialized_home_identity, read_init_config, read_runtime_state};
+use crate::cli::{P2pTransportArg, PrepareRuntimeArgs};
+use crate::home_state::{
+    load_initialized_home_identity, read_init_config, read_runtime_state, write_init_config,
+};
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 
 /// Preparation must eventually report a busy home if its startup reservation
@@ -89,7 +91,10 @@ pub(crate) async fn emit(result: RuntimePreparationResult) -> Result<()> {
 /// build; digest inequality is not evidence that either executable is newer.
 /// The preparation process becomes the server, retaining the startup lock
 /// through native readiness instead of handing an unlocked home to a child.
-pub(crate) async fn prepare(args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
+pub(crate) async fn prepare(
+    args: PrepareRuntimeArgs,
+    runtime: tokio::runtime::Handle,
+) -> Result<()> {
     let result = prepare_inner(args, runtime).await;
     if let Err(error) = &result {
         let reason = refusal_reason(error);
@@ -105,7 +110,15 @@ pub(crate) async fn prepare(args: ServeArgs, runtime: tokio::runtime::Handle) ->
     result
 }
 
-async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
+async fn prepare_inner(
+    preparation: PrepareRuntimeArgs,
+    runtime: tokio::runtime::Handle,
+) -> Result<()> {
+    let mut args = preparation.serve;
+    let requested_root = preparation
+        .change_tool_root
+        .map(validate_requested_root)
+        .transpose()?;
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(!args.keychain_startup_approval)?;
     crate::process_resources::prepare()?;
@@ -145,7 +158,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
             "Another runtime preparation is still in progress. Retry after it finishes.",
         )
     })??;
-    let (config, state) = tokio::task::spawn_blocking({
+    let (mut config, state) = tokio::task::spawn_blocking({
         let home = home.clone();
         move || read_home(&home)
     })
@@ -181,7 +194,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
         )
         .await?;
         if let Some(observation) = observation {
-            if observation.build == build && !observation.retiring {
+            if observation.build == build && !observation.retiring && requested_root.is_none() {
                 if observation.lifecycle != ServeLifecycle::Ready {
                     return Err(refusal(
                         RuntimePreparationRefusal::Starting,
@@ -263,6 +276,19 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
             error.into()
         }
     })?;
+    if let Some(root) = requested_root {
+        let checked = validate_requested_root(root.clone())?;
+        anyhow::ensure!(
+            checked == root,
+            "The requested tool root changed during runtime retirement"
+        );
+        config.tool_root = Some(
+            root.to_str()
+                .context("The tool root is not valid UTF-8")?
+                .to_owned(),
+        );
+        write_init_config(&home, &config)?;
+    }
     let (address, port) = if let Some(endpoint) = recorded_endpoint {
         (
             endpoint
@@ -306,6 +332,18 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
         },
     )
     .await
+}
+
+fn validate_requested_root(root: PathBuf) -> Result<PathBuf> {
+    anyhow::ensure!(
+        root.is_absolute(),
+        "The tool root must be an absolute directory"
+    );
+    let root =
+        std::fs::canonicalize(root).context("The tool root must be an existing directory")?;
+    anyhow::ensure!(root.is_dir(), "The tool root must be an existing directory");
+    anyhow::ensure!(root.to_str().is_some(), "The tool root is not valid UTF-8");
+    Ok(root)
 }
 
 fn read_home(home: &Path) -> Result<(StoredInitConfig, Option<StoredRuntimeState>)> {

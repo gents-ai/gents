@@ -7,7 +7,7 @@ use gents::{KeyIdentity, NodeIdentity as _};
 use super::*;
 
 type SeenCommands = Arc<Mutex<Vec<RuntimeControlCommand>>>;
-type ControlState = (Arc<KeyIdentity>, SeenCommands);
+type ControlState = (Arc<KeyIdentity>, SeenCommands, String);
 
 #[test]
 fn custody_refusals_preserve_key_access_without_reclassifying_authorization() {
@@ -54,6 +54,10 @@ impl Drop for ControlNode {
 }
 
 async fn control_node(tamper: bool) -> ControlNode {
+    control_node_with_build(tamper, "b".repeat(64)).await
+}
+
+async fn control_node_with_build(tamper: bool, build: String) -> ControlNode {
     let home = tempfile::tempdir().unwrap();
     let identity = Arc::new(KeyIdentity::load_or_create(home.path().join("key"), None).unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -61,7 +65,7 @@ async fn control_node(tamper: bool) -> ControlNode {
         .route(
             RUNTIME_CONTROL_PATH,
             post(
-                move |State((identity, seen)): State<ControlState>,
+                move |State((identity, seen, build)): State<ControlState>,
                       Json(command): Json<RuntimeControlCommand>| async move {
                     seen.lock().unwrap().push(command.clone());
                     let disposition = match command.operation {
@@ -73,7 +77,7 @@ async fn control_node(tamper: bool) -> ControlNode {
                         node_did: identity.did().to_owned(),
                         command_nonce: command.nonce.clone(),
                         command_digest: command.digest().unwrap(),
-                        build: "b".repeat(64),
+                        build,
                         capabilities: current_capabilities(),
                         replicated_schema: None,
                         lifecycle: ServeLifecycle::Ready,
@@ -92,7 +96,7 @@ async fn control_node(tamper: bool) -> ControlNode {
                 },
             ),
         )
-        .with_state((identity.clone(), seen.clone()));
+        .with_state((identity.clone(), seen.clone(), build));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = reqwest::Url::parse(&format!(
         "http://{}/api/v0/graphql",
@@ -253,6 +257,79 @@ async fn preparation_busy_refusal_leaves_identity_store_and_saved_route_unchange
     assert_eq!(std::fs::read(key).unwrap(), key_before);
     assert!(!home.join("data").exists());
     drop(store_claim);
+}
+
+#[tokio::test]
+async fn changing_root_does_not_modify_a_busy_runtime() {
+    let build = gents::runtime::service::executable_build_id()
+        .await
+        .unwrap();
+    let node = control_node_with_build(false, build).await;
+    let home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    record_home(&node, &home);
+    let init_before = std::fs::read(home.join("init.json")).unwrap();
+    let state_before = std::fs::read(home.join("runtime.json")).unwrap();
+    let cli = crate::cli::Cli::try_parse_from([
+        "gents",
+        "prepare-runtime",
+        "--home",
+        home.to_str().unwrap(),
+        "--change-tool-root",
+        root.path().to_str().unwrap(),
+    ])
+    .unwrap();
+    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+        panic!("prepare-runtime command");
+    };
+    let error = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<PreparationFailure>().unwrap().reason,
+        RuntimePreparationRefusal::Busy
+    );
+    assert_eq!(std::fs::read(home.join("init.json")).unwrap(), init_before);
+    assert_eq!(
+        std::fs::read(home.join("runtime.json")).unwrap(),
+        state_before
+    );
+    assert_eq!(node.seen.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn changed_root_requires_an_existing_absolute_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("file");
+    std::fs::write(&file, "fixture").unwrap();
+    assert!(validate_requested_root("relative".into()).is_err());
+    assert!(validate_requested_root(root.path().join("missing")).is_err());
+    assert!(validate_requested_root(file).is_err());
+    assert_eq!(
+        validate_requested_root(root.path().to_path_buf()).unwrap(),
+        root.path().canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn managed_root_change_rejects_conflicting_server_overrides() {
+    for flag in ["--tool-root", "--tool-ceiling"] {
+        let value = if flag == "--tool-root" {
+            "/other"
+        } else {
+            "readonly"
+        };
+        assert!(crate::cli::Cli::try_parse_from([
+            "gents",
+            "prepare-runtime",
+            "--change-tool-root",
+            "/workspace",
+            flag,
+            value,
+        ])
+        .is_err());
+    }
 }
 
 fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
