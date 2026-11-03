@@ -1,15 +1,16 @@
 //! The reference must never reject input the loaders accept. Every
 //! `pack_config.json` and pack `manifest.json` in the repository is checked
-//! as written and after each schema-declared property is set to null or
-//! removed: whenever the loader still accepts the result, the exported
-//! schema must too.
+//! as written, after each schema-declared property is set to null or
+//! removed, and after each string is rewritten as a `${...}` substitution:
+//! whenever the loader still accepts the result, the exported schema must too.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use gents::pack::interpolate::{interpolate_with, SUBSTITUTION_PATTERN};
 use gents::pack::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config, PackInstallOptions,
     PackManifest,
@@ -33,25 +34,36 @@ enum Step {
 enum Edit {
     Null,
     Remove,
+    /// The same string written as a substitution of an unset variable whose
+    /// default is the original, which the loader reads back unchanged.
+    Interpolate,
 }
 
 #[derive(Debug)]
 struct Mutation {
     parent: Vec<Step>,
-    key: String,
+    target: Step,
     edit: Edit,
 }
 
 impl Mutation {
+    fn new(parent: &[Step], target: Step, edit: Edit) -> Self {
+        Self {
+            parent: parent.to_vec(),
+            target,
+            edit,
+        }
+    }
+
     fn pointer(&self) -> String {
         let mut pointer = String::new();
-        for step in &self.parent {
+        for step in self.parent.iter().chain([&self.target]) {
             match step {
                 Step::Key(key) => pointer.push_str(&format!("/{key}")),
                 Step::Index(index) => pointer.push_str(&format!("/{index}")),
             }
         }
-        format!("{pointer}/{} {:?}", self.key, self.edit)
+        format!("{pointer} {:?}", self.edit)
     }
 
     fn apply(&self, base: &Value) -> Option<Value> {
@@ -63,15 +75,25 @@ impl Mutation {
                 Step::Index(index) => node.get_mut(*index)?,
             };
         }
-        let object = node.as_object_mut()?;
-        match self.edit {
-            Edit::Null => {
-                object.insert(self.key.clone(), Value::Null);
-            }
-            Edit::Remove => {
-                object.remove(&self.key)?;
-            }
+        if let (Step::Key(key), Edit::Remove) = (&self.target, self.edit) {
+            node.as_object_mut()?.remove(key)?;
+            return Some(value);
         }
+        let slot = match &self.target {
+            Step::Key(key) => node
+                .as_object_mut()?
+                .entry(key.clone())
+                .or_insert(Value::Null),
+            Step::Index(index) => node.get_mut(*index)?,
+        };
+        *slot = match self.edit {
+            Edit::Null => Value::Null,
+            Edit::Remove => return None,
+            Edit::Interpolate => {
+                let text = slot.as_str().filter(|text| !text.contains(['$', '}']))?;
+                Value::String(format!("${{DOCS_BUNDLE_UNSET:-{text}}}"))
+            }
+        };
         Some(value)
     }
 }
@@ -128,17 +150,16 @@ impl<'a> Walk<'a> {
             instance.as_object(),
         ) {
             for (key, property) in properties {
-                out.push(Mutation {
-                    parent: path.to_vec(),
-                    key: key.clone(),
-                    edit: Edit::Null,
-                });
+                out.push(Mutation::new(path, Step::Key(key.clone()), Edit::Null));
                 if let Some(child) = object.get(key) {
-                    out.push(Mutation {
-                        parent: path.to_vec(),
-                        key: key.clone(),
-                        edit: Edit::Remove,
-                    });
+                    out.push(Mutation::new(path, Step::Key(key.clone()), Edit::Remove));
+                    if child.is_string() {
+                        out.push(Mutation::new(
+                            path,
+                            Step::Key(key.clone()),
+                            Edit::Interpolate,
+                        ));
+                    }
                     let mut child_path = path.to_vec();
                     child_path.push(Step::Key(key.clone()));
                     self.mutations(property, child, &child_path, out);
@@ -147,6 +168,9 @@ impl<'a> Walk<'a> {
         }
         if let (Some(items), Some(array)) = (schema.get("items"), instance.as_array()) {
             for (index, item) in array.iter().enumerate() {
+                if item.is_string() {
+                    out.push(Mutation::new(path, Step::Index(index), Edit::Interpolate));
+                }
                 let mut child_path = path.to_vec();
                 child_path.push(Step::Index(index));
                 self.mutations(items, item, &child_path, out);
@@ -406,4 +430,92 @@ fn null_owner_and_sidecar_input_the_loader_accepts_validates() {
             .collect();
         assert!(errors.is_empty(), "{config} is rejected: {errors:?}");
     }
+}
+
+fn backend(fields: Value) -> Value {
+    let mut backend = json!({
+        "backend_id": "backend",
+        "name": "backend",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:1/v1",
+        "auth": {"kind": "unauthenticated"}
+    });
+    if let (Some(backend), Some(fields)) = (backend.as_object_mut(), fields.as_object()) {
+        backend.extend(fields.clone());
+    }
+    json!({"node": {"node_did": OWNER}, "inference_backends": [backend]})
+}
+
+#[test]
+fn interpolated_input_validates_exactly_where_the_loader_substitutes() {
+    let schema = authored_pack_config_schema();
+    let validator = jsonschema::validator_for(schema.as_value()).expect("compiles");
+    let dir = Path::new(".");
+    for accepted in [
+        backend(json!({"provider_kind": "${PROVIDER:-OpenAiCompatible}"})),
+        backend(json!({"auth": {"kind": "${AUTH:-unauthenticated}"}})),
+        backend(json!({"openai_wire_api": "${WIRE:-}${API:-chat_completions}"})),
+    ] {
+        assert!(
+            decodes(&accepted, dir, None),
+            "the loader accepts {accepted}"
+        );
+        let errors: Vec<_> = validator
+            .iter_errors(&accepted)
+            .map(|error| format!("{error} at {}", error.instance_path()))
+            .collect();
+        assert!(errors.is_empty(), "{accepted} is rejected: {errors:?}");
+    }
+    // Interpolation only rewrites strings, so numbers and booleans stay
+    // literal; escaped or unclosed `${` is not a substitution.
+    for rejected in [
+        backend(json!({"max_concurrent": "${CONCURRENCY:-2}"})),
+        backend(json!({"enabled": "${ENABLED:-true}"})),
+        backend(json!({"provider_kind": "$${PROVIDER}"})),
+        backend(json!({"provider_kind": "${PROVIDER"})),
+    ] {
+        assert!(
+            !decodes(&rejected, dir, None),
+            "the loader rejects {rejected}"
+        );
+        assert!(
+            !validator.is_valid(&rejected),
+            "the schema accepts {rejected}"
+        );
+    }
+}
+
+/// Every string over a small alphabet up to six characters: the pattern must
+/// match exactly those the loader performs a substitution in.
+#[test]
+fn substitution_pattern_matches_the_loader_parser() {
+    let validator =
+        jsonschema::validator_for(&json!({"type": "string", "pattern": SUBSTITUTION_PATTERN}))
+            .expect("pattern compiles");
+    let alphabet = ['$', '{', '}', 'a', ':', '-'];
+    let mut strings = vec![String::new()];
+    let mut frontier = vec![String::new()];
+    for _ in 0..6 {
+        frontier = frontier
+            .iter()
+            .flat_map(|prefix| alphabet.iter().map(move |next| format!("{prefix}{next}")))
+            .collect();
+        strings.extend(frontier.iter().cloned());
+    }
+    let mismatches: Vec<_> = strings
+        .iter()
+        .filter(|text| {
+            let substituted = Cell::new(false);
+            let _ = interpolate_with(text, &|_| {
+                substituted.set(true);
+                None
+            });
+            substituted.get() != validator.is_valid(&json!(text))
+        })
+        .take(20)
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "pattern and parser disagree on {mismatches:?}"
+    );
 }

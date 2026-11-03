@@ -1,10 +1,12 @@
 //! JSON Schemas of what [`super::decode_pack_config`] accepts, which is wider
-//! than the documents it returns: `bind_owner` fills every omitted owner and
+//! than the documents it returns: `interpolate_values` substitutes `${...}` in
+//! every string first, `bind_owner` fills every omitted owner and
 //! `hydrate_eval_cases` reads `./` case sidecars.
 
 use schemars::{schema_for, JsonSchema, Schema};
 use serde_json::{json, Map, Value};
 
+use crate::documents::widen_schema;
 use crate::documents::{
     Agent, AgentContext, AgentTargetDocument, Callback, CallbackBinding, CallbackModule,
     CompactionConfig, DatastoreToolSurfaceDocument, EvalDefinition, EventSource, InferenceBackend,
@@ -12,6 +14,7 @@ use crate::documents::{
     PackConfig, ProjectionAcpBinding, RepositoryPlacement, Schedule, SkillDocument, Task,
     ToolServiceRegistry, Tools, Trigger,
 };
+use crate::pack::interpolate::SUBSTITUTION_PATTERN;
 use crate::Collection;
 
 use super::{EVAL_CASES_FIELD, OWNER_FIELD};
@@ -39,6 +42,7 @@ pub fn authored_pack_config_schema() -> Schema {
             allow_case_sidecars(definition);
         }
     }
+    allow_substitutions(schema.ensure_object());
     schema
 }
 
@@ -75,6 +79,7 @@ pub fn authored_document_schema(collection: Collection) -> Schema {
     if collection == Collection::EvalDefinition {
         allow_case_sidecars(document);
     }
+    allow_substitutions(document);
     schema
 }
 
@@ -124,4 +129,88 @@ fn allow_case_sidecars(definition: &mut Map<String, Value>) {
             ]
         });
     }
+}
+
+const SCHEMA_MAPS: [&str; 4] = [
+    "properties",
+    "patternProperties",
+    "$defs",
+    "dependentSchemas",
+];
+const SCHEMA_LISTS: [&str; 4] = ["anyOf", "oneOf", "allOf", "prefixItems"];
+const SCHEMAS: [&str; 10] = [
+    "items",
+    "additionalProperties",
+    "not",
+    "contains",
+    "propertyNames",
+    "if",
+    "then",
+    "else",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+];
+
+/// A string the loader substitutes into may be written as any substitution,
+/// so every constrained string also accepts one. `oneOf` becomes `anyOf`
+/// because an interpolated tag no longer tells the branches apart.
+fn allow_substitutions(schema: &mut Map<String, Value>) {
+    for key in SCHEMA_MAPS {
+        if let Some(children) = schema.get_mut(key).and_then(Value::as_object_mut) {
+            children
+                .values_mut()
+                .filter_map(Value::as_object_mut)
+                .for_each(allow_substitutions);
+        }
+    }
+    for key in SCHEMA_LISTS {
+        if let Some(children) = schema.get_mut(key).and_then(Value::as_array_mut) {
+            children
+                .iter_mut()
+                .filter_map(Value::as_object_mut)
+                .for_each(allow_substitutions);
+        }
+    }
+    for key in SCHEMAS {
+        if let Some(child) = schema.get_mut(key).and_then(Value::as_object_mut) {
+            allow_substitutions(child);
+        }
+    }
+    if let Some(branches) = schema.remove("oneOf") {
+        if schema.contains_key("anyOf") {
+            if let Some(all) = schema
+                .entry("allOf")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+            {
+                all.push(json!({ "anyOf": branches }));
+            }
+        } else {
+            schema.insert("anyOf".into(), branches);
+        }
+    }
+    if constrains_strings(schema) {
+        widen_schema(
+            schema,
+            json!({ "type": "string", "pattern": SUBSTITUTION_PATTERN }),
+        );
+    }
+}
+
+fn constrains_strings(schema: &Map<String, Value>) -> bool {
+    let string_values = schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .is_some_and(|values| values.iter().any(Value::is_string))
+        || schema.get("const").is_some_and(Value::is_string);
+    let typed_string = match schema.get("type") {
+        Some(Value::String(kind)) => kind == "string",
+        Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
+        _ => false,
+    };
+    string_values
+        || (typed_string
+            && ["pattern", "format", "minLength", "maxLength"]
+                .iter()
+                .any(|key| schema.contains_key(*key)))
 }

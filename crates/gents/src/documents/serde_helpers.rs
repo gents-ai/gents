@@ -151,30 +151,32 @@ pub(crate) fn accepts_null(schema: &mut schemars::Schema) {
             }
         }
         None if !constrained => {}
-        _ => {
-            const METADATA: [&str; 6] = [
-                "title",
-                "description",
-                "default",
-                "deprecated",
-                "examples",
-                "readOnly",
-            ];
-            let inner: serde_json::Map<String, Value> = object
-                .iter()
-                .filter(|(key, _)| !METADATA.contains(&key.as_str()))
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect();
-            object.retain(|key, _| METADATA.contains(&key.as_str()));
-            object.insert(
-                "anyOf".into(),
-                Value::Array(vec![
-                    Value::Object(inner),
-                    serde_json::json!({ "type": "null" }),
-                ]),
-            );
-        }
+        _ => widen_schema(object, serde_json::json!({ "type": "null" })),
     }
+}
+
+/// Makes `schema` accept `alternative` as well, keeping its annotations on
+/// the outside so readers still see them.
+pub(crate) fn widen_schema(schema: &mut serde_json::Map<String, Value>, alternative: Value) {
+    const ANNOTATIONS: [&str; 7] = [
+        "title",
+        "description",
+        "default",
+        "deprecated",
+        "examples",
+        "readOnly",
+        "writeOnly",
+    ];
+    let inner: serde_json::Map<String, Value> = schema
+        .iter()
+        .filter(|(key, _)| !ANNOTATIONS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    schema.retain(|key, _| ANNOTATIONS.contains(&key.as_str()));
+    schema.insert(
+        "anyOf".into(),
+        Value::Array(vec![Value::Object(inner), alternative]),
+    );
 }
 
 /// Schema for [`deserialize_optional_string_vec`] and
