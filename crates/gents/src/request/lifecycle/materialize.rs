@@ -1088,7 +1088,7 @@ async fn created_session_provenance_in_txn(
                 request: request_id,
                 task,
                 valid: kind_matches
-                    && crate::session::origin::verified_task_fire(
+                    && gents_protocol::trigger_delivery::verified_task_fire(
                         row, node, session, request_id, trigger,
                     )
                     .is_some(),
@@ -1756,7 +1756,7 @@ mod task_delivery_tests {
             "session_id": "session", "task_id": "task"
         });
         assert_eq!(
-            crate::session::origin::verified_task_fire(
+            gents_protocol::trigger_delivery::verified_task_fire(
                 &fire,
                 "node",
                 "session",
@@ -1766,7 +1766,7 @@ mod task_delivery_tests {
             .map(|(_, task)| task),
             Some("task")
         );
-        assert!(crate::session::origin::verified_task_fire(
+        assert!(gents_protocol::trigger_delivery::verified_task_fire(
             &fire,
             "node",
             "other",
@@ -1775,7 +1775,7 @@ mod task_delivery_tests {
         )
         .is_none());
         fire["fire_key"] = serde_json::json!("tampered");
-        assert!(crate::session::origin::verified_task_fire(
+        assert!(gents_protocol::trigger_delivery::verified_task_fire(
             &fire,
             "node",
             "session",

@@ -1312,36 +1312,13 @@ where
     let [fire] = fires.as_slice() else {
         return Ok(None);
     };
-    Ok(
-        verified_task_fire(fire, node, session, &request.request_id, trigger)
-            .map(|(key, task)| serde_json::to_string(&(key, task)))
-            .transpose()?,
+    Ok(gents_protocol::trigger_delivery::verified_task_fire(
+        fire,
+        node,
+        session,
+        &request.request_id,
+        trigger,
     )
-}
-
-pub(crate) fn verified_task_fire<'a>(
-    fire: &'a Value,
-    node: &str,
-    session: &str,
-    request_id: &str,
-    trigger: &str,
-) -> Option<(&'a str, &'a str)> {
-    let key = fire["fire_key"]
-        .as_str()
-        .filter(|value| !value.is_empty())?;
-    let task = fire["task_id"].as_str().filter(|value| !value.is_empty())?;
-    let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: node.to_owned(),
-        trigger_id: trigger.to_owned(),
-        source_collection: fire["source_collection"].as_str()?.to_owned(),
-        source_doc_id: fire["source_doc_id"].as_str()?.to_owned(),
-    };
-    if fire["trigger_id"].as_str() != Some(trigger)
-        || fire["session_id"].as_str() != Some(session)
-        || key != identity.fire_key()
-        || request_id != identity.request_id()
-    {
-        return None;
-    }
-    Some((key, task))
+    .map(|(key, task)| serde_json::to_string(&(key, task)))
+    .transpose()?)
 }
