@@ -332,6 +332,44 @@ fn managed_root_change_rejects_conflicting_server_overrides() {
     }
 }
 
+#[tokio::test]
+async fn changing_root_without_the_store_key_preserves_the_initialized_home() {
+    let node = control_node(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    let mut config = record_home(&node, &home);
+    config.store_encryption = Some(gents::store::local::store_key::StoreEncryption {
+        version: gents::store::local::store_key::STORE_ENCRYPTION_VERSION,
+        custody: gents::store::local::store_key::StoreKeyCustody::File,
+    });
+    crate::home_state::write_init_config(&home, &config).unwrap();
+    std::fs::remove_file(home.join("runtime.json")).unwrap();
+    let before = std::fs::read(home.join("init.json")).unwrap();
+    let cli = crate::cli::Cli::try_parse_from([
+        "gents",
+        "prepare-runtime",
+        "--home",
+        home.to_str().unwrap(),
+        "--change-tool-root",
+        root.path().to_str().unwrap(),
+    ])
+    .unwrap();
+    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+        panic!("prepare-runtime command");
+    };
+    let error = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&error),
+        RuntimePreparationRefusal::Credentials
+    );
+    assert_eq!(std::fs::read(home.join("init.json")).unwrap(), before);
+    assert!(!home.join("runtime.json").exists());
+    assert!(node.seen.lock().unwrap().is_empty());
+}
+
 fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
     let key = node._home.path().join("key");
     let config = StoredInitConfig {

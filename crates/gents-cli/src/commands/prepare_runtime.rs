@@ -173,6 +173,7 @@ async fn prepare_inner(
     .await??;
     let mut outcome = RuntimePreparationOutcome::Started;
     let mut recorded_endpoint = None;
+    let mut credentials_checked = false;
     if let Some(state) = &state {
         args.p2p_transport = match state.p2p_transport.as_str() {
             "none" => P2pTransportArg::None,
@@ -220,30 +221,8 @@ async fn prepare_inner(
                 .await;
             }
             if !observation.retiring {
-                let identity = tokio::task::spawn_blocking({
-                    let home = home.clone();
-                    let config = config.clone();
-                    move || {
-                        if let Some(encryption) = config.store_encryption.as_ref() {
-                            encryption.load(
-                                &gents::store::local::store_key::home_key_file(&home),
-                                &gents::store::local::home::default_data_dir(&home),
-                            )?;
-                        }
-                        load_initialized_home_identity(&home, &config)
-                    }
-                })
-                .await?
-                .map_err(|error| {
-                    if refusal_reason(&error) == RuntimePreparationRefusal::KeyAccess {
-                        error.context("The recorded runtime keys need access")
-                    } else {
-                        refusal(
-                            RuntimePreparationRefusal::Credentials,
-                            format!("The runtime credentials are unavailable: {error:#}"),
-                        )
-                    }
-                })?;
+                let identity = load_runtime_identity(&home, &config).await?;
+                credentials_checked = true;
                 let authorization =
                     GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did());
                 let retired = control(&client, &endpoint, &config.node_did, RuntimeOperation::Retire { expected_build: observation.build }, Some(&authorization)).await?
@@ -277,6 +256,9 @@ async fn prepare_inner(
         }
     })?;
     if let Some(root) = requested_root {
+        if !credentials_checked {
+            drop(load_runtime_identity(&home, &config).await?);
+        }
         let checked = validate_requested_root(root.clone())?;
         anyhow::ensure!(
             checked == root,
@@ -332,6 +314,34 @@ async fn prepare_inner(
         },
     )
     .await
+}
+
+async fn load_runtime_identity(
+    home: &Path,
+    config: &StoredInitConfig,
+) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+    let home = home.to_path_buf();
+    let config = config.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(encryption) = config.store_encryption.as_ref() {
+            encryption.load(
+                &gents::store::local::store_key::home_key_file(&home),
+                &gents::store::local::home::default_data_dir(&home),
+            )?;
+        }
+        load_initialized_home_identity(&home, &config)
+    })
+    .await?
+    .map_err(|error| {
+        if refusal_reason(&error) == RuntimePreparationRefusal::KeyAccess {
+            error.context("The recorded runtime keys need access")
+        } else {
+            refusal(
+                RuntimePreparationRefusal::Credentials,
+                format!("The runtime credentials are unavailable: {error:#}"),
+            )
+        }
+    })
 }
 
 fn validate_requested_root(root: PathBuf) -> Result<PathBuf> {
