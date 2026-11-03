@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// loader fills missing root node_did from PackInstallOptions and explicit
 /// owners must match. Validate ownership, references, unknown authoring keys,
 /// and resource bounds before persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PackConfig {

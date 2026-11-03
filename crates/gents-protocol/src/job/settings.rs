@@ -5,7 +5,7 @@ use super::DynamicMode;
 
 /// Operator-owned job ceiling of one plugin: what a job it runs may start and
 /// how long it may live. An absent block means non-job verbs only.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PluginJobSettings {
@@ -75,7 +75,7 @@ impl PluginJobSettings {
 }
 
 /// Operator-only job policy; self-config may not edit it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct JobPolicy {
@@ -106,12 +106,12 @@ impl Default for JobPolicy {
 }
 
 /// Manifest `job`: the plugin runs job steps.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PluginJobDeclaration(pub bool);
 
 /// The context value a stamped field is host-filled from.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum StampedField {
@@ -125,7 +125,7 @@ pub enum StampedField {
 
 /// Manifest `data`: `ops` are `query`, `insert`, `update` or `delete`; `stamped`
 /// maps a written field to the context value that fills it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PluginDataDeclaration {

@@ -289,7 +289,7 @@ pub(crate) async fn update_trigger_runtime_fields(
 
 /// Reusable event-source configuration; the existing event engine owns group
 /// state independently per typed trigger/callback consumer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EventSource {

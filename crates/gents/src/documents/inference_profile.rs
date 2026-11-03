@@ -6,7 +6,7 @@ use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retr
 
 /// Complete selectable inference preset; multiple profiles may select different
 /// models or efforts through the same backend without duplicating credentials.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct InferenceProfile {

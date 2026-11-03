@@ -8,7 +8,7 @@ use super::surface_tool::{
     deserialize_optional_surface_tools, serialize_optional_surface_tools, SurfaceToolDecl,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct DatastoreToolSurfaceDocument {

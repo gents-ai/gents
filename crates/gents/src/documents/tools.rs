@@ -16,7 +16,7 @@ pub use gents_protocol::row::RetiredKey;
 /// Tool capabilities, execution policies, and dependencies referenced by a context.
 /// Groups are embedded in this document and share its ownership. Missing groups
 /// expose no capabilities. External service, surface, and target refs remain explicit.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Tools {
@@ -58,7 +58,7 @@ pub struct Tools {
 
 /// Access to the host running the agent, with nested capability settings.
 /// Missing groups and an empty CLI list expose no tools in that category.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct HostTools {
@@ -90,7 +90,7 @@ pub struct HostTools {
 /// File operations are bounded by the enclosing request deadline. There is no
 /// per-operation timer: a write cannot be abandoned mid-flight without
 /// misreporting whether it landed.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct FileTools {
@@ -121,7 +121,7 @@ pub struct FileTools {
 }
 
 /// Bash capability and command execution constraints.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BashTools {
@@ -211,7 +211,7 @@ pub struct BashTools {
 /// support background execution; only bash does among native host tools.
 /// Binary, environment, and argument constraints remain owned by its existing
 /// host registration; this document does not introduce a second executor config.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CliTool {
@@ -236,7 +236,9 @@ pub struct CliTool {
 }
 
 /// How selected MCP tools are presented to the model.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum RemoteToolStyle {
@@ -252,7 +254,7 @@ impl RemoteToolStyle {
 }
 
 /// Select MCP services with per-service settings. Empty means no remote tools.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct RemoteTools {
@@ -267,7 +269,7 @@ pub struct RemoteTools {
 
 /// Tool selection and presentation for one MCP service.
 /// Service connectivity remains owned by the existing MCP service document.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct RemoteServiceTools {
@@ -346,7 +348,7 @@ pub struct RemoteServiceTools {
 }
 
 /// Session-message targets: the allowlist agent_new/agent_message address.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct AgentTools {
@@ -368,7 +370,7 @@ pub struct AgentTools {
 }
 
 /// Agent runtime capabilities independent of host access or external integrations.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BuiltInTools {
@@ -376,6 +378,7 @@ pub struct BuiltInTools {
     /// it is accepted and ignored, and the canonical serializer drops it on next write.
     #[serde(default, rename = "enable_graph_tools", skip_serializing)]
     #[cfg_attr(feature = "typescript", ts(skip))]
+    #[schemars(skip)]
     pub retired_graph_tools: RetiredKey,
     /// Independent goal get/update capability. Unset is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -424,7 +427,7 @@ pub struct BuiltInTools {
 }
 
 /// Schema-bounded access to the DefraDB datastore.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct DatastoreTools {
@@ -458,8 +461,9 @@ pub struct DatastoreTools {
 }
 
 /// Domain-specific external integrations. Extension design remains to be settled.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, from = "IntegrationToolsStored")]
+#[schemars(!from)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct IntegrationTools {
     /// Presence selects the LSP integration; absent means disabled.
@@ -510,7 +514,7 @@ impl From<IntegrationToolsStored> for IntegrationTools {
 }
 
 /// One installed plugin offered to the model as a tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PluginToolRef {
@@ -550,7 +554,7 @@ impl PluginToolRef {
 
 /// Language-server settings embedded in `IntegrationTools`.
 /// The operator payload is validated with the rest of the tool document.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct LspTools {
@@ -571,7 +575,7 @@ pub struct LspTools {
 }
 
 /// Existing self-configuration controls, grouped for a separate design review.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct SelfConfigTools {

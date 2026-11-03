@@ -60,7 +60,7 @@ pub use ux::{
 
 mod asset_path;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PackKind {
     Documents,
@@ -68,7 +68,7 @@ pub enum PackKind {
     Plugins,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PackMetadata {
     pub kind: PackKind,
     #[serde(default = "default_namespace")]
@@ -100,7 +100,7 @@ pub struct PackMetadata {
     pub ux: Vec<PackUxPlugin>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackInferenceSlot {
     pub name: String,
@@ -123,7 +123,7 @@ fn default_namespace() -> String {
     crate::pack::archive::DEFAULT_NAMESPACE.to_owned()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackManifest {
     pub manifest_version: u32,
@@ -171,7 +171,7 @@ impl PackManifest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackageExternalDependency {
     pub service_id: String,

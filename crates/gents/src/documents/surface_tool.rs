@@ -111,20 +111,23 @@ pub fn merge_datastore_tool_surfaces<'a>(
 
 /// One bound read tool: one collection, a fixed projection, optional filter
 /// fills. The model never names the collection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct QueryToolDecl {
     pub tool_name: String,
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
+    #[schemars(default)]
     pub description: String,
     /// Projection allowlist; omit `fields` at call time to return all of these.
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional))]
+    #[schemars(default)]
     pub fields: Vec<String>,
     #[cfg_attr(
         feature = "typescript",
         ts(as = "Option<Vec<WriteToolField>>", optional)
     )]
+    #[schemars(default)]
     pub filter_fields: Vec<WriteToolField>,
 }
 
@@ -217,6 +220,33 @@ impl SurfaceToolDecl {
                 validate_query_tool_declarations(std::slice::from_ref(decl), &[], &[])
             }
         }
+    }
+}
+
+/// The authored shape the `Deserialize` impl below accepts: a create entry
+/// whose `kind` is absent, `create` or `write`, or a query entry whose `kind`
+/// is `query` or `read`.
+impl schemars::JsonSchema for SurfaceToolDecl {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SurfaceToolDecl".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let create = generator.subschema_for::<WriteToolDecl>();
+        let query = generator.subschema_for::<QueryToolDecl>();
+        schemars::json_schema!({
+            "anyOf": [
+                {
+                    "allOf": [create],
+                    "properties": { "kind": { "enum": ["create", "write"] } }
+                },
+                {
+                    "allOf": [query],
+                    "properties": { "kind": { "enum": ["query", "read"] } },
+                    "required": ["kind"]
+                }
+            ]
+        })
     }
 }
 

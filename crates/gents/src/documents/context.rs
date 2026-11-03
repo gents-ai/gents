@@ -5,7 +5,7 @@ use super::references::ConfigReferences;
 /// This document describes how context is assembled; conversation messages,
 /// activated skills, and generated compaction entries remain session state.
 /// References identify documents, not pinned revisions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct AgentContext {

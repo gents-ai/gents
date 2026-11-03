@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// MCP connection configuration; discovered tools and health are observations.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ToolServiceRegistry {
@@ -55,7 +55,7 @@ pub struct ToolServiceRegistry {
 }
 
 /// Principal-local checkout used by existing workspace provisioning callbacks.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct RepositoryPlacement {
@@ -79,7 +79,7 @@ pub struct RepositoryPlacement {
 }
 
 /// References existing DefraDB ACP policies; this is not a second ACL system.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ProjectionAcpBinding {

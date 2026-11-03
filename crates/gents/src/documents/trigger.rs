@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// A source supplies fire variables; the shared trigger engine renders the task
 /// and enqueues an AgentRequest. Execution and terminal state belong to that
 /// request, not to a new task-run lifecycle.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Trigger {
@@ -54,7 +54,7 @@ pub struct Trigger {
 /// Exactly one configured source per trigger. Source documents can be reused;
 /// each trigger retains its own delivery identity and runtime observations.
 /// Manual task invocation does not require a persisted Trigger document.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum TriggerSource {

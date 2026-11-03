@@ -7,7 +7,7 @@ pub use gents_loop::claude_platform::ClaudePlatform;
 
 /// Shared provider connection. Authentication must be compatible with the
 /// provider adapter; OAuth credentials resolve through the invoking principal's DID.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct InferenceBackend {
@@ -90,7 +90,7 @@ where
 }
 
 /// Authentication selection on a backend, not a second credential store.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

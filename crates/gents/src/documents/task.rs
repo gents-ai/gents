@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Reusable task definition; the trigger engine renders templates into an
 /// AgentRequest before the owned loop executes it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Task {
@@ -65,7 +65,7 @@ pub struct Task {
 
 /// A task-owned host command, using the behavior's HostTools.root and inherited
 /// host environment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct TaskHook {
@@ -89,7 +89,7 @@ pub struct TaskHook {
     pub skip_exit_codes: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum TaskHookPhase {
