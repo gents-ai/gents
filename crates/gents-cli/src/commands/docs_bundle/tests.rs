@@ -81,18 +81,24 @@ fn json_file(files: &BundleFiles, path: &str) -> Value {
     serde_json::from_slice(bytes).unwrap_or_else(|error| panic!("{path} is not JSON: {error}"))
 }
 
-/// Every non-hidden declared command path paired with its non-hidden argument ids.
-fn declared_commands(
-    command: &clap::Command,
-    path: Vec<String>,
-    out: &mut Vec<(Vec<String>, Vec<String>)>,
-) {
-    let args = command
+/// Every non-hidden declared command: its path, non-hidden argument ids and
+/// extended help, in the shape `cli.json` reports them.
+fn declared_commands(command: &clap::Command, path: Vec<String>, out: &mut Vec<Value>) {
+    let text = |long: Option<&clap::builder::StyledStr>,
+                short: Option<&clap::builder::StyledStr>| {
+        long.or(short).map(ToString::to_string)
+    };
+    let args: Vec<String> = command
         .get_arguments()
         .filter(|arg| !arg.is_hide_set())
         .map(|arg| arg.get_id().to_string())
         .collect();
-    out.push((path.clone(), args));
+    out.push(json!({
+        "path": path,
+        "args": args,
+        "before_help": text(command.get_before_long_help(), command.get_before_help()),
+        "after_help": text(command.get_after_long_help(), command.get_after_help()),
+    }));
     for subcommand in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {
         let mut path = path.clone();
         path.push(subcommand.get_name().to_owned());
@@ -100,22 +106,28 @@ fn declared_commands(
     }
 }
 
-fn exported_commands(command: &Value, out: &mut Vec<(Vec<String>, Vec<String>)>) {
-    let strings = |value: &Value, key: &str| -> Vec<String> {
-        value
-            .as_array()
-            .unwrap_or_else(|| panic!("{key} is not an array"))
-            .iter()
-            .map(|item| {
-                let item = if key == "args" { &item["id"] } else { item };
-                item.as_str().expect("string").to_owned()
-            })
-            .collect()
-    };
-    out.push((
-        strings(&command["path"], "path"),
-        strings(&command["args"], "args"),
-    ));
+fn exported_commands(command: &Value, out: &mut Vec<Value>) {
+    let args: Vec<Value> = command["args"]
+        .as_array()
+        .expect("args is an array")
+        .iter()
+        .map(|arg| arg["id"].clone())
+        .collect();
+    for key in ["before_help", "after_help"] {
+        assert!(
+            command
+                .get(key)
+                .is_some_and(|value| value.is_null() || value.is_string()),
+            "{} has no string-or-null {key}",
+            command["path"]
+        );
+    }
+    out.push(json!({
+        "path": command["path"],
+        "args": args,
+        "before_help": command["before_help"],
+        "after_help": command["after_help"],
+    }));
     for subcommand in command["subcommands"].as_array().expect("subcommands") {
         exported_commands(subcommand, out);
     }
@@ -168,13 +180,25 @@ fn exporter_writes_a_complete_deterministic_bundle() {
     exported_commands(&cli, &mut exported);
     assert_eq!(
         exported, declared,
-        "cli.json must hold exactly the non-hidden commands and arguments"
+        "cli.json must hold exactly the non-hidden commands, arguments and extended help"
     );
     assert!(
-        !exported
+        !exported.iter().any(|command| command["path"]
+            .as_array()
+            .expect("path")
             .iter()
-            .any(|(path, _)| path.iter().any(|name| name.starts_with("__"))),
+            .any(|name| name.as_str().is_some_and(|name| name.starts_with("__")))),
         "hidden commands leaked into cli.json"
+    );
+    let init = exported
+        .iter()
+        .find(|command| command["path"] == json!(["gents", "init"]))
+        .expect("gents init is exported");
+    assert!(
+        init["after_help"]
+            .as_str()
+            .is_some_and(|help| help.contains("gents init")),
+        "gents init keeps its examples: {init}"
     );
 
     let index = json_file(&files, "config/index.json");

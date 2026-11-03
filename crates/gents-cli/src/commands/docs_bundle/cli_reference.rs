@@ -21,6 +21,8 @@ pub(crate) struct CommandReference {
     pub(crate) path: Vec<String>,
     pub(crate) about: Option<String>,
     pub(crate) long_about: Option<String>,
+    pub(crate) before_help: Option<String>,
+    pub(crate) after_help: Option<String>,
     pub(crate) usage: String,
     pub(crate) aliases: Vec<String>,
     pub(crate) args: Vec<ArgReference>,
@@ -82,6 +84,14 @@ fn command_reference(
         name: declared.get_name().to_owned(),
         about: declared.get_about().map(ToString::to_string),
         long_about: declared.get_long_about().map(ToString::to_string),
+        before_help: declared
+            .get_before_long_help()
+            .or_else(|| declared.get_before_help())
+            .map(ToString::to_string),
+        after_help: declared
+            .get_after_long_help()
+            .or_else(|| declared.get_after_help())
+            .map(ToString::to_string),
         usage: usage(built),
         aliases: declared.get_visible_aliases().map(str::to_owned).collect(),
         args: declared
