@@ -7,7 +7,8 @@ use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
-    EnrollmentOfferRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,
+    EnrollmentOfferRecord, EnrollmentRequestRecord, DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+    ENROLLMENT_PROTOCOL_VERSION,
 };
 use gents_protocol::network_token::NetworkRecord;
 
@@ -161,15 +162,54 @@ pub async fn authorize_enrollment_peer(
     member_peer: &str,
     member_address: &str,
 ) -> AuthorizedEnrollment {
+    authorize_enrollment_generation(
+        node,
+        EnrollmentGeneration {
+            network_id,
+            network_name,
+            label: "",
+            lease: Duration::from_secs(DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS),
+        },
+        admin_identity,
+        member_identity,
+        member_peer,
+        member_address,
+    )
+    .await
+}
+
+/// One offer, request and approval for a member. A distinct `label` makes a
+/// fresh request from the same member, which is how a renewal re-enrolls it.
+pub struct EnrollmentGeneration<'a> {
+    pub network_id: &'a str,
+    pub network_name: &'a str,
+    pub label: &'a str,
+    pub lease: Duration,
+}
+
+pub async fn authorize_enrollment_generation(
+    node: Arc<EmbeddedNode>,
+    generation: EnrollmentGeneration<'_>,
+    admin_identity: Arc<dyn NodeIdentity>,
+    member_identity: Arc<dyn NodeIdentity>,
+    member_peer: &str,
+    member_address: &str,
+) -> AuthorizedEnrollment {
+    let EnrollmentGeneration {
+        network_id,
+        network_name,
+        label,
+        lease,
+    } = generation;
     let (offer, offer_token) = signed_enrollment_offer(
         &node,
         network_id,
         network_name,
         admin_identity.as_ref(),
-        format!("challenge-{network_id}-{member_peer}"),
+        format!("challenge-{network_id}-{member_peer}{label}"),
     )
     .await;
-    let client_nonce = format!("nonce-{network_id}-{member_peer}");
+    let client_nonce = format!("nonce-{network_id}-{member_peer}{label}");
     let request_id = format!(
         "enroll-{}",
         derive_enrollment_id(
@@ -248,7 +288,7 @@ pub async fn authorize_enrollment_peer(
         response.errors
     );
     GraphqlEnrollmentStore::new(node, admin_identity)
-        .decide_request(&request.request_id, EnrollmentDecisionKind::Approved)
+        .decide_request_with_lease(&request.request_id, EnrollmentDecisionKind::Approved, lease)
         .await
         .expect("approve live enrollment request");
     AuthorizedEnrollment {

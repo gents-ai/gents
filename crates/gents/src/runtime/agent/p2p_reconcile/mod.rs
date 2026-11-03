@@ -7,6 +7,7 @@ pub mod enrollment;
 pub mod enrollment_candidate;
 pub mod enrollment_offer;
 pub mod enrollment_reconcile;
+mod enrollment_renewal;
 pub mod enrollment_store;
 pub mod error_class;
 pub mod file_image_hydration;
