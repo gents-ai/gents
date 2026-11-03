@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## 1.0.0-rc1 - 2026-10-31
 
+- P2P DAG fetches rank providers by measured health, rotate past a provider
+  that answers busy instead of waiting on it, cut a fetch's closure below the
+  missing frontier so held history is not sent again, and log why a selective
+  fetch made no progress (defradb.rs#2531, #2533, #2535, #2537). A node whose
+  CAR serving lane is full answers busy; an rc0 peer reads that as an empty
+  reply. Storage workers flush deferred reclamation before they idle
+  (defradb.rs#2542). `/metrics` adds the admission saturation lane, busy
+  rotations, provider demotions and cooldown skips, busy CAR answers, and each
+  peer's busy rate.
 - Recover stalled conversation and file synchronization without resetting saved
   history, including reconnects and duplicate enrollment route records.
 - Improve mobile keyboard layout, touch targets, composer history, question
