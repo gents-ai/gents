@@ -11,6 +11,7 @@ import { packOrigin } from "./ListDetail";
 import { useApp } from "@/app/AppContext";
 import { settleAvatar } from "@/lib/avatarRoll";
 import { useBootstrap, useNodeConfigReadOnly, useNodeReach } from "@/hooks/useClient";
+import { href } from "@/lib/router";
 
 export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const bootstrap = useBootstrap();
@@ -101,6 +102,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         avatar={d.draft.avatar || null}
         onAvatar={(v) => d.set("avatar", v)}
       />
+      {readOnly && <SharedDetails deployment={deployment} />}
       {!readOnly && (
         <>
           <Unfold open={Boolean(naming || d.problems.displayName)} id="node-naming">
@@ -210,5 +212,48 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       </Group>
       {isLocalNode(deployment, bootstrap?.initNodeDid) && <LocalServer />}
     </div>
+  );
+}
+
+/* what a node shares of its own settings, shown as facts where the app can't
+   change them; a node on an older build, or whose settings this window may
+   not read, shares less, and says so rather than looking unset */
+function SharedDetails({ deployment }: { deployment: NodeView }) {
+  const node = deployment.node;
+  const config = deployment.nodeConfig;
+  const unshared = "Not shared by this node";
+  const defaultId = node.defaultAgentId;
+  const defaultName =
+    deployment.agents.find((a) => a.agentId === defaultId)?.displayName ?? defaultId;
+  return (
+    <Group title="Node details">
+      <Row label="Default agent" description="Used when a session does not choose one.">
+        <Fact title={defaultName ?? unshared}>
+          {defaultId ? (
+            <a
+              href={href({
+                name: "agent",
+                nodeDid: deployment.nodeDid,
+                section: "agents",
+                item: defaultId,
+              })}
+              className="underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {defaultName}
+            </a>
+          ) : (
+            unshared
+          )}
+        </Fact>
+      </Row>
+      <Row
+        label="Maximum request hop"
+        description="Limits how far requests can be chained; 0 permits only root requests."
+      >
+        <Fact>
+          {config ? (config.max_request_hop?.toString() ?? "No limit") : unshared}
+        </Fact>
+      </Row>
+    </Group>
   );
 }
