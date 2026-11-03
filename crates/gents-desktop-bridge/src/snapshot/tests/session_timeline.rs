@@ -1104,6 +1104,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
     let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = vec![
         RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: "pending-interrupted".into(),
             request_id: "interrupted".into(),
             started_goal_id: None,
@@ -1144,6 +1145,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
     let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: format!("pending-{index}"),
             request_id: format!("request-{index}"),
             started_goal_id: None,
@@ -1180,6 +1182,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
 fn local_pending_history_pages_with_durable_anchor_cursor() {
     let mut full = empty_timeline_snapshot();
     let pending = RenderedTimelineItem::PendingUserTurn {
+        question_reply: None,
         item_key: "pending-old".into(),
         request_id: "old".into(),
         started_goal_id: None,
@@ -1218,6 +1221,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
     full.timeline_items = vec![
         assistant_item("latest", 2),
         RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: "pending-current".into(),
             request_id: "current".into(),
             started_goal_id: None,
