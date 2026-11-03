@@ -73,7 +73,7 @@ pub(crate) struct ServeArgs {
         long,
         value_name = "ADDR:PORT",
         env = "GENTS_METRICS_ADDR",
-        help = "Also serve Prometheus /metrics on this dedicated listener, without runtime operator authorization. Off by default. Loopback addresses serve unauthenticated; a specific non-loopback interface requires --metrics-auth-token-env; unspecified addresses (0.0.0.0, ::) are refused. The runtime API's /metrics still requires the operator"
+        help = "Also serve Prometheus /metrics on this dedicated listener, without runtime operator authorization. Off by default. Loopback addresses serve unauthenticated; a specific non-loopback interface requires --metrics-auth-token-env; wildcard (unspecified) addresses are refused. The runtime API's /metrics still requires the operator"
     )]
     pub(crate) metrics_addr: Option<SocketAddr>,
     #[arg(
