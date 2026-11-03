@@ -129,6 +129,66 @@ where
     }
 }
 
+/// Schema for a field these deserializers also accept `null` for: the
+/// field's own schema, or null.
+pub(crate) fn accepts_null(schema: &mut schemars::Schema) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let null = Value::String("null".into());
+    let constrained = ["$ref", "anyOf", "oneOf", "allOf", "enum", "const", "not"]
+        .iter()
+        .any(|key| object.contains_key(*key));
+    match object.get_mut("type") {
+        Some(Value::Array(types)) if !constrained => {
+            if !types.contains(&null) {
+                types.push(null);
+            }
+        }
+        Some(kind @ Value::String(_)) if !constrained => {
+            if *kind != null {
+                *kind = Value::Array(vec![kind.take(), null]);
+            }
+        }
+        None if !constrained => {}
+        _ => {
+            const METADATA: [&str; 6] = [
+                "title",
+                "description",
+                "default",
+                "deprecated",
+                "examples",
+                "readOnly",
+            ];
+            let inner: serde_json::Map<String, Value> = object
+                .iter()
+                .filter(|(key, _)| !METADATA.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            object.retain(|key, _| METADATA.contains(&key.as_str()));
+            object.insert(
+                "anyOf".into(),
+                Value::Array(vec![
+                    Value::Object(inner),
+                    serde_json::json!({ "type": "null" }),
+                ]),
+            );
+        }
+    }
+}
+
+/// Schema for [`deserialize_optional_string_vec`] and
+/// [`deserialize_string_vec_or_null`]: a string list, one string, or null.
+pub(crate) fn string_list_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" },
+            { "type": "null" }
+        ]
+    })
+}
+
 pub(super) fn deserialize_string_vec_or_null<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Vec<String>, D::Error>

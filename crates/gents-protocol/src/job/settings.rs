@@ -45,6 +45,22 @@ where
     serde_json::from_value(policy).map_err(serde::de::Error::custom)
 }
 
+/// Adds the key [`policy_without_project_roots`] accepts and drops.
+fn retired_policy_keys(schema: &mut schemars::Schema) {
+    if let Some(properties) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        properties.insert(
+            "project_roots".into(),
+            serde_json::json!({
+                "description": "Accepted from 0.21 Tools documents and ignored.",
+                "deprecated": true
+            }),
+        );
+    }
+}
+
 impl PluginJobSettings {
     pub const DEFAULT_MAX_LIVE: u32 = 8;
     pub const DEFAULT_MAX_SPAWNS: u32 = 128;
@@ -77,6 +93,7 @@ impl PluginJobSettings {
 /// Operator-only job policy; self-config may not edit it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(transform = retired_policy_keys)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct JobPolicy {
     #[serde(default = "JobPolicy::default_dynamic")]

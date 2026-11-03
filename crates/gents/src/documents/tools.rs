@@ -53,6 +53,7 @@ pub struct Tools {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 
@@ -83,6 +84,7 @@ pub struct HostTools {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<CliTool>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub cli: Vec<CliTool>,
 }
 
@@ -100,6 +102,7 @@ pub struct FileTools {
     )]
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<FileToolMode>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub mode: FileToolMode,
     /// UTF-8 bytes of content `read_file` returns (cut on a character
     /// boundary) when a call omits `max_chars`, and the most a call can
@@ -131,6 +134,7 @@ pub struct BashTools {
     )]
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<BashMode>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub mode: BashMode,
     /// Execution restrictions, independent of which bash tool is exposed.
     /// Unset retains the existing mode-derived execution policy.
@@ -158,6 +162,7 @@ pub struct BashTools {
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub read_only_commands: Option<Vec<String>>,
     #[serde(
         default,
@@ -165,6 +170,7 @@ pub struct BashTools {
     )]
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub background_enabled: bool,
     /// Foreground timeout when a call omits `timeout_secs`. Unset uses the
     /// host's `--command-timeout-secs` (120s unless the host sets it). Clamped
@@ -264,6 +270,7 @@ pub struct RemoteTools {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<RemoteServiceTools>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub services: Vec<RemoteServiceTools>,
 }
 
@@ -283,6 +290,7 @@ pub struct RemoteServiceTools {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub tool_names: Vec<String>,
     /// Presentation does not change permissions. Discovery is the default.
     #[serde(
@@ -291,6 +299,7 @@ pub struct RemoteServiceTools {
     )]
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<RemoteToolStyle>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub style: RemoteToolStyle,
     /// Required services must be available before agent admission of new work.
     /// Optional service outages do not block admission; calls still require the
@@ -301,6 +310,7 @@ pub struct RemoteServiceTools {
     )]
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub required: bool,
     /// Exact service-local names permitted to run in the background. Must be a
     /// subset of tool_names; never the generic discovery invocation wrapper name.
@@ -311,6 +321,7 @@ pub struct RemoteServiceTools {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub background_tool_names: Vec<String>,
     /// Connection/handshake timeout for this service; current default 15s.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -359,6 +370,7 @@ pub struct AgentTools {
     /// References to same-owner AgentTarget documents. Empty selects no targets.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub target_ids: Vec<String>,
     /// Exposes agent_new/agent_message over the allowlisted targets. Every
     /// started session is a background tool row; there is no foreground wait,
@@ -378,7 +390,7 @@ pub struct BuiltInTools {
     /// it is accepted and ignored, and the canonical serializer drops it on next write.
     #[serde(default, rename = "enable_graph_tools", skip_serializing)]
     #[cfg_attr(feature = "typescript", ts(skip))]
-    #[schemars(skip)]
+    #[schemars(extend("deprecated" = true))]
     pub retired_graph_tools: RetiredKey,
     /// Independent goal get/update capability. Unset is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -420,6 +432,7 @@ pub struct BuiltInTools {
         deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub p2p_collections: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -440,6 +453,7 @@ pub struct DatastoreTools {
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub defra_query_collections: Option<Vec<String>>,
     /// Bare `surface_id` refs to same-agent `DatastoreToolSurface` docs.
     /// Expanded into create and query tools at snapshot build (fail-closed).
@@ -449,6 +463,7 @@ pub struct DatastoreTools {
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub datastore_tool_surface_ids: Option<Vec<String>>,
     /// Exact application collections granted to the generic write endpoint. Empty denies all.
     #[serde(
@@ -457,13 +472,14 @@ pub struct DatastoreTools {
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub write_collections: Option<Vec<String>>,
 }
 
 /// Domain-specific external integrations. Extension design remains to be settled.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, from = "IntegrationToolsStored")]
-#[schemars(!from)]
+#[schemars(!from, transform = IntegrationToolsStored::retired_keys)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct IntegrationTools {
     /// Presence selects the LSP integration; absent means disabled.
@@ -491,6 +507,24 @@ struct IntegrationToolsStored {
     plugins: Option<Vec<PluginToolRef>>,
     #[serde(default)]
     eth_tool_ids: Option<serde_json::Value>,
+}
+
+impl IntegrationToolsStored {
+    /// The canonical schema plus the keys only this stored shape accepts.
+    fn retired_keys(schema: &mut schemars::Schema) {
+        if let Some(properties) = schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert(
+                "eth_tool_ids".into(),
+                serde_json::json!({
+                    "description": "Accepted from v1.0.0-rc0 Tools documents and ignored.",
+                    "deprecated": true
+                }),
+            );
+        }
+    }
 }
 
 impl From<IntegrationToolsStored> for IntegrationTools {
@@ -590,6 +624,7 @@ pub struct SelfConfigTools {
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::documents::string_list_schema")]
     pub self_config_categories: Option<Vec<String>>,
     /// Opt-in guardrail: refuse self-config patches that would strip the
     /// agent's own reconfigure ability.

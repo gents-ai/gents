@@ -2,6 +2,8 @@
 //! tree and the authored configuration schemas, both read from this build.
 
 mod archive;
+#[cfg(test)]
+mod authored_input_tests;
 mod cli_reference;
 mod config_reference;
 #[cfg(test)]

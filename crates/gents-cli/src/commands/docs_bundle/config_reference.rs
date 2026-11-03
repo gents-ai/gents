@@ -1,14 +1,8 @@
 //! JSON Schemas of what a user authors: a pack's `pack_config.json` and its
-//! `manifest.json`, and each canonical configuration document they hold.
+//! `manifest.json`, and each canonical configuration document they hold, as
+//! the pack loader accepts them.
 
-use gents::documents::{
-    Agent, AgentContext, AgentTargetDocument, Callback, CallbackBinding, CallbackModule,
-    CompactionConfig, DatastoreToolSurfaceDocument, EvalDefinition, EventSource, InferenceBackend,
-    InferenceExecution, InferenceProfile, InferenceRetryPolicy, InferenceSampling, Node,
-    PackConfig, ProjectionAcpBinding, RepositoryPlacement, Schedule, SkillDocument, Task,
-    ToolServiceRegistry, Tools, Trigger,
-};
-use gents::pack::PackManifest;
+use gents::pack::{authored_document_schema, authored_pack_config_schema, PackManifest};
 use gents::Collection;
 use schemars::{schema_for, Schema};
 use serde::Serialize;
@@ -55,9 +49,15 @@ impl ConfigDocument {
 /// the pack manifest.
 pub(crate) fn config_reference() -> Vec<ConfigDocument> {
     let mut documents = Vec::with_capacity(Collection::ALL.len() + 2);
-    documents.push(ConfigDocument::new("pack_config", schema_for!(PackConfig)));
+    documents.push(ConfigDocument::new(
+        "pack_config",
+        authored_pack_config_schema(),
+    ));
     documents.extend(Collection::ALL.into_iter().map(|collection| {
-        ConfigDocument::new(document_id(collection), document_schema(collection))
+        ConfigDocument::new(
+            document_id(collection),
+            authored_document_schema(collection),
+        )
     }));
     documents.push(ConfigDocument::new(
         "pack_manifest",
@@ -76,33 +76,4 @@ pub(crate) fn document_id(collection: Collection) -> String {
         id.push(character.to_ascii_lowercase());
     }
     id
-}
-
-fn document_schema(collection: Collection) -> Schema {
-    match collection {
-        Collection::Node => schema_for!(Node),
-        Collection::Agent => schema_for!(Agent),
-        Collection::AgentContext => schema_for!(AgentContext),
-        Collection::Compaction => schema_for!(CompactionConfig),
-        Collection::Skill => schema_for!(SkillDocument),
-        Collection::DatastoreToolSurface => schema_for!(DatastoreToolSurfaceDocument),
-        Collection::Tools => schema_for!(Tools),
-        Collection::AgentTarget => schema_for!(AgentTargetDocument),
-        Collection::InferenceBackend => schema_for!(InferenceBackend),
-        Collection::InferenceProfile => schema_for!(InferenceProfile),
-        Collection::InferenceSampling => schema_for!(InferenceSampling),
-        Collection::InferenceExecution => schema_for!(InferenceExecution),
-        Collection::InferenceRetryPolicy => schema_for!(InferenceRetryPolicy),
-        Collection::ToolServiceRegistry => schema_for!(ToolServiceRegistry),
-        Collection::ProjectionAcpBinding => schema_for!(ProjectionAcpBinding),
-        Collection::Task => schema_for!(Task),
-        Collection::Schedule => schema_for!(Schedule),
-        Collection::EventSource => schema_for!(EventSource),
-        Collection::Trigger => schema_for!(Trigger),
-        Collection::Callback => schema_for!(Callback),
-        Collection::CallbackBinding => schema_for!(CallbackBinding),
-        Collection::CallbackModule => schema_for!(CallbackModule),
-        Collection::RepositoryPlacement => schema_for!(RepositoryPlacement),
-        Collection::EvalDefinition => schema_for!(EvalDefinition),
-    }
 }

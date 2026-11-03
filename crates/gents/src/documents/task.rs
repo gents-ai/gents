@@ -22,6 +22,7 @@ pub struct Task {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "super::serde_helpers::is_disabled"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub emit_outcome: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -37,6 +38,7 @@ pub struct Task {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<TaskHook>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub hooks: Vec<TaskHook>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
@@ -44,6 +46,7 @@ pub struct Task {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -60,6 +63,7 @@ pub struct Task {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 
@@ -86,6 +90,7 @@ pub struct TaskHook {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<i64>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub skip_exit_codes: Vec<i64>,
 }
 

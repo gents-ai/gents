@@ -21,6 +21,7 @@ pub struct CompactionConfig {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<CompactionStrategy>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub strategy: CompactionStrategy,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -47,6 +48,7 @@ pub struct CompactionConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

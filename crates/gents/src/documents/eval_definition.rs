@@ -52,6 +52,7 @@ pub struct EvalSubject {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub inference_slots: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
@@ -89,6 +90,7 @@ pub struct EvalFixtures {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub assets: Vec<String>,
     #[serde(
         default,
@@ -99,6 +101,7 @@ pub struct EvalFixtures {
         feature = "typescript",
         ts(as = "Option<Vec<EvalFixtureDocument>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub documents: Vec<EvalFixtureDocument>,
     #[serde(
         default,
@@ -109,6 +112,7 @@ pub struct EvalFixtures {
         feature = "typescript",
         ts(as = "Option<Vec<EvalFixtureFile>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub files: Vec<EvalFixtureFile>,
     /// App-collection SDL to install in the trial before its documents.
     #[serde(
@@ -117,6 +121,7 @@ pub struct EvalFixtures {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub schemas: Vec<String>,
 }
 
@@ -210,6 +215,7 @@ pub struct EvalStage {
         feature = "typescript",
         ts(as = "Option<Vec<EvalCheckRef>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub checks: Vec<EvalCheckRef>,
     #[serde(
         default,
@@ -220,6 +226,7 @@ pub struct EvalStage {
         feature = "typescript",
         ts(as = "Option<Vec<EvalCapture>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub capture: Vec<EvalCapture>,
 }
 
@@ -257,6 +264,7 @@ pub struct EvalCase {
         feature = "typescript",
         ts(as = "Option<BTreeMap<String, u64>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub goal: BTreeMap<String, u64>,
 }
 
@@ -289,6 +297,7 @@ pub struct EvalDefinition {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

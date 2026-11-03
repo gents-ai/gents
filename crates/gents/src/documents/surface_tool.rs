@@ -224,8 +224,8 @@ impl SurfaceToolDecl {
 }
 
 /// The authored shape the `Deserialize` impl below accepts: a create entry
-/// whose `kind` is absent, `create` or `write`, or a query entry whose `kind`
-/// is `query` or `read`.
+/// whose `kind` is absent, null, `create` or `write`, or a query entry whose
+/// `kind` is `query` or `read`.
 impl schemars::JsonSchema for SurfaceToolDecl {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "SurfaceToolDecl".into()
@@ -238,7 +238,7 @@ impl schemars::JsonSchema for SurfaceToolDecl {
             "anyOf": [
                 {
                     "allOf": [create],
-                    "properties": { "kind": { "enum": ["create", "write"] } }
+                    "properties": { "kind": { "enum": ["create", "write", null] } }
                 },
                 {
                     "allOf": [query],
@@ -325,6 +325,31 @@ where
     )
     .map(Some)
     .map_err(D::Error::custom)
+}
+
+/// Schema for [`deserialize_optional_surface_tools`]: entries as a list, as
+/// the stored `{"entries": ...}` envelope, or null; an entry may also be the
+/// JSON text of one declaration.
+pub(crate) fn surface_tools_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let entry = generator.subschema_for::<SurfaceToolDecl>();
+    let entries = schemars::json_schema!({
+        "anyOf": [
+            { "type": "array", "items": { "anyOf": [entry, { "type": "string" }] } },
+            { "type": "string" },
+            { "type": "null" }
+        ]
+    });
+    schemars::json_schema!({
+        "anyOf": [
+            entries.clone(),
+            {
+                "type": "object",
+                "properties": { "entries": entries },
+                "required": ["entries"],
+                "additionalProperties": false
+            }
+        ]
+    })
 }
 
 pub(crate) fn serialize_optional_surface_tools<S>(

@@ -44,7 +44,8 @@ pub use installation::{
     PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub use loader::{
-    decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+    authored_document_schema, authored_pack_config_schema, decode_pack_config,
+    ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
 };
 pub use manifest_validation::{validate_manifest, validate_pack_manifest};
 pub use plugin::{
@@ -79,6 +80,7 @@ pub struct PackMetadata {
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
     pub assets: Vec<String>,
     #[serde(
@@ -86,6 +88,7 @@ pub struct PackMetadata {
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub dependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inference_slots: Vec<PackInferenceSlot>,
@@ -139,12 +142,14 @@ pub struct PackManifest {
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub schemas: Vec<String>,
     #[serde(
         default,
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub external_dependencies: Vec<PackageExternalDependency>,
 }
 
