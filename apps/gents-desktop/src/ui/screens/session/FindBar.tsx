@@ -9,6 +9,7 @@ import { SEARCH_FIELD } from "@/lib/textAssist";
 import { commandKey } from "../shortcutKeys";
 import type { TranscriptEntry } from "../transcript-groups";
 import {
+  findPart,
   closeFind,
   findBar,
   openFind,
@@ -153,6 +154,20 @@ function rangesUnder(root: Element, needle: string): Range[] {
     }
   }
   return out;
+}
+
+/* the ranges of a row's part (see findPart): one step's output or one
+   reasoning, or for "" the row's text outside every part */
+function rangesInPart(row: Element, part: string, needle: string): Range[] {
+  if (part) {
+    const el = [...row.querySelectorAll("[data-find-part]")].find(
+      (e) => e.getAttribute("data-find-part") === part,
+    );
+    return el ? rangesUnder(el, needle) : [];
+  }
+  return rangesUnder(row, needle).filter(
+    (range) => !range.startContainer.parentElement?.closest("[data-find-part]"),
+  );
 }
 
 const rowOf = (list: Element, key: string) =>
@@ -317,7 +332,7 @@ export function FindBar({
       CSS.highlights.set("find", new Highlight(...rangesUnder(list, needle)));
       const target = shown.current;
       const row = target && rowOf(list, target.rowKey);
-      const mine = row ? rangesUnder(row, needle) : [];
+      const mine = row && target ? rangesInPart(row, findPart(target), needle) : [];
       const range = mine[Math.min(target?.nth ?? 0, mine.length - 1)];
       if (!range) return CSS.highlights.delete("find-current");
       CSS.highlights.set("find-current", new Highlight(range));

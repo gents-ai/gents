@@ -19,9 +19,22 @@ export type FindPlace = {
 };
 
 export type FindMatch = FindPlace & {
-  /** which occurrence in its row, counted over the row's texts in order */
+  /** which occurrence in its part of the row (see `findPart`), counted over
+      that part's texts in order */
   nth: number;
 };
+
+/** The part of a row a match is counted in, as the page marks it with
+    data-find-part: a step's output or a reasoning, which are drawn only
+    once opened, or "" for the row's text that is always drawn. Counting in
+    the part keeps a match's number to what the page draws, wherever other
+    steps are folded. */
+export const findPart = (place: FindPlace) =>
+  place.group?.step
+    ? `step:${place.group.step}`
+    : place.reasoning
+      ? `reasoning:${place.reasoning}`
+      : "";
 
 /* each source's text as it is found in, lowercased once: the items and
    steps keep their identity while a session updates, so typing searches
@@ -151,14 +164,19 @@ function rowMatches(
   room: number,
 ) {
   const row: FindMatch[] = [];
-  let nth = 0;
-  for (const { hay, place } of findTexts(entry, rowKey))
+  const counted = new Map<string, number>();
+  for (const { hay, place } of findTexts(entry, rowKey)) {
+    const part = findPart(place);
     for (
       let at = hay.indexOf(needle);
       at !== -1 && row.length < room;
       at = hay.indexOf(needle, at + needle.length)
-    )
-      row.push({ ...place, nth: nth++ });
+    ) {
+      const nth = counted.get(part) ?? 0;
+      counted.set(part, nth + 1);
+      row.push({ ...place, nth });
+    }
+  }
   return row;
 }
 

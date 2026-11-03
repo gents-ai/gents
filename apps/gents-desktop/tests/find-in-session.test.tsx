@@ -62,7 +62,9 @@ describe("finding in a session", () => {
     /* the output is drawn once its step opens; the thought, once its reasoning does */
     expect(found[1]).toMatchObject({ group: { key: "g1", step: "t1" } });
     expect(found[2]).toMatchObject({ group: { key: "g1" }, reasoning: "a0" });
-    expect(found.map((m) => m.nth)).toEqual([0, 0, 1, 0, 1]);
+    /* counted in the part the page draws it in: a step's output and a
+       reasoning each on their own, as only an opened one is drawn */
+    expect(found.map((m) => m.nth)).toEqual([0, 0, 0, 0, 1]);
     expect(findMatches(entries, keyOf, "  ").matches).toEqual([]);
     /* past the limit: the newest ones, and more */
     const capped = findMatches(entries, keyOf, "snake", 2);
@@ -71,6 +73,21 @@ describe("finding in a session", () => {
       ["a1", 0],
       ["a1", 1],
     ]);
+  });
+
+  it("counts a step's output on its own, so a folded step before it doesn't shift it", () => {
+    const steps = groupTranscript([
+      {
+        kind: "toolGroup",
+        itemKey: "g2",
+        messageSequence: null,
+        tools: [command("s1", "snake one\nsnake two"), command("s2", "snake three")],
+      },
+    ]);
+    const { matches: found } = findMatches(steps, keyOf, "snake");
+    const inSecond = found.filter((m) => m.group?.step === "s2");
+    /* only s2's output is drawn while s2 is open, so its match is its first */
+    expect(inSecond.map((m) => m.nth)).toEqual([0]);
   });
 
   it("opens on its key, counts, steps both ways around, and closes with Escape", async () => {
