@@ -148,16 +148,37 @@ test.describe("transcript input at its scroll boundary", () => {
           nested.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
           nested.remove();
         }
-        return scroller.scrollTop;
+        const top = scroller.getBoundingClientRect().top;
+        const row = Array.from(
+          scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+        ).find((element) => element.getBoundingClientRect().bottom > top + 200)!;
+        return {
+          scrollTop: scroller.scrollTop,
+          key: row.dataset.timelineKey!,
+          offset: row.getBoundingClientRect().top - top,
+        };
       }, input);
       await page.waitForTimeout(400);
       await viewport.evaluate((scroller, top) => {
         scroller.scrollTop = top - 24;
         scroller.dispatchEvent(new Event("scroll"));
-      }, before);
+      }, before.scrollTop);
       await expect
-        .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
-        .toBe(before);
+        .poll(() =>
+          viewport.evaluate((scroller, previous) => {
+            const row = Array.from(
+              scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+            ).find((element) => element.dataset.timelineKey === previous.key);
+            return row
+              ? Math.abs(
+                  row.getBoundingClientRect().top -
+                    scroller.getBoundingClientRect().top -
+                    previous.offset,
+                )
+              : Infinity;
+          }, before),
+        )
+        .toBeLessThan(1);
     });
   }
 
