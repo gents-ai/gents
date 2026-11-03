@@ -339,6 +339,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         SessionRowsView,
         SessionRowsWindow,
         MessageView,
+        QuestionReplyView,
         ToolCallView,
         RequestResendResultView,
         SessionContextDetailsRequest,

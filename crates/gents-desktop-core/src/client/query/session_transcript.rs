@@ -73,6 +73,55 @@ pub(super) async fn read_request_documents(
     Ok((rows, unique_doc_ids.len()))
 }
 
+async fn read_legacy_question_sources<'a>(
+    access: TranscriptAccess<'_>,
+    requests: impl Iterator<Item = &'a AgentRequestRow>,
+) -> (Vec<MailboxItemRow>, u64) {
+    let ids = requests
+        .filter_map(|request| {
+            let input = request.input.as_ref();
+            if !matches!(
+                gents::request::lifecycle::request_origin(request),
+                gents::request::lifecycle::RequestOrigin::Person
+            ) || input.is_some_and(|input| input.question_reply.is_some())
+            {
+                return None;
+            }
+            request
+                .caused_by_source_doc_id
+                .as_ref()
+                .filter(|id| !id.is_empty())
+                .cloned()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    let mut query_count = 0;
+    for batch in ids.chunks(128) {
+        let list =
+            gents::store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
+        let query = format!("query DesktopQuestionSources {{ {MAILBOX_ITEM_NAME}(docIDs: {list}) {{ {MAILBOX_ITEM_FIELDS} }} }}");
+        query_count += 1;
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            access.execute(&query, "question reply sources"),
+        )
+        .await
+        {
+            Ok(Ok(data)) => match parse_query_rows::<MailboxItemRow>(&data, MAILBOX_ITEM_NAME) {
+                Ok(found) => {
+                    rows.extend(found.into_iter().filter(|row| batch.contains(&row.doc_id)))
+                }
+                Err(error) => tracing::debug!(%error, "question reply sources unavailable"),
+            },
+            Ok(Err(error)) => tracing::debug!(%error, "question reply sources unavailable"),
+            Err(_) => tracing::debug!("question reply sources timed out"),
+        }
+    }
+    (rows, query_count)
+}
+
 fn scope_filter(node_did: &str, requester_did: Option<&str>) -> String {
     let node_did = escape_graphql_string(node_did);
     let requester = requester_did
@@ -921,14 +970,26 @@ async fn load_session_transcript_window_with_access(
         read_request_documents(access, &request_doc_ids, "session transcript requests").await?
     };
     let request_query_count = request_doc_ids.len().div_ceil(128) as u64;
+    let (question_sources, question_query_count) = read_legacy_question_sources(
+        access,
+        requests
+            .iter()
+            .chain(&canonical_dependencies.origin_requests),
+    )
+    .await;
     let source_exhausted = messages_exhausted && tools_exhausted;
     let queried_rows = queried_messages
         .len()
         .saturating_add(queried_tool_calls.len())
         .saturating_add(dependency_rows)
         .saturating_add(requests.len())
+        .saturating_add(question_sources.len())
         .saturating_add(result_messages.len());
-    let query_count = 1 + dependency_query_count + request_query_count + result_query_count;
+    let query_count = 1
+        + dependency_query_count
+        + request_query_count
+        + result_query_count
+        + question_query_count;
     /* the message numbers this read proves: every message inside the span is
     in the page, so a gap inside it is empty rather than unread */
     let kept = messages
@@ -984,6 +1045,7 @@ async fn load_session_transcript_window_with_access(
             transcript_messages: messages,
             output_segments: canonical_dependencies.output_segments.clone(),
             tool_calls,
+            mailbox_items: question_sources,
             ..ClientStoreRows::default()
         }),
         requests,

@@ -451,3 +451,45 @@ fn queued_and_folded_observations_retain_the_active_owners_trigger() {
         assert_eq!(summaries[0].trigger_kind.as_deref(), Some("schedule"));
     }
 }
+
+#[test]
+fn question_reply_keeps_the_signed_choice_on_the_persons_request() {
+    let store = automated_store();
+    let mut answer = request("answer", "sess-1", 1);
+    answer.caused_by_source_doc_id = Some("question-doc".into());
+    answer.input = input(serde_json::json!({ "question_reply": {
+        "source_doc_id": "question-doc",
+        "question_hash": "sha256:question",
+        "answer": { "option_ids": ["blue"], "free_text": "please" }
+    }}));
+    let view = crate::snapshot::session::question_reply_view(&store, &store, &answer).unwrap();
+    assert_eq!(view.source_doc_id, "question-doc");
+    assert_eq!(view.answer.unwrap().option_ids, ["blue"]);
+    answer.caused_by_source_doc_id = Some("different-question".into());
+    assert!(crate::snapshot::session::question_reply_view(&store, &store, &answer).is_none());
+    answer.caused_by_source_doc_id = Some("question-doc".into());
+    answer.caused_by_trigger_id = Some("scheduled".into());
+    assert!(crate::snapshot::session::question_reply_view(&store, &store, &answer).is_none());
+}
+
+#[test]
+fn legacy_question_reply_requires_the_matching_observed_question() {
+    let store = automated_store();
+    let mut answer = request("answer", "sess-1", 1);
+    answer.caused_by_source_doc_id = Some("question-doc".into());
+    answer.requester_did = Some("did:test:person".into());
+    let mut questions = ClientStore::default();
+    assert!(crate::snapshot::session::question_reply_view(&store, &questions, &answer).is_none());
+    let question: gents_protocol::row::MailboxItemRow = serde_json::from_value(serde_json::json!({
+        "_docID": "question-doc", "item_key": "question", "requester_did": "did:test:person",
+        "node_did": "did:test:amy", "status": "resolved", "kind": "ask", "action": "start_request",
+        "title": "Question", "source_kind": "request", "source_id": "source", "session_id": "sess-1",
+        "target_node_did": "did:test:amy", "target_agent_id": "default", "created_at": "2026-04-21T12:00:00Z"
+    })).unwrap();
+    questions.mailbox_items.push(question);
+    let view = crate::snapshot::session::question_reply_view(&store, &questions, &answer).unwrap();
+    assert_eq!(view.source_doc_id, "question-doc");
+    assert!(view.answer.is_none());
+    questions.mailbox_items[0].session_id = Some("other-session".into());
+    assert!(crate::snapshot::session::question_reply_view(&store, &questions, &answer).is_none());
+}

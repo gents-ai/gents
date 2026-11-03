@@ -153,6 +153,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
     .expect("snapshot");
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::UserMessage {
+            question_reply: None,
             started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: Some(format!("request-{index:03}")),
@@ -198,6 +199,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
     .expect("snapshot");
     snapshot.timeline_items = (0..81)
         .map(|index| RenderedTimelineItem::UserMessage {
+            question_reply: None,
             started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: None,
@@ -443,6 +445,37 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     assert!(matches!(snapshot.timeline_items.as_slice(), [
         RenderedTimelineItem::AutomatedInput { content: Some(content), .. }
     ] if content == "wake"));
+}
+
+#[test]
+fn question_reply_metadata_survives_the_published_user_turn() {
+    let mut rows = active_store().to_rows();
+    rows.requests[0].caused_by_source_doc_id = Some("question-doc".into());
+    rows.requests[0].input = Some(
+        serde_json::from_value(serde_json::json!({
+            "question_reply": {
+                "source_doc_id": "question-doc", "question_hash": "sha256:question",
+                "answer": { "option_ids": ["blue"] }
+            }
+        }))
+        .unwrap(),
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:req-1:prompt",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "Decision on colour: Blue",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
+        RenderedTimelineItem::UserMessage { question_reply: Some(reply), .. }
+        if reply.source_doc_id == "question-doc" && reply.answer.as_ref().unwrap().option_ids == ["blue"]
+    )));
 }
 
 #[test]

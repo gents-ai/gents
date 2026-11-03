@@ -132,6 +132,7 @@ pub(super) fn project_pending_turn(
     }
 
     Some(PendingTurnView {
+        question_reply: super::question_reply_view(store, transcript_store, request),
         request_id: request.request_id.clone(),
         started_goal_id: None,
         request_doc_id: request.doc_id.clone(),

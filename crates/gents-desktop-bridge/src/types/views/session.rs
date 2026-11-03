@@ -3,6 +3,15 @@ use ts_rs::TS;
 
 use super::operations::DerivedCancelCauseView;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionReplyView {
+    pub source_doc_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub answer: Option<gents_protocol::mailbox_question::MailboxQuestionAnswer>,
+}
+
 /// Observed physical request ownership; absent lifecycle facts remain unknown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +24,9 @@ pub struct RequestTurnView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub question_reply: Option<QuestionReplyView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub started_goal_id: Option<String>,
@@ -369,6 +381,9 @@ pub struct PendingQueueEntryView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub question_reply: Option<QuestionReplyView>,
     pub request_id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
@@ -418,6 +433,9 @@ pub struct RequestOutcomeView {
 pub enum RenderedTimelineItem {
     #[serde(rename_all = "camelCase")]
     UserMessage {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        question_reply: Option<QuestionReplyView>,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         started_goal_id: Option<String>,
@@ -503,6 +521,9 @@ pub enum RenderedTimelineItem {
     },
     #[serde(rename_all = "camelCase")]
     PendingUserTurn {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        question_reply: Option<QuestionReplyView>,
         item_key: String,
         request_id: String,
         #[serde(skip_serializing_if = "Option::is_none", default)]

@@ -22,6 +22,7 @@ pub mod output;
 pub mod peer_schema;
 pub mod plugin;
 pub mod process_control;
+pub mod question_reply_source;
 pub mod rendered_request;
 pub mod request_admission;
 pub mod request_input;

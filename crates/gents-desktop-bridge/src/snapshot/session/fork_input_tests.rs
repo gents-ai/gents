@@ -64,6 +64,7 @@ fn nested_fork_keeps_automated_input_origin_without_child_turn_membership() {
     let (store, dependencies) = fork_fixture();
     let (messages, _) = project_transcript_rows(
         &store,
+        &store,
         &store.transcript("second"),
         Some(&dependencies),
         &[],
@@ -184,6 +185,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
     assert!(page.store.requests.is_empty());
     let (messages, _) = project_transcript_rows(
         &page.store,
+        &page.store,
         &page.store.transcript(&source),
         Some(&page.canonical_dependencies),
         &[],
@@ -220,6 +222,7 @@ fn fork_input_metadata_requires_exact_source_scope() {
             _ => unreachable!(),
         }
         let (messages, _) = project_transcript_rows(
+            &store,
             &store,
             &store.transcript("second"),
             Some(&dependencies),
@@ -271,6 +274,7 @@ fn copied_person_and_automated_input_keep_the_source_presentation() {
             .collect();
         let (original, _) = project_transcript_rows(
             &original_store,
+            &original_store,
             &original_store.transcript("source"),
             None,
             &refs,
@@ -278,6 +282,7 @@ fn copied_person_and_automated_input_keep_the_source_presentation() {
             &[],
         );
         let (copied, _) = project_transcript_rows(
+            &store,
             &store,
             &store.transcript("second"),
             Some(&dependencies),

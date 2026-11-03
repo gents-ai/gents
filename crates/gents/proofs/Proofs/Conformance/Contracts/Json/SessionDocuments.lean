@@ -1,4 +1,5 @@
 import Proofs.ClientShell.Timeline
+import Proofs.Conformance.QuestionReply
 import Proofs.Session.Archive
 import Proofs.Conformance.ContractCases.SessionDocuments
 import Proofs.Conformance.ContractCases.Types
@@ -113,7 +114,7 @@ private def pendingTimelineCases : List Json :=
    pendingTimelineJson "pending_tail_keeps_overlay_orphan_placement" msgs
      [⟨1, .tail⟩, ⟨2, .tail⟩] [7, 8] (some ⟨false, .beforeOrphan 8⟩),
    pendingTimelineJson "durable_owner_suppresses_overlay_only" msgs
-     [⟨1, .tail⟩, ⟨2, .tail⟩] [8] (some ⟨true, .tail⟩)]
+     [⟨1, .tail⟩, ⟨2, .tail⟩] [8] (some ⟨true, .tail⟩)] ++ Conformance.QuestionReply.cases
 
 private def renameBefore : AgentSession.Document :=
   { indexed with title := some ⟨"task title", .task⟩ }

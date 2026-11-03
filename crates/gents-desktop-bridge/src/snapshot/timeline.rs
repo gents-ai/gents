@@ -114,6 +114,7 @@ fn render_timeline_order(
                     turn.request_doc_id.as_deref().unwrap_or(&turn.request_id) == key
                 }) {
                     timeline.push(RenderedTimelineItem::PendingUserTurn {
+                        question_reply: pending_turn.question_reply.clone(),
                         item_key: format!("pending-{}", pending_turn.request_id),
                         started_goal_id: pending_turn.started_goal_id.clone(),
                         request_id: pending_turn.request_id.clone(),
@@ -216,6 +217,7 @@ pub(super) fn build_rendered_timeline(
                 (Some(_), _) | (None, true) => (
                     true,
                     Some(RenderedTimelineItem::UserMessage {
+                        question_reply: message.question_reply.clone(),
                         started_goal_id: message.started_goal_id.clone(),
                         item_key: message.message_key.clone(),
                         request_id: message.request_id.clone(),
@@ -310,6 +312,7 @@ mod tests {
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
         MessageView {
+            question_reply: None,
             started_goal_id: None,
             request_turn: None,
             message_key: key.to_string(),
@@ -334,6 +337,24 @@ mod tests {
             input_text: None,
             timestamp: None,
         }
+    }
+
+    #[test]
+    fn question_answer_remains_a_user_message_with_its_structured_choice() {
+        let mut message = user_message("answer", 1, "Decision on colour: Blue");
+        message.question_reply = Some(crate::types::QuestionReplyView {
+            source_doc_id: "question".into(),
+            answer: Some(gents_protocol::mailbox_question::MailboxQuestionAnswer {
+                option_ids: vec!["blue".into()],
+                ..Default::default()
+            }),
+        });
+        let timeline = build_rendered_timeline(&[message], &[], &[]);
+        assert!(
+            matches!(timeline.as_slice(), [RenderedTimelineItem::UserMessage {
+            question_reply: Some(reply), ..
+        }] if reply.source_doc_id == "question" && reply.answer.as_ref().unwrap().option_ids == ["blue"])
+        );
     }
 
     #[test]
