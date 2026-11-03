@@ -137,6 +137,7 @@ describe("the notification owner", () => {
   let visible = false;
   let shown: { title: string; body?: string; onClick?: () => void }[] = [];
   let opened: unknown[] = [];
+  let offered: { title: string; action: string; open: () => void }[] = [];
   let focusHandler: (() => void) | null = null;
   let kinds: Record<NotifyKind, boolean>;
   let enabled = true;
@@ -164,6 +165,8 @@ describe("the notification owner", () => {
         enabled: () => enabled,
         kinds: () => kinds,
         open: (to) => void opened.push(to),
+        offer: (o, open) =>
+          void offered.push({ title: o.title, action: o.action, open }),
         onFocus: (then) => {
           focusHandler = then;
           return () => {};
@@ -187,6 +190,7 @@ describe("the notification owner", () => {
     visible = false;
     shown = [];
     opened = [];
+    offered = [];
     focusHandler = null;
     enabled = true;
     kinds = { finished: true, failed: true, question: true, mailbox: true };
@@ -278,18 +282,36 @@ describe("the notification owner", () => {
     expect(opened).toEqual([{ name: "session", sessionId: "a", nodeDid: NODE }]);
   });
 
-  it("without click callbacks, opens it when the window comes back soon after", () => {
+  it("without click callbacks, offers it when the window comes back soon after, and opens only on Open", () => {
     const { set } = start([session("a", "running"), session("b", "running")]);
     set([session("a", "completed"), session("b", "running")]);
     pass(BURST_QUIET);
     pass(1000);
     focusHandler?.();
+    expect(offered.map(({ title, action }) => ({ title, action }))).toEqual([
+      { title: "Finished: Session a", action: "Open" },
+    ]);
+    expect(opened).toEqual([]);
+    offered[0]!.open();
     expect(opened).toEqual([{ name: "session", sessionId: "a", nodeDid: NODE }]);
     set([session("a", "completed"), session("b", "completed")]);
     pass(BURST_QUIET);
     pass(FOLLOW_WITHIN + 1);
     focusHandler?.();
+    expect(offered).toHaveLength(1);
     expect(opened).toHaveLength(1);
+  });
+
+  it("offers a burst with Show, which opens its list", () => {
+    const { set } = start([session("a", "running"), session("b", "running")]);
+    set([session("a", "completed"), session("b", "completed")]);
+    pass(BURST_QUIET);
+    focusHandler?.();
+    expect(offered.map(({ title, action }) => ({ title, action }))).toEqual([
+      { title: "2 sessions finished", action: "Show" },
+    ]);
+    offered[0]!.open();
+    expect(opened).toEqual([{ name: "sessions" }]);
   });
 });
 

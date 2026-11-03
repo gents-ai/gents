@@ -1,5 +1,6 @@
 import type { FleetStore } from "../../../hooks/fleetStore";
 import type { SelectionStore } from "../../../hooks/selectionStore";
+import { toast } from "sonner";
 import { flag, notifyKinds } from "@/preferences";
 import { navigate, type Route } from "../router";
 import { changesBetween, type NotifyEvent, type NotifyKind } from "./events";
@@ -10,8 +11,12 @@ import { notifyPlatform, type Notice, type NotifyPlatform } from "./platform";
 export const BURST_QUIET = 2500;
 export const BURST_MOST = 6000;
 /* without a click callback, coming back to the app this soon after a
-   notification counts as following it */
+   notification offers what it was about; the app never goes there unasked */
 export const FOLLOW_WITHIN = 20_000;
+
+/** What a notification offers once the window is back: its own words, and
+    Open for one thing or Show for several. */
+export type Offer = { title: string; action: "Open" | "Show"; to: Route };
 
 export type NotifyDeps = {
   platform: NotifyPlatform;
@@ -23,6 +28,8 @@ export type NotifyDeps = {
   enabled: () => boolean;
   kinds: () => Record<NotifyKind, boolean>;
   open: (to: Route) => void;
+  /** offers to open what a notification was about, in the app */
+  offer: (offer: Offer, open: () => void) => void;
   /** calls `then` each time the window comes back to the front */
   onFocus: (then: () => void) => () => void;
 };
@@ -35,6 +42,8 @@ const defaults = (): NotifyDeps => ({
   enabled: () => flag("notifications"),
   kinds: notifyKinds,
   open: navigate,
+  offer: (offer, open) =>
+    void toast(offer.title, { action: { label: offer.action, onClick: open } }),
   onFocus: (then) => {
     if (typeof window === "undefined") return () => {};
     window.addEventListener("focus", then);
@@ -69,16 +78,19 @@ const listed = (titles: string[]) =>
     : titles.join(", ");
 
 /** One notification per kind for what arrived together. */
-export function noticesFor(events: readonly NotifyEvent[]): (Notice & { to: Route })[] {
+export function noticesFor(
+  events: readonly NotifyEvent[],
+): (Notice & { to: Route; many: boolean })[] {
   const byKind = new Map<NotifyKind, NotifyEvent[]>();
   for (const e of events) byKind.set(e.kind, [...(byKind.get(e.kind) ?? []), e]);
   return [...byKind].map(([kind, told]) =>
     told.length === 1
-      ? { title: ONE[kind](told[0]!), to: told[0]!.to }
+      ? { title: ONE[kind](told[0]!), to: told[0]!.to, many: false }
       : {
           title: COUNTED[kind](told.length),
           body: listed(told.map((e) => e.title)),
           to: MANY_LEADS_TO[kind],
+          many: true,
         },
   );
 }
@@ -98,7 +110,7 @@ export function watchNotifications(
   let queued: NotifyEvent[] = [];
   let first = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let pending: { to: Route; at: number } | null = null;
+  let pending: (Offer & { at: number })[] = [];
 
   const onScreen = (e: NotifyEvent) => {
     if (!e.session || !deps.visible()) return false;
@@ -116,11 +128,16 @@ export function watchNotifications(
         title: notice.title,
         body: notice.body,
         onClick: () => {
-          pending = null;
+          pending = [];
           deps.open(notice.to);
         },
       });
-      pending = { to: notice.to, at: deps.now() };
+      pending.push({
+        title: notice.title,
+        action: notice.many ? "Show" : "Open",
+        to: notice.to,
+        at: deps.now(),
+      });
     }
   };
 
@@ -143,10 +160,11 @@ export function watchNotifications(
   });
 
   const followed = deps.onFocus(() => {
-    if (deps.platform.reportsClicks || !pending) return;
-    const { to, at } = pending;
-    pending = null;
-    if (deps.now() - at <= FOLLOW_WITHIN) deps.open(to);
+    if (deps.platform.reportsClicks || !pending.length) return;
+    const recent = pending.filter((p) => deps.now() - p.at <= FOLLOW_WITHIN);
+    pending = [];
+    for (const { at: _at, ...offer } of recent)
+      deps.offer(offer, () => deps.open(offer.to));
   });
 
   return () => {
