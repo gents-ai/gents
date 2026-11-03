@@ -210,6 +210,7 @@ export function useComposerEditing({
       !onEdit ||
       !queue ||
       (!text.trim() &&
+        !skills.length &&
         !editing.capturedContext.length &&
         !added.length &&
         !(

@@ -386,11 +386,15 @@ export function OpenSessionComposer({
             attachDisabled={
               blocked || readOnly !== null || (editing && edit.saving) || false
             }
+            /* what the field counts as something to send besides its text:
+               a queued message's kept skills are, as core takes a message of
+               skills alone */
             hasAttachments={
               editing
                 ? (editing.attachments?.length ?? 0) >
                     editing.removedAttachments.length ||
                   editing.capturedContext.length > 0 ||
+                  editing.skills.length > 0 ||
                   editAttachments.hasAttachments
                 : attachments.hasAttachments
             }
