@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::store::graphql::escape_graphql_string;
 
-pub(crate) fn render_filter(filter: &Value) -> Result<String> {
+pub fn render_filter(filter: &Value) -> Result<String> {
     if !filter.is_object() {
         bail!("filter must be a JSON object");
     }

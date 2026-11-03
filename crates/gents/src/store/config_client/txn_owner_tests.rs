@@ -148,6 +148,21 @@ async fn http_transaction_cursors_keep_all_pages() {
         .collect();
     values.sort();
     assert_eq!(values, (0..66).collect::<Vec<_>>());
+    let lengths = access
+        .transact_readonly("test.cursor_transport.pages", |txn| {
+            Box::pin(async move {
+                let mut lengths = Vec::new();
+                let mut cursor = txn.cursor_scan("CursorTransportProbe", "_docID value", "");
+                while let Some(page) = cursor.next_page().await? {
+                    lengths.push(page.len());
+                }
+                assert!(cursor.next_page().await?.is_none());
+                Ok::<_, super::ConfigClientError>(lengths)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(lengths, [64, 2]);
     node.shutdown().await;
 }
 

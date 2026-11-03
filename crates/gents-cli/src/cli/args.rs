@@ -173,6 +173,8 @@ pub(crate) enum Command {
     Status(StatusArgs),
     #[command(about = "Run a read-only structured query against a DefraDB collection")]
     Query(QueryArgs),
+    #[command(about = "Export full-fidelity application records from the home node")]
+    Export(ExportArgs),
     #[command(about = "Preview and apply scoped application document mutations")]
     Write(WriteArgs),
     #[command(about = "Create documents as the home node")]

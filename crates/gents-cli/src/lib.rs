@@ -475,6 +475,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,
         Command::Query(args) => commands::query::query(args).await,
+        Command::Export(args) => commands::export::export(args).await,
         Command::Write(args) => commands::write::write(args).await,
         Command::Document { command } => commands::document::dispatch(command).await,
         Command::Background { command } => commands::background::dispatch(command).await,

@@ -21,6 +21,7 @@ use super::{
 };
 
 pub use apply_txn::ConfigApplyTxn;
+pub use cursor::ConfigCursor;
 pub use gate::LocalConfigAccess;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 pub use transact::IdempotentTransactionRetry;

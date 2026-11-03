@@ -330,8 +330,12 @@ pub async fn execute_command(
     }
     let returned_count = rows.as_array().unwrap().len();
     let total_bytes = serde_json::to_vec(&rows)?.len();
+    let truncated_fields = super::truncation_sidecar::truncated_fields(&rows);
     let truncated = super::truncate_field_strings(&mut rows);
     let mut result = json!({"results":rows,"returned_count":returned_count,"collection":collection,"truncated":truncated,"total_bytes":total_bytes});
+    if !truncated_fields.is_empty() {
+        result["truncated_fields"] = json!(truncated_fields);
+    }
     if !recovery.is_empty() {
         result["field_recovery"] = json!(recovery);
     }
@@ -399,6 +403,7 @@ pub fn render_result(value: Value) -> Result<String> {
                 "field_page",
                 "total_count",
                 "fields",
+                "truncated_fields",
                 "field_recovery",
                 "next_call",
                 "mode",
