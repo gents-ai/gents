@@ -537,3 +537,44 @@ pub(super) async fn resolve_summary_starters<'a, R>(
         });
     }
 }
+
+pub(super) fn apply_originating_tasks(
+    summaries: &mut [SessionSummary],
+    tasks: &[TaskView],
+    node_did: &str,
+) {
+    use super::task_lineage::{LineageIndex, Row, Scope};
+    let scope_of = |summary: &SessionSummary| Scope {
+        node: summary.node_did.clone(),
+        session: summary.session_id.clone(),
+        requester: summary.requester_did.clone(),
+    };
+    let rows = summaries
+        .iter()
+        .map(|summary| Row {
+            scope: scope_of(summary),
+            task: summary
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.task_id.clone()),
+            starter: summary.started_by.as_ref().map(|starter| Scope {
+                node: starter.node_did.clone(),
+                session: starter.session_id.clone(),
+                requester: starter.requester_did.clone(),
+            }),
+        })
+        .collect();
+    let mut index = LineageIndex::new(rows);
+    for summary in summaries
+        .iter_mut()
+        .filter(|summary| summary.task_id.is_none())
+    {
+        if let Some(task) = index.originating_task(node_did, &scope_of(summary)) {
+            summary.task_id = Some(task.clone());
+            summary.task_name = tasks
+                .iter()
+                .find(|candidate| candidate.task_id == task)
+                .and_then(|candidate| candidate.name.clone());
+        }
+    }
+}
