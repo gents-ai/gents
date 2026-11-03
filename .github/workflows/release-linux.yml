@@ -281,50 +281,6 @@ jobs:
             ${{ steps.measurement.outputs.metrics_file }}
           if-no-files-found: error
 
-      # The docs bundle is the same on every target, so one leg exports it.
-      # It runs after the CLI archive is retained so a docs failure cannot
-      # withhold the CLI from the release.
-      - name: Export docs bundle
-        id: docs
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && github.ref_type == 'tag'
-        run: |
-          set -euo pipefail
-
-          docs_dir="${RUNNER_TEMP}/docs-dist"
-          rm -rf "${docs_dir}"
-          make dist-docs DIST_DIR="${docs_dir}"
-
-          archive="${docs_dir}/gents-docs-${RELEASE_VERSION}.tar.gz"
-          (
-            cd "${docs_dir}"
-            sha256sum -c SHA256SUMS-docs.txt
-          )
-          archive_files="$(tar -tzf "${archive}")"
-          for required in manifest.json cli.json config/index.json; do
-            if ! grep -qx "${required}" <<<"${archive_files}"; then
-              echo "::error::Docs bundle is missing ${required} at its root."
-              exit 1
-            fi
-          done
-          if ! tar -xzOf "${archive}" manifest.json | grep -q "\"commit\": \"${GITHUB_SHA}\""; then
-            echo "::error::Docs bundle manifest does not name commit ${GITHUB_SHA}."
-            exit 1
-          fi
-          {
-            echo "archive=${archive}"
-            echo "checksum_file=${docs_dir}/SHA256SUMS-docs.txt"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Upload docs bundle
-        if: steps.docs.outcome == 'success'
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-docs
-          path: |
-            ${{ steps.docs.outputs.archive }}
-            ${{ steps.docs.outputs.checksum_file }}
-          if-no-files-found: error
-
   # Attaches whatever legs produced archives, even when the other matrix leg
   # failed. The container image downloads the same archives from this run's
   # workflow artifacts; build metrics stay there only.
@@ -372,47 +328,4 @@ jobs:
           gh release upload "${GITHUB_REF_NAME}" \
             "${tarballs[@]}" \
             SHA256SUMS-cli-linux.txt \
-            --clobber
-
-  # Separate from the CLI attach so a missing docs bundle never withholds the
-  # CLI archives, and the reverse.
-  attach-docs:
-    name: Attach docs bundle to GitHub Release
-    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: build-package
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download docs bundle
-        uses: actions/download-artifact@v7
-        with:
-          name: gents-docs
-          path: dist
-
-      - name: Attach docs bundle to GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          cd dist
-          shopt -s nullglob
-          archives=(gents-docs-*.tar.gz)
-          if (( ${#archives[@]} != 1 )); then
-            echo "::error::Expected exactly one docs bundle archive, found ${#archives[@]}."
-            exit 1
-          fi
-          sha256sum -c SHA256SUMS-docs.txt
-
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" \
-              --verify-tag \
-              --title "${GITHUB_REF_NAME}" \
-              --notes "Installers and CLI archives are attached as they finish." \
-              || gh release view "${GITHUB_REF_NAME}" >/dev/null
-          fi
-          gh release upload "${GITHUB_REF_NAME}" \
-            "${archives[0]}" \
-            SHA256SUMS-docs.txt \
             --clobber

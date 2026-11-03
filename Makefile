@@ -35,7 +35,7 @@ help:
 	@echo "  make release-cli           Build the release CLI (full features)"
 	@echo "  make release-cli-headless  Build the release CLI without embedded Codex TUI"
 	@echo "  make dist-cli              Build + package $(DIST_DIR)/gents-<triple>.tar.gz(+sha256)"
-	@echo "  make dist-docs             Build + export $(DIST_DIR)/gents-docs-<version>.tar.gz + SHA256SUMS-docs.txt"
+	@echo "  make dist-docs             Export $(DIST_DIR)/gents-docs-<version>.tar.gz + SHA256SUMS-docs.txt from RELEASE_BIN"
 	@echo
 	@echo "Measurements:"
 	@echo "  make measure-build-graph   Report the normal CLI dependency graph"
@@ -160,9 +160,10 @@ dist-cli: release-cli
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz"*
 
-# The binary refuses a tag that does not name its version, and archives the
-# bundle itself so the bytes are the same on every host.
-dist-docs: release-cli
+# Exports from an already built binary (release-docs.yml passes the published
+# Linux CLI as RELEASE_BIN). The binary refuses a tag that does not name its
+# version, and archives the bundle itself so the bytes are the same on every host.
+dist-docs:
 	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)" "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
 	@mkdir -p "$(DIST_DIR)"
 	"$(RELEASE_BIN)" __docs-bundle --out "$(DIST_DIR)/$(DOCS_ARTIFACT)" --archive "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
