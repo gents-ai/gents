@@ -331,5 +331,36 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
             bytes.len()
         )
     );
+    let all_output = tempdir.path().join("all-export");
+    let all = run_cli_json(
+        &home,
+        &[
+            "export",
+            "--all-app-collections",
+            "--jsonl",
+            "--output-dir",
+            all_output.to_str().unwrap(),
+        ],
+    )?;
+    assert_eq!(all["status"], "complete");
+    assert_eq!(
+        fs::read_to_string(all_output.join("ExportRecord.jsonl"))?
+            .lines()
+            .count(),
+        2
+    );
+    assert!(!all_output.join("Node.jsonl").exists());
+    let failed_output = tempdir.path().join("failed-export");
+    run_cli_failure_stderr(
+        &home,
+        &[
+            "export",
+            "MissingRecord",
+            "--jsonl",
+            "--output-dir",
+            failed_output.to_str().unwrap(),
+        ],
+    )?;
+    assert!(!failed_output.join("MANIFEST.tsv").exists());
     Ok(())
 }

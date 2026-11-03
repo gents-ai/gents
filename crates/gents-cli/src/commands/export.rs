@@ -3,7 +3,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
-use gents::store::config_client::ConfigApplyTxn;
+use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::store::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_name,
 };
@@ -29,15 +29,7 @@ pub(crate) async fn export(args: ExportArgs) -> Result<()> {
     );
     let (access, _) = crate::resolve_config_access(args.home.as_deref(), None).await?;
     let collections: BTreeSet<String> = if args.all_app_collections {
-        access
-            .collection_names()
-            .await?
-            .into_iter()
-            .filter(|name| {
-                !name.starts_with('_')
-                    && !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&name.as_str())
-            })
-            .collect()
+        app_collection_names(&access).await?
     } else {
         args.collections.into_iter().collect()
     };
@@ -72,6 +64,12 @@ pub(crate) async fn export(args: ExportArgs) -> Result<()> {
             Box::pin(async move { stage_export(txn, collections, filter, output_dir).await })
         })
         .await?;
+    if args.all_app_collections {
+        ensure!(
+            app_collection_names(&access).await? == collections,
+            "application collections changed during export; retry to include the current set"
+        );
+    }
     let count = files.len();
     publish(files, &output_dir)?;
     crate::print_json(&serde_json::json!({
@@ -80,6 +78,25 @@ pub(crate) async fn export(args: ExportArgs) -> Result<()> {
         "collections": count,
         "scope": "documents visible to the home node"
     }))
+}
+
+async fn app_collection_names(access: &ConfigAccess) -> Result<BTreeSet<String>> {
+    let mut result = BTreeSet::new();
+    for name in access.collection_names().await? {
+        if name.starts_with('_')
+            || gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&name.as_str())
+        {
+            continue;
+        }
+        let version = access
+            .collection_version(&name)
+            .await?
+            .with_context(|| format!("collection {name:?} changed during discovery"))?;
+        if version.get("Query").is_none_or(Value::is_null) {
+            result.insert(name);
+        }
+    }
+    Ok(result)
 }
 
 pub(super) async fn stage_export(
