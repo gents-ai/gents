@@ -60,6 +60,7 @@ impl ConfigCursor<'_, '_> {
 impl<'txn> ConfigApplyTxn<'txn> {
     /// `collection` and `fields` are schema syntax; filter values must already
     /// be escaped through the GraphQL owner. Include `_docID` in the selection.
+    /// External output must be discarded if the transaction fails or is replayed.
     pub fn cursor_scan<'a>(
         &'a self,
         collection: &'a str,
@@ -90,25 +91,5 @@ impl<'txn> ConfigApplyTxn<'txn> {
             rows.extend(page);
         }
         Ok(rows)
-    }
-
-    /// Visits authorized pages in this transaction's snapshot. Discard any
-    /// external output if the transaction fails or its callback is replayed.
-    pub async fn visit_cursor_pages<E, F>(
-        &self,
-        collection: &str,
-        fields: &str,
-        filter: &str,
-        mut visit: F,
-    ) -> Result<(), E>
-    where
-        E: From<ConfigClientError>,
-        F: FnMut(&[Value]) -> Result<(), E>,
-    {
-        let mut cursor = self.cursor_scan(collection, fields, filter);
-        while let Some(page) = cursor.next_page().await.map_err(E::from)? {
-            visit(&page)?;
-        }
-        Ok(())
     }
 }

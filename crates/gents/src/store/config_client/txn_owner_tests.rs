@@ -149,32 +149,20 @@ async fn http_transaction_cursors_keep_all_pages() {
     values.sort();
     assert_eq!(values, (0..66).collect::<Vec<_>>());
     let lengths = access
-        .transact_readonly("test.cursor_transport.visit", |txn| {
+        .transact_readonly("test.cursor_transport.pages", |txn| {
             Box::pin(async move {
                 let mut lengths = Vec::new();
-                txn.visit_cursor_pages("CursorTransportProbe", "_docID value", "", |page| {
+                let mut cursor = txn.cursor_scan("CursorTransportProbe", "_docID value", "");
+                while let Some(page) = cursor.next_page().await? {
                     lengths.push(page.len());
-                    Ok::<(), super::ConfigClientError>(())
-                })
-                .await?;
+                }
+                assert!(cursor.next_page().await?.is_none());
                 Ok::<_, super::ConfigClientError>(lengths)
             })
         })
         .await
         .unwrap();
     assert_eq!(lengths, [64, 2]);
-    let error = access
-        .transact_readonly("test.cursor_transport.visit_error", |txn| {
-            Box::pin(async move {
-                txn.visit_cursor_pages("CursorTransportProbe", "_docID value", "", |_| {
-                    Err::<(), anyhow::Error>(anyhow::anyhow!("output failed"))
-                })
-                .await
-            })
-        })
-        .await
-        .unwrap_err();
-    assert!(format!("{error:#}").contains("output failed"));
     node.shutdown().await;
 }
 
