@@ -152,9 +152,22 @@ const SCHEMAS: [&str; 10] = [
 ];
 
 /// A string the loader substitutes into may be written as any substitution,
-/// so every constrained string also accepts one. `oneOf` becomes `anyOf`
-/// because an interpolated tag no longer tells the branches apart.
+/// so every constrained string also accepts one, as one more member when it
+/// is already a choice of strings. `oneOf` becomes `anyOf` because an
+/// interpolated tag no longer tells the branches apart.
 fn allow_substitutions(schema: &mut Map<String, Value>) {
+    let substitution = json!({ "type": "string", "pattern": SUBSTITUTION_PATTERN });
+    if let Some(members) = schema.get_mut("anyOf").and_then(Value::as_array_mut) {
+        let only_strings = members.iter().all(|member| {
+            member.as_object().is_some_and(|member| {
+                constrains_strings(member) || member.get("type") == Some(&json!("null"))
+            })
+        });
+        if only_strings {
+            members.push(substitution);
+            return;
+        }
+    }
     for key in SCHEMA_MAPS {
         if let Some(children) = schema.get_mut(key).and_then(Value::as_object_mut) {
             children
@@ -190,10 +203,7 @@ fn allow_substitutions(schema: &mut Map<String, Value>) {
         }
     }
     if constrains_strings(schema) {
-        widen_schema(
-            schema,
-            json!({ "type": "string", "pattern": SUBSTITUTION_PATTERN }),
-        );
+        widen_schema(schema, substitution);
     }
 }
 

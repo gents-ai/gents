@@ -37,6 +37,44 @@ enum Edit {
     /// The same string written as a substitution of an unset variable whose
     /// default is the original, which the loader reads back unchanged.
     Interpolate,
+    /// Spellings a normalizing deserializer may read as an enumerated value.
+    Spelling(Spelling),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Spelling {
+    Leading,
+    Trailing,
+    Padded,
+    Blank,
+    Whitespace,
+    Upper,
+    Lower,
+}
+
+impl Spelling {
+    const ALL: [Self; 7] = [
+        Self::Leading,
+        Self::Trailing,
+        Self::Padded,
+        Self::Blank,
+        Self::Whitespace,
+        Self::Upper,
+        Self::Lower,
+    ];
+
+    fn respell(self, text: &str) -> Option<String> {
+        let respelled = match self {
+            Self::Leading => format!(" {text}"),
+            Self::Trailing => format!("{text}\t"),
+            Self::Padded => format!("  {text}\n"),
+            Self::Blank => String::new(),
+            Self::Whitespace => "  ".to_owned(),
+            Self::Upper => text.to_uppercase(),
+            Self::Lower => text.to_lowercase(),
+        };
+        (respelled != text).then_some(respelled)
+    }
 }
 
 #[derive(Debug)]
@@ -93,6 +131,7 @@ impl Mutation {
                 let text = slot.as_str().filter(|text| !text.contains(['$', '}']))?;
                 Value::String(format!("${{DOCS_BUNDLE_UNSET:-{text}}}"))
             }
+            Edit::Spelling(spelling) => Value::String(spelling.respell(slot.as_str()?)?),
         };
         Some(value)
     }
@@ -137,6 +176,36 @@ impl<'a> Walk<'a> {
         accepted
     }
 
+    /// Every string may be interpolated; a string whose schema enumerates
+    /// values is also respelled.
+    fn string_edits(&self, schema: &'a Value, value: &Value) -> Vec<Edit> {
+        if !value.is_string() {
+            return Vec::new();
+        }
+        let mut edits = vec![Edit::Interpolate];
+        if self.enumerates_strings(schema, 0) {
+            edits.extend(Spelling::ALL.map(Edit::Spelling));
+        }
+        edits
+    }
+
+    fn enumerates_strings(&self, schema: &'a Value, depth: usize) -> bool {
+        let schema = self.resolve(schema);
+        let listed = schema["enum"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(Value::is_string))
+            || schema["const"].is_string();
+        listed
+            || (depth < 8
+                && ["anyOf", "oneOf", "allOf"].iter().any(|key| {
+                    schema[*key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|branch| self.enumerates_strings(branch, depth + 1))
+                }))
+    }
+
     fn mutations(
         &self,
         schema: &'a Value,
@@ -153,12 +222,8 @@ impl<'a> Walk<'a> {
                 out.push(Mutation::new(path, Step::Key(key.clone()), Edit::Null));
                 if let Some(child) = object.get(key) {
                     out.push(Mutation::new(path, Step::Key(key.clone()), Edit::Remove));
-                    if child.is_string() {
-                        out.push(Mutation::new(
-                            path,
-                            Step::Key(key.clone()),
-                            Edit::Interpolate,
-                        ));
+                    for edit in self.string_edits(property, child) {
+                        out.push(Mutation::new(path, Step::Key(key.clone()), edit));
                     }
                     let mut child_path = path.to_vec();
                     child_path.push(Step::Key(key.clone()));
@@ -168,8 +233,8 @@ impl<'a> Walk<'a> {
         }
         if let (Some(items), Some(array)) = (schema.get("items"), instance.as_array()) {
             for (index, item) in array.iter().enumerate() {
-                if item.is_string() {
-                    out.push(Mutation::new(path, Step::Index(index), Edit::Interpolate));
+                for edit in self.string_edits(items, item) {
+                    out.push(Mutation::new(path, Step::Index(index), edit));
                 }
                 let mut child_path = path.to_vec();
                 child_path.push(Step::Index(index));
@@ -517,5 +582,62 @@ fn substitution_pattern_matches_the_loader_parser() {
     assert!(
         mismatches.is_empty(),
         "pattern and parser disagree on {mismatches:?}"
+    );
+}
+
+fn surface_entry(kind: Value) -> Value {
+    let query = kind
+        .as_str()
+        .is_some_and(|kind| matches!(kind.trim(), "query" | "read"));
+    let fields = if query {
+        json!(["name"])
+    } else {
+        json!([{"name": "name"}])
+    };
+    json!({"node": {"node_did": OWNER}, "datastore_tool_surfaces": [{
+        "surface_id": "surface",
+        "entries": [{"kind": kind, "tool_name": "tool", "collection": "Record", "fields": fields}]
+    }]})
+}
+
+#[test]
+fn surface_entry_kinds_validate_exactly_as_the_deserializer_reads_them() {
+    let schema = authored_pack_config_schema();
+    let validator = jsonschema::validator_for(schema.as_value()).expect("compiles");
+    let dir = Path::new(".");
+    for kind in [
+        json!(""),
+        json!("  "),
+        json!("  create  "),
+        json!("\twrite\n"),
+        json!(" query "),
+        json!("read\t"),
+        json!(null),
+    ] {
+        let config = surface_entry(kind);
+        assert!(decodes(&config, dir, None), "the loader accepts {config}");
+        let errors: Vec<_> = validator
+            .iter_errors(&config)
+            .map(|error| format!("{error} at {}", error.instance_path()))
+            .collect();
+        assert!(errors.is_empty(), "{config} is rejected: {errors:?}");
+    }
+    for kind in ["creat", "qu ery", "Query", "x"] {
+        let config = surface_entry(json!(kind));
+        assert!(!decodes(&config, dir, None), "the loader rejects {config}");
+        assert!(!validator.is_valid(&config), "the schema accepts {config}");
+    }
+    let mismatches: Vec<_> = ('\0'..='\u{3000}')
+        .chain(['\u{feff}', '\u{205f}', '\u{2028}', '\u{2029}'])
+        .filter(|padding| {
+            let config = surface_entry(json!(format!("{padding}query")));
+            decodes(&config, dir, None) != validator.is_valid(&config)
+        })
+        .map(|padding| format!("U+{:04X}", u32::from(padding)))
+        .take(20)
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "the kind pattern and str::trim disagree on {mismatches:?}"
     );
 }

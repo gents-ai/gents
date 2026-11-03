@@ -223,9 +223,10 @@ impl SurfaceToolDecl {
     }
 }
 
-/// The authored shape the `Deserialize` impl below accepts: a create entry
-/// whose `kind` is absent, null, `create` or `write`, or a query entry whose
-/// `kind` is `query` or `read`.
+/// The authored shape the `Deserialize` impl below accepts. It trims `kind`
+/// with `str::trim`: a create entry's `kind` is absent, null, blank, `create`
+/// or `write`, and a query entry's is `query` or `read`. The canonical values
+/// stay an enum, and the padded spellings are one extra pattern member.
 impl schemars::JsonSchema for SurfaceToolDecl {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "SurfaceToolDecl".into()
@@ -234,20 +235,52 @@ impl schemars::JsonSchema for SurfaceToolDecl {
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         let create = generator.subschema_for::<WriteToolDecl>();
         let query = generator.subschema_for::<QueryToolDecl>();
+        let space = trimmed_class();
+        let padded_create = format!("^{space}*(create|write)?{space}*$");
+        let padded_query = format!("^{space}*(query|read){space}*$");
         schemars::json_schema!({
             "anyOf": [
                 {
                     "allOf": [create],
-                    "properties": { "kind": { "enum": ["create", "write", null] } }
+                    "properties": { "kind": { "anyOf": [
+                        { "enum": ["create", "write", null] },
+                        { "type": "string", "pattern": padded_create }
+                    ] } }
                 },
                 {
                     "allOf": [query],
-                    "properties": { "kind": { "enum": ["query", "read"] } },
+                    "properties": { "kind": { "anyOf": [
+                        { "enum": ["query", "read"] },
+                        { "type": "string", "pattern": padded_query }
+                    ] } },
                     "required": ["kind"]
                 }
             ]
         })
     }
+}
+
+/// The characters `str::trim` removes, as an ECMA-262 class: spelled out
+/// because regex engines disagree on what `\s` covers.
+fn trimmed_class() -> String {
+    let mut class = String::from("[");
+    let mut spaces = ('\0'..=char::MAX).filter(|c| c.is_whitespace()).peekable();
+    while let Some(first) = spaces.next() {
+        let mut last = first;
+        while let Some(&next) = spaces.peek() {
+            if u32::from(next) != u32::from(last) + 1 {
+                break;
+            }
+            last = next;
+            spaces.next();
+        }
+        class.push_str(&format!("\\u{:04X}", u32::from(first)));
+        if last != first {
+            class.push_str(&format!("-\\u{:04X}", u32::from(last)));
+        }
+    }
+    class.push(']');
+    class
 }
 
 impl Serialize for SurfaceToolDecl {
