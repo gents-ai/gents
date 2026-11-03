@@ -71,7 +71,7 @@ fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
 pub(crate) struct PreparedStartup {
     pub(crate) reservation: gents::store::local::home::RuntimeStartupReservation,
     pub(crate) outcome: RuntimePreparationOutcome,
-    pub(crate) pending_config: Option<StoredInitConfig>,
+    pub(crate) pending_config: Option<(StoredInitConfig, StoredInitConfig)>,
 }
 
 pub(crate) async fn emit(result: RuntimePreparationResult) -> Result<()> {
@@ -263,13 +263,14 @@ async fn prepare_inner(
             checked == root,
             "The requested tool root changed during runtime retirement"
         );
+        let expected = config.clone();
         config.tool_root = Some(
             root.to_str()
                 .context("The tool root is not valid UTF-8")?
                 .to_owned(),
         );
         args.tool_root = Some(root);
-        Some(config)
+        Some((expected, config))
     } else {
         None
     };
@@ -357,6 +358,18 @@ fn validate_requested_root(root: PathBuf) -> Result<PathBuf> {
     anyhow::ensure!(root.is_dir(), "The tool root must be an existing directory");
     anyhow::ensure!(root.to_str().is_some(), "The tool root is not valid UTF-8");
     Ok(root)
+}
+
+pub(crate) fn commit_root_change(
+    home: &Path,
+    expected: &StoredInitConfig,
+    updated: &StoredInitConfig,
+) -> Result<()> {
+    anyhow::ensure!(
+        read_init_config(home)?.as_ref() == Some(expected),
+        "Runtime configuration changed during startup; retry the workspace access change"
+    );
+    crate::home_state::write_init_config(home, updated)
 }
 
 fn read_home(home: &Path) -> Result<(StoredInitConfig, Option<StoredRuntimeState>)> {

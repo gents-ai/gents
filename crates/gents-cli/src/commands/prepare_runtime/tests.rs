@@ -370,6 +370,24 @@ async fn changing_root_without_the_store_key_preserves_the_initialized_home() {
     assert!(node.seen.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn changed_home_configuration_is_not_overwritten_at_readiness() {
+    let node = control_node(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let original = record_home(&node, home.path());
+    let mut requested = original.clone();
+    requested.tool_root = Some("/workspace".into());
+    let mut concurrent = original.clone();
+    concurrent.node_name = "updated by operator".into();
+    crate::home_state::write_init_config(home.path(), &concurrent).unwrap();
+    let before = std::fs::read(home.path().join("init.json")).unwrap();
+    assert!(commit_root_change(home.path(), &original, &requested).is_err());
+    assert_eq!(
+        std::fs::read(home.path().join("init.json")).unwrap(),
+        before
+    );
+}
+
 fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
     let key = node._home.path().join("key");
     let config = StoredInitConfig {

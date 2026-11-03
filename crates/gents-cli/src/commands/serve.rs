@@ -1210,8 +1210,8 @@ async fn serve_foreground(
                     p2p_admission: p2p_admission_state,
                 },
             )?;
-            if let Some(config) = startup.as_ref().and_then(|startup| startup.pending_config.as_ref()) {
-                crate::home_state::write_init_config(&home_dir, config)?;
+            if let Some((expected, updated)) = startup.as_ref().and_then(|startup| startup.pending_config.as_ref()) {
+                super::prepare_runtime::commit_root_change(&home_dir, expected, updated)?;
             }
             serve_lifecycle.mark_ready();
 
