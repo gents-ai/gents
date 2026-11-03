@@ -1081,6 +1081,24 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
     assert!(validate_write_tools(&decls).is_err());
 }
 
+#[test]
+fn source_filled_write_field_is_optional_in_an_individual_surface_entry() {
+    let mut decl: WriteToolDecl = serde_json::from_value(serde_json::json!({
+        "tool_name": "write_result",
+        "collection": "Result",
+        "fields": [{"name": "handoff_id", "fill": {"source_field": "handoff_id"}}]
+    }))
+    .unwrap();
+    let entry = super::SurfaceToolDecl::Create(decl.clone());
+    assert!(entry.validate().is_ok());
+
+    decl.fields[0].required = true;
+    let error = super::SurfaceToolDecl::Create(decl).validate().unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("runtime-filled and cannot be required"));
+}
+
 fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
     use crate::Collection;
     vec![

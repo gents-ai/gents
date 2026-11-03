@@ -307,6 +307,12 @@ impl WriteToolDecl {
             crate::store::graphql::validate_graphql_name(&field.name).map_err(|error| {
                 anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
             })?;
+            if field.fill.is_some() && field.required {
+                anyhow::bail!(
+                    "field[{index}] {:?} is runtime-filled and cannot be required",
+                    field.name
+                );
+            }
             if field.name == "requester_did" && field.fill.is_none() {
                 anyhow::bail!(
                     "field[{index}] requester_did is node identity and must be runtime-filled"
@@ -381,13 +387,6 @@ pub(crate) fn validate_write_tool_declarations(
                     "write_tools[{i}] (tool {:?}) has a duplicate field name {:?}; each WriteToolField in a declaration must have a unique name",
                     decl.tool_name,
                     field.name.trim()
-                ));
-            }
-            if field.fill.is_some() && field.required {
-                return Err(anyhow::anyhow!(
-                    "write_tools[{i}] (tool {:?}) field[{j}] {:?} is runtime-filled and cannot be required",
-                    decl.tool_name,
-                    field.name,
                 ));
             }
             if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {

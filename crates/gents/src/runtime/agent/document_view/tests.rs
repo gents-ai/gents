@@ -1017,6 +1017,119 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
 }
 
 #[tokio::test]
+async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-required-source-fill"));
+    let owner = identity.did();
+    let agent_id = crate::default_agent_id_for_node(owner);
+    bind_default_agent_backend(&node, owner, &agent_id).await;
+    create_task_bound(&node, owner, "fill-task", &agent_id, "process event", true).await;
+    create_event_trigger(
+        &node,
+        owner,
+        "fill-trigger",
+        "fill-task",
+        "CustomerSignup",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let entries = |required| {
+        serde_json::json!({"entries": [{
+            "tool_name": "write_result",
+            "collection": "Result",
+            "fields": [{
+                "name": "handoff_id",
+                "required": required,
+                "fill": {"source_field": "handoff_id"}
+            }]
+        }]})
+    };
+    seed_automation(
+        &node,
+        vec![(
+            crate::Collection::DatastoreToolSurface,
+            serde_json::json!({
+                "node_did": owner,
+                "surface_id": "fill-surface",
+                "enabled": true,
+                "entries": entries(true),
+            }),
+        )],
+    )
+    .await;
+
+    let tools_id = format!("{agent_id}:tools");
+    crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.bind_invalid_fill",
+        |txn| {
+            let owner = owner.to_owned();
+            let tools_id = tools_id.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: ToolsMutationInputArg!, $owner: String!, $id: String!) { update_Tools(filter: { node_did: { _eq: $owner }, tools_id: { _eq: $id } }, input: $input) { _docID } }",
+                    &serde_json::json!({
+                        "owner": owner, "id": tools_id,
+                        "input": {"datastore": {"datastore_tool_surface_ids": ["fill-surface"]}}
+                    }),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+
+    let resolve_context = DocumentResolveContext::for_tests(
+        identity.clone(),
+        ToolCeiling::readonly(),
+        crate::inference::backends::health::BackendHealthMap::new(),
+    );
+    let view = load_document_runtime_view(&node, owner).await.unwrap();
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .unwrap();
+    let unavailable = snapshot.unavailable_agents.get(&agent_id).unwrap();
+    assert!(unavailable
+        .diagnostic
+        .contains("runtime-filled and cannot be required"));
+    assert!(!snapshot.active_event_triggers.contains_key("fill-trigger"));
+    assert!(snapshot.unavailable_event_triggers.contains("fill-trigger"));
+
+    crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.correct_invalid_fill",
+        |txn| {
+            let owner = owner.to_owned();
+            let entries = entries(false);
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: DatastoreToolSurfaceMutationInputArg!, $owner: String!) { update_DatastoreToolSurface(filter: { node_did: { _eq: $owner }, surface_id: { _eq: \"fill-surface\" } }, input: $input) { _docID } }",
+                    &serde_json::json!({"owner": owner, "input": {"entries": entries}}),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let view = load_document_runtime_view(&node, owner).await.unwrap();
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .unwrap();
+    assert!(snapshot.agents.contains_key(&agent_id));
+    assert!(snapshot.active_event_triggers.contains_key("fill-trigger"));
+    assert!(!snapshot.unavailable_event_triggers.contains("fill-trigger"));
+}
+
+#[tokio::test]
 async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
