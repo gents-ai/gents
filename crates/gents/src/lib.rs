@@ -363,9 +363,9 @@ pub use runtime::agent::{
 pub use runtime::oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use runtime::p2p::observability::{
     JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
-    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPushBacklogSnapshot,
-    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
-    P2pSyncStatusSnapshot,
+    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPendingPeerOccupancySnapshot,
+    P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot,
+    P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
 pub use runtime::periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,

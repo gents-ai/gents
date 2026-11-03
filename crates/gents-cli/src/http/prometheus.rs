@@ -2241,6 +2241,11 @@ mod tests {
                     busy_ppm: 1_200,
                     in_flight: 2,
                     in_flight_bytes: 1_024,
+                    success_latency_micros: Some(84_000),
+                    useful_ewma_ppm: Some(170_000),
+                    attempt_cost_micros: Some(490_000),
+                    expected_useful_micros: Some(2_882_352),
+                    ewma_age_millis: Some(1_500),
                 },
                 gents::P2pPeerFetchSnapshot {
                     peer: "abcdef0123-spoke".to_string(),
@@ -2268,6 +2273,15 @@ mod tests {
             pending_dag_fetch_exhausted: 9_871,
             pending_dag_terminal_merged: 10_523,
             next_pending_retry_in_ms: Some(1_500),
+            pending_dag_attempt_ewma_median_ms: Some(4_500),
+            pending_dag_attempt_ewma_max_ms: Some(35_000),
+            pending_dag_no_progress_median_ppm: Some(500_007),
+            pending_dag_tie_reorders: 12,
+            pending_dag_peer_occupancy: vec![gents::P2pPendingPeerOccupancySnapshot {
+                peer: "1dd587be-hub-peer".to_string(),
+                held: 3,
+                occupancy_q8: 640,
+            }],
             peers: vec![
                 gents::P2pPeerSummarySnapshot {
                     peer_id: "1dd587be-hub-peer".to_string(),
@@ -2350,6 +2364,18 @@ mod tests {
             format!("gents_p2p_peer_fetch_in_flight{{{hub}}} 2"),
             format!("gents_p2p_peer_fetch_in_flight_bytes{{{hub}}} 1024"),
             format!("gents_p2p_peer_fetch_success_ppm{{{spoke}}} 1000000"),
+            format!("gents_p2p_peer_fetch_success_latency_seconds{{{hub}}} 0.084"),
+            format!("gents_p2p_peer_fetch_useful_ewma_ppm{{{hub}}} 170000"),
+            format!("gents_p2p_peer_fetch_attempt_cost_seconds{{{hub}}} 0.49"),
+            format!("gents_p2p_peer_fetch_expected_useful_seconds{{{hub}}} 2.882352"),
+            format!("gents_p2p_peer_fetch_ewma_age_seconds{{{hub}}} 1.5"),
+            "gents_p2p_pending_dag_tie_reorders_total 12".to_string(),
+            "gents_p2p_pending_dag_attempt_ewma_median_seconds 4.5".to_string(),
+            "gents_p2p_pending_dag_attempt_ewma_max_seconds 35".to_string(),
+            "gents_p2p_pending_dag_no_progress_median_ppm 500007".to_string(),
+            format!("gents_p2p_pending_dag_peer_held{{{hub}}} 3"),
+            format!("gents_p2p_pending_dag_peer_occupancy{{{hub}}} 2.5"),
+            r#"gents_p2p_peer_series_dropped{family="pending_dag"} 0"#.to_string(),
             format!("gents_p2p_peer_connected{{{hub}}} 1"),
             format!("gents_p2p_peer_connected{{{spoke}}} 0"),
             format!("gents_p2p_peer_last_seen_age_seconds{{{hub}}} 10"),
@@ -2365,6 +2391,8 @@ mod tests {
         }
         for absent in [
             format!("gents_p2p_peer_fetch_min_rtt_seconds{{{spoke}}}"),
+            format!("gents_p2p_peer_fetch_success_latency_seconds{{{spoke}}}"),
+            format!("gents_p2p_peer_fetch_expected_useful_seconds{{{spoke}}}"),
             format!("gents_p2p_peer_last_seen_age_seconds{{{spoke}}}"),
             format!("gents_p2p_peer_last_head_acked_age_seconds{{{spoke}}}"),
         ] {
