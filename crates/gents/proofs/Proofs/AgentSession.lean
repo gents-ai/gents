@@ -99,6 +99,42 @@ theorem ambiguous_task_fire_is_not_provenance (node : Nat) (session : SessionId)
     taskForOpening node session request (a :: b :: rest) = none := by
   simp [taskForOpening]
 
+/-- A starter in this projection has already been verified against the signed
+creation receipt. A Task is scoped to its owning node; an unreadable, ambiguous,
+or cyclic parent chain does not establish an originating Task. -/
+structure TaskLineageRow where
+  scope : Scope
+  task : Option Nat
+  starter : Option Scope
+  deriving DecidableEq, Repr
+
+def originatingTask (owner : Nat) (scope : Scope) (rows : List TaskLineageRow)
+    (visited : List Scope) : Nat → Option Nat
+  | 0 => none
+  | fuel + 1 =>
+      if scope.node != owner || visited.contains scope then none
+      else
+        match rows.filter (fun row => row.scope == scope) with
+        | [row] =>
+            match row.task with
+            | some task => some task
+            | none => match row.starter with
+              | some parent => originatingTask owner parent rows (scope :: visited) fuel
+              | none => none
+        | _ => none
+
+theorem foreign_task_lineage_is_not_attributed (owner : Nat) (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (different : scope.node ≠ owner) :
+    originatingTask owner scope rows visited (fuel + 1) = none := by
+  simp [originatingTask, different]
+
+theorem repeated_task_lineage_is_not_attributed (owner : Nat) (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (seen : scope ∈ visited) :
+    originatingTask owner scope rows visited (fuel + 1) = none := by
+  simp [originatingTask, seen]
+
 def openingRequestAtCreation (request : Nat) (toolCall taskTrigger : Bool) : Option Nat :=
   if toolCall || taskTrigger then some request else none
 

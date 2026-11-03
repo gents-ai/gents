@@ -1,3 +1,4 @@
+import Proofs.Conformance.TaskLineage
 import Proofs.ClientShell.Timeline
 import Proofs.Session.Archive
 import Proofs.Conformance.ContractCases.SessionDocuments
@@ -297,7 +298,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       retryJson "newer_authoritative_row" [old, newerRequest] 101,
       retryJson "wrong_physical_parent" [old] 999,
       retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]),
-   ("projection", toJson (taskOpeningCases ++ pendingTimelineCases ++ [renameJson, clearTitleJson,
+   ("projection", toJson (Conformance.TaskLineage.cases ++ taskOpeningCases ++ pendingTimelineCases ++ [renameJson, clearTitleJson,
       tipCoverageJson false true false 2,
       tipCoverageJson false false false,
       tipCoverageJson false true false,

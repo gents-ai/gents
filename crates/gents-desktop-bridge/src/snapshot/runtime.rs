@@ -403,6 +403,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             deployment.sessions.iter_mut(),
         )
         .await;
+        super::runtime_tasks::apply_originating_tasks(
+            &mut deployment.sessions,
+            &deployment.tasks,
+            &deployment.node_did,
+        );
     }
     deployments.sort_by(|left, right| left.label.cmp(&right.label));
 

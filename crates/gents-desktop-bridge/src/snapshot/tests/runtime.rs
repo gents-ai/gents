@@ -90,6 +90,64 @@ fn missing_indexed_request_does_not_fall_back_to_older_or_foreign_rows() {
 }
 
 #[test]
+fn verified_worker_lineage_inherits_the_task_without_changing_provenance() {
+    let mut parent = canonical_session(Some("did:test:requester"));
+    parent.session_id = "parent".into();
+    let mut child = canonical_session(Some("did:test:requester"));
+    child.session_id = "child".into();
+    child.provenance = None;
+    let mut summaries = session_summaries(
+        &[parent.clone(), child.clone()],
+        &[],
+        "did:test:owner",
+        &[],
+        &[],
+    );
+    let child_summary = summaries
+        .iter_mut()
+        .find(|summary| summary.session_id == "child")
+        .unwrap();
+    child_summary.started_by = Some(crate::types::LinkedSessionView {
+        node_did: "did:test:owner".into(),
+        session_id: "parent".into(),
+        requester_did: Some("did:test:requester".into()),
+        cause_request_doc_id: "opening".into(),
+    });
+    super::super::runtime_tasks::apply_originating_tasks(&mut summaries, &[], "did:test:owner");
+    let child_summary = summaries
+        .iter()
+        .find(|summary| summary.session_id == "child")
+        .unwrap();
+    assert_eq!(child_summary.task_id.as_deref(), Some("task"));
+    assert!(child_summary.provenance.is_none());
+
+    let mut ambiguous = session_summaries(
+        &[parent.clone(), parent, child],
+        &[],
+        "did:test:owner",
+        &[],
+        &[],
+    );
+    let child_summary = ambiguous
+        .iter_mut()
+        .find(|summary| summary.session_id == "child")
+        .unwrap();
+    child_summary.started_by = Some(crate::types::LinkedSessionView {
+        node_did: "did:test:owner".into(),
+        session_id: "parent".into(),
+        requester_did: Some("did:test:requester".into()),
+        cause_request_doc_id: "opening".into(),
+    });
+    super::super::runtime_tasks::apply_originating_tasks(&mut ambiguous, &[], "did:test:owner");
+    assert!(ambiguous
+        .iter()
+        .find(|summary| summary.session_id == "child")
+        .unwrap()
+        .task_id
+        .is_none());
+}
+
+#[test]
 fn session_reply_previews_are_cut_on_a_character_boundary() {
     let reply_for = |reply: String| {
         let mut session = indexed_session(None);
