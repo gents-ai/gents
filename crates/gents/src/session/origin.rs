@@ -1312,30 +1312,13 @@ where
     let [fire] = fires.as_slice() else {
         return Ok(None);
     };
-    let (Some(key), Some(task)) = (
-        fire["fire_key"].as_str().filter(|v| !v.is_empty()),
-        fire["task_id"].as_str().filter(|v| !v.is_empty()),
-    ) else {
-        return Ok(None);
-    };
-    let (Some(source_collection), Some(source_doc_id)) = (
-        fire["source_collection"].as_str(),
-        fire["source_doc_id"].as_str(),
-    ) else {
-        return Ok(None);
-    };
-    let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: node.to_owned(),
-        trigger_id: trigger.to_owned(),
-        source_collection: source_collection.to_owned(),
-        source_doc_id: source_doc_id.to_owned(),
-    };
-    if fire["trigger_id"].as_str() != Some(trigger)
-        || fire["session_id"].as_str() != Some(session)
-        || key != identity.fire_key()
-        || request.request_id != identity.request_id()
-    {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::to_string(&(key, task))?))
+    Ok(gents_protocol::trigger_delivery::verified_task_fire(
+        fire,
+        node,
+        session,
+        &request.request_id,
+        trigger,
+    )
+    .map(|(key, task)| serde_json::to_string(&(key, task)))
+    .transpose()?)
 }

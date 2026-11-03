@@ -67,13 +67,37 @@ structure Provenance where
       absence, never a wildcard. Older sessions may have no recorded scope. -/
   startedBy : Option Scope := none
   /-- The request whose claim or refusal created this session through a
-      calling tool call or an automated Task trigger. It is written once and
+      calling tool call or a Task delivery. It is written once and
       never rewritten (`advance`, `rename` and `setClosed` keep
       `provenance`). `DurableLineage.openingRequest` opens the session at
       it; a session created before it was recorded has none. -/
   openingRequestDoc : Option Nat := none
   fork : Option ForkOrigin := none
   deriving DecidableEq, Repr
+
+/-- The fire is immutable task-delivery evidence. Its canonical identity and
+trigger kind are checked by the adapter before it can name a task; a mismatched
+scope or ambiguous receipt is never projected as provenance. -/
+structure TaskFireEvidence where
+  node : Nat
+  session : SessionId
+  request : Nat
+  task : Nat
+  valid : Bool
+  deriving DecidableEq, Repr
+
+def taskForOpening (node : Nat) (session : SessionId) (request : Nat)
+    (fires : List TaskFireEvidence) : Option Nat :=
+  match fires with
+  | [fire] =>
+      if fire.valid && fire.node == node && fire.session == session && fire.request == request
+      then some fire.task else none
+  | _ => none
+
+theorem ambiguous_task_fire_is_not_provenance (node : Nat) (session : SessionId)
+    (request : Nat) (a b : TaskFireEvidence) (rest : List TaskFireEvidence) :
+    taskForOpening node session request (a :: b :: rest) = none := by
+  simp [taskForOpening]
 
 def openingRequestAtCreation (request : Nat) (toolCall taskTrigger : Bool) : Option Nat :=
   if toolCall || taskTrigger then some request else none

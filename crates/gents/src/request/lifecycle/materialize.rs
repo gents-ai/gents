@@ -1002,13 +1002,9 @@ async fn labeled_session_rows_in_txn(
     })
 }
 
-/// The provenance a request records on the session its claim or refusal
-/// creates: its calling request and, for a calling tool call or automated trigger, the
-/// request itself as the session's opening request (Lean
-/// `AgentSession.Provenance.openingRequestDoc`, read by
-/// `DurableLineage.openingRequest`). `ensure_session_in_txn` keeps an
-/// existing session's provenance, so only the request that creates the
-/// session writes it.
+/// The calling request and opening document recorded when a request creates a
+/// session. Task delivery evidence is added in the same creation transaction.
+/// `ensure_session_in_txn` preserves existing session provenance.
 pub(crate) fn created_session_provenance(
     request: &AgentRequest,
 ) -> Option<gents_protocol::session::SessionProvenance> {
@@ -1024,6 +1020,92 @@ pub(crate) fn created_session_provenance(
         opening_request_doc_id: opening.then(|| request.doc_id.clone()),
         ..Default::default()
     })
+}
+
+struct TaskFireEvidence<'a> {
+    node: &'a str,
+    session: &'a str,
+    request: &'a str,
+    task: &'a str,
+    valid: bool,
+}
+
+fn task_for_opening<'a>(
+    node: &str,
+    session: &str,
+    request: &str,
+    fires: &'a [TaskFireEvidence<'a>],
+) -> Option<&'a str> {
+    let [fire] = fires else { return None };
+    (fire.valid && fire.node == node && fire.session == session && fire.request == request)
+        .then_some(fire.task)
+}
+
+async fn created_session_provenance_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequest,
+) -> Result<Option<gents_protocol::session::SessionProvenance>> {
+    let mut provenance = created_session_provenance(request);
+    let kind = request.caused_by_trigger_kind.as_deref();
+    if !matches!(kind, Some("manual" | "event" | "schedule")) {
+        return Ok(provenance);
+    }
+    let query = format!(
+        r#"{{ TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}, limit: 2) {{fire_key owner_did request_id session_id trigger_id task_id source_collection source_doc_id}} }}"#,
+        escape_graphql_string(&request.node_did),
+        escape_graphql_string(&request.request_id),
+    );
+    let response = txn.execute(&query).await?;
+    let rows = response
+        .pointer("/data/TriggerFire")
+        .and_then(serde_json::Value::as_array)
+        .context("Task fire query omitted rows")?;
+    let evidence: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            let node = row["owner_did"].as_str().unwrap_or_default();
+            let session = row["session_id"].as_str().unwrap_or_default();
+            let request_id = row["request_id"].as_str().unwrap_or_default();
+            let trigger = row["trigger_id"].as_str().unwrap_or_default();
+            let task = row["task_id"].as_str().unwrap_or_default();
+            let kind_matches = match kind {
+                Some("manual") => {
+                    request.caused_by_trigger_id.is_none()
+                        && row["source_collection"].as_str() == Some("Task")
+                        && trigger.starts_with(&format!("manual:{task}:"))
+                }
+                Some("event") => {
+                    request.caused_by_trigger_id.as_deref() == Some(trigger)
+                        && request.caused_by_source_doc_id.as_deref()
+                            == row["source_doc_id"].as_str()
+                }
+                Some("schedule") => request.caused_by_trigger_id.as_deref() == Some(trigger),
+                _ => false,
+            };
+            TaskFireEvidence {
+                node,
+                session,
+                request: request_id,
+                task,
+                valid: kind_matches
+                    && gents_protocol::trigger_delivery::verified_task_fire(
+                        row, node, session, request_id, trigger,
+                    )
+                    .is_some(),
+            }
+        })
+        .collect();
+    if let Some(task) = task_for_opening(
+        &request.node_did,
+        &request.session_id,
+        &request.request_id,
+        &evidence,
+    ) {
+        let origin = provenance.get_or_insert_with(Default::default);
+        origin.task_id = Some(task.to_owned());
+        origin.opening_request_doc_id = Some(request.doc_id.clone());
+    }
+    Ok(provenance)
 }
 
 pub(super) async fn apply_request_session_projection(
@@ -1060,6 +1142,11 @@ pub(super) async fn apply_request_session_projection(
             .into());
         }
     }
+    let provenance = if rows.decoded.is_empty() {
+        created_session_provenance_in_txn(txn, request).await?
+    } else {
+        created_session_provenance(request)
+    };
     session::ensure_session_in_txn(
         txn,
         &request.session_id,
@@ -1067,7 +1154,7 @@ pub(super) async fn apply_request_session_projection(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        created_session_provenance(request),
+        provenance,
         now,
     )
     .await?;
@@ -1136,14 +1223,20 @@ pub(crate) async fn project_refused_request_session_in_txn(
             return Ok(());
         }
     }
-    project_refused_request_onto_session_in_txn(txn, request, now).await
+    project_refused_request_onto_session_in_txn(txn, request, now, rows.decoded.is_empty()).await
 }
 
 async fn project_refused_request_onto_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
     now: &str,
+    new_session: bool,
 ) -> Result<()> {
+    let provenance = if new_session {
+        created_session_provenance_in_txn(txn, request).await?
+    } else {
+        created_session_provenance(request)
+    };
     session::ensure_session_in_txn(
         txn,
         &request.session_id,
@@ -1151,7 +1244,7 @@ async fn project_refused_request_onto_session_in_txn(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        created_session_provenance(request),
+        provenance,
         now,
     )
     .await?;
@@ -1607,6 +1700,91 @@ mod task_delivery_tests {
     use super::*;
     use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
+    #[test]
+    fn task_provenance_matches_generated_opening_cases() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+            .session_document_cases
+            .projection;
+        let cases: Vec<_> = cases
+            .iter()
+            .filter(|case| case["operation"] == "task_opening")
+            .collect();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let values: Vec<_> = case["fires"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|fire| {
+                    (
+                        fire["node"].as_u64().unwrap().to_string(),
+                        fire["session"].as_u64().unwrap().to_string(),
+                        fire["request"].as_u64().unwrap().to_string(),
+                        fire["task"].as_u64().unwrap().to_string(),
+                        fire["valid"].as_bool().unwrap(),
+                    )
+                })
+                .collect();
+            let fires: Vec<_> = values
+                .iter()
+                .map(|(node, session, request, task, valid)| TaskFireEvidence {
+                    node,
+                    session,
+                    request,
+                    task,
+                    valid: *valid,
+                })
+                .collect();
+            let actual =
+                task_for_opening("1", "10", "20", &fires).map(|task| task.parse::<u64>().unwrap());
+            assert_eq!(actual, case["task"].as_u64(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn task_fire_requires_its_canonical_identity_and_exact_session() {
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: "node".into(),
+            trigger_id: "manual:task:invocation".into(),
+            source_collection: "Task".into(),
+            source_doc_id: "invocation".into(),
+        };
+        let request = identity.request_id();
+        let mut fire = serde_json::json!({
+            "fire_key": identity.fire_key(), "trigger_id": identity.trigger_id,
+            "source_collection": identity.source_collection, "source_doc_id": identity.source_doc_id,
+            "session_id": "session", "task_id": "task"
+        });
+        assert_eq!(
+            gents_protocol::trigger_delivery::verified_task_fire(
+                &fire,
+                "node",
+                "session",
+                &request,
+                "manual:task:invocation"
+            )
+            .map(|(_, task)| task),
+            Some("task")
+        );
+        assert!(gents_protocol::trigger_delivery::verified_task_fire(
+            &fire,
+            "node",
+            "other",
+            &request,
+            "manual:task:invocation"
+        )
+        .is_none());
+        fire["fire_key"] = serde_json::json!("tampered");
+        assert!(gents_protocol::trigger_delivery::verified_task_fire(
+            &fire,
+            "node",
+            "session",
+            &request,
+            "manual:task:invocation"
+        )
+        .is_none());
+    }
+
     #[tokio::test]
     async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         let identity_dir = tempfile::tempdir().unwrap();
@@ -1622,7 +1800,7 @@ mod task_delivery_tests {
         let access = crate::store::config_client::ConfigAccess::local(node.clone());
         let identity = gents_protocol::trigger_delivery::FireIdentity {
             owner_did: PIN_FIXED_DID.into(),
-            trigger_id: "manual:task".into(),
+            trigger_id: "manual:task:invocation-key".into(),
             source_collection: "Task".into(),
             source_doc_id: "invocation-key".into(),
         };
@@ -1702,6 +1880,37 @@ mod task_delivery_tests {
             "pending"
         );
         assert_eq!(after["data"]["Goal"].as_array().unwrap().len(), 0);
+        let request_row = access
+            .execute(&format!(
+                "{{ AgentRequest {{ {} }} }}",
+                crate::request::watcher::AGENT_REQUEST_FIELDS
+            ))
+            .await
+            .unwrap();
+        let request = AgentRequest::try_from(
+            serde_json::from_value::<gents_protocol::row::AgentRequestRow>(
+                request_row["data"]["AgentRequest"][0].clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let provenance = crate::store::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.task_provenance",
+            |txn| {
+                let request = &request;
+                Box::pin(async move { created_session_provenance_in_txn(txn, request).await })
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(provenance.task_id.as_deref(), Some("task"));
+        assert_eq!(
+            provenance.opening_request_doc_id.as_deref(),
+            Some(first.request.doc_id.as_str())
+        );
     }
 
     #[tokio::test]

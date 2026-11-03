@@ -275,6 +275,19 @@ private def starterVerificationCases : List Json :=
       Json.mkObj [("name", toJson name), ("accepted", toJson
         ((AgentSession.observedStarter index (some receipt) physical recorded parent signed).isSome))]
 
+private def taskOpeningCases : List Json :=
+  let fire : AgentSession.TaskFireEvidence := ⟨1, 10, 20, 4, true⟩
+  [ ("valid", [fire]), ("missing", []), ("ambiguous", [fire, fire]),
+    ("invalid_identity", [{ fire with valid := false }]),
+    ("other_node", [{ fire with node := 2 }]),
+    ("other_session", [{ fire with session := 11 }]),
+    ("other_request", [{ fire with request := 21 }]) ].map fun (name, fires) =>
+      Json.mkObj [("name", toJson name), ("operation", toJson "task_opening"),
+        ("fires", toJson (fires.map fun f => Json.mkObj [("node", toJson f.node),
+          ("session", toJson f.session), ("request", toJson f.request),
+          ("task", toJson f.task), ("valid", toJson f.valid)])),
+        ("task", toJson (AgentSession.taskForOpening 1 10 20 fires))]
+
 def sessionDocumentsJson : String := (Json.mkObj
   [("starter_verification", toJson starterVerificationCases),
    ("archive", toJson archiveCases),
@@ -284,7 +297,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       retryJson "newer_authoritative_row" [old, newerRequest] 101,
       retryJson "wrong_physical_parent" [old] 999,
       retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]),
-   ("projection", toJson (pendingTimelineCases ++ [renameJson, clearTitleJson,
+   ("projection", toJson (taskOpeningCases ++ pendingTimelineCases ++ [renameJson, clearTitleJson,
       tipCoverageJson false true false 2,
       tipCoverageJson false false false,
       tipCoverageJson false true false,

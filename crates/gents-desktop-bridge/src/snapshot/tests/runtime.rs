@@ -205,6 +205,65 @@ fn task_run_history_is_node_scoped_when_trigger_ids_match() {
 }
 
 #[test]
+fn manual_task_history_uses_exact_opening_and_preserves_later_turns() {
+    let mut session = indexed_session(Some("requester"));
+    session.provenance.as_mut().unwrap().opening_request_doc_id = Some("opening-doc".into());
+    let mut opening = indexed_request(Some("requester"));
+    opening.doc_id = Some("opening-doc".into());
+    opening.request_id = "opening".into();
+    opening.caused_by_trigger_kind = Some("manual".into());
+    opening.lifecycle_state = Some(RequestLifecycleState::Completed);
+    let mut foreign = opening.clone();
+    foreign.request_id = "foreign".into();
+    foreign.requester_did = Some("other".into());
+    let mut wrong_agent = opening.clone();
+    wrong_agent.request_id = "wrong-agent".into();
+    wrong_agent.agent_id = Some("other".into());
+    let later = indexed_request(Some("requester"));
+    let store = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![session.clone()],
+        requests: vec![opening.clone(), foreign, wrong_agent, later.clone()],
+        ..Default::default()
+    });
+    let histories = task_run_histories(&store, "did:test:owner", &[]);
+    assert_eq!(histories["task"].len(), 1);
+    assert_eq!(histories["task"][0].request_id, "opening");
+    let summaries = session_summaries(
+        &[session.clone()],
+        &[opening.clone(), later],
+        "did:test:owner",
+        &[],
+        &[],
+    );
+    assert_eq!(summaries[0].task_id.as_deref(), Some("task"));
+    assert_eq!(summaries[0].trigger_kind.as_deref(), Some("manual"));
+    assert_eq!(
+        summaries[0].latest_request_id.as_deref(),
+        Some("logical-head")
+    );
+
+    let ambiguous = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![session.clone(), session],
+        requests: vec![opening],
+        ..Default::default()
+    });
+    assert!(!task_run_histories(&ambiguous, "did:test:owner", &[]).contains_key("task"));
+
+    let mut duplicate = indexed_request(Some("requester"));
+    duplicate.doc_id = Some("opening-doc".into());
+    let mut other = duplicate.clone();
+    other.request_id = "conflicting-opening".into();
+    let mut session = indexed_session(Some("requester"));
+    session.provenance.as_mut().unwrap().opening_request_doc_id = Some("opening-doc".into());
+    let ambiguous_request = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![session],
+        requests: vec![duplicate, other],
+        ..Default::default()
+    });
+    assert!(!task_run_histories(&ambiguous_request, "did:test:owner", &[]).contains_key("task"));
+}
+
+#[test]
 fn task_histories_keep_eight_latest_rows_per_task_without_foreign_or_duplicate_triggers() {
     let request = |index, owner: &str, trigger: &str| AgentRequestRow {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),

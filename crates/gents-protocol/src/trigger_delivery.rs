@@ -38,6 +38,36 @@ impl FireIdentity {
     }
 }
 
+/// The fire key and task of a `TriggerFire` row, when the row is the fire
+/// `trigger` admitted for `request_id` into `session` on `node`: its key and
+/// request id must be the ones its identity derives.
+pub fn verified_task_fire<'a>(
+    fire: &'a serde_json::Value,
+    node: &str,
+    session: &str,
+    request_id: &str,
+    trigger: &str,
+) -> Option<(&'a str, &'a str)> {
+    let key = fire["fire_key"]
+        .as_str()
+        .filter(|value| !value.is_empty())?;
+    let task = fire["task_id"].as_str().filter(|value| !value.is_empty())?;
+    let identity = FireIdentity {
+        owner_did: node.to_owned(),
+        trigger_id: trigger.to_owned(),
+        source_collection: fire["source_collection"].as_str()?.to_owned(),
+        source_doc_id: fire["source_doc_id"].as_str()?.to_owned(),
+    };
+    if fire["trigger_id"].as_str() != Some(trigger)
+        || fire["session_id"].as_str() != Some(session)
+        || key != identity.fire_key()
+        || request_id != identity.request_id()
+    {
+        return None;
+    }
+    Some((key, task))
+}
+
 /// Admission fields are immutable and committed atomically with their AgentRequest.
 /// The sole mutable claim marker is set with the deferred Goal assignment; it
 /// records which assignment owns the outcome, not a second execution lifecycle.
