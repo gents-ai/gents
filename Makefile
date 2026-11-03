@@ -35,6 +35,7 @@ help:
 	@echo "  make release-cli           Build the release CLI (full features)"
 	@echo "  make release-cli-headless  Build the release CLI without embedded Codex TUI"
 	@echo "  make dist-cli              Build + package $(DIST_DIR)/gents-<triple>.tar.gz(+sha256)"
+	@echo "  make dist-docs             Build + export $(DIST_DIR)/gents-docs-<version>.tar.gz + SHA256SUMS-docs.txt"
 	@echo
 	@echo "Measurements:"
 	@echo "  make measure-build-graph   Report the normal CLI dependency graph"
@@ -125,8 +126,10 @@ CARGO_TARGET_FLAG := $(if $(TARGET),--target $(TARGET),)
 TARGET_TRIPLE := $(if $(TARGET),$(TARGET),$(shell rustc -Vv | awk '/^host:/ { print $$2 }'))
 RELEASE_BIN := target/$(if $(TARGET),$(TARGET)/,)release/gents
 RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
+RELEASE_VERSION ?= $(shell awk '/^\[workspace\.package\]$$/ { p = 1; next } /^\[/ { p = 0 } p && $$1 == "version" { gsub(/"/, "", $$3); print $$3; exit }' Cargo.toml)
+DOCS_ARTIFACT := gents-docs-$(RELEASE_VERSION)
 
-.PHONY: release-cli release-cli-headless fast-dev-cli dist-cli measure-build-graph measure-release-cli measure-build-attribution
+.PHONY: release-cli release-cli-headless fast-dev-cli dist-cli dist-docs measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
 	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
@@ -156,6 +159,16 @@ dist-cli: release-cli
 	cd "$(DIST_DIR)" && sha256sum "$(RELEASE_ARTIFACT).tar.gz" > "$(RELEASE_ARTIFACT).tar.gz.sha256"
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz"*
+
+# The binary refuses a tag that does not name its version, and archives the
+# bundle itself so the bytes are the same on every host.
+dist-docs: release-cli
+	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)" "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
+	@mkdir -p "$(DIST_DIR)"
+	"$(RELEASE_BIN)" __docs-bundle --out "$(DIST_DIR)/$(DOCS_ARTIFACT)" --archive "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
+	cd "$(DIST_DIR)" && sha256sum "$(DOCS_ARTIFACT).tar.gz" > SHA256SUMS-docs.txt
+	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)"
+	@ls -lh "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz" "$(DIST_DIR)/SHA256SUMS-docs.txt"
 
 .PHONY: fmt fmt-check lint check-cli-headless proofs
 fmt:
