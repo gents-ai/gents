@@ -22,6 +22,8 @@ import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
 import { formatMessageTime } from "@source-inc/gents-desktop-ui";
+import { failureText, stopSourceText } from "../../lib/reasonText";
+import { Notice } from "../components/Notice";
 import { SentText } from "./SkillChips";
 import { writtenText } from "@/lib/skillLines";
 import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
@@ -90,14 +92,15 @@ import {
 
 function FailedEarlier({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-      <p className="text-sm font-medium">
-        This request could not finish. The session continued on a later one.
+    <Notice
+      tone="destructive"
+      title="An earlier attempt couldn't finish, and the session carried on"
+      details={message}
+    >
+      <p>
+        {failureText(message) ?? "Something went wrong while the agent was answering."}
       </p>
-      <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-        {message}
-      </pre>
-    </div>
+    </Notice>
   );
 }
 
@@ -225,29 +228,38 @@ function ModelInputReduction({
   item: Extract<RenderedTimelineItem, { kind: "requestContextReductionSummary" }>;
 }) {
   return (
-    <div
-      className="mx-auto my-2 w-full max-w-3xl rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+    <Notice
+      className="mx-auto my-2 max-w-3xl"
       data-testid="request-context-reduction-summary"
       data-request-doc-id={item.requestDocId}
+      title={
+        <span className="flex flex-wrap items-baseline justify-between gap-x-3">
+          Earlier messages were shortened for the model
+          {item.latestTimestamp && (
+            <time
+              dateTime={item.latestTimestamp}
+              className="text-xs font-normal text-muted-foreground"
+            >
+              {formatMessageTime(item.latestTimestamp)}
+            </time>
+          )}
+        </span>
+      }
     >
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="font-medium text-foreground">Request context reductions</span>
-        {item.latestTimestamp && (
-          <time dateTime={item.latestTimestamp}>{item.latestTimestamp}</time>
-        )}
-      </div>
-      <p className="mt-1">
-        {item.reductionCount.toLocaleString()} affected model{" "}
-        {item.reductionCount === 1 ? "input" : "inputs"}
+      <p className="text-xs">
+        {item.reductionCount.toLocaleString()}{" "}
+        {item.reductionCount === 1
+          ? "request to the model was"
+          : "requests to the model were"}{" "}
+        shortened to fit
         {/* a compaction with its own marker is not counted here */}
         {item.compactedCount > 0 &&
-          ` · ${item.compactedCount.toLocaleString()} compacted`}
-        {item.repairedCount > 0 && ` · ${item.repairedCount.toLocaleString()} repaired`}
-        {item.latestEstimatedInputTokens == null
-          ? " · latest estimate unavailable"
-          : ` · latest estimate ${item.latestEstimatedInputTokens.toLocaleString()} tokens`}
+          `, ${item.compactedCount.toLocaleString()} by compacting`}
+        {item.repairedCount > 0 && `, ${item.repairedCount.toLocaleString()} repaired`}.
+        {item.latestEstimatedInputTokens != null &&
+          ` The latest came to about ${item.latestEstimatedInputTokens.toLocaleString()} tokens.`}
       </p>
-    </div>
+    </Notice>
   );
 }
 
@@ -351,12 +363,6 @@ const TranscriptItem = memo(function TranscriptItem({
   }
 });
 
-const STOP_SOURCES: Record<string, string> = {
-  requestInterrupt: "a stop request on this request",
-  requestLifecycle: "the request's lifecycle state",
-  deadline: "its deadline",
-};
-
 function StoppedNotice({
   cause,
   stoppedBeforeRunning,
@@ -389,7 +395,7 @@ function StoppedNotice({
         <CollapsibleContent>
           <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11px]">
             <dt>stopped by</dt>
-            <dd>{STOP_SOURCES[cause.source] ?? cause.source}</dd>
+            <dd>{stopSourceText(cause.source)}</dd>
             {at && !Number.isNaN(at.getTime()) && (
               <>
                 <dt>at</dt>
@@ -999,36 +1005,41 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                   />
                 )}
                 {showError && (
-                  <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-                    <p className="text-sm font-medium">
-                      The assistant could not finish this turn.
+                  <Notice
+                    tone="destructive"
+                    title="This turn couldn't finish"
+                    details={latest?.failureReason?.trim() || undefined}
+                    actions={
+                      session?.retryEligibility?.eligible && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={retrying}
+                          onClick={retry}
+                        >
+                          {retrying ? "Retrying…" : "Retry"}
+                        </Button>
+                      )
+                    }
+                  >
+                    <p>
+                      {failureText(latest?.failureReason) ??
+                        (latest?.failureReason
+                          ? "Something went wrong while the agent was answering."
+                          : "The request failed before a response was available.")}
                     </p>
-                    <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-                      {responseError}
-                    </pre>
                     {session?.timelineItems.some(
                       (item) =>
                         (item.kind === "userMessage" ||
                           item.kind === "pendingUserTurn") &&
                         !!item.attachments?.length,
                     ) && (
-                      <p className="mt-2 text-xs text-muted-foreground">
+                      <p className="text-xs">
                         Attachments stay in this conversation. Start a new chat to
                         continue without them.
                       </p>
                     )}
-                    {session?.retryEligibility?.eligible && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="mt-3"
-                        disabled={retrying}
-                        onClick={retry}
-                      >
-                        {retrying ? "Retrying…" : "Retry"}
-                      </Button>
-                    )}
-                  </div>
+                  </Notice>
                 )}
                 {/* the run's line: laid out as a reply is, but not one */}
                 <div className="relative min-w-0">

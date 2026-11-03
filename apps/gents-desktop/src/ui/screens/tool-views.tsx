@@ -16,6 +16,8 @@ import { useHomeDid, useSelectedNode } from "../hooks/useClient";
 import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
 import { JobProgressCell } from "./JobProgressCell";
+import { cancelCauseText, sentence, stopSourceText } from "../../lib/reasonText";
+import { Disclosure } from "../components/Disclosure";
 import {
   diffText,
   duration,
@@ -183,29 +185,43 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
     <div className="grid gap-3">
       {(tool.jobProgress || tool.jobState) && <JobProgressCell tool={tool} />}
       {denial && (
-        <>
-          <Meta
-            items={[
-              `rule · ${denial.ruleId}`,
-              denial.deniedCommand && `command · ${denial.deniedCommand}`,
-              denial.deniedSubcommand && `subcommand · ${denial.deniedSubcommand}`,
-              denial.deniedArgument && `argument · ${denial.deniedArgument}`,
-            ]}
-          />
-          <p className="text-sm">{denial.reasonLine}</p>
-          <Payload label="diagnostic" value={denial.diagnostic} />
-        </>
+        <div className="grid gap-1.5">
+          <p className="font-sans text-sm">{sentence(denial.reasonLine)}</p>
+          <Disclosure summary="Details" summaryClassName="font-sans text-xs">
+            <div className="mt-2 grid gap-2">
+              <Meta
+                items={[
+                  `rule · ${denial.ruleId}`,
+                  denial.deniedCommand && `command · ${denial.deniedCommand}`,
+                  denial.deniedSubcommand && `subcommand · ${denial.deniedSubcommand}`,
+                  denial.deniedArgument && `argument · ${denial.deniedArgument}`,
+                ]}
+              />
+              <Payload label="diagnostic" value={denial.diagnostic} />
+            </div>
+          </Disclosure>
+        </div>
       )}
       {tool.cancelCause && (
-        <Meta
-          items={[
-            `canceled · ${tool.cancelCause.cause}`,
-            tool.cancelCause.source,
-            tool.cancelCause.at
-              ? new Date(tool.cancelCause.at).toLocaleTimeString()
-              : null,
-          ]}
-        />
+        <div className="grid gap-1.5">
+          <p className="font-sans text-sm">
+            {cancelCauseText(tool.cancelCause.cause)}
+            {tool.cancelCause.at &&
+              !Number.isNaN(Date.parse(tool.cancelCause.at)) &&
+              ` at ${new Date(tool.cancelCause.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}
+            .
+          </p>
+          <Disclosure summary="Details" summaryClassName="font-sans text-xs">
+            <div className="mt-2">
+              <Meta
+                items={[
+                  `stopped by · ${stopSourceText(tool.cancelCause.source)}`,
+                  ...tool.cancelCause.evidence,
+                ]}
+              />
+            </div>
+          </Disclosure>
+        </div>
       )}
       <Meta
         items={[

@@ -1,4 +1,10 @@
 import { useState } from "react";
+import {
+  failureText,
+  goalStatusText,
+  reasonText,
+  sentence,
+} from "../../lib/reasonText";
 import { ChevronDown, Pause, Pencil, Play, Target, Timer, X, Zap } from "lucide-react";
 import type { GoalControlAction, GoalView } from "@source-inc/gents-desktop-client";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
@@ -352,25 +358,32 @@ export function Goal({
           {goal.status && (
             <div className="flex justify-between gap-4">
               <dt>Status</dt>
-              <dd>{goal.status}</dd>
+              <dd className="text-right">{goalStatusText(goal.status)}</dd>
+            </div>
+          )}
+          {goal.lastBlockedReason && (
+            <div className="flex justify-between gap-4" title={goal.lastBlockedReason}>
+              <dt className="shrink-0">Why it stopped</dt>
+              <dd className="text-right text-foreground">
+                {reasonText(goal.lastBlockedReason)}
+              </dd>
+            </div>
+          )}
+          {goal.lastFailure && (
+            <div className="flex justify-between gap-4" title={goal.lastFailure}>
+              <dt className="shrink-0">Last failure</dt>
+              <dd className="text-right text-destructive">
+                {failureText(goal.lastFailure) ?? reasonText(goal.lastFailure)}
+              </dd>
+            </div>
+          )}
+          {goal.completionEvidence && (
+            <div className="flex justify-between gap-4">
+              <dt className="shrink-0">How it was met</dt>
+              <dd className="text-right">{sentence(goal.completionEvidence)}</dd>
             </div>
           )}
         </dl>
-        {goal.lastBlockedReason && (
-          <p className="mt-2 text-xs text-destructive">
-            Blocked: {goal.lastBlockedReason}
-          </p>
-        )}
-        {goal.lastFailure && (
-          <p className="mt-1 text-xs text-destructive">
-            Last failure: {goal.lastFailure}
-          </p>
-        )}
-        {goal.completionEvidence && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Evidence: {goal.completionEvidence}
-          </p>
-        )}
       </CollapsibleContent>
     </Collapsible>
   );
