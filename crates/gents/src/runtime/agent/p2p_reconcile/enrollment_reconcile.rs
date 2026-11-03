@@ -395,6 +395,7 @@ pub async fn run_enrollment_reconciler(
     let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
     let pairing_admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let mut delivered = BTreeSet::new();
+    let mut renewal_notices = super::enrollment_renewal::RenewalNotices::default();
     let mut subscription = crate::subscribe_collections(&node, ENROLLMENT_SWEEP_COLLECTIONS)?;
     let mut subscription_open = true;
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
@@ -408,6 +409,7 @@ pub async fn run_enrollment_reconciler(
             &pairing_admin,
             &owner.sender,
             &mut delivered,
+            &mut renewal_notices,
         );
         if !serve_authority_during_sweep(sweep, &store, &owner.sender, &mut owner.commands, &cancel)
             .await
@@ -631,6 +633,7 @@ async fn sweep_enrollment(
     pairing_admin: &EmbeddedRemoteP2pAdmin,
     sender: &watch::Sender<EnrollmentAuthorityState>,
     delivered: &mut BTreeSet<String>,
+    renewal_notices: &mut super::enrollment_renewal::RenewalNotices,
 ) {
     let projection = match store.load_projection().await {
         Ok(projection) => projection,
@@ -641,6 +644,9 @@ async fn sweep_enrollment(
         }
     };
     publish_ready(sender, projection.clone());
+    for notice in renewal_notices.observe(&projection, Utc::now()) {
+        super::enrollment_renewal::log_renewal_notice(&notice);
+    }
 
     if let Err(error) = reconcile_data_plane(node, identity.did(), store, &projection).await {
         publish_failed(sender, &error);
