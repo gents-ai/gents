@@ -1768,7 +1768,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/http/file_inventory.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
     ("crates/gents-desktop-bridge/src/commands/chat_resolve.rs", 3),
-    ("crates/gents-desktop-bridge/src/commands/session.rs", 2),
+    ("crates/gents-desktop-bridge/src/commands/session.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
