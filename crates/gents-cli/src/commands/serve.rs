@@ -426,6 +426,16 @@ where
     Ok(token.to_string())
 }
 
+fn read_metrics_auth_token(env_name: &str) -> Result<String> {
+    let token = std::env::var(env_name)
+        .with_context(|| format!("reading metrics scrape token from {env_name}"))?;
+    let token = token.trim();
+    if token.is_empty() {
+        anyhow::bail!("metrics scrape token in {env_name} is empty");
+    }
+    Ok(token.to_string())
+}
+
 fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
     let uri = raw
         .parse::<Uri>()
@@ -602,6 +612,11 @@ async fn serve_foreground(
     if args.codex_shim_public_url.is_some() && codex_shim_auth_token.is_none() {
         anyhow::bail!("--codex-shim-public-url requires --codex-shim-auth-token-env");
     }
+    let metrics_auth_token = args
+        .metrics_auth_token_env
+        .as_deref()
+        .map(read_metrics_auth_token)
+        .transpose()?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     tokio::fs::create_dir_all(&home_dir).await?;
     let data_dir = args
@@ -723,6 +738,13 @@ async fn serve_foreground(
             }
         }));
     preflight_embedded_http_bind(http_addr).await?;
+    let metrics_listener = match args.metrics_addr {
+        Some(addr) => Some(
+            crate::http::metrics_scrape::MetricsScrapeListener::bind(addr, metrics_auth_token)
+                .await?,
+        ),
+        None => None,
+    };
     let bind_probe_token = Uuid::new_v4().simple().to_string();
     let bind_probe_path = format!("/_gents/http-bind/{}", Uuid::new_v4().simple());
     let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
@@ -743,7 +765,7 @@ async fn serve_foreground(
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
     let serve_lifecycle = ServeLifecycleHandle::default();
-    let extra_routes = runtime_contract_router(
+    let runtime_routers = runtime_contract_router(
         graphql_url.clone(),
         node_name.clone(),
         identity.did().to_string(),
@@ -760,6 +782,7 @@ async fn serve_foreground(
             .transpose(),
         args.cli_tools.clone(),
         Some(home_dir.to_string_lossy().into_owned()),
+        Some(data_dir.clone()),
         mcp_options,
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
@@ -770,8 +793,9 @@ async fn serve_foreground(
         activation_rx,
         replicated_schema.clone(),
         serve_lifecycle.clone(),
-    )
-    .merge(
+    );
+    let scrape_state = runtime_routers.scrape_state;
+    let extra_routes = runtime_routers.contract.merge(
         embedded_http_probe_router(&bind_probe_path, bind_probe_token.clone())
             .merge(crate::http::explorer::explorer_router()),
     );
@@ -816,6 +840,14 @@ async fn serve_foreground(
     *store_lifetime = Some(store_access.clone());
     let mut runtime =
         ServeRuntime::new(executor).retain_shutdown_owner(node.clone(), store_access.clone());
+    let _metrics_listener = metrics_listener.map(|listener| {
+        tracing::info!(
+            addr = %listener.addr(),
+            auth_required = listener.auth_required(),
+            "serving Prometheus metrics on the dedicated listener"
+        );
+        listener.spawn(scrape_state, runtime.shutdown_tx.subscribe())
+    });
     #[cfg(unix)]
     let mut grok_shim_handle = None;
     let serve_result: Result<()> = async {

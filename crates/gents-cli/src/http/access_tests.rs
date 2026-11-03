@@ -84,6 +84,7 @@ fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
         None,
         None,
         None,
+        None,
         crate::http::enrollment::empty_issuer_handle(),
         crate::http::enrollment::empty_decision_service_handle(),
         runtime,
@@ -91,6 +92,7 @@ fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
         Default::default(),
         Default::default(),
     )
+    .contract
 }
 
 impl Fixture {

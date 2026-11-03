@@ -315,6 +315,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             crate::http::enrollment::empty_issuer_handle(),
             crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
@@ -322,6 +323,7 @@ mod tests {
             Default::default(),
             Default::default(),
         )
+        .contract
         .merge(
             Router::new()
                 .route("/api/v0/acp/document/decide", post(mock_defradb_decide))

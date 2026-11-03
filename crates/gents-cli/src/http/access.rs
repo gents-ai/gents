@@ -36,7 +36,7 @@ impl HttpAuthority {
         ))
     }
 
-    fn accepts(&self, request: &Request) -> bool {
+    pub(crate) fn accepts(&self, request: &Request) -> bool {
         let Some((configured_host, bound_port)) = &self.configured else {
             return false;
         };
@@ -130,7 +130,7 @@ pub(crate) async fn require_operator(
     }
 }
 
-fn failure(status: StatusCode, error: &str) -> Response {
+pub(crate) fn failure(status: StatusCode, error: &str) -> Response {
     let mut response = (status, axum::Json(serde_json::json!({ "error": error }))).into_response();
     if status == StatusCode::UNAUTHORIZED {
         response.headers_mut().insert(
