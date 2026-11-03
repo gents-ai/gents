@@ -113,7 +113,8 @@ fn request_origin_names_what_put_a_request_into_its_session() {
         }))),
         RequestOrigin::GoalContinuation {
             goal_id: Some("goal-1"),
-            sequence: Some(2)
+            sequence: Some(2),
+            wrapup: Some(false),
         }
     );
     assert_eq!(

@@ -122,12 +122,15 @@ pub(super) fn request_origin_view(
             trigger_id: trigger_id.to_owned(),
             trigger_kind: trigger_kind.map(str::to_owned),
         },
-        RequestOrigin::GoalContinuation { goal_id, sequence } => {
-            RequestOriginView::GoalContinuation {
-                goal_id: goal_id.map(str::to_owned),
-                sequence,
-            }
-        }
+        RequestOrigin::GoalContinuation {
+            goal_id,
+            sequence,
+            wrapup,
+        } => RequestOriginView::GoalContinuation {
+            goal_id: goal_id.map(str::to_owned),
+            sequence,
+            wrapup,
+        },
         RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion,
     })
 }

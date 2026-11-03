@@ -40,6 +40,37 @@ fn input(value: serde_json::Value) -> Option<gents_protocol::request_input::Requ
     Some(serde_json::from_value(value).expect("request input"))
 }
 
+#[test]
+fn goal_continuation_exposes_recorded_wrapup_without_fabricating_older_values() {
+    let store = automated_store();
+    let mut continuation = request("goal", "sess-1", 1);
+    continuation.caused_by_trigger_id = Some("goal-1".into());
+    continuation.input = input(serde_json::json!({
+        "goal_continuation": { "sequence": 3, "wrapup": true }
+    }));
+    let origin = crate::snapshot::session::request_origin_view(&store, &continuation).unwrap();
+    assert_eq!(
+        origin,
+        RequestOriginView::GoalContinuation {
+            goal_id: Some("goal-1".into()),
+            sequence: Some(3),
+            wrapup: Some(true),
+        }
+    );
+    continuation.input = input(serde_json::json!({
+        "queue": { "source": "goal", "policy": "append" }
+    }));
+    let origin = crate::snapshot::session::request_origin_view(&store, &continuation).unwrap();
+    assert_eq!(
+        origin,
+        RequestOriginView::GoalContinuation {
+            goal_id: Some("goal-1".into()),
+            sequence: None,
+            wrapup: None,
+        }
+    );
+}
+
 fn automated_store() -> ClientStore {
     let person = request("person", "sess-1", 0);
     let sender = request("sender", "sess-other", 1);

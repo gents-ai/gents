@@ -146,6 +146,7 @@ export function originLabel(
           : `Task run · ${name}`;
     }
     case "goalContinuation":
+      if (origin.wrapup) return "Goal wrap-up";
       return origin.sequence != null
         ? `Goal continuation · ${origin.sequence}`
         : "Goal continuation";
