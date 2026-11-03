@@ -148,6 +148,33 @@ async fn http_transaction_cursors_keep_all_pages() {
         .collect();
     values.sort();
     assert_eq!(values, (0..66).collect::<Vec<_>>());
+    let lengths = access
+        .transact_readonly("test.cursor_transport.visit", |txn| {
+            Box::pin(async move {
+                let mut lengths = Vec::new();
+                txn.visit_cursor_pages("CursorTransportProbe", "_docID value", "", |page| {
+                    lengths.push(page.len());
+                    Ok::<(), super::ConfigClientError>(())
+                })
+                .await?;
+                Ok::<_, super::ConfigClientError>(lengths)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(lengths, [64, 2]);
+    let error = access
+        .transact_readonly("test.cursor_transport.visit_error", |txn| {
+            Box::pin(async move {
+                txn.visit_cursor_pages("CursorTransportProbe", "_docID value", "", |_| {
+                    Err::<(), anyhow::Error>(anyhow::anyhow!("output failed"))
+                })
+                .await
+            })
+        })
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("output failed"));
     node.shutdown().await;
 }
 
