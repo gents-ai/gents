@@ -8,6 +8,7 @@ import { NavPanel } from "@/app/RailFlyout";
 import { switchedRoute } from "@/app/NodeSwitcher";
 import { bindNavigationGuard } from "@/lib/router";
 import { NewSession } from "@/screens/session/NewSession";
+import { avatarSrc } from "@/lib/avatar";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, testApp } from "./app-fixture";
 
@@ -50,7 +51,7 @@ describe("switching node", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(screen.getByRole("button", { name: "Switch node" }));
     const juno = await screen.findByRole("menuitemradio", { name: /Juno/ });
-    expect(juno.querySelector('img[src="/avatars/12.png"]')).not.toBeNull();
+    expect(juno.querySelector(`img[src="${avatarSrc("12")}"]`)).not.toBeNull();
   });
 
   it("lists the nodes from the nav's node row and makes the chosen one active", async () => {

@@ -16,6 +16,7 @@ import {
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 import { useExclusivePopover } from "../src/ui/hooks/useExclusivePopover";
 import { MailboxStack } from "../src/ui/screens/MailboxStack";
+import { avatarSrc } from "@/lib/avatar";
 
 const NODE = "did:key:z6MkAgent";
 
@@ -308,7 +309,7 @@ describe("the search palette", () => {
     const juno = screen
       .getAllByRole("option")
       .find((o) => o.textContent?.includes("Juno"));
-    expect(juno?.querySelector('img[src="/avatars/12.png"]')).not.toBeNull();
+    expect(juno?.querySelector(`img[src="${avatarSrc("12")}"]`)).not.toBeNull();
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Search" }), {
       key: "Escape",
     });
