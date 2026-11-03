@@ -75,6 +75,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         tokio::process::Command::new(executable)
             .args(["prepare-runtime", "--home"])
             .arg(&home)
+            .arg("--change-tool-root")
+            .arg(root.path())
             .args(["--http-port", &port.to_string(), "--http-addr", "127.0.0.1"])
             .kill_on_drop(true)
             .output(),

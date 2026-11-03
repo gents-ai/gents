@@ -18,9 +18,7 @@ use gents_protocol::serve_lifecycle::{
 use tokio::io::AsyncWriteExt as _;
 
 use crate::cli::{P2pTransportArg, PrepareRuntimeArgs};
-use crate::home_state::{
-    load_initialized_home_identity, read_init_config, read_runtime_state, write_init_config,
-};
+use crate::home_state::{load_initialized_home_identity, read_init_config, read_runtime_state};
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 
 /// Preparation must eventually report a busy home if its startup reservation
@@ -73,6 +71,7 @@ fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
 pub(crate) struct PreparedStartup {
     pub(crate) reservation: gents::store::local::home::RuntimeStartupReservation,
     pub(crate) outcome: RuntimePreparationOutcome,
+    pub(crate) pending_config: Option<StoredInitConfig>,
 }
 
 pub(crate) async fn emit(result: RuntimePreparationResult) -> Result<()> {
@@ -255,7 +254,7 @@ async fn prepare_inner(
             error.into()
         }
     })?;
-    if let Some(root) = requested_root {
+    let pending_config = if let Some(root) = requested_root {
         if !credentials_checked {
             drop(load_runtime_identity(&home, &config).await?);
         }
@@ -269,8 +268,11 @@ async fn prepare_inner(
                 .context("The tool root is not valid UTF-8")?
                 .to_owned(),
         );
-        write_init_config(&home, &config)?;
-    }
+        args.tool_root = Some(root);
+        Some(config)
+    } else {
+        None
+    };
     let (address, port) = if let Some(endpoint) = recorded_endpoint {
         (
             endpoint
@@ -311,6 +313,7 @@ async fn prepare_inner(
         PreparedStartup {
             reservation,
             outcome,
+            pending_config,
         },
     )
     .await
