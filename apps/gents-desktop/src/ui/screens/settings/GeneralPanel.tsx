@@ -8,7 +8,6 @@ import {
 import type { FollowUp, SentTurnPlacement, SidebarMode } from "@/preferences";
 import {
   preferences,
-  useFlag,
   useFollowUp,
   useSidebarMode,
   useSentTurnPlacement,
@@ -64,7 +63,6 @@ export function GeneralPanel() {
   const sidebarShown = useSidebarMode();
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
-  const customizableNav = useFlag("customize-nav");
   const [usageTelemetry, setUsageTelemetry] = useState<ProductTelemetryStatus | null>(
     null,
   );
@@ -93,16 +91,14 @@ export function GeneralPanel() {
           onChange={(v) => sidebar.setMode(v as SidebarMode)}
           items={SIDEBAR_MODES}
         />
-        {customizableNav && (
-          <Row
-            label="Sidebar items"
-            description="Reorder the sidebar's items, hide them, or add pages of the node to it."
-          >
-            <Button variant="outline" size="sm" onClick={openCustomizeNav}>
-              Customize…
-            </Button>
-          </Row>
-        )}
+        <Row
+          label="Sidebar items"
+          description="Reorder the sidebar's items, hide them, or add pages of the node to it."
+        >
+          <Button variant="outline" size="sm" onClick={openCustomizeNav}>
+            Customize…
+          </Button>
+        </Row>
       </Group>
       <Group title="Privacy">
         {usageTelemetry?.configured || usageTelemetry?.enabled ? (

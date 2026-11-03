@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import type { Route } from "@/lib/router";
 import {
-  useFlag,
   useNavLayout,
   type ListedCount,
   type NavLayout,
@@ -213,15 +212,8 @@ export function useNavSections(): {
   /** how many items a mailbox section lists */
   listed: (id: string) => ListedCount;
 } {
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const candidates = useNavSectionCandidates();
-  if (!customizable)
-    return {
-      sections: NAV_SECTIONS.filter((s) => !s.optional),
-      recent: DEFAULT_RECENT,
-      listed: () => DEFAULT_LISTED,
-    };
   return {
     sections: arrange(candidates, layout)
       .filter(({ shown }) => shown)
@@ -262,10 +254,8 @@ export function useNavFooterCandidates(): NavRow[] {
 /** the rows at the nav's foot, in order, and whether the sync status shows;
     Settings is drawn after them, always */
 export function useNavFooter(): { rows: NavRow[]; status: boolean } {
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const candidates = useNavFooterCandidates();
-  if (!customizable) return { rows: candidates, status: true };
   return {
     rows: arrange(candidates, layout)
       .filter(({ shown }) => shown)
@@ -354,11 +344,8 @@ export function useNavCandidates(): (NavRow | NavDivider)[] {
 
 /** the entries the nav's top draws, in order */
 export function useNavRows(): (NavRow | NavDivider)[] {
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const candidates = useNavCandidates();
-  if (!customizable)
-    return candidates.filter((row) => !isDivider(row) && !row.optional);
   return arrange(candidates, layout)
     .filter(({ shown }) => shown)
     .map(({ row }) => row);

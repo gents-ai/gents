@@ -35,13 +35,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
-import {
-  preferences,
-  LISTED_COUNTS,
-  RECENT_COUNTS,
-  useFlag,
-  useNavLayout,
-} from "@/preferences";
+import { preferences, LISTED_COUNTS, RECENT_COUNTS, useNavLayout } from "@/preferences";
 import {
   arrange,
   DEFAULT_RECENT,
@@ -60,8 +54,7 @@ const sheet = createStore<{ open: boolean }>(() => ({ open: false }));
 
 export const openCustomizeNav = () => sheet.setState({ open: true });
 
-/** the sidebar, with how it shows on its context menu, and "Customize…"
-    while customizing is on */
+/** the sidebar, with how it shows and "Customize…" on its context menu */
 export function NavMenu({
   render,
   children,
@@ -69,7 +62,6 @@ export function NavMenu({
   render: ReactElement;
   children: ReactNode;
 }) {
-  const customizable = useFlag("customize-nav");
   return (
     <ContextMenu>
       <ContextMenuTrigger render={render}>{children}</ContextMenuTrigger>
@@ -80,9 +72,7 @@ export function NavMenu({
             <SidebarModeItems />
           </ContextMenuSubContent>
         </ContextMenuSub>
-        {customizable && (
-          <ContextMenuItem onClick={openCustomizeNav}>Customize…</ContextMenuItem>
-        )}
+        <ContextMenuItem onClick={openCustomizeNav}>Customize…</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -405,7 +395,6 @@ function CountPicker<T extends number>({
 
 export function CustomizeNavDialog() {
   const open = useStore(sheet, (s) => s.open);
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const groups = {
     items: arrange(useNavCandidates(), layout),
@@ -468,7 +457,7 @@ export function CustomizeNavDialog() {
 
   return (
     <Dialog
-      open={open && customizable}
+      open={open}
       onOpenChange={(next) => !next && sheet.setState({ open: false })}
     >
       <DialogContent
