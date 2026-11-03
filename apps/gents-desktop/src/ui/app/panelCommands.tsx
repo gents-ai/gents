@@ -11,7 +11,6 @@ import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { registerCommand, useCommand } from "@/commands/commands";
 import { matchScore, queryWords } from "@/lib/search";
 import { dockTabId } from "./Dock";
-import { NTH_PANEL, NTH_PANEL_TEXT } from "./panelKeys";
 import { dockView, inScope } from "./dock-scope";
 import { listSurfaces, useSurfaces, type Surface } from "./surfaces";
 import type { ShellLayout } from "./useShellLayout";
@@ -112,21 +111,6 @@ export function usePanelCommands(route: Route, layout: ShellLayout) {
     icon: Rows3,
     when: () => panelsOf(route, surfaces).length > 0,
     run: openPanelPicker,
-  });
-  useCommand({
-    id: "panel.nth",
-    title: "Go to a panel by its number",
-    group: "Panel",
-    keys: NTH_PANEL,
-    keysText: NTH_PANEL_TEXT,
-    desktopOnly: true,
-    palette: false,
-    run: (index) => {
-      const panel = panelsOf(route, surfaces)[index];
-      if (!panel) return false;
-      if (!view.shown) returnTo.current = document.activeElement;
-      openPanel(panel.surface.id);
-    },
   });
   /* no key: ⌘W always closes the window, as the menu's Close Window does */
   useCommand({

@@ -146,7 +146,7 @@ describe("the panel's commands", () => {
     expect(workspace.dock(SCOPE).active).toBe("background");
   }, 20_000);
 
-  it("answers on a Mac to ⌥⌘B, ⌥⌘P and ⌥⌘ with a number, by the keys pressed", async () => {
+  it("answers on a Mac to ⌥⌘B and ⌥⌘P, by the keys pressed", async () => {
     const { workspace, dispatch } = await load();
     /* ⌥ turns the letters and digits into other characters on a Mac */
     const mac = (key: string, code: string) =>
@@ -161,8 +161,6 @@ describe("the panel's commands", () => {
     expect(workspace.dock(SCOPE).open).toBe(true);
     mac("∫", "KeyB");
     expect(workspace.dock(SCOPE).open).toBe(false);
-    mac("£", "Digit3");
-    expect(workspace.dock(SCOPE)).toMatchObject({ open: true, active: "changes" });
     mac("π", "KeyP");
     expect(await screen.findByRole("combobox", { name: "Find a panel" })).toBeVisible();
   }, 20_000);
@@ -193,13 +191,11 @@ describe("the panel's commands", () => {
     expect(workspace.dock(SCOPE)).toMatchObject({ open: true, tabs: [] });
   }, 20_000);
 
-  it("goes straight to a panel by its number", async () => {
+  it("opens no panel from a number key", async () => {
     const { workspace } = await load();
     press("2", { altKey: true });
-    expect(workspace.dock(SCOPE)).toMatchObject({ open: true, active: "background" });
-    /* a number past the panels this page has stays with the page */
-    press("9", { altKey: true });
-    expect(workspace.dock(SCOPE).active).toBe("background");
+    press("2", { altKey: true, metaKey: true });
+    expect(workspace.dock(SCOPE).open).toBe(false);
   }, 20_000);
 
   it("gives every panel registered, a plugin's too, an Open command", async () => {
@@ -235,7 +231,6 @@ describe("the panel's commands", () => {
     const { workspace } = await load();
     cmd("B", true);
     cmd("P", true);
-    press("1", { altKey: true });
     expect(workspace.dock(SCOPE).open).toBe(false);
     expect(screen.queryByTestId("panel-picker")).toBeNull();
   }, 20_000);

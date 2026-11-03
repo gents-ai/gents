@@ -6,12 +6,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { Hint } from "@/screens/Hint";
 import { useAriaKeys, useKeysHint } from "@/commands/commands";
-import { nthPanelKey } from "./panelKeys";
 import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
@@ -106,21 +104,15 @@ function OpenAPanel({
       <div className="m-auto grid w-full max-w-80 gap-3">
         {titled && <h2 className="px-1 text-xs text-muted-foreground">Panels</h2>}
         <div className="grid gap-1.5">
-          {available.map((s, i) => (
+          {available.map((s) => (
             <button
               key={s.id}
               type="button"
               onClick={() => onOpen(s.id)}
-              aria-keyshortcuts={nthPanelKey(i + 1).aria}
               className="flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border border-border/60 px-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none"
             >
               <s.icon className="size-4 shrink-0" />
               <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
-              {nthPanelKey(i + 1).text && (
-                <span aria-hidden className="shrink-0 font-mono text-[11px]">
-                  {nthPanelKey(i + 1).text}
-                </span>
-              )}
             </button>
           ))}
         </div>
@@ -283,37 +275,31 @@ export function DockTabs({
                   reorder.active && reorder.moving !== index && "pointer-events-none",
                 )}
               >
-                <TabHint title={s.title} keys={nthPanelKey(index + 1).text}>
-                  <button
-                    ref={(el) => {
-                      if (el) tabEls.current.set(s.id, el);
-                      else tabEls.current.delete(s.id);
-                    }}
-                    type="button"
-                    role="tab"
-                    id={dockTabId(s.id)}
-                    aria-selected={active}
-                    aria-controls={active ? DOCK_PANEL_ID : undefined}
-                    aria-keyshortcuts={["Delete", nthPanelKey(index + 1).aria]
-                      .filter(Boolean)
-                      .join(" ")}
-                    tabIndex={active ? 0 : -1}
-                    onKeyDown={(e) => onTabKey(e, index)}
-                    onClick={() => activate(s.id)}
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
+                <button
+                  ref={(el) => {
+                    if (el) tabEls.current.set(s.id, el);
+                    else tabEls.current.delete(s.id);
+                  }}
+                  type="button"
+                  role="tab"
+                  id={dockTabId(s.id)}
+                  aria-selected={active}
+                  aria-controls={active ? DOCK_PANEL_ID : undefined}
+                  aria-keyshortcuts="Delete"
+                  tabIndex={active ? 0 : -1}
+                  onKeyDown={(e) => onTabKey(e, index)}
+                  onClick={() => activate(s.id)}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
+                >
+                  <s.icon className="size-4 shrink-0" />
+                  <span
+                    title={s.tab ? s.title : undefined}
+                    className={cn("truncate", active && "font-medium")}
                   >
-                    <s.icon className="size-4 shrink-0" />
-                    <span
-                      title={
-                        s.tab && !nthPanelKey(index + 1).text ? s.title : undefined
-                      }
-                      className={cn("truncate", active && "font-medium")}
-                    >
-                      {s.tab ?? s.title}
-                    </span>
-                    <TabBadge surface={s} sessionId={sessionId} />
-                  </button>
-                </TabHint>
+                    {s.tab ?? s.title}
+                  </span>
+                  <TabBadge surface={s} sessionId={sessionId} />
+                </button>
                 <button
                   type="button"
                   aria-hidden
@@ -333,11 +319,7 @@ export function DockTabs({
             );
           })}
         </div>
-        <AddTab
-          available={view.available}
-          numberedFrom={view.tabs.length + 1}
-          onOpen={openSurface}
-        />
+        <AddTab available={view.available} onOpen={openSurface} />
       </div>
       {onExpand && (
         <Hint label={expanded ? "Restore panel" : "Expand panel"} keys={expandKeys}>
@@ -372,33 +354,13 @@ export function DockTabs({
 
 /* a tab's full title and its key, where it has one; the rest keep the
    short tab name's own title */
-function TabHint({
-  title,
-  keys,
-  children,
-}: {
-  title: string;
-  keys: string | undefined;
-  children: React.ReactElement;
-}) {
-  return keys ? (
-    <Hint label={title} keys={keys}>
-      {children}
-    </Hint>
-  ) : (
-    children
-  );
-}
-
 /* the panels this page can show that aren't open yet; none, no button */
 function AddTab({
   available,
-  numberedFrom,
   onOpen,
 }: {
   available: readonly Surface[];
   /** the first one's number, after the open tabs, as the picker counts */
-  numberedFrom: number;
   onOpen: (id: string) => void;
 }) {
   const pickerKeys = useKeysHint("panel.picker");
@@ -423,16 +385,12 @@ function AddTab({
         align="start"
         className="w-48 text-xs [&_[role=menuitem]]:text-xs"
       >
-        {available.map((s, i) => {
-          const keys = nthPanelKey(numberedFrom + i).text;
-          return (
-            <DropdownMenuItem key={s.id} onClick={() => onOpen(s.id)}>
-              <s.icon className="size-4" />
-              <span className="flex-1">{s.title}</span>
-              {keys && <DropdownMenuShortcut>{keys}</DropdownMenuShortcut>}
-            </DropdownMenuItem>
-          );
-        })}
+        {available.map((s) => (
+          <DropdownMenuItem key={s.id} onClick={() => onOpen(s.id)}>
+            <s.icon className="size-4" />
+            <span className="flex-1">{s.title}</span>
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
