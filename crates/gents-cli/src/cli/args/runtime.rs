@@ -178,6 +178,22 @@ pub(crate) struct QueryArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct ExportArgs {
+    #[arg(value_name = "COLLECTION", conflicts_with = "all_app_collections")]
+    pub(crate) collections: Vec<String>,
+    #[arg(long, conflicts_with = "collections")]
+    pub(crate) all_app_collections: bool,
+    #[arg(long, required = true, help = "Write full values as JSON Lines")]
+    pub(crate) jsonl: bool,
+    #[arg(long, default_value = "gents-export")]
+    pub(crate) output_dir: PathBuf,
+    #[arg(long, help = "Apply this JSON filter to each collection")]
+    pub(crate) filter: Option<String>,
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct WriteArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,

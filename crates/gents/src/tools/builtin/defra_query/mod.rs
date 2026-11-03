@@ -68,6 +68,7 @@ pub use query::{
     DefraQueryParams, AGENT_CONFIG_QUERY_COLLECTIONS, AGENT_CONFIG_SCOPE_ALIAS, DEFAULT_LIMIT,
     MAX_LIMIT,
 };
+pub use render::render_filter;
 pub use schema::{
     diagnose_failed_query, discovery_payload, introspection_query, parse_collection_schema,
     unknown_collection_message, CollectionSchema, SchemaField,

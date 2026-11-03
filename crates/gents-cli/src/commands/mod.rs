@@ -13,6 +13,7 @@ pub(crate) mod config;
 pub(crate) mod diagnose;
 pub(crate) mod document;
 pub(crate) mod eval;
+pub(crate) mod export;
 pub(crate) mod fleet;
 pub(crate) mod goal;
 pub(crate) mod grok_auth_probe;
