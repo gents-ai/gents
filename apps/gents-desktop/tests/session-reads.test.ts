@@ -510,12 +510,15 @@ describe("createSessionReads", () => {
       } as unknown as DesktopApiAdapter);
       await reads.refreshSession("session-1");
       clock.mockReturnValue(250);
-      expect(await reads.readSessionUpdate()).toBeNull();
+      expect(
+        await reads.readSessionUpdate(),
+        "a live read covers the live text, not the update; the full read is owed",
+      ).toBe(1_250);
       clock.mockReturnValue(1_500);
       expect(await reads.readSessionUpdate()).toBe(0);
       expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
       await reads.refreshSession("session-1");
-      expect(await reads.readSessionUpdate()).toBeNull();
+      expect(await reads.readSessionUpdate()).toBe(1_500);
     } finally {
       clock.mockRestore();
     }

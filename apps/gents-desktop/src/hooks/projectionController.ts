@@ -6,16 +6,18 @@ import {
 export type DesktopUpdateRefreshScope =
   "snapshot" | "sessionDelta" | "session" | "sessionEvent" | "full";
 
-/** A pairing-health change re-reads a session waiting on its node, since the
-    pairing is one of the signals its delivery state derives from. */
+/** A pairing-health change re-reads a selected session that shows no
+    snapshot yet: the pairing is one of the signals its delivery state derives
+    from, and a read already in flight may have taken the pairing before the
+    change. */
 export function desktopUpdateRefreshScope(
   reason: string | undefined,
   selectedSessionId: string | null,
   selectedTrackedRequestId: string | null,
-  selectedSessionAwaitsNode = false,
+  selectedSessionUnresolved = false,
 ): DesktopUpdateRefreshScope {
   if (reason === "health")
-    return selectedSessionId && selectedSessionAwaitsNode ? "full" : "snapshot";
+    return selectedSessionId && selectedSessionUnresolved ? "full" : "snapshot";
   if (selectedSessionId && selectedTrackedRequestId) {
     if (reason === "store") return "sessionDelta";
     return "sessionEvent";

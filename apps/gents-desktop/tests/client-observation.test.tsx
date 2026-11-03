@@ -102,9 +102,15 @@ describe("following the client while it runs", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(hasLive ? 1 : 0);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 2 : 3);
+        /* the live read stood in for the update; the full read it owes
+           follows once the read gap ends */
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
         stop();
         await vi.advanceTimersByTimeAsync(3_000);
-        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 2 : 3);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
       } finally {
         stop?.();
         vi.useRealTimers();

@@ -230,6 +230,54 @@ describe("a session waiting on its node", () => {
     }
   });
 
+  it("re-reads after a pairing change that lands while the first read is in flight", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const api = bridgeApi();
+    let land!: () => void;
+    api.fetchSessionSnapshot
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            land = () => reject(deliveryError("sessionNotConnected"));
+          }),
+      )
+      .mockRejectedValueOnce(deliveryError("sessionDelivering"));
+    const app = testApp({
+      api,
+      snapshot: running,
+      selection: { nodeDid: NODE_DID, sessionId: "s-1" },
+    });
+    app.stores.chat.setState({
+      localWorkflow: {
+        kind: "awaitingObservation",
+        nodeDid: NODE_DID,
+        sessionId: "s-1",
+        requestId: "r-1",
+      },
+    });
+    let update: Listener | undefined;
+    const stop = startClientObservation(
+      app,
+      vi.fn(async (listener) => {
+        update = listener as Listener;
+        return () => {};
+      }),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      expect(app.stores.session.getState().load.phase).toBe("loading");
+      void update?.({ reason: "health" });
+      await vi.advanceTimersByTimeAsync(0);
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      expect(app.stores.session.getState().load.phase).toBe("delivering");
+    } finally {
+      stop();
+    }
+  });
+
   it("waits for the update that brings a pending request rather than polling for it", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const api = bridgeApi();
@@ -270,6 +318,44 @@ describe("a session waiting on its node", () => {
       void update?.({ reason: "store" });
       await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
+  });
+});
+
+describe("a session read through the node's operator access", () => {
+  it("is read at the session read gap, having no replica here to raise events", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const api = bridgeApi();
+    const session = {
+      ...sessionSnapshot({
+        sessionId: "s-1",
+        nodeDid: NODE_DID,
+        turnState: "running",
+        latestRequestId: "r-1",
+        liveCursor: null,
+        timelineItems: [],
+      }),
+      readThroughOperator: true,
+    };
+    api.fetchSessionSnapshot.mockResolvedValue(session);
+    const app = testApp({ api, snapshot: running, session });
+    expect(app.trackedRequestId()).toBe("r-1");
+    const stop = startClientObservation(
+      app,
+      vi.fn(async () => () => {}),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
+      stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
     } finally {
       stop();
     }

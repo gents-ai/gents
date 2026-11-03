@@ -2,12 +2,13 @@ import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desk
 import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
 import { clientRunning } from "./clientStore";
+import { readSession } from "./sessionStore";
 import type { DesktopApp } from "./desktopApp";
 import { createProjectionController } from "./projectionController";
 import { logShellEvent } from "./clientLifecycle";
 import { desktopUpdateRefreshScope } from "./projectionController";
+import { timingConfig } from "./timing";
 import { errorText } from "../lib/errorText";
-import { isSessionDeliveryPhase } from "../lib/loadingStatus";
 
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
@@ -15,14 +16,15 @@ export function startClientObservation(
 ): () => void {
   const selection = stores.selection;
   const { refreshSession, readSessionUpdate, refreshSnapshot } = actions;
-  /* the selected session has no row from its node yet */
-  const selectedSessionAwaitsNode = () => {
+  /* the selected session shows no snapshot: it waits on its node, or its
+     read has not resolved yet */
+  const selectedSessionUnresolved = () => {
     const { sessionId, nodeDid } = selection.getState();
-    const load = stores.session.getState().load;
-    return (
-      load.sessionId === sessionId &&
-      (!nodeDid || !load.nodeDid || load.nodeDid === nodeDid) &&
-      isSessionDeliveryPhase(load.phase)
+    const open = readSession(stores.session);
+    return !(
+      open &&
+      open.sessionId === sessionId &&
+      (!nodeDid || !open.nodeDid || open.nodeDid === nodeDid)
     );
   };
 
@@ -42,8 +44,8 @@ export function startClientObservation(
       readSessionUpdate,
       onError: reportListenerError,
     });
-    /* Store and pairing-health events drive every read; nothing reads the
-       open session on a timer. */
+    /* Store and pairing-health events drive every read of a session whose
+       rows replicate here. */
     void listenToDesktopClientUpdates(
       async (event) => {
         if (stopped) return;
@@ -51,7 +53,7 @@ export function startClientObservation(
           event.reason,
           selection.getState().sessionId,
           trackedRequestId(),
-          selectedSessionAwaitsNode(),
+          selectedSessionUnresolved(),
         );
         await controller.request(scope);
       },
@@ -74,23 +76,62 @@ export function startClientObservation(
 
     const hidden = () => document.visibilityState === "hidden";
 
+    /* A session read through the node's operator access has no replica here,
+       so no store event reports its changes. While it has a request open and
+       the window shows it, it is read at the session read gap, live text
+       sooner, until the node's runtime gains an event source of its own. */
+    let operatorTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleOperatorRead = () => {
+      clearTimeout(operatorTimer);
+      operatorTimer = undefined;
+      const open = readSession(stores.session);
+      const gap = timingConfig().sessionReadGapMs;
+      if (stopped || hidden() || gap === null || !trackedRequestId()) return;
+      if (
+        !open?.readThroughOperator ||
+        open.sessionId !== selection.getState().sessionId
+      )
+        return;
+      operatorTimer = setTimeout(
+        async () => {
+          operatorTimer = undefined;
+          await controller.request("sessionDelta");
+          scheduleOperatorRead();
+        },
+        open.liveCursor ? Math.min(250, gap) : gap,
+      );
+    };
+    const unsubscribeOperator = stores.session.subscribe((state, prev) => {
+      if (
+        state.session?.sessionId !== prev.session?.sessionId ||
+        state.session?.readThroughOperator !== prev.session?.readThroughOperator ||
+        (operatorTimer === undefined && state.session?.readThroughOperator)
+      )
+        scheduleOperatorRead();
+    });
+
     publishSelection();
     void controller.request("session");
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
       if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
         void controller.request("session");
+        scheduleOperatorRead();
       }
     });
     const unsubscribeTracked = view.subscribe((state, prev) => {
       if (state.trackedRequestId === prev.trackedRequestId) return;
       void controller.request("session");
+      scheduleOperatorRead();
     });
 
     /* showing the window reads it in full */
     const refreshForegroundState = () => {
-      if (hidden()) return;
-      void controller.request("full");
+      if (hidden()) {
+        scheduleOperatorRead();
+        return;
+      }
+      void controller.request("full").then(scheduleOperatorRead);
     };
     document.addEventListener("visibilitychange", refreshForegroundState);
     window.addEventListener("focus", refreshForegroundState);
@@ -99,6 +140,8 @@ export function startClientObservation(
       stopped = true;
       controller.dispose();
       actions.invalidateSessionReads();
+      clearTimeout(operatorTimer);
+      unsubscribeOperator();
       unsubscribeSelection();
       unsubscribeTracked();
       document.removeEventListener("visibilitychange", refreshForegroundState);

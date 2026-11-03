@@ -262,6 +262,10 @@ pub async fn session_snapshot(
     )
     .await;
     if let Some(snapshot) = snapshot.as_mut() {
+        snapshot.read_through_operator = node_did
+            .as_deref()
+            .is_some_and(|node| core.session_read_through_operator(&session_id, node))
+            .then_some(true);
         if let (Some(node), Some(requests), Some(selected)) = (
             node_did.as_deref(),
             fresh_requests.as_ref(),

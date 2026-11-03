@@ -195,10 +195,12 @@ export function createSessionReads({
 
   /** Reads a store update for the open session and resolves to when it is
       owed a full read: 0 for now, the ms until the gap ends, or null once a
-      live read or a read started after the update covers it. Inside the gap
-      a live read stands in; otherwise the full read waits, not back to back
-      and longer once the session has gone quiet, but is never dropped:
-      updates are the only thing that reads an open session. */
+      read started after the update covers it. Inside the gap a live read
+      stands in, but it covers only the live text and turn state, so the
+      update is still owed the full read when the gap ends. Without a live
+      read the full read waits, not back to back and longer once the session
+      has gone quiet. It is never dropped: updates are the only thing that
+      reads an open session. */
   async function readSessionUpdate(): Promise<number | null> {
     const gap = sessionReadGapMs();
     const since = performance.now() - readAt;
@@ -231,7 +233,7 @@ export function createSessionReads({
       const next = applySessionLiveDelta(latest, delta);
       if (!next) return 0;
       setSession(next);
-      return null;
+      return gap === null ? null : Math.max(0, gap - (performance.now() - readAt));
     } catch {
       if (!stillCurrent()) return null;
       return 0;

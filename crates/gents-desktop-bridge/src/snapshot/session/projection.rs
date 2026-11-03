@@ -755,6 +755,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         hydration: None,
         timeline_page: None,
         projection_revision: None,
+        read_through_operator: None,
         messages,
         tool_calls,
     })
