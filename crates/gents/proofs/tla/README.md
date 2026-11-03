@@ -28,20 +28,26 @@ See `../README.md` for how this fits the broader formal-verification model.
   retirement of acknowledged requests, real P2P replay after cap exhaustion,
   and reconnect-triggered replicator reinstall skipped once acknowledged.
   With `ModelDelivery`, the request party `Desktop` also writes the request:
-  its client-to-runtime pairing (up to `MaxPairingDrops` drops) carries it to
-  the owner, which claims only what it holds and creates the canonical
-  `AgentSession` row as it claims; the claim and the row return over the party
-  replicator. Store events (the local write, each returned leg) and
+  its client-to-runtime pairing, which may change any number of times,
+  carries it to the owner, which claims only what it holds and creates the
+  canonical `AgentSession` row as it claims; the claim and the row return over
+  the party replicator. Store events (the local write, each returned leg) and
   pairing-health events are the only things that read the desktop's selected
-  session, which `Classify` (the Lean `deriveSessionDelivery`) projects from
-  the four signals. `ProjectionCurrent` says that once every event is read the
-  projection equals the classification, with no timer; and
-  `NoTerminalErrorWhileDeliverable` says a written request shows no terminal
-  error before its row arrives. `DesktopEventuallyVisible` holds under
-  `DeliverySpec`: pairing eventually up, the owner eventually claims, each leg
-  and read eventually runs. The `UntypedRead` diagnostic restores the old read
-  failure on a missing row; `HealthIgnored` restores the old health handling
-  that refreshed only the node list.
+  session. A read takes the signals when it starts and publishes
+  `Classify` (the Lean `deriveSessionDelivery`) when it finishes; an event
+  raised meanwhile queues the next read. `ProjectionCurrent` says that once
+  every event is read and no read is in flight the projection equals the
+  classification, with no timer; and `NoTerminalErrorWhileDeliverable` says a
+  written request shows no terminal error before its row arrives.
+  `DesktopEventuallyVisible` holds under `DeliverySpec` (the owner eventually
+  claims, each leg and read eventually runs) for every behavior whose pairing
+  is eventually up for good. `HealthRereads` names the rule for which
+  pairing-health events re-read the session: the shipped `unresolved` (the
+  desktop shows no session yet), the first fix's `awaiting` (only a delivery
+  state already shown) and the old `never`. The `UntypedRead`, `HealthIgnored`
+  and `HealthAwaitingOnly` diagnostics restore the old read failure, the old
+  health handling, and the rule that missed a pairing change during the first
+  read.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -126,10 +132,11 @@ The desktop delivery extension checks clean with its liveness property and the o
 ./scripts/run-tlc.sh MCReplicatedRequestConvergenceDesktop
 ```
 
-Its two diagnostics are EXPECTED to report violations. `UntypedRead` reads a missing row as an error and violates `NoTerminalErrorWhileDeliverable` right after the first read of the desktop's write; `HealthIgnored` leaves a pairing change unread and violates `ProjectionCurrent` with the session still shown as not connected after the pairing returns:
+Its three diagnostics are EXPECTED to report violations. `UntypedRead` reads a missing row as an error and violates `NoTerminalErrorWhileDeliverable` right after the first read of the desktop's write. `HealthIgnored` leaves a pairing change unread and violates `ProjectionCurrent` with the session still shown as not connected after the pairing returns. `HealthAwaitingOnly` re-reads on health only once a delivery state is shown, so a pairing change during the first read is lost: the read finishes with `NotConnected` while the pairing is up:
 ```bash
 ./scripts/run-tlc.sh MCReplicatedRequestConvergenceUntypedRead
 ./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthIgnored
+./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthAwaitingOnly
 ```
 
 Each run directly, from this directory, is:
@@ -180,10 +187,9 @@ Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedReques
 | `ReplayOnRecovery` | `TRUE` (green/peer-claim) / `FALSE` (stuck) | Production recovery reinstalls a configured peer replicator once per reconnect, causing a bounded full replay. The stuck diagnostic removes that action and exposes the exhausted-cap liveness gap. |
 | `StateBound` | `Cardinality(deltaIdsUsed) <= Cap` | `emitCount` is persisted per request and caps same-value owner writes at `Cap`, independent of replica count. |
 | `Desktop` | `p1` | The request party that writes the request and reads its session. |
-| `ModelDelivery` | `FALSE` (the three configs above) / `TRUE` (`Desktop`, `UntypedRead`, `HealthIgnored`) | Off, the owner holds the request from the start and the delivery variables stay fixed, so the earlier state spaces are unchanged. |
-| `MaxPairingDrops` | `0` / `1` | One drop of the client-to-runtime pairing, restored fairly, exercises not-connected and delivering. |
+| `ModelDelivery` | `FALSE` (the three configs above) / `TRUE` (`Desktop`, `UntypedRead`, `HealthIgnored`, `HealthAwaitingOnly`) | Off, the owner holds the request from the start and the delivery variables stay fixed, so the earlier state spaces are unchanged. |
 | `UntypedRead` | `FALSE` / `TRUE` (`UntypedRead`) | Restores the pre-fix read failure on a missing row. |
-| `HealthRereads` | `TRUE` / `FALSE` (`HealthIgnored`) | Off, a pairing-health event no longer re-reads the waiting session. |
+| `HealthRereads` | `"unresolved"` / `"never"` (`HealthIgnored`) / `"awaiting"` (`HealthAwaitingOnly`) | Which pairing-health events re-read the selected session. |
 
 Current parameters in `MCP2PBackpressureGreen.cfg` / diagnostic configs:
 
@@ -252,9 +258,9 @@ Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, reconnect rep
 
 `MCReplicatedRequestConvergenceDesktop.cfg` (`SPECIFICATION DeliverySpec`) keeps every line above and adds:
 
-- **`INVARIANT ProjectionCurrent`** — with no event left unread, the desktop's selected-session projection is the classification of its local write, pairing, returned claim or lifecycle, and returned row. Reads happen only on events, so this is the no-poll, no-stale-state claim.
+- **`INVARIANT ProjectionCurrent`** — with no event left unread and no read in flight, the desktop's selected-session projection is the classification of its local write, pairing, returned claim or lifecycle, and returned row. Reads happen only on events, so this is the no-poll, no-stale-state claim.
 - **`INVARIANT NoTerminalErrorWhileDeliverable`** — while the desktop's request is written and its row has not arrived, the projection is never the old terminal read error.
-- **`PROPERTY DesktopEventuallyVisible`** (`desktopWrote ~> desktopView = "Visible"`) — under eventually-up pairing and an eventually-claiming owner, the desktop shows the session. Without `WF_vars(Claim)` the same model violates it, so the property is not vacuous.
+- **`PROPERTY DesktopEventuallyVisible`** (`<>[]pairingUp => (desktopWrote ~> desktopView = "Visible")`) — when the pairing is eventually up for good and the owner eventually claims, the desktop shows the session. The pairing itself is unconstrained, so safety is checked across unlimited reconnects. Without `WF_vars(Claim)` the same model violates the property, so it is not vacuous.
 
 Two diagnostic configs reproduce the pre-fix convergence gap (liveness) and prove the safety property is falsifiable (safety):
 
@@ -278,7 +284,7 @@ Notes:
 - `DeliverDelta` and `PersistDeltaOnPeer`
 - per-peer `RecoverPeer`, `ReplayTerminalSnapshot`, and `SkipAcknowledgedReplay`
 
-It deliberately has no fairness on the owner lifecycle (`Claim`/`Process`/`Terminalize`), `DropDelta`, `CrashPeer`, or `CrashOwner` — those are voluntary. `DeliverySpec` adds weak fairness on `PairingRestore`, `DeliverRequest`, `Claim`, `ReturnClaim`, `ReturnRow` and `DesktopRead` only for the desktop liveness claim; `PairingDrop` and `DesktopWrite` stay voluntary. `EmitTerminalDelta` is gated by persisted `emitCount < Cap` and by an unacknowledged party peer; an offline peer never acknowledges, so the cap still bounds writes. Fair reconnect and full replay are therefore the unbounded-partition liveness assumption. The `Stuck` config removes replay while retaining the bounded write budget and reaches the exhausted-cap disagreement.
+It deliberately has no fairness on the owner lifecycle (`Claim`/`Process`/`Terminalize`), `DropDelta`, `CrashPeer`, or `CrashOwner` — those are voluntary. `DeliverySpec` adds weak fairness on `DeliverRequest`, `Claim`, `ReturnClaim`, `ReturnRow`, `DesktopReadStart` and `DesktopReadFinish` only for the desktop liveness claim; `PairingChange` and `DesktopWrite` stay voluntary, and the pairing's eventual stability is the property's premise, not a fairness assumption. `EmitTerminalDelta` is gated by persisted `emitCount < Cap` and by an unacknowledged party peer; an offline peer never acknowledges, so the cap still bounds writes. Fair reconnect and full replay are therefore the unbounded-partition liveness assumption. The `Stuck` config removes replay while retaining the bounded write budget and reaches the exhausted-cap disagreement.
 
 ## Convergence form
 
@@ -331,9 +337,10 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCReplicatedRequestConvergenceStuck.cfg` | `Cap = 1`, `ReplayOnRecovery = FALSE` | Invariants hold; `TerminalConverges` intentionally VIOLATED with the requester offline and the persisted budget exhausted | 42 distinct states; 78 generated | 8 | <1s |
 | `MCReplicatedRequestConvergencePeerClaim.cfg` | `AllowPeerClaim = TRUE` | `SingleClaimer` intentionally VIOLATED by `PeerClaimsForeign` | 17 distinct states before counterexample; 18 generated | 4 | <1s |
 | `MCReplicatedRequestConvergence.cfg` (with the desktop constants, `ModelDelivery = FALSE`) | as above | Same result and state space as the row above it | 246 distinct states; 548 generated | 12 | <1s |
-| `MCReplicatedRequestConvergenceDesktop.cfg` | `ModelDelivery = TRUE`, `MaxPairingDrops = 1`, `Cap = 3` | Passes every invariant above plus `ProjectionCurrent` and `NoTerminalErrorWhileDeliverable`; passes `TerminalConverges` and `DesktopEventuallyVisible` | 13,830 distinct states; 61,884 generated | 19 | 1s |
-| `MCReplicatedRequestConvergenceUntypedRead.cfg` | `UntypedRead = TRUE` | `NoTerminalErrorWhileDeliverable` intentionally VIOLATED: write, then a read shows `Error` | 32 distinct states before counterexample; 47 generated | 3 | <1s |
-| `MCReplicatedRequestConvergenceHealthIgnored.cfg` | `HealthRereads = FALSE` | `ProjectionCurrent` intentionally VIOLATED: the pairing returns unread and the view stays `NotConnected` | 57 distinct states before counterexample; 116 generated | 4 | <1s |
+| `MCReplicatedRequestConvergenceDesktop.cfg` | `ModelDelivery = TRUE`, unconstrained pairing, `Cap = 3` | Passes every invariant above plus `ProjectionCurrent` and `NoTerminalErrorWhileDeliverable`; passes `TerminalConverges` and `DesktopEventuallyVisible` | 39,168 distinct states; 193,620 generated | 22 | 4s |
+| `MCReplicatedRequestConvergenceUntypedRead.cfg` | `UntypedRead = TRUE` | `NoTerminalErrorWhileDeliverable` intentionally VIOLATED: write, then a read shows `Error` | 63 distinct states before counterexample; 137 generated | 4 | <1s |
+| `MCReplicatedRequestConvergenceHealthIgnored.cfg` | `HealthRereads = "never"` | `ProjectionCurrent` intentionally VIOLATED: the pairing returns unread and the view stays `NotConnected` | 79 distinct states before counterexample; 180 generated | 5 | <1s |
+| `MCReplicatedRequestConvergenceHealthAwaitingOnly.cfg` | `HealthRereads = "awaiting"` | `ProjectionCurrent` intentionally VIOLATED: the pairing comes up while the first read is in flight, and that read publishes `NotConnected` | 85 distinct states before counterexample; 184 generated | 5 | <1s |
 
 The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
 
@@ -342,9 +349,9 @@ The three ReplicatedRequestConvergence runs used TLC2
 arm64, `-workers auto` using 8 workers. The one-requester green run checked
 one temporal branch; the other two are deliberately failing diagnostics.
 
-The four desktop delivery rows used TLC2 `2026.07.03.221739` (rev `227f61b`,
+The five desktop delivery rows used TLC2 `2026.07.03.221739` (rev `227f61b`,
 the v1.8.0 cache jar) with Homebrew OpenJDK 17.0.20.1 on macOS arm64,
-`-workers 2`. The `Desktop` run checked two temporal branches over 27,660
+`-workers 2`. The `Desktop` run checked two temporal branches over 78,336
 distinct states. With two workers, `Stuck` reproduced its recorded row and
 `PeerClaim` reached the same violation after 7 states at depth 2.
 
@@ -366,12 +373,15 @@ Crash-enabled two-collection attempts were stopped for tractability, not propert
   is not modeled. The connection tracker covers
   local dial, remote-first reconnect, and daemon startup, but permanent
   disconnect or permanent reinstall failure is outside the liveness claim.
-- **Desktop delivery abstraction.** A desktop read is one atomic step that
-  consumes every event raised before it; the live-text read that stands in for
-  some reads, read pacing, and the session's other rows are outside the
-  model. One request is modeled, and only `pairingUp` changes raise
-  pairing-health events. That the bridge's native events fire on each local
-  write, replicated document and pairing change is the premise, not a result.
+- **Desktop delivery abstraction.** A read consumes every event raised
+  before it starts and publishes what it captured; the live-text read that
+  stands in for some reads, read pacing, and the session's other rows are
+  outside the model. One request is modeled, and only `pairingUp` changes
+  raise pairing-health events. That the bridge's native events fire on each
+  local write, replicated document and pairing change is the premise, not a
+  result. Sessions this client reads through the node's operator access hold
+  no local replica and raise no store events; the app reads those at the
+  session read gap, and the model does not cover them.
 - **Connection-event delivery.** `RecoverPeer` assumes every reconnect is
   observed. Production records each DefraDB `PeerConnection` disconnect until a
   sweep consumes it and sweeps on each connect, so a peer that drops and

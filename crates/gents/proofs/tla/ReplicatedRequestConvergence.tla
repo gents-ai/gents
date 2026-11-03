@@ -14,8 +14,7 @@ CONSTANTS
   Desktop,
   ModelDelivery,
   UntypedRead,
-  HealthRereads,
-  MaxPairingDrops
+  HealthRereads
 
 Node == {Owner} \cup ReplicaHolder
 
@@ -36,8 +35,7 @@ ASSUME AllowPeerClaimIsBoolean == AllowPeerClaim \in BOOLEAN
 ASSUME DesktopIsARequestParty == Desktop \in ReplicaHolder
 ASSUME ModelDeliveryIsBoolean == ModelDelivery \in BOOLEAN
 ASSUME UntypedReadIsBoolean == UntypedRead \in BOOLEAN
-ASSUME HealthRereadsIsBoolean == HealthRereads \in BOOLEAN
-ASSUME MaxPairingDropsIsNat == MaxPairingDrops \in Nat
+ASSUME HealthRereadsIsRule == HealthRereads \in {"never", "awaiting", "unresolved"}
 
 Delta == [
   id     : DeltaId,
@@ -61,22 +59,24 @@ VARIABLES
   \* row, and the desktop's selected-session projection (ModelDelivery).
   ownerHolds,
   pairingUp,
-  pairingDrops,
   desktopWrote,
   claimSeen,
   rowSeen,
   desktopView,
-  eventPending
+  eventPending,
+  readInFlight,
+  readCapture
 
 deliveryVars == <<
   ownerHolds,
   pairingUp,
-  pairingDrops,
   desktopWrote,
   claimSeen,
   rowSeen,
   desktopView,
-  eventPending
+  eventPending,
+  readInFlight,
+  readCapture
 >>
 
 vars == <<
@@ -119,9 +119,16 @@ Classify ==
 \* The pre-fix read failed whenever the row was absent.
 ReadResult == IF UntypedRead /\ ~rowSeen THEN "Error" ELSE Classify
 
-\* A store or pairing-health event the desktop has not read yet.
+\* Which events re-read the selected session. Every store event does. A
+\* pairing-health event does, under the shipped rule, while the desktop shows
+\* no session yet ("unresolved"); the first fix re-read only a delivery state
+\* already shown ("awaiting"), and the old code never re-read on health.
 StoreEvent == ModelDelivery
-PairingEvent == ModelDelivery /\ HealthRereads
+PairingEvent ==
+  /\ ModelDelivery
+  /\ CASE HealthRereads = "unresolved" -> desktopView # "Visible"
+       [] HealthRereads = "awaiting" -> desktopView \in {"Delivering", "NotConnected", "Accepted"}
+       [] OTHER -> FALSE
 
 TypeOK ==
   /\ reqState        \in [Node -> LifecycleState]
@@ -137,12 +144,13 @@ TypeOK ==
   /\ acked           \in [ReplicaHolder -> BOOLEAN]
   /\ ownerHolds      \in BOOLEAN
   /\ pairingUp       \in BOOLEAN
-  /\ pairingDrops    \in 0..MaxPairingDrops
   /\ desktopWrote    \in BOOLEAN
   /\ claimSeen       \in BOOLEAN
   /\ rowSeen         \in BOOLEAN
   /\ desktopView     \in DesktopViews
   /\ eventPending    \in BOOLEAN
+  /\ readInFlight    \in BOOLEAN
+  /\ readCapture     \in DesktopViews
 
 Init ==
   /\ reqState        = [n \in Node |-> "Pending"]
@@ -158,12 +166,13 @@ Init ==
   /\ acked           = [peer \in ReplicaHolder |-> FALSE]
   /\ ownerHolds      = ~ModelDelivery
   /\ pairingUp       \in IF ModelDelivery THEN BOOLEAN ELSE {TRUE}
-  /\ pairingDrops    = 0
   /\ desktopWrote    = FALSE
   /\ claimSeen       = FALSE
   /\ rowSeen         = FALSE
   /\ desktopView     = "NoRequest"
   /\ eventPending    = FALSE
+  /\ readInFlight    = FALSE
+  /\ readCapture     = "NoRequest"
 
 \* Claiming also creates the canonical AgentSession row (`OwnerClaimed`).
 Claim ==
@@ -238,7 +247,8 @@ PersistDeltaOnPeer(d) ==
   /\ eventPending'   = (eventPending \/ (StoreEvent /\ d.target = Desktop))
   /\ UNCHANGED <<messages, deltaIdsUsed, dropCount, crashCount, emitCount,
                   peerOnline, replayPending, replayCount, ownerHolds, pairingUp,
-                  pairingDrops, desktopWrote, claimSeen, rowSeen, desktopView>>
+                  desktopWrote, claimSeen, rowSeen, desktopView, readInFlight,
+                  readCapture>>
 
 RecoverPeer(peer) ==
   /\ ReplayOnRecovery
@@ -265,8 +275,8 @@ ReplayTerminalSnapshot(peer) ==
   /\ acked'         = [acked EXCEPT ![peer] = TRUE]
   /\ eventPending'  = (eventPending \/ (StoreEvent /\ peer = Desktop))
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
-                  emitCount, peerOnline, ownerHolds, pairingUp, pairingDrops,
-                  desktopWrote, claimSeen, rowSeen, desktopView>>
+                  emitCount, peerOnline, ownerHolds, pairingUp, desktopWrote,
+                  claimSeen, rowSeen, desktopView, readInFlight, readCapture>>
 
 \* The native ensure operation preserves acknowledgements and retry markers;
 \* an already acknowledged peer needs no additional delivery.
@@ -308,11 +318,13 @@ PeerClaimsForeign(peer) ==
 ----
 \* The desktop as request party (ModelDelivery). It writes its AgentRequest
 \* locally, which raises a store event, and the client-to-runtime pairing
-\* carries it to the owner. The pairing goes down at most MaxPairingDrops
-\* times; each change raises a pairing-health event, which re-reads the
-\* waiting session unless HealthRereads is off. The owner's claim and the
+\* carries it to the owner. The pairing goes down and comes back any number
+\* of times; each change is a pairing-health event, which re-reads the
+\* selected session under the `HealthRereads` rule. The owner's claim and the
 \* canonical row return over the party replicator; each arrival is a store
-\* event. Events alone drive reads: nothing reads on a timer.
+\* event. Events alone start reads: nothing reads on a timer. A read takes the
+\* signals when it starts and publishes them when it finishes, and an event
+\* raised meanwhile queues the next read, as the projection controller does.
 
 DesktopWrite ==
   /\ ModelDelivery
@@ -321,7 +333,8 @@ DesktopWrite ==
   /\ eventPending' = TRUE
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline, replayPending, replayCount, acked,
-                  ownerHolds, pairingUp, pairingDrops, claimSeen, rowSeen, desktopView>>
+                  ownerHolds, pairingUp, claimSeen, rowSeen, desktopView, readInFlight,
+                  readCapture>>
 
 DeliverRequest ==
   /\ ModelDelivery
@@ -331,28 +344,17 @@ DeliverRequest ==
   /\ ownerHolds' = TRUE
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline, replayPending, replayCount, acked,
-                  pairingUp, pairingDrops, desktopWrote, claimSeen, rowSeen, desktopView,
-                  eventPending>>
+                  pairingUp, desktopWrote, claimSeen, rowSeen, desktopView,
+                  eventPending, readInFlight, readCapture>>
 
-PairingDrop ==
+PairingChange ==
   /\ ModelDelivery
-  /\ pairingUp
-  /\ pairingDrops < MaxPairingDrops
-  /\ pairingUp'    = FALSE
-  /\ pairingDrops' = pairingDrops + 1
+  /\ pairingUp'    = ~pairingUp
   /\ eventPending' = (eventPending \/ PairingEvent)
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline, replayPending, replayCount, acked,
-                  ownerHolds, desktopWrote, claimSeen, rowSeen, desktopView>>
-
-PairingRestore ==
-  /\ ModelDelivery
-  /\ ~pairingUp
-  /\ pairingUp'    = TRUE
-  /\ eventPending' = (eventPending \/ PairingEvent)
-  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
-                  emitCount, peerOnline, replayPending, replayCount, acked,
-                  ownerHolds, pairingDrops, desktopWrote, claimSeen, rowSeen, desktopView>>
+                  ownerHolds, desktopWrote, claimSeen, rowSeen, desktopView,
+                  readInFlight, readCapture>>
 
 ReturnClaim ==
   /\ ModelDelivery
@@ -363,7 +365,8 @@ ReturnClaim ==
   /\ eventPending' = TRUE
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline, replayPending, replayCount, acked,
-                  ownerHolds, pairingUp, pairingDrops, desktopWrote, rowSeen, desktopView>>
+                  ownerHolds, pairingUp, desktopWrote, rowSeen, desktopView,
+                  readInFlight, readCapture>>
 
 ReturnRow ==
   /\ ModelDelivery
@@ -374,17 +377,30 @@ ReturnRow ==
   /\ eventPending' = TRUE
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline, replayPending, replayCount, acked,
-                  ownerHolds, pairingUp, pairingDrops, desktopWrote, claimSeen, desktopView>>
+                  ownerHolds, pairingUp, desktopWrote, claimSeen, desktopView,
+                  readInFlight, readCapture>>
 
-\* One read consumes every event raised before it.
-DesktopRead ==
+\* A read consumes every event raised before it starts.
+DesktopReadStart ==
   /\ ModelDelivery
   /\ eventPending
-  /\ desktopView'  = ReadResult
+  /\ ~readInFlight
+  /\ readInFlight' = TRUE
+  /\ readCapture'  = ReadResult
   /\ eventPending' = FALSE
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline, replayPending, replayCount, acked,
-                  ownerHolds, pairingUp, pairingDrops, desktopWrote, claimSeen, rowSeen>>
+                  ownerHolds, pairingUp, desktopWrote, claimSeen, rowSeen, desktopView>>
+
+DesktopReadFinish ==
+  /\ ModelDelivery
+  /\ readInFlight
+  /\ desktopView'  = readCapture
+  /\ readInFlight' = FALSE
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  ownerHolds, pairingUp, desktopWrote, claimSeen, rowSeen,
+                  eventPending, readCapture>>
 
 ----
 SingleClaimer ==
@@ -413,10 +429,10 @@ AckedImpliesConverged ==
 ReplayBound ==
   \A peer \in ReplicaHolder : replayCount[peer] <= 1
 
-\* No stale state: once the desktop has read every event, its projection is
-\* the classification of the signals it now holds.
+\* No stale state: once the desktop has read every event and no read is in
+\* flight, its projection is the classification of the signals it now holds.
 ProjectionCurrent ==
-  ~eventPending => desktopView = Classify
+  (~eventPending /\ ~readInFlight) => desktopView = Classify
 
 \* A request the desktop wrote can still become visible until its row
 \* arrives, so the read never shows a terminal error meanwhile.
@@ -439,11 +455,11 @@ Next ==
   \/ CrashOwner
   \/ DesktopWrite
   \/ DeliverRequest
-  \/ PairingDrop
-  \/ PairingRestore
+  \/ PairingChange
   \/ ReturnClaim
   \/ ReturnRow
-  \/ DesktopRead
+  \/ DesktopReadStart
+  \/ DesktopReadFinish
 
 Fairness ==
   /\ WF_vars(EmitTerminalDelta)
@@ -455,23 +471,24 @@ Fairness ==
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
-\* Delivery liveness assumes the pairing is eventually up for good (bounded
-\* drops and fair restore), the owner eventually claims what it holds, the
+\* Delivery liveness assumes the owner eventually claims what it holds, the
 \* replicators eventually carry each leg, and every event is eventually read.
+\* The pairing is unconstrained; `DesktopEventuallyVisible` takes its eventual
+\* stability as a premise.
 DeliverySpec ==
   /\ Spec
-  /\ WF_vars(PairingRestore)
   /\ WF_vars(DeliverRequest)
   /\ WF_vars(Claim)
   /\ WF_vars(ReturnClaim)
   /\ WF_vars(ReturnRow)
-  /\ WF_vars(DesktopRead)
+  /\ WF_vars(DesktopReadStart)
+  /\ WF_vars(DesktopReadFinish)
 
 TerminalConverges ==
   \A peer \in ReplicaHolder :
     IsTerminal(reqState[Owner]) ~> (reqState[peer] = reqState[Owner])
 
 DesktopEventuallyVisible ==
-  desktopWrote ~> (desktopView = "Visible")
+  <>[]pairingUp => (desktopWrote ~> (desktopView = "Visible"))
 
 ====
