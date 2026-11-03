@@ -6,7 +6,8 @@ import { cn } from "@gents/ui/lib/utils";
 import { holdRow } from "@/lib/scroll";
 import type { ReaderPlace } from "@/lib/transcriptList";
 import { SEARCH_FIELD } from "@/lib/textAssist";
-import { commandKey } from "../shortcutKeys";
+import { commandKey, IS_MAC } from "../shortcutKeys";
+import { Hint } from "../Hint";
 import type { TranscriptEntry } from "../transcript-groups";
 import {
   findPart,
@@ -379,10 +380,17 @@ export function FindBar({
     };
   }, [open, query, scroller, current, goTo]);
 
-  /* ⌘F opens or selects; ⌘G and ⌘⇧G step while it is open. The webview's
+  /* ⌘F opens or selects; ⌘G and ⌘⇧G (and F3 off a Mac) step while it is open. The webview's
      own find bar would take ⌘F on Windows, so the key is kept. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      /* F3 and Shift+F3 step too off a Mac, as finding there does */
+      if (!IS_MAC && e.key === "F3" && !e.altKey && !commandKey(e)) {
+        if (!findBar.getState().open) return;
+        e.preventDefault();
+        step(e.shiftKey ? -1 : 1);
+        return;
+      }
       if (!commandKey(e) || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === "f" && !e.shiftKey) {
@@ -447,32 +455,38 @@ export function FindBar({
           >
             {count}
           </span>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Previous match"
-            disabled={matches.length === 0}
-            onClick={() => step(-1)}
-          >
-            <ChevronUp />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Next match"
-            disabled={matches.length === 0}
-            onClick={() => step(1)}
-          >
-            <ChevronDown />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Close find"
-            onClick={close}
-          >
-            <X />
-          </Button>
+          <Hint label="Previous match" keys={IS_MAC ? "⇧⌘G" : "Shift+F3"}>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Previous match"
+              disabled={matches.length === 0}
+              onClick={() => step(-1)}
+            >
+              <ChevronUp />
+            </Button>
+          </Hint>
+          <Hint label="Next match" keys={IS_MAC ? "⌘G" : "F3"}>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Next match"
+              disabled={matches.length === 0}
+              onClick={() => step(1)}
+            >
+              <ChevronDown />
+            </Button>
+          </Hint>
+          <Hint label="Close" keys="Esc">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Close find"
+              onClick={close}
+            >
+              <X />
+            </Button>
+          </Hint>
         </div>
         {(older.more || all) && (
           <p className="flex min-w-0 items-center gap-1 px-2 pb-1 text-xs text-muted-foreground">

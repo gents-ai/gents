@@ -144,6 +144,13 @@ describe("finding in a session", () => {
     expect(screen.getByText("5 of 5")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "g", [IS_MAC ? "metaKey" : "ctrlKey"]: true });
     expect(screen.getByText("1 of 5")).toBeInTheDocument();
+    /* off a Mac, F3 and Shift+F3 step as well */
+    if (!IS_MAC) {
+      fireEvent.keyDown(window, { key: "F3" });
+      expect(screen.getByText("2 of 5")).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "F3", shiftKey: true });
+      expect(screen.getByText("1 of 5")).toBeInTheDocument();
+    }
 
     fireEvent.change(field, { target: { value: "lizard" } });
     act(() => vi.advanceTimersByTime(200));
