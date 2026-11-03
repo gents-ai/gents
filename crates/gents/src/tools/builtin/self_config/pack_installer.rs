@@ -19,6 +19,14 @@ pub(super) struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
+/// The pack kinds this installer installs: document and plugins-only packs.
+pub(super) fn installs_kind(kind: &crate::pack::PackKind) -> bool {
+    matches!(
+        kind,
+        crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
+    )
+}
+
 pub(super) struct ConfigPackDistribution(pub(super) crate::pack::resolve::ResolvedNamedPack);
 
 impl ConfigPackDistribution {
@@ -151,10 +159,7 @@ impl PackInstaller {
             // declaring child_process or bind_dir capabilities) cannot
             // silently authorize itself.
             anyhow::ensure!(
-                matches!(
-                    archive.manifest().metadata.kind,
-                    crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
-                ),
+                installs_kind(&archive.manifest().metadata.kind),
                 "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
                 archive.manifest().name,
                 archive.manifest().metadata.kind
@@ -203,11 +208,7 @@ impl PackInstaller {
         .await?;
         let distribution = ConfigPackDistribution(resolved);
         anyhow::ensure!(
-            operation == "get"
-                || matches!(
-                    distribution.manifest().metadata.kind,
-                    crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
-                ),
+            operation == "get" || installs_kind(&distribution.manifest().metadata.kind),
             "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
             distribution.manifest().name,
             distribution.manifest().metadata.kind

@@ -151,14 +151,19 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             assert_eq!(enrolled.label, agent_name);
             assert_eq!(enrolled.node_did, node_did);
 
+            // The runtime returns its own Node to an enrolled client; the
+            // client authors none, and the client-to-runtime route carries no
+            // Node (`scope_templates` conformance).
             let principals = query_collection_dids(core.node(), "Node").await?;
             assert!(
-                principals.is_empty(),
-                "Node must stay on the runtime node; client gossiped {principals:?}"
+                principals.iter().all(|did| did == &node_did),
+                "the client may hold only the runtime's replicated Node; found {principals:?}"
             );
+            let snapshot = core.store().snapshot();
             assert!(
-                core.store().snapshot().nodes.is_empty(),
-                "client store must not materialize a gossiped Node"
+                snapshot.nodes.iter().all(|node| node.node_did == node_did),
+                "the client store may materialize only the runtime's Node; found {:?}",
+                snapshot.nodes
             );
 
             wait_for_client_node_readiness(&core, &node_did).await?;
@@ -202,10 +207,11 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                 .cloned()
                 .unwrap_or_default();
             assert!(
-                runtime_rows.iter().any(|row| {
-                    row.get("node_did").and_then(Value::as_str) == Some(node_did.as_str())
-                }),
-                "runtime must keep Node locally: {runtime_principals}"
+                !runtime_rows.is_empty()
+                    && runtime_rows.iter().all(|row| {
+                        row.get("node_did").and_then(Value::as_str) == Some(node_did.as_str())
+                    }),
+                "runtime must keep its own Node and receive none from the client: {runtime_principals}"
             );
 
             let remaining = core

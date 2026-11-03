@@ -12,33 +12,11 @@ impl PackInstaller {
             None => BTreeMap::new(),
         };
         let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
-        let mut installed = BTreeMap::new();
-        for record in crate::pack::list_installed_packs(&access, self.core.node_did()).await? {
-            names.entry(record.coordinate.clone()).or_default();
-            installed.insert(
-                record.coordinate.clone(),
-                (
-                    serde_json::to_value(record)?,
-                    crate::pack::PackKind::Documents,
-                ),
-            );
-        }
-        if let Some(home) = self.home.as_deref() {
-            for record in crate::pack::list_home_installs(home)? {
-                if record.kind == crate::pack::PackKind::Documents {
-                    continue;
-                }
-                anyhow::ensure!(
-                    !installed.contains_key(&record.coordinate),
-                    "pack {} has conflicting installed kinds",
-                    record.coordinate
-                );
-                names.entry(record.coordinate.clone()).or_default();
-                installed.insert(
-                    record.coordinate.clone(),
-                    (serde_json::to_value(&record)?, record.kind),
-                );
-            }
+        let installed =
+            crate::pack::installed_catalog(&access, self.core.node_did(), self.home.as_deref())
+                .await?;
+        for coordinate in installed.keys() {
+            names.entry(coordinate.clone()).or_default();
         }
         let total = names.len();
         let mut selected = names
@@ -54,21 +32,10 @@ impl PackInstaller {
         let mut items = Vec::with_capacity(selected.len());
         for (coordinate, versions) in selected {
             let current = installed.get(&coordinate);
-            let current_name = current
-                .map(|(record, _)| -> Result<crate::pack::store::StoredName> {
-                    Ok(crate::pack::store::StoredName {
-                        version: record["version"]
-                            .as_str()
-                            .context("installed pack version is missing")?
-                            .to_owned(),
-                        digest: record["digest"]
-                            .as_str()
-                            .context("installed pack digest is missing")?
-                            .to_owned(),
-                    })
-                })
-                .transpose()?;
-            let listing = crate::pack::store::list_pack_versions(&versions, current_name);
+            let listing = crate::pack::store::list_pack_versions(
+                &versions,
+                current.map(|entry| entry.stored.clone()),
+            );
             let preferred = versions.first();
             let display = listing.installed.as_ref().or(preferred);
             let archive = match (&store, display) {
@@ -84,15 +51,9 @@ impl PackInstaller {
                 ),
             };
             let kind = current
-                .map(|(_, kind)| kind)
+                .map(|entry| &entry.kind)
                 .or_else(|| manifest.map(|manifest| &manifest.metadata.kind));
-            let installable = manifest.is_some()
-                && kind.is_some_and(|kind| {
-                    matches!(
-                        kind,
-                        crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
-                    )
-                });
+            let installable = manifest.is_some() && kind.is_some_and(installs_kind);
             items.push(json!({
                 "name": coordinate,
                 "version": listing.installed.as_ref().map(|entry| &entry.version),
@@ -105,7 +66,7 @@ impl PackInstaller {
                 "installed_digest": listing.installed.as_ref().map(|entry| &entry.digest),
                 "inference_slots": manifest.map(|manifest| &manifest.metadata.inference_slots),
                 "installable": installable,
-                "installed": current.map(|(record, _)| record),
+                "installed": current.map(|entry| &entry.record),
                 "error": error,
             }));
         }
@@ -170,10 +131,7 @@ impl PackInstaller {
             &BTreeMap::new(),
         )
         .await?;
-        let installable = matches!(
-            distribution.manifest().metadata.kind,
-            crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
-        );
+        let installable = installs_kind(&distribution.manifest().metadata.kind);
         let installed = if installable {
             self.installation_status(distribution.manifest()).await?
         } else {

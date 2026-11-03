@@ -62,7 +62,10 @@ impl TryFrom<TranscriptMessageWire> for TranscriptMessage {
 }
 
 impl Serialize for TranscriptMessage {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         #[derive(Serialize)]
         struct Stored<'a> {
             message_key: &'a str,
@@ -138,7 +141,10 @@ impl StoredPublication {
 }
 
 impl<'de> Deserialize<'de> for StoredPublication {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         use serde::de::Error;
         let mut value = Value::deserialize(deserializer)?;
         let native_request_id = match value
