@@ -90,6 +90,38 @@ describe("finding in a session", () => {
     expect(inSecond.map((m) => m.nth)).toEqual([0]);
   });
 
+  it("closes on Escape from anywhere, unless a field or menu takes it", () => {
+    render(
+      <>
+        <button type="button">elsewhere</button>
+        <textarea aria-label="draft" />
+        <FindBar
+          scroller={null}
+          sessionKey="s1"
+          entries={entries}
+          keyOf={keyOf}
+          goTo={() => {}}
+          opener={NO_ROWS}
+          older={{ more: false, loading: false, load: () => {}, messages: null }}
+        />
+      </>,
+    );
+    const open = () =>
+      fireEvent.keyDown(window, { key: "f", [IS_MAC ? "metaKey" : "ctrlKey"]: true });
+    const bar = () => screen.queryByRole("search", { name: "Find in session" });
+    open();
+    screen.getByRole("textbox", { name: "draft" }).focus();
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "draft" }), {
+      key: "Escape",
+    });
+    expect(bar()).not.toBeNull();
+    screen.getByRole("button", { name: "elsewhere" }).focus();
+    fireEvent.keyDown(screen.getByRole("button", { name: "elsewhere" }), {
+      key: "Escape",
+    });
+    expect(bar()).toBeNull();
+  });
+
   it("starts from the text selected on the page", () => {
     render(
       <>

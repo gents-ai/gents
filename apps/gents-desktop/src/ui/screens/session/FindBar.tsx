@@ -384,6 +384,23 @@ export function FindBar({
      own find bar would take ⌘F on Windows, so the key is kept. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      /* Escape closes the bar from anywhere, once nothing else took it: a
+         menu or dialog closes first, and a text field keeps its own */
+      if (e.key === "Escape" && !e.defaultPrevented && findBar.getState().open) {
+        const at = document.activeElement;
+        const typing =
+          at instanceof HTMLElement &&
+          at !== input.current &&
+          (at.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(at.tagName));
+        const layered = document.querySelector(
+          '[role="dialog"], [role="menu"], [role="listbox"]',
+        );
+        if (!typing && !layered) {
+          e.preventDefault();
+          close();
+        }
+        return;
+      }
       /* F3 and Shift+F3 step too off a Mac, as finding there does */
       if (!IS_MAC && e.key === "F3" && !e.altKey && !commandKey(e)) {
         if (!findBar.getState().open) return;
