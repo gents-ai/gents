@@ -172,6 +172,7 @@ fn render_request_dispatch(f: &mut Families, status: Option<&P2pSyncStatusSnapsh
     }
     for (lane, value) in [
         ("any", dispatch.saturated_total),
+        ("admission", dispatch.admission_saturated_total),
         ("recovery", dispatch.recovery_saturated_total),
     ] {
         f.sample(
@@ -195,7 +196,7 @@ type FieldFamily = (
 );
 
 fn render_pending_dag(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>) {
-    let counters: [FieldFamily; 6] = [
+    let counters: [FieldFamily; 10] = [
         (
             "gents_p2p_pending_dag_registered_total",
             "Pending DAG roots registered while missing links are fetched.",
@@ -225,6 +226,26 @@ fn render_pending_dag(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>) 
             "gents_p2p_provider_rotations_total",
             "Times a DAG fetch rotated to another provider.",
             |s| s.provider_rotations,
+        ),
+        (
+            "gents_p2p_provider_busy_rotations_total",
+            "Times a DAG fetch rotated past a provider that answered busy.",
+            |s| s.provider_busy_rotations,
+        ),
+        (
+            "gents_p2p_provider_demotions_total",
+            "Times a DAG fetch provider was demoted for poor measured health.",
+            |s| s.provider_demotions_total,
+        ),
+        (
+            "gents_p2p_provider_cooldown_skips_total",
+            "Times a DAG fetch skipped a provider still cooling down.",
+            |s| s.provider_cooldown_skips_total,
+        ),
+        (
+            "gents_p2p_car_busy_responses_total",
+            "CAR requests this node answered busy because its serving lane was full.",
+            |s| s.car_busy_responses,
         ),
     ];
     for (name, help, _) in &counters {
@@ -501,6 +522,11 @@ fn render_peer_fetches(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>)
             "gauge",
         ),
         (
+            "gents_p2p_peer_fetch_busy_ppm",
+            "Recent busy-answer rate from one peer, in parts per million.",
+            "gauge",
+        ),
+        (
             "gents_p2p_peer_fetch_min_rtt_seconds",
             "Minimum observed fetch round trip to one peer; absent until measured.",
             "gauge",
@@ -535,6 +561,7 @@ fn render_peer_fetches(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>)
             ("gents_p2p_peer_fetch_success_ppm", fetch.success_ppm),
             ("gents_p2p_peer_fetch_timeout_ppm", fetch.timeout_ppm),
             ("gents_p2p_peer_fetch_partial_ppm", fetch.partial_ppm),
+            ("gents_p2p_peer_fetch_busy_ppm", fetch.busy_ppm),
             (
                 "gents_p2p_peer_fetch_delivery_rate_bytes_per_second",
                 fetch.delivery_rate_bytes_per_sec,

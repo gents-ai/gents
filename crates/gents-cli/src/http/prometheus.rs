@@ -880,6 +880,11 @@ fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSy
             status.pending_dag_fetch_deferred_contention,
         ),
         (
+            "gents_p2p_pending_dag_fetch_deferred_busy_total",
+            "Due pending DAG fetches deferred because every provider answered busy.",
+            status.pending_dag_fetch_deferred_busy,
+        ),
+        (
             "gents_p2p_single_flight_suppressed_total",
             "Duplicate concurrent receives of the same CID suppressed by DefraDB sync.",
             status.single_flight_suppressed,
@@ -2034,6 +2039,7 @@ mod tests {
                     pending_dag_retry_suppressed: 67,
                     pending_dag_fetch_deferred_unavailable: 69,
                     pending_dag_fetch_deferred_contention: 68,
+                    pending_dag_fetch_deferred_busy: 76,
                     next_pending_retry_in_ms: Some(71),
                     pending_dag_terminal_quarantined: 73,
                     quarantined_pending_dags: 79,
@@ -2075,6 +2081,7 @@ mod tests {
         assert!(rendered.contains("gents_p2p_pending_dag_capacity_shed_total 59"));
         assert!(rendered.contains("gents_p2p_pending_dag_fetch_deferred_unavailable_total 69"));
         assert!(rendered.contains("gents_p2p_pending_dag_fetch_deferred_contention_total 68"));
+        assert!(rendered.contains("gents_p2p_pending_dag_fetch_deferred_busy_total 76"));
         assert!(rendered.contains("gents_p2p_single_flight_suppressed_total 37"));
         assert!(rendered.contains("gents_p2p_already_merged_fast_path_total 53"));
         assert!(rendered.contains("gents_p2p_pending_dag_terminal_quarantined_total 73"));
@@ -2186,6 +2193,7 @@ mod tests {
                 active_completions: 3,
                 active_completions_high_water: 9,
                 saturated_total: 1_611_200,
+                admission_saturated_total: 29,
                 recovery_saturated_total: 1_611_171,
                 rejection_dropped_total: 12,
             },
@@ -2230,6 +2238,7 @@ mod tests {
                     success_ppm: 20_897,
                     timeout_ppm: 970_000,
                     partial_ppm: 9_103,
+                    busy_ppm: 1_200,
                     in_flight: 2,
                     in_flight_bytes: 1_024,
                 },
@@ -2249,6 +2258,10 @@ mod tests {
             car_served_cids: 1_340_000_000,
             car_filtered_cids: 10,
             provider_rotations: 36_455,
+            provider_busy_rotations: 412,
+            provider_demotions_total: 37,
+            provider_cooldown_skips_total: 205,
+            car_busy_responses: 96,
             pending_dag_registered: 11_329,
             pending_dag_retry_dispatched: 20_852,
             pending_dag_retry_suppressed: 44,
@@ -2295,6 +2308,7 @@ mod tests {
             r#"gents_p2p_request_dispatch_active{lane="rejection"} 1"#.to_string(),
             r#"gents_p2p_request_dispatch_high_water{lane="completion"} 9"#.to_string(),
             r#"gents_p2p_request_dispatch_saturated_total{lane="any"} 1611200"#.to_string(),
+            r#"gents_p2p_request_dispatch_saturated_total{lane="admission"} 29"#.to_string(),
             r#"gents_p2p_request_dispatch_saturated_total{lane="recovery"} 1611171"#.to_string(),
             "gents_p2p_request_dispatch_rejection_dropped_total 12".to_string(),
             "gents_p2p_pending_dag_registered_total 11329".to_string(),
@@ -2303,6 +2317,10 @@ mod tests {
             "gents_p2p_pending_dag_retry_dispatched_total 20852".to_string(),
             "gents_p2p_pending_dag_retry_suppressed_total 44".to_string(),
             "gents_p2p_provider_rotations_total 36455".to_string(),
+            "gents_p2p_provider_busy_rotations_total 412".to_string(),
+            "gents_p2p_provider_demotions_total 37".to_string(),
+            "gents_p2p_provider_cooldown_skips_total 205".to_string(),
+            "gents_p2p_car_busy_responses_total 96".to_string(),
             "gents_p2p_pending_dag_high_water 900".to_string(),
             "gents_p2p_persisted_pending_dag_high_water 950".to_string(),
             "gents_p2p_next_pending_retry_seconds 1.5".to_string(),
@@ -2326,6 +2344,7 @@ mod tests {
             format!("gents_p2p_peer_fetch_success_ppm{{{hub}}} 20897"),
             format!("gents_p2p_peer_fetch_timeout_ppm{{{hub}}} 970000"),
             format!("gents_p2p_peer_fetch_partial_ppm{{{hub}}} 9103"),
+            format!("gents_p2p_peer_fetch_busy_ppm{{{hub}}} 1200"),
             format!("gents_p2p_peer_fetch_min_rtt_seconds{{{hub}}} 0.0004"),
             format!("gents_p2p_peer_fetch_delivery_rate_bytes_per_second{{{hub}}} 2048"),
             format!("gents_p2p_peer_fetch_in_flight{{{hub}}} 2"),
