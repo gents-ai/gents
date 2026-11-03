@@ -74,7 +74,7 @@ pub use inference_profile::{
 
 pub use serde_helpers::deserialize_dual_shape;
 pub(crate) use serde_helpers::{
-    accepts_null, deserialize_default_on_null, string_list_schema, widen_schema,
+    accepts_null, deserialize_default_on_null, noted, string_list_schema, widen_schema,
 };
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{

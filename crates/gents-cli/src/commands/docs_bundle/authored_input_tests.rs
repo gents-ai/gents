@@ -641,3 +641,65 @@ fn surface_entry_kinds_validate_exactly_as_the_deserializer_reads_them() {
         "the kind pattern and str::trim disagree on {mismatches:?}"
     );
 }
+
+/// schemars generates no `pattern` of its own, so every patterned member of
+/// an authored schema is a helper beside the canonical values, and the
+/// reference folds it by its note.
+#[test]
+fn every_helper_member_carries_a_note() {
+    fn patterned<'v>(value: &'v Value, at: String, out: &mut Vec<(String, &'v Value)>) {
+        match value {
+            Value::Object(object) => {
+                if object.contains_key("pattern") {
+                    out.push((at.clone(), value));
+                }
+                for (key, child) in object {
+                    if key != "enum" && key != "const" && key != "default" && key != "examples" {
+                        patterned(child, format!("{at}/{key}"), out);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    patterned(child, format!("{at}/{index}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let schemas: Vec<(String, Schema)> =
+        std::iter::once(("pack_config".to_owned(), authored_pack_config_schema()))
+            .chain(
+                Collection::ALL.into_iter().map(|collection| {
+                    (collection.to_string(), authored_document_schema(collection))
+                }),
+            )
+            .collect();
+    let mut notes = BTreeSet::new();
+    for (name, schema) in &schemas {
+        let root = schema.as_value();
+        assert!(
+            jsonschema::meta::is_valid(root),
+            "{name} is not a valid draft 2020-12 schema"
+        );
+        jsonschema::validator_for(root).expect("compiles with the annotation");
+        let mut members = Vec::new();
+        patterned(root, String::new(), &mut members);
+        for (at, member) in members {
+            let note = member["x-gents-note"].as_str();
+            assert!(
+                note.is_some_and(|note| !note.trim().is_empty()),
+                "{name}{at} has no x-gents-note: {member}"
+            );
+            notes.extend(note.map(str::to_owned));
+        }
+    }
+    assert!(
+        notes.iter().any(|note| note.contains("${VAR}")),
+        "substitution members are annotated: {notes:?}"
+    );
+    assert!(
+        notes.iter().any(|note| note.contains("trimmed")),
+        "trimmed spelling members are annotated: {notes:?}"
+    );
+}

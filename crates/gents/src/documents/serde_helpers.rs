@@ -155,6 +155,18 @@ pub(crate) fn accepts_null(schema: &mut schemars::Schema) {
     }
 }
 
+/// The annotation on a schema member that accepts another spelling of the
+/// canonical values: one sentence the reference shows instead of the member.
+const SCHEMA_NOTE: &str = "x-gents-note";
+
+/// `member` annotated with `note` under [`SCHEMA_NOTE`].
+pub(crate) fn noted(mut member: Value, note: &str) -> Value {
+    if let Some(object) = member.as_object_mut() {
+        object.insert(SCHEMA_NOTE.into(), note.into());
+    }
+    member
+}
+
 /// Makes `schema` accept `alternative` as well, keeping its annotations on
 /// the outside so readers still see them.
 pub(crate) fn widen_schema(schema: &mut serde_json::Map<String, Value>, alternative: Value) {

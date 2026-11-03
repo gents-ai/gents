@@ -236,22 +236,34 @@ impl schemars::JsonSchema for SurfaceToolDecl {
         let create = generator.subschema_for::<WriteToolDecl>();
         let query = generator.subschema_for::<QueryToolDecl>();
         let space = trimmed_class();
-        let padded_create = format!("^{space}*(create|write)?{space}*$");
-        let padded_query = format!("^{space}*(query|read){space}*$");
+        let padded_create = super::noted(
+            serde_json::json!({
+                "type": "string",
+                "pattern": format!("^{space}*(create|write)?{space}*$")
+            }),
+            "Surrounding whitespace is trimmed; blank means create.",
+        );
+        let padded_query = super::noted(
+            serde_json::json!({
+                "type": "string",
+                "pattern": format!("^{space}*(query|read){space}*$")
+            }),
+            "Surrounding whitespace is trimmed.",
+        );
         schemars::json_schema!({
             "anyOf": [
                 {
                     "allOf": [create],
                     "properties": { "kind": { "anyOf": [
                         { "enum": ["create", "write", null] },
-                        { "type": "string", "pattern": padded_create }
+                        padded_create
                     ] } }
                 },
                 {
                     "allOf": [query],
                     "properties": { "kind": { "anyOf": [
                         { "enum": ["query", "read"] },
-                        { "type": "string", "pattern": padded_query }
+                        padded_query
                     ] } },
                     "required": ["kind"]
                 }

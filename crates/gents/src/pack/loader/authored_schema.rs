@@ -6,7 +6,7 @@
 use schemars::{schema_for, JsonSchema, Schema};
 use serde_json::{json, Map, Value};
 
-use crate::documents::widen_schema;
+use crate::documents::{noted, widen_schema};
 use crate::documents::{
     Agent, AgentContext, AgentTargetDocument, Callback, CallbackBinding, CallbackModule,
     CompactionConfig, DatastoreToolSurfaceDocument, EvalDefinition, EventSource, InferenceBackend,
@@ -18,6 +18,11 @@ use crate::pack::interpolate::SUBSTITUTION_PATTERN;
 use crate::Collection;
 
 use super::{EVAL_CASES_FIELD, OWNER_FIELD};
+
+const SUBSTITUTION_NOTE: &str =
+    "A ${VAR} or ${VAR:-default} substitution, resolved from the environment when the pack loads.";
+const CASE_SIDECAR_NOTE: &str =
+    "A ./ path to a pack file that holds one case, read when the pack loads.";
 
 /// `pack_config.json` as authored.
 pub fn authored_pack_config_schema() -> Schema {
@@ -125,7 +130,7 @@ fn allow_case_sidecars(definition: &mut Map<String, Value>) {
         *items = json!({
             "anyOf": [
                 case,
-                { "type": "string", "pattern": "^\\./", "description": "A sidecar file holding one case." }
+                noted(json!({ "type": "string", "pattern": "^\\./" }), CASE_SIDECAR_NOTE)
             ]
         });
     }
@@ -156,7 +161,10 @@ const SCHEMAS: [&str; 10] = [
 /// is already a choice of strings. `oneOf` becomes `anyOf` because an
 /// interpolated tag no longer tells the branches apart.
 fn allow_substitutions(schema: &mut Map<String, Value>) {
-    let substitution = json!({ "type": "string", "pattern": SUBSTITUTION_PATTERN });
+    let substitution = noted(
+        json!({ "type": "string", "pattern": SUBSTITUTION_PATTERN }),
+        SUBSTITUTION_NOTE,
+    );
     if let Some(members) = schema.get_mut("anyOf").and_then(Value::as_array_mut) {
         let only_strings = members.iter().all(|member| {
             member.as_object().is_some_and(|member| {
