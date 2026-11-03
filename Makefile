@@ -161,12 +161,13 @@ dist-cli: release-cli
 	@ls -lh "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz"*
 
 # Exports from an already built binary (release-docs.yml passes the published
-# Linux CLI as RELEASE_BIN). The binary refuses a tag that does not name its
-# version, and archives the bundle itself so the bytes are the same on every host.
+# Linux CLI as RELEASE_BIN). The binary refuses a --tag that does not name its
+# own version, so a binary from another release cannot produce a mislabeled
+# archive, and it archives the bundle itself so the bytes match on every host.
 dist-docs:
 	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)" "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
 	@mkdir -p "$(DIST_DIR)"
-	"$(RELEASE_BIN)" __docs-bundle --out "$(DIST_DIR)/$(DOCS_ARTIFACT)" --archive "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
+	"$(RELEASE_BIN)" __docs-bundle --tag "v$(RELEASE_VERSION)" --out "$(DIST_DIR)/$(DOCS_ARTIFACT)" --archive "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
 	cd "$(DIST_DIR)" && sha256sum "$(DOCS_ARTIFACT).tar.gz" > SHA256SUMS-docs.txt
 	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz" "$(DIST_DIR)/SHA256SUMS-docs.txt"
