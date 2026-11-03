@@ -10,8 +10,8 @@ use serde_json::Value;
 use super::RuntimeHttpState;
 use crate::http::healthz::render_healthz_payload;
 use crate::http::prometheus::{
-    load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
-    P2pMetricsSnapshot,
+    load_metrics_query_data, render_prometheus_metrics, sample_process_memory,
+    with_local_native_executors, P2pMetricsSnapshot, ProcessMetricsSnapshot,
 };
 use crate::shared::P2pAdmissionState;
 
@@ -24,11 +24,13 @@ pub(super) async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Re
         None => Default::default(),
     };
     let p2p_metrics = load_p2p_metrics_for_scrape(&state).await;
+    let process = process_metrics_for_scrape(&state);
     match render_prometheus_metrics(
         &state.p2p_graphql,
         &state.node_did,
         &measured_backend_health,
         Some(&p2p_metrics),
+        Some(&process),
     )
     .await
     {
@@ -39,6 +41,17 @@ pub(super) async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Re
             format!("metrics render failed: {error}"),
         )
             .into_response(),
+    }
+}
+
+fn process_metrics_for_scrape(state: &RuntimeHttpState) -> ProcessMetricsSnapshot {
+    ProcessMetricsSnapshot {
+        memory: sample_process_memory(),
+        started_at: chrono::DateTime::parse_from_rfc3339(&state.started_at)
+            .map(|started| started.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        uptime: state.started_instant.elapsed(),
+        store: state.store_size.observe(),
     }
 }
 
@@ -84,6 +97,8 @@ fn p2p_metrics_admission_only(state: &RuntimeHttpState, stale: bool) -> P2pMetri
         admission: state.p2p_admission.clone(),
         sync_status: None,
         stale,
+        peer_id: None,
+        transport: None,
     }
 }
 
@@ -133,6 +148,12 @@ pub(super) fn p2p_metrics_from_status(
             use gents::P2pSyncStatusAdapter;
             gents::JsonP2pSyncStatusAdapter.adapt(value).ok()
         });
+    let text_field = |name: &str| {
+        p2p.get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
     P2pMetricsSnapshot {
         enabled,
         connected_peers,
@@ -140,5 +161,7 @@ pub(super) fn p2p_metrics_from_status(
         admission,
         sync_status,
         stale: false,
+        peer_id: text_field("p2p_peer_id"),
+        transport: text_field("p2p_transport"),
     }
 }

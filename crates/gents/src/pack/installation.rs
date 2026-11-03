@@ -13,10 +13,12 @@ use crate::store::config_client::{
 use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
+mod catalog;
 mod dependencies;
 mod documents;
 pub(crate) use documents::sdl_paths;
 mod removal;
+pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use documents::{
     apply_prepared_dependency_schemas, document_pack_schema_paths, install_documents_with_plugins,
     install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,

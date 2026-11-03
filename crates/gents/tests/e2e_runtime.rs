@@ -59,3 +59,6 @@ mod steering_delivery;
 
 #[path = "e2e_runtime/session_input_edit.rs"]
 mod session_input_edit;
+
+#[path = "e2e_runtime/enrollment_renewal.rs"]
+mod enrollment_renewal;

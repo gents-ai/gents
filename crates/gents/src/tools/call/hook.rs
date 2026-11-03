@@ -183,6 +183,9 @@ pub struct BackgroundExecutionRegistry {
     inner: Arc<std::sync::Mutex<RapidHashMap<String, BackgroundExecution>>>,
     live_outputs: BackgroundLiveOutputState,
     process_records: crate::tools::exec::ownership::ProcessRecordStore,
+    // Recovery revisits a retained record on every sweep, so a group that
+    // outlives its leader warns once per record and then logs at debug.
+    unproven_record_warnings: Arc<std::sync::Mutex<rapidhash::RapidHashSet<String>>>,
     #[cfg(windows)]
     failed_jobs: Arc<
         std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::tools::exec::FailedJobOwner>)>>,
@@ -536,12 +539,7 @@ impl BackgroundExecutionRegistry {
                 .await_leader_exit(crate::tools::exec::ownership::KILL_GRACE)
                 .await;
             if observed.retain_process_record() {
-                tracing::warn!(
-                    tool_call_id,
-                    pid = record.identity.pid,
-                    observation = ?observed,
-                    "background process group is not proven exited; keeping its record"
-                );
+                self.note_retained_process_record(&record, observed);
                 return;
             }
             self.remove_process_record(tool_call_id, tool_call_doc_id);
@@ -552,19 +550,49 @@ impl BackgroundExecutionRegistry {
         if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
             let observed = record.identity.observe();
             if observed.retain_process_record() {
-                tracing::warn!(
-                    tool_call_id,
-                    pid = record.identity.pid,
-                    observation = ?observed,
-                    "background process group is not proven exited; keeping its record"
-                );
+                self.note_retained_process_record(&record, observed);
                 return;
             }
             self.remove_process_record(tool_call_id, tool_call_doc_id);
         }
     }
 
+    fn note_retained_process_record(
+        &self,
+        record: &crate::tools::exec::ownership::ProcessRecord,
+        observed: crate::tools::exec::ownership::ProcessObservation,
+    ) {
+        let first = self
+            .unproven_record_warnings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(record.tool_call_doc_id.clone());
+        if first {
+            tracing::warn!(
+                tool_call_id = %record.tool_call_id,
+                tool_call_doc_id = %record.tool_call_doc_id,
+                pid = record.identity.pid,
+                pgid = record.identity.pgid,
+                observation = ?observed,
+                "background process group is not proven exited; keeping its record"
+            );
+        } else {
+            tracing::debug!(
+                tool_call_id = %record.tool_call_id,
+                tool_call_doc_id = %record.tool_call_doc_id,
+                pid = record.identity.pid,
+                pgid = record.identity.pgid,
+                observation = ?observed,
+                "background process group is still not proven exited; keeping its record"
+            );
+        }
+    }
+
     fn remove_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
+        self.unproven_record_warnings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(tool_call_doc_id);
         for key in [tool_call_doc_id, tool_call_id] {
             if self.process_records.read(key).is_some_and(|record| {
                 record.tool_call_id == tool_call_id && record.tool_call_doc_id == tool_call_doc_id

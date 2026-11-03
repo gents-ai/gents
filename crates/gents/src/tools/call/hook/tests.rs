@@ -38,6 +38,9 @@ mod wait_settlement;
 #[path = "tests/process_control_scope.rs"]
 mod process_control_scope;
 
+#[path = "tests/retained_record_warnings.rs"]
+mod retained_record_warnings;
+
 #[path = "tests/session_message_commit.rs"]
 mod session_message_commit;
 

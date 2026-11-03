@@ -2448,7 +2448,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("store", "triggers", 5),
     ("tools", "goal", 37),
     ("tools", "observe", 4),
-    ("tools", "pack", 88),
+    ("tools", "pack", 85),
     ("tools", "plugin", 77),
     ("tools", "request", 79),
     ("tools", "runtime", 20),

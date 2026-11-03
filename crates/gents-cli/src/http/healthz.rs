@@ -203,6 +203,7 @@ mod tests {
             backend_health: None,
             p2p_admission: None,
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            store_size: crate::http::prometheus::StoreSizeCache::new(None),
             codex_shim_health: None,
             enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),

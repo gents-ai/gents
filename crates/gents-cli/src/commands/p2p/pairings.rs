@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use gents_protocol::enrollment::{AuthorizationLease, AuthorizationLeaseState};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -26,9 +28,38 @@ struct PeerPairingDesiredRow {
     created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     updated_at: Option<String>,
+    /// The signed enrollment generation this route materializes; absent on a
+    /// local overlay row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enrollment_authorization_sequence: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enrollment_authorization_expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorization_lease: Option<LeaseView>,
     connected: bool,
     subscribed: bool,
     replicating: bool,
+}
+
+/// Days left on an enrollment-owned route's signed authorization lease.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct LeaseView {
+    state: AuthorizationLeaseState,
+    remaining_days: i64,
+}
+
+impl LeaseView {
+    fn at(expires_at: &str, now: DateTime<Utc>) -> Self {
+        let lease = AuthorizationLease::at(expires_at, now);
+        Self {
+            state: lease.state,
+            remaining_days: lease.remaining_days(),
+        }
+    }
+
+    fn needs_renewal(&self) -> bool {
+        self.state != AuthorizationLeaseState::Current
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -50,8 +81,15 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
     let applied = parse_applied_rows(applied_rows);
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let connected_peers = fetch_connected_peer_ids(&graphql).await.unwrap_or_default();
-    let pairings = annotate_pairing_health(parse_pairing_rows(rows), &applied, &connected_peers);
+    let pairings = annotate_pairing_health(
+        parse_pairing_rows(rows, Utc::now()),
+        &applied,
+        &connected_peers,
+    );
     let count = pairings.len();
+    if let Some(warning) = renewal_warning(&pairings) {
+        eprintln!("{warning}");
+    }
     match args.output.ensure_supported(
         "p2p pairings list",
         &[OutputFormat::Json, OutputFormat::Table],
@@ -79,6 +117,8 @@ fn pairings_list_query() -> &'static str {
             template
             created_at
             updated_at
+            enrollment_authorization_sequence
+            enrollment_authorization_expires_at
         }
     }"#
 }
@@ -94,7 +134,7 @@ fn applied_list_query() -> &'static str {
     }"#
 }
 
-fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
+fn parse_pairing_rows(rows: Vec<Value>, now: DateTime<Utc>) -> Vec<PeerPairingDesiredRow> {
     let mut pairings = rows
         .into_iter()
         .filter_map(|row| {
@@ -113,6 +153,11 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
                         .map(|endpoint| endpoint.peer_id().to_string())
                 })
                 .collect();
+            let enrollment_authorization_expires_at =
+                optional_string(&row, "enrollment_authorization_expires_at");
+            let authorization_lease = enrollment_authorization_expires_at
+                .as_deref()
+                .map(|expires_at| LeaseView::at(expires_at, now));
             Some(PeerPairingDesiredRow {
                 peer_id,
                 transport_peer_ids,
@@ -123,6 +168,11 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
                 template: optional_string(&row, "template"),
                 created_at: optional_string(&row, "created_at"),
                 updated_at: optional_string(&row, "updated_at"),
+                enrollment_authorization_sequence: row
+                    .get("enrollment_authorization_sequence")
+                    .and_then(Value::as_i64),
+                enrollment_authorization_expires_at,
+                authorization_lease,
                 connected: false,
                 subscribed: false,
                 replicating: false,
@@ -160,6 +210,40 @@ fn parse_applied_rows(rows: Vec<Value>) -> Vec<PeerPairingAppliedRow> {
         canonical.entry(row.peer_id.clone()).or_insert(row);
     }
     canonical.into_values().collect()
+}
+
+/// One stderr line naming every enrollment route whose lease is inside the
+/// renewal window or already gone, with the renewal procedure.
+fn renewal_warning(rows: &[PeerPairingDesiredRow]) -> Option<String> {
+    let due = rows
+        .iter()
+        .filter_map(|row| {
+            let lease = row.authorization_lease.as_ref()?;
+            lease.needs_renewal().then(|| {
+                format!(
+                    "{} ({}, {}d left, expires {})",
+                    row.peer_id,
+                    serde_json::to_value(lease.state)
+                        .ok()
+                        .and_then(|state| state.as_str().map(str::to_owned))
+                        .unwrap_or_default(),
+                    lease.remaining_days,
+                    row.enrollment_authorization_expires_at
+                        .as_deref()
+                        .unwrap_or("-"),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    (!due.is_empty()).then(|| {
+        format!(
+            "warning: {} enrollment authorization(s) need renewal: {}. Renew by re-enrolling each peer: \
+             this node's p2p enrollment_offer, the peer's enrollment_request, then \
+             `gents p2p enrollment approve <request-id>` here; the new generation supersedes the old one.",
+            due.len(),
+            due.join("; "),
+        )
+    })
 }
 
 fn annotate_pairing_health(
@@ -289,6 +373,7 @@ fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
         "CONNECTED".to_string(),
         "SUBSCRIBED".to_string(),
         "REPLICATING".to_string(),
+        "LEASE".to_string(),
     ];
     let mut widths = headers.clone().map(|header| header.len());
     let table_rows = rows
@@ -310,6 +395,7 @@ fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
                 yes_no(row.connected),
                 yes_no(row.subscribed),
                 yes_no(row.replicating),
+                lease_cell(row.authorization_lease.as_ref()),
             ]
         })
         .collect::<Vec<_>>();
@@ -326,6 +412,18 @@ fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
     }
     stdout.flush().context("flushing p2p pairings table")?;
     Ok(())
+}
+
+fn lease_cell(lease: Option<&LeaseView>) -> String {
+    match lease {
+        None => "-".to_string(),
+        Some(lease) => match lease.state {
+            AuthorizationLeaseState::Current => format!("{}d", lease.remaining_days),
+            AuthorizationLeaseState::RenewalDue => format!("{}d renew", lease.remaining_days),
+            AuthorizationLeaseState::Expired => "expired".to_string(),
+            AuthorizationLeaseState::Invalid => "invalid".to_string(),
+        },
+    }
 }
 
 fn yes_no(value: bool) -> String {
@@ -392,6 +490,9 @@ mod tests {
             template: Some(template.to_string()),
             created_at: None,
             updated_at: None,
+            enrollment_authorization_sequence: None,
+            enrollment_authorization_expires_at: None,
+            authorization_lease: None,
             connected: false,
             subscribed: false,
             replicating: false,
@@ -559,7 +660,7 @@ mod tests {
             }),
         ];
 
-        let pairings = parse_pairing_rows(rows);
+        let pairings = parse_pairing_rows(rows, Utc::now());
 
         assert_eq!(pairings.len(), 2);
         assert_eq!(pairings[0].peer_id, "peer-a");
@@ -574,5 +675,66 @@ mod tests {
             pairings[1].updated_at.as_deref(),
             Some("2026-06-10T00:00:01Z")
         );
+    }
+
+    #[test]
+    fn enrollment_routes_report_their_lease_and_warn_inside_the_renewal_window() {
+        let rows = vec![
+            json!({
+                "peer_id": "peer-current",
+                "enrollment_authorization_sequence": 1,
+                "enrollment_authorization_expires_at": "2026-11-29T19:07:47Z"
+            }),
+            json!({
+                "peer_id": "peer-due",
+                "enrollment_authorization_sequence": 1,
+                "enrollment_authorization_expires_at": "2026-11-28T22:19:13Z"
+            }),
+            json!({
+                "peer_id": "peer-expired",
+                "enrollment_authorization_sequence": 2,
+                "enrollment_authorization_expires_at": "2026-11-20T00:00:00Z"
+            }),
+            json!({"peer_id": "peer-overlay", "collections": ["FleetBoardPost"]}),
+        ];
+        let now: DateTime<Utc> = "2026-11-21T23:00:00Z".parse().unwrap();
+        let pairings = parse_pairing_rows(rows, now);
+        let lease = |peer: &str| {
+            pairings
+                .iter()
+                .find(|row| row.peer_id == peer)
+                .unwrap()
+                .authorization_lease
+                .clone()
+        };
+        assert_eq!(
+            lease("peer-current"),
+            Some(LeaseView {
+                state: AuthorizationLeaseState::Current,
+                remaining_days: 7
+            })
+        );
+        assert_eq!(
+            lease("peer-due"),
+            Some(LeaseView {
+                state: AuthorizationLeaseState::RenewalDue,
+                remaining_days: 6
+            })
+        );
+        assert_eq!(
+            lease("peer-expired").unwrap().state,
+            AuthorizationLeaseState::Expired
+        );
+        assert_eq!(lease("peer-overlay"), None);
+        assert_eq!(lease_cell(lease("peer-due").as_ref()), "6d renew");
+        assert_eq!(lease_cell(lease("peer-current").as_ref()), "7d");
+        assert_eq!(lease_cell(None), "-");
+
+        let warning = renewal_warning(&pairings).expect("renewal warning");
+        assert!(warning.contains("2 enrollment authorization(s) need renewal"));
+        assert!(warning.contains("peer-due (renewal_due, 6d left, expires 2026-11-28T22:19:13Z)"));
+        assert!(warning.contains("peer-expired (expired"));
+        assert!(!warning.contains("peer-current"));
+        assert!(renewal_warning(&pairings[..0]).is_none());
     }
 }

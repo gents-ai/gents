@@ -18,6 +18,7 @@ const ENROLLMENT_SCHEMA_DOMAIN: &str = "gents-enrollment-schema-v1";
 mod canonical;
 mod decision;
 mod error;
+mod lease;
 mod offer;
 mod operator;
 mod request;
@@ -34,6 +35,7 @@ pub use decision::{
     EnrollmentDecisionRefusalCode,
 };
 pub use error::EnrollmentError;
+pub use lease::{AuthorizationLease, AuthorizationLeaseState, ENROLLMENT_RENEWAL_WINDOW_SECONDS};
 pub use offer::{decode_offer, encode_offer, EnrollmentOfferRecord};
 pub use operator::{
     EnrollmentOperatorAction, EnrollmentOperatorDecisionCommand, EnrollmentOperatorQuery,

@@ -210,7 +210,8 @@ async fn run_contract_with_streaming_cadence(
                 wait_for_readiness_revision(&core, &node_did, expected).await?;
                 reached("client_readiness_revision");
             }
-            anyhow::ensure!(query_collection_dids(core.node(), "Node").await?.is_empty(), "runtime principal replicated to app");
+            let nodes = query_collection_dids(core.node(), "Node").await?;
+            anyhow::ensure!(nodes.iter().all(|did| did == &node_did), "app holds a Node other than the runtime's replica: {nodes:?}");
             Ok::<_, anyhow::Error>(())
         }).await;
         sampler.abort();
@@ -303,7 +304,8 @@ async fn run_contract_with_streaming_cadence(
         .await?;
         assert_local_pagination(&core, &graphql, &session, &node_did).await?;
         assert_observer_did_not_overflow(&core).await?;
-        anyhow::ensure!(query_collection_dids(core.node(), "Node").await?.is_empty(), "reopen replicated runtime principal");
+        let nodes = query_collection_dids(core.node(), "Node").await?;
+        anyhow::ensure!(nodes.iter().all(|did| did == &node_did), "reopened app holds a Node other than the runtime's replica: {nodes:?}");
         core.shutdown().await?;
         anyhow::ensure!(model.captured_chat_requests().iter().any(|request| {
             request_contains_role_text(request, "user", FOLLOWUP_PROMPT)

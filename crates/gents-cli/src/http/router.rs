@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::{watch, OnceCell};
 
 use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
-use crate::http::prometheus::P2pMetricsSnapshot;
+use crate::http::prometheus::{P2pMetricsSnapshot, StoreSizeCache};
 use crate::http::version::version_response;
 use crate::shared::P2pAdmissionState;
 use accounts::{
@@ -48,6 +48,7 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) backend_health: Option<gents::BackendHealthMap>,
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
     pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
+    pub(crate) store_size: Arc<StoreSizeCache>,
     /// Shared because the shim may bind after HTTP serving starts.
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
@@ -123,6 +124,7 @@ pub(crate) fn runtime_contract_router(
     tool_root: Result<Option<String>, String>,
     cli_tools: Vec<String>,
     home: Option<String>,
+    store_dir: Option<std::path::PathBuf>,
     mcp: Option<crate::http::mcp_server::McpServiceOptions>,
     backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
@@ -133,7 +135,7 @@ pub(crate) fn runtime_contract_router(
     activation_observation: watch::Receiver<RuntimeActivationObservation>,
     replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     serve_lifecycle: ServeLifecycleHandle,
-) -> Router {
+) -> RuntimeRouters {
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
@@ -151,6 +153,7 @@ pub(crate) fn runtime_contract_router(
         backend_health,
         p2p_admission,
         p2p_metrics_cache: Arc::new(Mutex::new(None)),
+        store_size: StoreSizeCache::new(store_dir),
         codex_shim_health,
         enrollment_offer_issuer,
         enrollment_decisions,
@@ -222,7 +225,24 @@ pub(crate) fn runtime_contract_router(
         );
     }
 
-    router.with_state(state)
+    RuntimeRouters {
+        contract: router.with_state(state.clone()),
+        scrape_state: state,
+    }
+}
+
+/// The runtime API and the state a dedicated metrics listener serves from.
+/// The scrape state is never routed on the runtime API listener.
+pub(crate) struct RuntimeRouters {
+    pub(crate) contract: Router,
+    pub(crate) scrape_state: RuntimeHttpState,
+}
+
+/// Serves only the exposition; operator routes stay on the runtime API.
+pub(crate) fn metrics_scrape_router(state: RuntimeHttpState) -> Router {
+    Router::new()
+        .route("/metrics", get(metrics_handler))
+        .with_state(state)
 }
 
 async fn activation_handler(State(state): State<RuntimeHttpState>) -> Response {

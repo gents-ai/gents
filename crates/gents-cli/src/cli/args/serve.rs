@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use super::{
@@ -69,6 +69,21 @@ pub(crate) struct ServeArgs {
         help = "Expose write for exactly these application collections; each call must forward a caller-signed DefraDB bearer (repeatable)"
     )]
     pub(crate) mcp_write_collections: Vec<String>,
+    #[arg(
+        long,
+        value_name = "ADDR:PORT",
+        env = "GENTS_METRICS_ADDR",
+        help = "Also serve Prometheus /metrics on this dedicated listener, without runtime operator authorization. Off by default. Loopback addresses serve unauthenticated; a specific non-loopback interface requires --metrics-auth-token-env; unspecified addresses (0.0.0.0, ::) are refused. The runtime API's /metrics still requires the operator"
+    )]
+    pub(crate) metrics_addr: Option<SocketAddr>,
+    #[arg(
+        long,
+        value_name = "ENV_VAR",
+        value_parser = parse_env_var_name,
+        requires = "metrics_addr",
+        help = "Environment variable containing the bearer token scrapers must send to the --metrics-addr listener"
+    )]
+    pub(crate) metrics_auth_token_env: Option<String>,
     #[arg(
         long,
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"

@@ -19,6 +19,11 @@ use crate::http::liveness::{
 use crate::post_graphql;
 use gents::store::graphql::escape_graphql_string;
 
+mod p2p_sync;
+mod process;
+
+pub(crate) use process::{sample_process_memory, ProcessMetricsSnapshot, StoreSizeCache};
+
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
 const LIVENESS_ACTIVITY_CHUNK: usize = 32;
@@ -168,6 +173,8 @@ pub(crate) struct P2pMetricsSnapshot {
     pub(crate) admission: Option<crate::shared::P2pAdmissionState>,
     pub(crate) sync_status: Option<gents::P2pSyncStatusSnapshot>,
     pub(crate) stale: bool,
+    pub(crate) peer_id: Option<String>,
+    pub(crate) transport: Option<String>,
 }
 
 pub(crate) async fn render_prometheus_metrics(
@@ -175,6 +182,7 @@ pub(crate) async fn render_prometheus_metrics(
     local_node_did: &str,
     measured_backend_health: &RapidHashMap<String, gents::BackendHealthSnapshot>,
     p2p: Option<&P2pMetricsSnapshot>,
+    process: Option<&ProcessMetricsSnapshot>,
 ) -> Result<String> {
     let data = load_metrics_query_data(graphql, local_node_did).await?;
     let data = with_local_native_executors(data);
@@ -440,6 +448,7 @@ pub(crate) async fn render_prometheus_metrics(
         background_completion.as_ref(),
     );
     render_p2p_metrics(&mut lines, p2p);
+    process::render_process_metrics(&mut lines, process);
 
     lines.push(String::new());
     Ok(lines.join("\n"))
@@ -607,7 +616,14 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
         snapshot.replicators as i64,
     );
 
+    p2p_sync::render_self_info(
+        lines,
+        snapshot.peer_id.as_deref(),
+        snapshot.transport.as_deref().unwrap_or_default(),
+    );
+
     render_p2p_sync_metrics(lines, snapshot.sync_status.as_ref());
+    p2p_sync::render_sync_diagnostics(lines, snapshot.sync_status.as_ref(), Utc::now());
 
     push_metric_prelude(
         lines,
@@ -2024,9 +2040,15 @@ mod tests {
                     ..Default::default()
                 }),
                 stale: false,
+                peer_id: Some("1dd587be0123456789".to_string()),
+                transport: Some("iroh".to_string()),
             }),
         );
         let rendered = lines.join("\n");
+        assert!(rendered.contains(
+            r#"gents_p2p_self_info{peer_id="1dd587be0123456789",peer="1dd587be",transport="iroh"} 1"#
+        ));
+        assert_valid_exposition(&rendered, false);
         assert!(rendered.contains("gents_p2p_enabled 1"));
         assert!(rendered.contains("gents_p2p_status_stale 0"));
         assert!(rendered.contains("gents_p2p_connected_peers 3"));
@@ -2059,6 +2081,326 @@ mod tests {
         assert!(rendered.contains(r#"gents_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#));
         assert!(rendered
             .contains(r#"gents_p2p_peer_cooldown_remaining_milliseconds{peer_id="peer-a"} 750"#));
+    }
+
+    /// Checks the text exposition format: comments are HELP or TYPE, every
+    /// sample's family is typed exactly once before it, values are numbers,
+    /// labels are well formed and no series repeats. `grouped` additionally
+    /// requires each family's samples to be contiguous after its TYPE line.
+    pub(super) fn assert_valid_exposition(text: &str, grouped: bool) {
+        let mut typed = std::collections::BTreeMap::<String, String>::new();
+        let mut series = std::collections::BTreeSet::<String>::new();
+        let mut closed = std::collections::BTreeSet::<String>::new();
+        let mut current: Option<String> = None;
+        let valid_name = |name: &str| {
+            !name.is_empty()
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+        };
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            if let Some(comment) = line.strip_prefix("# ") {
+                let mut parts = comment.splitn(3, ' ');
+                let (kind, name) = (parts.next().unwrap(), parts.next().unwrap_or_default());
+                assert!(valid_name(name), "bad family name: {line}");
+                match kind {
+                    "HELP" => {}
+                    "TYPE" => {
+                        let metric_type = parts.next().unwrap_or_default();
+                        assert!(
+                            ["gauge", "counter", "histogram", "summary", "untyped"]
+                                .contains(&metric_type),
+                            "bad type: {line}"
+                        );
+                        assert!(
+                            typed
+                                .insert(name.to_string(), metric_type.to_string())
+                                .is_none(),
+                            "family typed twice: {name}"
+                        );
+                        if grouped {
+                            if let Some(previous) = current.replace(name.to_string()) {
+                                closed.insert(previous);
+                            }
+                        }
+                    }
+                    _ => panic!("unexpected comment: {line}"),
+                }
+                continue;
+            }
+            let (series_key, value) = line.rsplit_once(' ').expect("sample has a value");
+            assert!(value.parse::<f64>().is_ok(), "non-numeric value: {line}");
+            let name = series_key.split('{').next().unwrap();
+            let metric_type = typed
+                .get(name)
+                .unwrap_or_else(|| panic!("sample before TYPE: {line}"));
+            if metric_type == "counter" {
+                assert!(name.ends_with("_total"), "counter without _total: {name}");
+            }
+            if grouped {
+                assert_eq!(
+                    current.as_deref(),
+                    Some(name),
+                    "family not contiguous: {line}"
+                );
+                assert!(!closed.contains(name), "family reopened: {line}");
+            }
+            if let Some(labels) = series_key.strip_prefix(name) {
+                if !labels.is_empty() {
+                    let inner = labels
+                        .strip_prefix('{')
+                        .and_then(|rest| rest.strip_suffix('}'))
+                        .unwrap_or_else(|| panic!("bad label set: {line}"));
+                    let mut keys = std::collections::BTreeSet::new();
+                    for pair in inner.split("\",").filter(|pair| !pair.is_empty()) {
+                        let (key, value) = pair
+                            .split_once("=\"")
+                            .unwrap_or_else(|| panic!("bad label: {line}"));
+                        assert!(valid_name(key), "bad label name: {line}");
+                        assert!(keys.insert(key), "duplicate label {key}: {line}");
+                        assert!(!value.trim_end_matches('"').contains('\n'));
+                    }
+                }
+            }
+            assert!(
+                series.insert(series_key.to_string()),
+                "duplicate series: {line}"
+            );
+        }
+    }
+
+    fn rich_sync_status() -> gents::P2pSyncStatusSnapshot {
+        gents::P2pSyncStatusSnapshot {
+            request_dispatch: gents::P2pRequestDispatchSnapshot {
+                request_capacity: 32,
+                active_requests: 5,
+                active_requests_high_water: 30,
+                recovery_capacity: 8,
+                active_recovery: 7,
+                active_recovery_high_water: 8,
+                rejection_capacity: 4,
+                active_rejections: 1,
+                active_rejections_high_water: 2,
+                completion_capacity: 16,
+                active_completions: 3,
+                active_completions_high_water: 9,
+                saturated_total: 1_611_200,
+                recovery_saturated_total: 1_611_171,
+                rejection_dropped_total: 12,
+            },
+            push_backlog: gents::P2pPushBacklogSnapshot {
+                enqueued_total: 512_729,
+                failed_total: 82_089,
+                head_hints_enqueued_document: 10,
+                head_hints_enqueued_collection: 11,
+                head_hints_sent_document: 12,
+                head_hints_sent_collection: 13,
+                head_hints_acked_document: 14,
+                head_hints_acked_collection: 15,
+                head_hints_nacked_capacity: 16,
+                head_hints_nacked_other: 17,
+                head_hints_failed_transport: 47_037,
+                head_hints_failed_local: 18,
+                ..Default::default()
+            },
+            push_retry_markers: gents::P2pPushRetryMarkerSnapshot {
+                document_markers: 3,
+                collection_markers: 4,
+                scheduled_peers: 2,
+                oldest_scheduled_retry_unix: Some(1_800_000_000),
+            },
+            pending_dag_high_water: 900,
+            persisted_pending_dag_high_water: 950,
+            inbound_budget: vec![gents::P2pInboundClassSnapshot {
+                class: "sync".to_string(),
+                capacity_bytes: 1_048_576,
+                held_bytes: 4_096,
+                held_bytes_high_water: 65_536,
+                busy_resets: 5,
+                oversized_resets: 6,
+            }],
+            peer_fetches: vec![
+                gents::P2pPeerFetchSnapshot {
+                    peer: "1dd587be-hub-peer".to_string(),
+                    fetches: 82_928,
+                    bytes: 13_600_000_000,
+                    delivery_rate_bytes_per_sec: 2_048,
+                    min_rtt_micros: Some(400),
+                    success_ppm: 20_897,
+                    timeout_ppm: 970_000,
+                    partial_ppm: 9_103,
+                    in_flight: 2,
+                    in_flight_bytes: 1_024,
+                },
+                gents::P2pPeerFetchSnapshot {
+                    peer: "abcdef0123-spoke".to_string(),
+                    fetches: 10,
+                    success_ppm: 1_000_000,
+                    min_rtt_micros: None,
+                    ..Default::default()
+                },
+            ],
+            non_authoritative_broadcast_tasks: 3,
+            non_authoritative_broadcast_high_water: 7,
+            non_authoritative_broadcast_rejected_total: 9,
+            car_requested_cids: 1_400_000_000,
+            car_present_cids: 1_350_000_000,
+            car_served_cids: 1_340_000_000,
+            car_filtered_cids: 10,
+            provider_rotations: 36_455,
+            pending_dag_registered: 11_329,
+            pending_dag_retry_dispatched: 20_852,
+            pending_dag_retry_suppressed: 44,
+            pending_dag_fetch_exhausted: 9_871,
+            pending_dag_terminal_merged: 10_523,
+            next_pending_retry_in_ms: Some(1_500),
+            peers: vec![
+                gents::P2pPeerSummarySnapshot {
+                    peer_id: "1dd587be-hub-peer".to_string(),
+                    connected: true,
+                    last_seen_at: "2026-11-02T15:14:50Z".to_string(),
+                    last_block_received_at: Some("2026-11-02T15:14:00Z".to_string()),
+                    last_head_acked_at: Some("2026-11-02T15:10:00Z".to_string()),
+                },
+                gents::P2pPeerSummarySnapshot {
+                    peer_id: "abcdef0123-spoke".to_string(),
+                    connected: false,
+                    last_seen_at: "not a timestamp".to_string(),
+                    last_block_received_at: None,
+                    last_head_acked_at: None,
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn scrape_now() -> DateTime<Utc> {
+        rfc3339_timestamp("2026-11-02T15:15:00Z").unwrap()
+    }
+
+    #[test]
+    fn sync_diagnostics_render_every_decoded_field_with_bounded_labels() {
+        let mut lines = Vec::new();
+        p2p_sync::render_sync_diagnostics(&mut lines, Some(&rich_sync_status()), scrape_now());
+        let rendered = lines.join("\n");
+        assert_valid_exposition(&rendered, true);
+        let hub = r#"peer_id="1dd587be-hub-peer",peer="1dd587be""#;
+        let spoke = r#"peer_id="abcdef0123-spoke",peer="abcdef01""#;
+        for sample in [
+            r#"gents_p2p_request_dispatch_capacity{lane="recovery"} 8"#.to_string(),
+            r#"gents_p2p_request_dispatch_active{lane="recovery"} 7"#.to_string(),
+            r#"gents_p2p_request_dispatch_high_water{lane="recovery"} 8"#.to_string(),
+            r#"gents_p2p_request_dispatch_capacity{lane="request"} 32"#.to_string(),
+            r#"gents_p2p_request_dispatch_active{lane="rejection"} 1"#.to_string(),
+            r#"gents_p2p_request_dispatch_high_water{lane="completion"} 9"#.to_string(),
+            r#"gents_p2p_request_dispatch_saturated_total{lane="any"} 1611200"#.to_string(),
+            r#"gents_p2p_request_dispatch_saturated_total{lane="recovery"} 1611171"#.to_string(),
+            "gents_p2p_request_dispatch_rejection_dropped_total 12".to_string(),
+            "gents_p2p_pending_dag_registered_total 11329".to_string(),
+            "gents_p2p_pending_dag_fetch_exhausted_total 9871".to_string(),
+            "gents_p2p_pending_dag_terminal_merged_total 10523".to_string(),
+            "gents_p2p_pending_dag_retry_dispatched_total 20852".to_string(),
+            "gents_p2p_pending_dag_retry_suppressed_total 44".to_string(),
+            "gents_p2p_provider_rotations_total 36455".to_string(),
+            "gents_p2p_pending_dag_high_water 900".to_string(),
+            "gents_p2p_persisted_pending_dag_high_water 950".to_string(),
+            "gents_p2p_next_pending_retry_seconds 1.5".to_string(),
+            r#"gents_p2p_car_cids_total{outcome="present"} 1350000000"#.to_string(),
+            r#"gents_p2p_car_cids_total{outcome="served"} 1340000000"#.to_string(),
+            r#"gents_p2p_head_hints_total{outcome="acked",scope="collection"} 15"#.to_string(),
+            r#"gents_p2p_head_hints_total{outcome="failed_transport",scope="all"} 47037"#
+                .to_string(),
+            r#"gents_p2p_inbound_budget_held_bytes{class="sync"} 4096"#.to_string(),
+            r#"gents_p2p_inbound_budget_capacity_bytes{class="sync"} 1048576"#.to_string(),
+            r#"gents_p2p_inbound_budget_held_high_water_bytes{class="sync"} 65536"#.to_string(),
+            r#"gents_p2p_inbound_budget_resets_total{class="sync",reason="oversized"} 6"#
+                .to_string(),
+            "gents_p2p_non_authoritative_broadcast_tasks 3".to_string(),
+            "gents_p2p_non_authoritative_broadcast_rejected_total 9".to_string(),
+            r#"gents_p2p_push_retry_markers{scope="collection"} 4"#.to_string(),
+            "gents_p2p_push_retry_scheduled_peers 2".to_string(),
+            "gents_p2p_push_retry_oldest_scheduled_timestamp_seconds 1800000000".to_string(),
+            format!("gents_p2p_peer_fetch_total{{{hub}}} 82928"),
+            format!("gents_p2p_peer_fetch_bytes_total{{{hub}}} 13600000000"),
+            format!("gents_p2p_peer_fetch_success_ppm{{{hub}}} 20897"),
+            format!("gents_p2p_peer_fetch_timeout_ppm{{{hub}}} 970000"),
+            format!("gents_p2p_peer_fetch_partial_ppm{{{hub}}} 9103"),
+            format!("gents_p2p_peer_fetch_min_rtt_seconds{{{hub}}} 0.0004"),
+            format!("gents_p2p_peer_fetch_delivery_rate_bytes_per_second{{{hub}}} 2048"),
+            format!("gents_p2p_peer_fetch_in_flight{{{hub}}} 2"),
+            format!("gents_p2p_peer_fetch_in_flight_bytes{{{hub}}} 1024"),
+            format!("gents_p2p_peer_fetch_success_ppm{{{spoke}}} 1000000"),
+            format!("gents_p2p_peer_connected{{{hub}}} 1"),
+            format!("gents_p2p_peer_connected{{{spoke}}} 0"),
+            format!("gents_p2p_peer_last_seen_age_seconds{{{hub}}} 10"),
+            format!("gents_p2p_peer_last_block_received_age_seconds{{{hub}}} 60"),
+            format!("gents_p2p_peer_last_head_acked_age_seconds{{{hub}}} 300"),
+            r#"gents_p2p_peer_series_dropped{family="fetch"} 0"#.to_string(),
+            r#"gents_p2p_peer_series_dropped{family="peer"} 0"#.to_string(),
+        ] {
+            assert!(
+                rendered.lines().any(|line| line == sample),
+                "missing {sample}"
+            );
+        }
+        for absent in [
+            format!("gents_p2p_peer_fetch_min_rtt_seconds{{{spoke}}}"),
+            format!("gents_p2p_peer_last_seen_age_seconds{{{spoke}}}"),
+            format!("gents_p2p_peer_last_head_acked_age_seconds{{{spoke}}}"),
+        ] {
+            assert!(
+                !rendered.contains(&absent),
+                "unmeasured {absent} must be absent"
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_sync_status_declares_families_without_zero_samples() {
+        let mut lines = Vec::new();
+        p2p_sync::render_sync_diagnostics(&mut lines, None, scrape_now());
+        let rendered = lines.join("\n");
+        assert_valid_exposition(&rendered, true);
+        assert!(rendered.contains("# TYPE gents_p2p_request_dispatch_saturated_total counter"));
+        assert!(rendered.lines().all(|line| line.starts_with('#')));
+    }
+
+    #[test]
+    fn per_peer_series_are_capped_and_the_overflow_is_counted() {
+        let status = gents::P2pSyncStatusSnapshot {
+            peer_fetches: (0..300)
+                .map(|index| gents::P2pPeerFetchSnapshot {
+                    peer: format!("peer-{index:04}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut lines = Vec::new();
+        p2p_sync::render_sync_diagnostics(&mut lines, Some(&status), scrape_now());
+        let rendered = lines.join("\n");
+        assert_valid_exposition(&rendered, true);
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with("gents_p2p_peer_fetch_total{"))
+                .count(),
+            256
+        );
+        assert!(rendered
+            .contains(r#"gents_p2p_peer_fetch_total{peer_id="peer-0255",peer="peer-025"} 0"#));
+        assert!(!rendered.contains(r#"peer_id="peer-0256""#));
+        assert!(rendered
+            .lines()
+            .any(|line| line == r#"gents_p2p_peer_series_dropped{family="fetch"} 44"#));
+    }
+
+    #[test]
+    fn short_peer_id_respects_char_boundaries() {
+        assert_eq!(p2p_sync::short_peer_id("1dd587be0123"), "1dd587be");
+        assert_eq!(p2p_sync::short_peer_id("abc"), "abc");
+        assert_eq!(p2p_sync::short_peer_id("ééééééééé"), "éééééééé");
     }
 
     #[test]

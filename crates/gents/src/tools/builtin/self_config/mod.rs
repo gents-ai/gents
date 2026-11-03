@@ -19,7 +19,7 @@ mod ops;
 mod pack_catalog;
 mod pack_documents;
 mod pack_installer;
-use pack_installer::{ConfigPackDistribution, PackInstallParams, PackInstaller};
+use pack_installer::{installs_kind, ConfigPackDistribution, PackInstallParams, PackInstaller};
 mod pack_plugins;
 mod read;
 mod requests;
