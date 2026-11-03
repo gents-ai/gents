@@ -395,6 +395,16 @@ export function FindBar({
       const key = e.key.toLowerCase();
       if (key === "f" && !e.shiftKey) {
         e.preventDefault();
+        /* text selected on the page starts the search, as finding does
+           elsewhere; one line at most, and never the find field's own */
+        const picked = document.getSelection()?.toString().trim() ?? "";
+        if (
+          picked &&
+          !picked.includes("\n") &&
+          picked.length <= 200 &&
+          document.activeElement !== input.current
+        )
+          setText(picked);
         openFind();
       } else if (key === "g" && findBar.getState().open) {
         e.preventDefault();

@@ -90,6 +90,34 @@ describe("finding in a session", () => {
     expect(inSecond.map((m) => m.nth)).toEqual([0]);
   });
 
+  it("starts from the text selected on the page", () => {
+    render(
+      <>
+        <p data-testid="said">the snake game</p>
+        <FindBar
+          scroller={null}
+          sessionKey="s1"
+          entries={entries}
+          keyOf={keyOf}
+          goTo={() => {}}
+          opener={NO_ROWS}
+          older={{ more: false, loading: false, load: () => {}, messages: null }}
+        />
+      </>,
+    );
+    const said = screen.getByTestId("said").firstChild!;
+    const range = document.createRange();
+    range.setStart(said, 4);
+    range.setEnd(said, 9);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+    fireEvent.keyDown(window, { key: "f", [IS_MAC ? "metaKey" : "ctrlKey"]: true });
+    expect(screen.getByRole("textbox", { name: "Find in session" })).toHaveValue(
+      "snake",
+    );
+    document.getSelection()!.removeAllRanges();
+  });
+
   it("opens on its key, counts, steps both ways around, and closes with Escape", async () => {
     vi.useFakeTimers();
     const goTo = vi.fn();
