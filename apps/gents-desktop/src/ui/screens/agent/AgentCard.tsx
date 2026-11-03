@@ -23,6 +23,8 @@ import { AgentInitials } from "../parts";
 import { agentName } from "../behavior";
 import { span, useMinute } from "../time";
 import { lastRunFailed } from "./automation";
+import { limitNote } from "./ProviderUsage";
+import { useProviderUsage } from "@/hooks/useProviders";
 import { ProviderLogo } from "../ProviderLogo";
 import { agentOf, backendOf } from "@/lib/agents";
 import { RunNodeButton } from "./LocalServer";
@@ -268,6 +270,7 @@ export function AgentCard({
     };
   }, [fetchOperationsSnapshot, deployment.nodeDid, sessions]);
   const now = pulse(sessions, ops);
+  const limit = limitNote(useProviderUsage(deployment.nodeDid).usage, useMinute());
   const online = deployment.dialSucceeded;
   const backends = deployment.inferenceBackends;
   const section = (section: string): Route => ({
@@ -377,7 +380,7 @@ export function AgentCard({
           <AutomationsValue deployment={deployment} />
         </Summary>
         <Summary label="Inference" to={section("inference")}>
-          <InferenceSummary backends={backends} />
+          <InferenceSummary backends={backends} limit={limit} />
         </Summary>
         <Summary label="Packs" to={section("packs")}>
           <PacksValue packs={packs} />
