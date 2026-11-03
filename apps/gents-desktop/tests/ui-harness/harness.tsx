@@ -116,6 +116,7 @@ const app = (
     bridge={{
       api: harness.adapter,
       listenToUpdates: harness.listenerFactory,
+      supportsManagedServer: params.get("scenario") === "startup-port-in-use",
     }}
   />
 );

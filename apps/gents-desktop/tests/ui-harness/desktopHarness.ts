@@ -536,7 +536,8 @@ export type DesktopUiHarnessScenario =
   | "days"
   | "automated-inputs"
   | "background"
-  | "notices";
+  | "notices"
+  | "startup-port-in-use";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -959,6 +960,16 @@ export function createDesktopUiHarness(
     runtimeBooting: false,
     error: null,
   };
+  if (scenario === "startup-port-in-use") {
+    managedServer = {
+      ...managedServer,
+      state: "failed",
+      autoStart: true,
+      nodeName: deployment.label,
+      error:
+        "Port 9191 is in use by a program that does not advertise a Gents identity, and the local Node needs that port. Quit that program, then start the Node again.",
+    };
+  }
   if (scenario === "storage-recovery") {
     managedServer = {
       ...managedServer,
@@ -1804,7 +1815,10 @@ export function createDesktopUiHarness(
         desktopHome: "/tmp/gents-bombadil/desktop",
         peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
         nodeDataDir: "/tmp/gents-bombadil/node",
-        diagnosticsHint: "native logging",
+        diagnosticsHint:
+          scenario === "startup-port-in-use"
+            ? "journalctl --user --since '1 hour ago' SYSLOG_IDENTIFIER=gents-desktop SYSLOG_IDENTIFIER=gents-runtime. Runtime startup errors: /home/me/.local/share/gents/desktop/logs/runtime-errors.log"
+            : "native logging",
         nodeHomeExists: !freshHome,
         desktopHomeExists: true,
         peerDirectoryExists: true,
@@ -2157,7 +2171,9 @@ export function createDesktopUiHarness(
     async listUxDataSurfaces() {
       return { surfaces: [] };
     },
-    ...(scenario === "empty-fleet" || scenario === "storage-recovery"
+    ...(scenario === "empty-fleet" ||
+    scenario === "storage-recovery" ||
+    scenario === "startup-port-in-use"
       ? ({
           async managedServerStatus() {
             if (managedServer.state === "running" && !managedServer.pairingReady) {
@@ -4893,6 +4909,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "session-hydration":
     case "sync-offline":
     case "storage-recovery":
+    case "startup-port-in-use":
     case "sync-failed":
     case "days":
     case "automated-inputs":
