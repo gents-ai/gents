@@ -44,6 +44,8 @@ export function useLocalServerRun() {
   };
   return {
     offered: actions.localServerOffers.status,
+    /** whether the node's state has been read yet */
+    known: status != null,
     running: status?.state === "running" || status?.state === "external",
     external: status?.state === "external",
     starting: status?.state === "starting",
