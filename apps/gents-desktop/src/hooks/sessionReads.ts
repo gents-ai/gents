@@ -14,7 +14,11 @@ import { acceptsAsyncResult } from "./observationOrdering";
 import { createContextDetailsCache } from "./sessionContextDetails";
 import { timingConfig } from "./timing";
 import { mergeSessionTipSnapshot } from "@source-inc/gents-desktop-client";
-import type { SessionLoadState } from "../lib/loadingStatus";
+import {
+  isSessionDeliveryPhase,
+  sessionDeliveryPhase,
+  type SessionLoadState,
+} from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
 import {
   IDLE_LOAD,
@@ -29,7 +33,7 @@ export const SESSION_TIMELINE_PAGE_SIZE = 40;
 const TRANSCRIPT_READ_SIZE = 80;
 /** how long a session's reads must find nothing new before they slow down */
 const QUIET_AFTER_MS = 60_000;
-/** the wait between reads of a session that has gone quiet */
+/** the least wait between full reads of a session that has gone quiet */
 const QUIET_READ_GAP_MS = 8_000;
 
 /* a session's content apart from the store-wide revision, which moves when
@@ -73,11 +77,12 @@ export function createSessionReads({
   };
   const quiet = () => readAt - changedAt >= QUIET_AFTER_MS;
   /* A full read of a long session can take over a second, and nothing tells
-     the app which session a store change touched. So the next read waits at
-     least as long as the last one took, and longer once reads have found the
-     session unchanged for a minute. */
+     the app which session a store change touched. So an update reads the
+     session in full once the gap since the last full read is at least as
+     long as that read took, and longer once reads have found the session
+     unchanged for a minute. */
   const sessionReadGapMs = () => {
-    const base = timingConfig().activeSessionPollMs;
+    const base = timingConfig().sessionReadGapMs;
     if (base === null) return null;
     return Math.max(readCost, quiet() ? QUIET_READ_GAP_MS : base);
   };
@@ -102,8 +107,10 @@ export function createSessionReads({
     const previous = sessionStore.getState().load;
     const sameSelection =
       previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
+    const waiting =
+      previous.phase === "pending" || isSessionDeliveryPhase(previous.phase);
     setSessionLoad({
-      phase: sameSelection && previous.phase === "pending" ? "pending" : "loading",
+      phase: sameSelection && waiting ? previous.phase : "loading",
       sessionId: nextSessionId,
       nodeDid,
       found: null,
@@ -135,12 +142,20 @@ export function createSessionReads({
       return next;
     } catch (error) {
       if (refreshSeq === currentRefresh) {
-        const message = String(error);
-        const pending =
-          error instanceof BridgeInvokeError && error.code === "projectionPending";
-        noteRead(nextSessionId, pending ? "pending" : `failed ${message}`, started);
+        const code = error instanceof BridgeInvokeError ? error.code : null;
+        const delivery = code ? sessionDeliveryPhase(code) : null;
+        const phase = code === "projectionPending" ? "pending" : (delivery ?? "failed");
+        const message =
+          delivery && error instanceof BridgeInvokeError
+            ? error.message
+            : String(error);
+        noteRead(
+          nextSessionId,
+          phase === "failed" ? `failed ${message}` : phase,
+          started,
+        );
         setSessionLoad({
-          phase: pending ? "pending" : "failed",
+          phase,
           sessionId: nextSessionId,
           nodeDid,
           found: null,
@@ -178,21 +193,26 @@ export function createSessionReads({
     }
   }
 
-  /** false when the session is due a full read. A live read stands in for
-      one until the next periodic read; otherwise an update reads at once,
-      though not back to back, unless the session has gone quiet. */
-  async function refreshSessionLiveDelta(): Promise<boolean> {
+  /** Reads a store update for the open session and resolves to when it is
+      owed a full read: 0 for now, the ms until the gap ends, or null once a
+      live read or a read started after the update covers it. Inside the gap
+      a live read stands in; otherwise the full read waits, not back to back
+      and longer once the session has gone quiet, but is never dropped:
+      updates are the only thing that reads an open session. */
+  async function readSessionUpdate(): Promise<number | null> {
     const gap = sessionReadGapMs();
     const since = performance.now() - readAt;
-    if (gap !== null && since >= gap) return false;
+    if (gap !== null && since >= gap) return 0;
     const current = readSession(sessionStore);
     const requestId = trackedRequestId();
     const request =
       current && requestId && api.fetchSessionLiveDelta
         ? sessionLiveDeltaRequest(current, requestId)
         : null;
-    if (!current || !requestId || !request || !api.fetchSessionLiveDelta)
-      return gap !== null && (quiet() || since < readCost);
+    if (!current || !requestId || !request || !api.fetchSessionLiveDelta) {
+      if (gap === null) return 0;
+      return Math.max(0, (quiet() ? gap : readCost) - since);
+    }
     const capturedRefresh = refreshSeq;
     const capturedLive = ++liveSeq;
     const capturedNodeDid = store.getState().nodeDid;
@@ -204,17 +224,17 @@ export function createSessionReads({
       trackedRequestId() === requestId;
     try {
       const delta = await api.fetchSessionLiveDelta(request);
-      if (!stillCurrent()) return true;
-      if (!delta) return false;
+      if (!stillCurrent()) return null;
+      if (!delta) return 0;
       const latest = readSession(sessionStore);
-      if (!latest || latest.sessionId !== current.sessionId) return true;
+      if (!latest || latest.sessionId !== current.sessionId) return null;
       const next = applySessionLiveDelta(latest, delta);
-      if (!next) return false;
+      if (!next) return 0;
       setSession(next);
-      return true;
+      return null;
     } catch {
-      if (!stillCurrent()) return true;
-      return false;
+      if (!stillCurrent()) return null;
+      return 0;
     }
   }
 
@@ -283,8 +303,7 @@ export function createSessionReads({
     },
     refreshSession,
     retrySessionHydration,
-    refreshSessionLiveDelta,
-    sessionReadGapMs,
+    readSessionUpdate,
     loadSessionRows,
   };
 }

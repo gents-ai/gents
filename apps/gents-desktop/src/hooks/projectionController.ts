@@ -6,12 +6,16 @@ import {
 export type DesktopUpdateRefreshScope =
   "snapshot" | "sessionDelta" | "session" | "sessionEvent" | "full";
 
+/** A pairing-health change re-reads a session waiting on its node, since the
+    pairing is one of the signals its delivery state derives from. */
 export function desktopUpdateRefreshScope(
   reason: string | undefined,
   selectedSessionId: string | null,
   selectedTrackedRequestId: string | null,
+  selectedSessionAwaitsNode = false,
 ): DesktopUpdateRefreshScope {
-  if (reason === "health") return "snapshot";
+  if (reason === "health")
+    return selectedSessionId && selectedSessionAwaitsNode ? "full" : "snapshot";
   if (selectedSessionId && selectedTrackedRequestId) {
     if (reason === "store") return "sessionDelta";
     return "sessionEvent";
@@ -33,7 +37,9 @@ type ProjectionControllerOptions = {
   currentSessionId: () => string | null;
   refreshSnapshot: () => Promise<void>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
-  refreshSessionLiveDelta: () => Promise<boolean>;
+  /** reads a store update for the open session; resolves to the ms until
+      it is owed a full read (0: now), or null when a read covers it */
+  readSessionUpdate: () => Promise<number | null>;
   onError?: (error: unknown) => void;
 };
 
@@ -56,7 +62,7 @@ export function createProjectionController({
   currentSessionId,
   refreshSnapshot,
   refreshSession,
-  refreshSessionLiveDelta,
+  readSessionUpdate,
   onError = () => {},
 }: ProjectionControllerOptions): ProjectionController {
   let active: Promise<void> | null = null;
@@ -64,6 +70,13 @@ export function createProjectionController({
   let snapshotPending = false;
   let pending = 0;
   let disposed = false;
+  /* the one full read an update not yet read in full is owed; a full read
+     that starts after the update pays it */
+  let owed: ReturnType<typeof setTimeout> | undefined;
+  const settleOwed = () => {
+    clearTimeout(owed);
+    owed = undefined;
+  };
 
   const enqueue = (work: number) => {
     pending |= work;
@@ -104,6 +117,7 @@ export function createProjectionController({
       try {
         const sessionId = currentSessionId();
         if (work & SESSION) {
+          settleOwed();
           const next = await refreshSession(sessionId);
           if (
             work & INDEX_AFTER_TERMINAL &&
@@ -117,8 +131,13 @@ export function createProjectionController({
             snapshot = refreshIndex();
           }
         } else if (sessionId && work & SESSION_DELTA) {
-          if (!(await refreshSessionLiveDelta())) {
-            enqueue(SESSION | INDEX_AFTER_TERMINAL);
+          const due = await readSessionUpdate();
+          if (due === 0) enqueue(SESSION | INDEX_AFTER_TERMINAL);
+          else if (due !== null && owed === undefined && !disposed) {
+            owed = setTimeout(() => {
+              owed = undefined;
+              void controller.request("sessionEvent");
+            }, due);
           }
         }
       } catch (error) {
@@ -136,7 +155,7 @@ export function createProjectionController({
     return { snapshot };
   };
 
-  return {
+  const controller: ProjectionController = {
     request(scope) {
       if (disposed) return Promise.resolve();
       enqueue(requestedWork(scope));
@@ -155,6 +174,8 @@ export function createProjectionController({
     dispose() {
       disposed = true;
       pending = 0;
+      settleOwed();
     },
   };
+  return controller;
 }
