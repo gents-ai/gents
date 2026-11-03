@@ -85,24 +85,24 @@ async fn native_export_retains_relationship_ids() {
     );
     let access = ConfigAccess::local(node.clone());
     access.add_collection("type ExportAuthor { name: String books: [ExportBook] }\ntype ExportBook { title: String author: ExportAuthor }").await.unwrap();
-    let author = ConfigAccess::write_local_response(
+    let author = ConfigAccess::write_local(
         &node,
         "test.export.author",
         r#"mutation { create_ExportAuthor(input:{name:"Author"}) {_docID} }"#,
     )
     .await
     .unwrap();
-    let author_id = author.data.as_ref().unwrap()["create_ExportAuthor"][0]["_docID"]
+    let author_id = author["data"]["create_ExportAuthor"][0]["_docID"]
         .as_str()
         .unwrap();
     let mutation = format!(
         r#"mutation {{ create_ExportBook(input:{{title:"Book",_authorID:"{}"}}) {{_docID}} }}"#,
         gents::store::graphql::escape_graphql_string(author_id)
     );
-    let book = ConfigAccess::write_local_response(&node, "test.export.book", &mutation)
+    let book = ConfigAccess::write_local(&node, "test.export.book", &mutation)
         .await
         .unwrap();
-    let book_id = book.data.as_ref().unwrap()["create_ExportBook"][0]["_docID"]
+    let book_id = book["data"]["create_ExportBook"][0]["_docID"]
         .as_str()
         .unwrap();
     let output = tempfile::tempdir().unwrap();
