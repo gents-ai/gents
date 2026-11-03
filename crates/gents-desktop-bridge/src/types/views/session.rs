@@ -87,6 +87,9 @@ pub enum RequestOriginView {
     GoalContinuation {
         goal_id: Option<String>,
         sequence: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        wrapup: Option<bool>,
     },
     BackgroundCompletion,
 }

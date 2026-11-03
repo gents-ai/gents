@@ -9,11 +9,38 @@ import {
   backgroundName,
   backgroundRunLabel,
   backgroundText,
+  originLabel,
   senderSession,
   withoutRoutingHeader,
 } from "@/screens/TranscriptInputs";
 import type { BackgroundResult } from "@/screens/transcript-groups";
 import type { Reached } from "@/screens/workers";
+
+describe("goal continuation labels", () => {
+  it("distinguishes a recorded wrap-up from an ordinary continuation", () => {
+    expect(
+      originLabel(
+        { kind: "goalContinuation", goalId: "g", sequence: 3, wrapup: true },
+        null,
+        null,
+      ),
+    ).toBe("Goal wrap-up");
+    expect(
+      originLabel(
+        { kind: "goalContinuation", goalId: "g", sequence: 3, wrapup: false },
+        null,
+        null,
+      ),
+    ).toBe("Goal continuation · 3");
+    expect(
+      originLabel(
+        { kind: "goalContinuation", goalId: "g", sequence: null },
+        null,
+        null,
+      ),
+    ).toBe("Goal continuation");
+  });
+});
 
 describe("a message's routing line", () => {
   const header =

@@ -202,6 +202,7 @@ pub enum RequestOrigin<'a> {
     GoalContinuation {
         goal_id: Option<&'a str>,
         sequence: Option<i64>,
+        wrapup: Option<bool>,
     },
     BackgroundCompletion,
 }
@@ -222,6 +223,7 @@ pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrig
         return RequestOrigin::GoalContinuation {
             goal_id: present(&row.caused_by_trigger_id),
             sequence: continuation.map(|continuation| continuation.sequence),
+            wrapup: continuation.map(|continuation| continuation.wrapup),
         };
     }
     if source == Some(queue::QueueSource::BackgroundCompletion) {

@@ -64,7 +64,7 @@ function originLabel(origin: RequestOriginView): string {
     case "trigger":
       return "Triggered input";
     case "goalContinuation":
-      return "Goal continuation";
+      return origin.wrapup ? "Goal wrap-up" : "Goal continuation";
     case "backgroundCompletion":
       return "Background result";
   }

@@ -73,7 +73,7 @@ fn nested_fork_keeps_automated_input_origin_without_child_turn_membership() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].reconstruction_state, ReconstructionState::Ready);
     assert!(matches!(&messages[0].origin,
-        Some(RequestOriginView::GoalContinuation { goal_id: Some(id), sequence: Some(3) }) if id == "goal"));
+        Some(RequestOriginView::GoalContinuation { goal_id: Some(id), sequence: Some(3), .. }) if id == "goal"));
     assert!(messages[0].request_id.is_none());
     assert!(messages[0].input_request_id.is_none());
     assert!(!messages[0].owns_turn);

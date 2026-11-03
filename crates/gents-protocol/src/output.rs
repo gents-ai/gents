@@ -6,6 +6,7 @@ use crate::message::{
 };
 use crate::rendered_request::{CaptureScope, CaptureScopeKind};
 
+pub mod authored;
 pub mod extent;
 pub mod live;
 pub mod origin;
