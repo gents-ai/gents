@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -13,7 +13,7 @@ use tempfile::NamedTempFile;
 
 use crate::cli::args::ExportArgs;
 
-struct ExportFile {
+pub(super) struct ExportFile {
     collection: String,
     rows: u64,
     bytes: u64,
@@ -82,7 +82,7 @@ pub(crate) async fn export(args: ExportArgs) -> Result<()> {
     }))
 }
 
-async fn stage_export(
+pub(super) async fn stage_export(
     txn: &ConfigApplyTxn<'_>,
     collections: &BTreeSet<String>,
     filter: &str,
@@ -95,19 +95,22 @@ async fn stage_export(
             escape_graphql_string(collection)
         );
         let schema = txn.execute(&query).await?;
-        let selection = scalar_selection(&schema["data"]["__type"], collection)?;
+        let selection = field_selection(&schema["data"]["__type"], collection)?;
         let mut file =
             NamedTempFile::new_in(output_dir).context("creating temporary export file")?;
         let mut writer = DigestWriter::new(BufWriter::new(file.as_file_mut()));
         let mut rows = 0u64;
-        txn.visit_cursor_pages(collection, &selection, filter, |page| {
+        txn.visit_cursor_pages(collection, &selection.query, filter, |page| {
             for row in page {
                 let object = row.as_object().context("export row is not an object")?;
-                for field in selection.split_whitespace() {
+                for field in &selection.fields {
                     ensure!(
                         object.contains_key(field),
                         "export row omitted {collection}.{field}"
                     );
+                }
+                for relation in &selection.relations {
+                    validate_relation(object, collection, relation)?;
                 }
                 serde_json::to_writer(&mut writer, row)?;
                 writer.write_all(b"\n")?;
@@ -131,19 +134,25 @@ async fn stage_export(
     Ok(files)
 }
 
-fn scalar_selection(schema: &Value, collection: &str) -> Result<String> {
+struct FieldSelection {
+    query: String,
+    fields: Vec<String>,
+    relations: Vec<String>,
+}
+
+fn field_selection(schema: &Value, collection: &str) -> Result<FieldSelection> {
     let fields = schema
         .get("fields")
         .and_then(Value::as_array)
         .with_context(|| format!("collection {collection:?} has no accessible schema"))?;
-    let mut selected = BTreeSet::new();
-    selected.insert("_docID".to_owned());
+    let mut selected = BTreeMap::new();
+    selected.insert("_docID".to_owned(), false);
     for field in fields {
         let name = field
             .get("name")
             .and_then(Value::as_str)
             .context("schema field has no name")?;
-        if name.starts_with('_')
+        if matches!(name, "_deleted" | "_version")
             || matches!(
                 name,
                 "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "GROUP" | "SIMILARITY" | "BM25"
@@ -155,18 +164,95 @@ fn scalar_selection(schema: &Value, collection: &str) -> Result<String> {
         let mut ty = field.get("type").context("schema field has no type")?;
         loop {
             match ty.get("kind").and_then(Value::as_str) {
-                Some("NON_NULL" | "LIST") => ty = ty.get("ofType").filter(|value| !value.is_null()).with_context(|| format!("unsupported nested type for {collection}.{name}"))?,
-                Some("SCALAR" | "ENUM") => break,
-                Some(kind) => bail!("cannot export {collection}.{name} with type {kind}: relationship export is not supported"),
+                Some("NON_NULL" | "LIST") => {
+                    ty = ty
+                        .get("ofType")
+                        .filter(|value| !value.is_null())
+                        .with_context(|| {
+                            format!("unsupported nested type for {collection}.{name}")
+                        })?
+                }
+                Some("SCALAR" | "ENUM") => {
+                    selected.insert(name.to_owned(), false);
+                    break;
+                }
+                Some("OBJECT") => {
+                    selected.insert(name.to_owned(), true);
+                    break;
+                }
+                Some(kind) => bail!("cannot export {collection}.{name} with type {kind}"),
                 None => bail!("cannot determine type of {collection}.{name}"),
             }
         }
-        selected.insert(name.to_owned());
     }
-    Ok(selected.into_iter().collect::<Vec<_>>().join(" "))
+    let query = selected
+        .iter()
+        .map(|(name, relation)| {
+            if *relation {
+                format!("{name} {{ _docID }}")
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let fields = selected.keys().cloned().collect();
+    let relations = selected
+        .into_iter()
+        .filter_map(|(name, relation)| relation.then_some(name))
+        .collect();
+    Ok(FieldSelection {
+        query,
+        fields,
+        relations,
+    })
 }
 
-fn publish(files: Vec<ExportFile>, output_dir: &Path) -> Result<()> {
+fn validate_relation(
+    object: &serde_json::Map<String, Value>,
+    collection: &str,
+    relation: &str,
+) -> Result<()> {
+    let value = &object[relation];
+    let validate_target = |target: &Value| -> Result<()> {
+        ensure!(
+            target
+                .get("_docID")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty()),
+            "export could not resolve a reference in {collection}.{relation}"
+        );
+        Ok(())
+    };
+    match value {
+        Value::Null => {
+            let backing = format!("_{relation}ID");
+            ensure!(
+                object.get(&backing).is_none_or(Value::is_null),
+                "export could not resolve the stored reference in {collection}.{relation}"
+            );
+        }
+        Value::Array(targets) => {
+            for target in targets {
+                validate_target(target)?;
+            }
+        }
+        Value::Object(_) => {
+            validate_target(value)?;
+            let backing = format!("_{relation}ID");
+            if let Some(id) = object.get(&backing).and_then(Value::as_str) {
+                ensure!(
+                    value["_docID"].as_str() == Some(id),
+                    "export found inconsistent references in {collection}.{relation}"
+                );
+            }
+        }
+        _ => bail!("unexpected reference value in {collection}.{relation}"),
+    }
+    Ok(())
+}
+
+pub(super) fn publish(files: Vec<ExportFile>, output_dir: &Path) -> Result<()> {
     let mut manifest = NamedTempFile::new_in(output_dir)?;
     writeln!(manifest, "collection\trows\tbytes\tsha256")?;
     for file in &files {
@@ -228,23 +314,26 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn schema_selection_rejects_relationships_and_selects_scalar_lists() {
+    fn schema_selection_preserves_backing_ids_and_relationships() {
         let schema = json!({"fields":[
             {"name":"body","type":{"kind":"SCALAR","name":"String"}},
             {"name":"tags","type":{"kind":"LIST","ofType":{"kind":"SCALAR","name":"String"}}},
             {"name":"_docID","type":{"kind":"SCALAR","name":"ID"}},
+            {"name":"_authorID","type":{"kind":"SCALAR","name":"ID"}},
+            {"name":"author","type":{"kind":"OBJECT","name":"Person"}},
+            {"name":"children","type":{"kind":"LIST","ofType":{"kind":"OBJECT","name":"Record"}}},
             {"name":"COUNT","type":{"kind":"SCALAR","name":"Int"}}
         ]});
         assert_eq!(
-            scalar_selection(&schema, "Record").unwrap(),
-            "_docID body tags"
+            field_selection(&schema, "Record").unwrap().query,
+            "_authorID _docID author { _docID } body children { _docID } tags"
         );
-        let relation =
-            json!({"fields":[{"name":"author","type":{"kind":"OBJECT","name":"Person"}}]});
-        assert!(scalar_selection(&relation, "Record")
-            .unwrap_err()
-            .to_string()
-            .contains("relationship"));
+        let unresolved = json!({"author":null,"_authorID":"hidden"});
+        assert!(validate_relation(unresolved.as_object().unwrap(), "Record", "author").is_err());
+        let matching = json!({"author":{"_docID":"known"},"_authorID":"known"});
+        assert!(validate_relation(matching.as_object().unwrap(), "Record", "author").is_ok());
+        let mismatch = json!({"author":{"_docID":"other"},"_authorID":"known"});
+        assert!(validate_relation(mismatch.as_object().unwrap(), "Record", "author").is_err());
     }
 
     #[test]
