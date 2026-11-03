@@ -1479,6 +1479,60 @@ export function createDesktopUiHarness(
         }),
       ],
     });
+    /* a command that wrote to both streams and failed */
+    sessions.set("session-notices-stderr", {
+      ...base,
+      sessionId: "session-notices-stderr",
+      title: "Build the docs",
+      previewText: "Build the docs",
+      turnState: "completed",
+      latestRequestId: "request-notices-stderr",
+      latestRequestOutcome: null,
+      timelineItems: [
+        user("notices-stderr", "Build the docs site.", 2),
+        {
+          kind: "toolGroup" as const,
+          itemKey: "notices-stderr-group",
+          messageSequence: 1,
+          tools: [
+            {
+              itemKey: "notices-stderr-tool",
+              toolName: "bash",
+              statusKind: "error",
+              requestId: "request-notices-stderr",
+              toolCallId: "call-notices-stderr",
+              toolCallDocId: "doc-notices-stderr",
+              startedAt: ago(2),
+              completedAt: ago(2),
+              reconstruction: HARNESS_READY_RECONSTRUCTION,
+              presentation: {
+                kind: "command",
+                command: "npm run docs:build",
+                exitCode: 1,
+                timedOut: false,
+                failed: true,
+                durationMs: 4_200,
+                cwd: "~/src/gents",
+                executionMode: null,
+                networkMode: null,
+                stdout:
+                  "> docs:build\n> vitepress build docs\n\nbuilding client + server bundles...",
+                stderr:
+                  'x Build failed in 3.81s\n[vitepress] docs/guide/nodes.md: Unknown custom container "warn"',
+                fallbackOutput: null,
+              },
+            } satisfies RenderedToolCallView,
+          ],
+        } as unknown as RenderedTimelineItem,
+        harnessAssistantItem({
+          itemKey: "notices-stderr-reply",
+          sequence: 3,
+          content: "The docs build failed on an unknown container in nodes.md.",
+          reasoning: null,
+          timestamp: ago(1),
+        }),
+      ],
+    });
     deployment = {
       ...deployment,
       inferenceBackends: [
