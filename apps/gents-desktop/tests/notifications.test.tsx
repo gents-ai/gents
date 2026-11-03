@@ -308,4 +308,18 @@ describe("the notification settings", () => {
     act(() => preferences.setNotify("finished", true));
     expect(screen.getByRole("switch", { name: "Finished" })).toBeChecked();
   });
+
+  it("have their own Settings section while the feature is on, and General otherwise", async () => {
+    const { SettingsScreen } =
+      await import("../src/ui/screens/settings/SettingsScreen");
+    const { renderIn, testApp } = await import("./app-fixture");
+    const view = renderIn(testApp(), <SettingsScreen section="notifications" />);
+    expect(screen.getByRole("switch", { name: "Finished" })).toBeInTheDocument();
+    view.unmount();
+    act(() => resetPreferences());
+    renderIn(testApp(), <SettingsScreen section="notifications" />);
+    expect(screen.queryByRole("switch", { name: "Finished" })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Notifications/ })).toBeNull();
+    expect(screen.getAllByText("General").length).toBeGreaterThan(0);
+  });
 });
