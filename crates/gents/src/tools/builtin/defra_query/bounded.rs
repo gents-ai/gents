@@ -534,6 +534,7 @@ impl Tool for BoundedQueryTool {
                 "field_page",
                 "count",
                 "next_offset",
+                "truncated_fields",
                 "field_recovery",
                 "limit_note",
             ],
@@ -684,6 +685,7 @@ mod tests {
             Some("run-42".into()), Default::default(), false, async {
                 let initial: Value = serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"]}).as_object().unwrap().clone())).await.unwrap()).unwrap();
                 assert_eq!(initial["truncated"], true);
+                assert_eq!(initial["truncated_fields"][0], json!({"row":0,"field":"title","path":"","total_bytes":text.len()}));
                 assert_eq!(initial["field_recovery"][0]["total_bytes"], text.len());
                 assert_eq!(initial["field_recovery"][0]["doc_id"], doc);
                 assert_eq!(initial["field_recovery"][0]["row"], 0);
