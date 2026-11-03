@@ -78,6 +78,8 @@ download() {
   release="https://github.com/gents-ai/gents/releases/download/$tag"
   curl -fsSLO "$release/$dmg" && curl -fsSLO "$release/SHA256SUMS-desktop-macos.txt" || return 1
   grep -F "$dmg" SHA256SUMS-desktop-macos.txt | shasum -a 256 -c - || return 1
+  grep -F "$dmg" SHA256SUMS-desktop-macos.txt | awk '{print $1}' > "$out/artifact-sha256.txt"
+  echo "$dmg" > "$out/artifact-name.txt"
   # What a browser download carries; Gatekeeper and App Translocation key on it.
   xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;$(uuidgen)" "$dmg"
 }
