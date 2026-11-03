@@ -3,6 +3,7 @@ import Proofs.Session.Archive
 import Proofs.Conformance.ContractCases.SessionDocuments
 import Proofs.Conformance.ContractCases.Types
 import Lean
+import Proofs.Conformance.RuntimeInput
 
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
@@ -324,7 +325,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       refreshJson "missing_current_row_noop" newerRequest [],
       refreshJson "foreign_scope_current_row_noop" newerRequest
         [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
-      refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]])),
+      refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]] ++ Conformance.RuntimeInput.cases)),
    ("selection", toJson [
       selectionJson "timestamp_tie_forward" [old, newerRequest] 1 10 none,
       selectionJson "timestamp_tie_reverse" [newerRequest, old] 1 10 none,

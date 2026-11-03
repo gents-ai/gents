@@ -487,7 +487,8 @@ where
             }
             Ok(LoopStreamItem::OutputObligationPending { reminder }) => {
                 self.flush_pending().await?;
-                let key = format!("output-obligation:{}", self.authored_index);
+                let key =
+                    gents_protocol::output::authored::output_obligation_key(self.authored_index);
                 self.stream_writer
                     .publish_authored_message(self.lifecycle, &key, &reminder)
                     .await

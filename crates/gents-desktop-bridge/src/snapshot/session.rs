@@ -69,6 +69,13 @@ pub(super) fn message_is_runtime_control(
     message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
 ) -> bool {
+    if gents_protocol::output::authored::is_output_obligation(
+        message.role,
+        message.request_doc_id.as_deref(),
+        &message.message_key,
+    ) {
+        return true;
+    }
     let request_input = input_request
         .and_then(|request| request.input.as_ref())
         .cloned()
@@ -130,7 +137,13 @@ pub(super) fn message_origin(
     message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
 ) -> Option<RequestOriginView> {
-    if message.role != gents_protocol::output::MessageRole::User {
+    if message.role != gents_protocol::output::MessageRole::User
+        || gents_protocol::output::authored::is_output_obligation(
+            message.role,
+            message.request_doc_id.as_deref(),
+            &message.message_key,
+        )
+    {
         return None;
     }
     if gents::tools::background::completion::is_background_completion_notification_message_key(

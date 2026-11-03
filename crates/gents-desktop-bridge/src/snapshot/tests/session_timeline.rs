@@ -425,6 +425,62 @@ fn background_notification_is_control_by_message_key_with_honest_request_binding
 }
 
 #[test]
+fn output_obligation_reminders_do_not_appear_as_user_or_goal_messages() {
+    for goal in [false, true] {
+        let mut rows = active_store().to_rows();
+        if goal {
+            rows.requests[0].input = Some(
+                serde_json::from_value(serde_json::json!({
+                    "queue": { "source": "goal", "policy": "append" }
+                }))
+                .unwrap(),
+            );
+        }
+        push_canonical_text_message(
+            &mut rows,
+            "authored:req-1:output-obligation:0",
+            "sess-1",
+            Some("req-1"),
+            1,
+            MessageRole::User,
+            "The request cannot complete yet.",
+        );
+        let snapshot = build_session_snapshot_from_store(
+            &ClientStore::from_rows(rows),
+            "sess-1",
+            Some("req-1"),
+        )
+        .expect("snapshot");
+        assert!(snapshot.messages[0].runtime_control);
+        assert!(snapshot.messages[0].origin.is_none());
+        assert!(!snapshot.timeline_items.iter().any(|item| matches!(
+            item,
+            RenderedTimelineItem::UserMessage { .. } | RenderedTimelineItem::AutomatedInput { .. }
+        )));
+    }
+}
+
+#[test]
+fn reminder_key_from_another_request_remains_visible_as_user_input() {
+    let mut rows = active_store().to_rows();
+    push_canonical_text_message(
+        &mut rows,
+        "authored:other:output-obligation:0",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "user text",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(!snapshot.messages[0].runtime_control);
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
+        RenderedTimelineItem::UserMessage { content: Some(content), .. } if content == "user text")));
+}
+
+#[test]
 fn versioned_background_wake_never_projects_as_a_user_turn() {
     let mut rows = active_store().to_rows();
     push_canonical_text_message(

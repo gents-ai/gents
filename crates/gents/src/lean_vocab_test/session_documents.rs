@@ -50,6 +50,36 @@ mod tests {
     use serde_json::{json, Value};
 
     #[test]
+    fn generated_output_obligation_cases_match_runtime_input_classification() {
+        use gents_protocol::output::{authored, MessageRole};
+        let cases: Vec<_> = lean_contract_snapshot()
+            .session_document_cases
+            .projection
+            .iter()
+            .filter(|case| case["operation"] == "output_obligation_control")
+            .collect();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let role = if case["user"].as_bool().unwrap() {
+                MessageRole::User
+            } else {
+                MessageRole::Assistant
+            };
+            assert_eq!(
+                authored::is_output_obligation(
+                    role,
+                    case["request"].as_str(),
+                    case["key"].as_str().unwrap()
+                ),
+                case["control"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        assert_eq!(authored::output_obligation_key(12), "output-obligation:12");
+    }
+
+    #[test]
     fn generated_pending_timeline_cases_preserve_request_identities_and_order() {
         let cases: Vec<_> = lean_contract_snapshot()
             .session_document_cases
