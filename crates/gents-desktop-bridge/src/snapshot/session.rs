@@ -18,13 +18,49 @@ use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, To
 use super::super::types::{
     is_live_turn_state, normalize_optional, turn_state_label, CommandDenialView,
     DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageReconstructionView,
-    MessageView, PendingTurnView, ReconstructionState, RenderedTimelineItem, RequestOriginView,
-    RequestOutcomeView, RetryEligibilityView, SessionCompactionView, SessionContextView,
-    SessionHydrationView, SessionLiveDeltaView, SessionLiveTextPatchView,
+    MessageView, PendingTurnView, QuestionReplyView, ReconstructionState, RenderedTimelineItem,
+    RequestOriginView, RequestOutcomeView, RetryEligibilityView, SessionCompactionView,
+    SessionContextView, SessionHydrationView, SessionLiveDeltaView, SessionLiveTextPatchView,
     SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
 };
 use super::timeline::build_rendered_timeline;
 use super::{request_matches_node, source_matches_node};
+
+pub(super) fn question_reply_view(
+    store: &ClientStore,
+    question_store: &ClientStore,
+    request: &AgentRequestRow,
+) -> Option<QuestionReplyView> {
+    let evidence = request
+        .input
+        .as_ref()
+        .and_then(|input| input.question_reply.as_ref());
+    let observed_question = store
+        .mailbox_items
+        .iter()
+        .chain(&question_store.mailbox_items)
+        .any(|item| {
+            Some(item.doc_id.as_str()) == request.caused_by_source_doc_id.as_deref()
+                && item.kind == "ask"
+                && item.action == "start_request"
+                && Some(item.target_node_did.as_str()) == request.node_did.as_deref()
+                && item.session_id == request.session_id
+                && Some(item.requester_did.as_str()) == request.requester_did.as_deref()
+        });
+    let source = gents_protocol::question_reply_source::question_reply_source(
+        matches!(
+            gents::request::lifecycle::request_origin(request),
+            gents::request::lifecycle::RequestOrigin::Person
+        ),
+        request.caused_by_source_doc_id.as_deref(),
+        evidence.map(|reply| reply.source_doc_id.as_str()),
+        observed_question,
+    )?;
+    Some(QuestionReplyView {
+        source_doc_id: source.to_owned(),
+        answer: evidence.map(|reply| reply.answer.clone()),
+    })
+}
 
 #[path = "session/command_denial.rs"]
 mod command_denial;

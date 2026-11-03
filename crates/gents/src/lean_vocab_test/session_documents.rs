@@ -145,4 +145,24 @@ mod tests {
             assert_eq!(json!(actual), case["slots"], "{}", case["name"]);
         }
     }
+
+    #[test]
+    fn generated_question_reply_source_cases_preserve_attribution() {
+        let cases: Vec<_> = lean_contract_snapshot()
+            .session_document_cases
+            .projection
+            .iter()
+            .filter(|case| case["operation"] == "question_reply_source")
+            .collect();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let actual = gents_protocol::question_reply_source::question_reply_source(
+                case["person"].as_bool().unwrap(),
+                case["request_source"].as_str(),
+                case["evidence_source"].as_str(),
+                case["observed_question"].as_bool().unwrap(),
+            );
+            assert_eq!(actual, case["source"].as_str(), "{}", case["name"]);
+        }
+    }
 }

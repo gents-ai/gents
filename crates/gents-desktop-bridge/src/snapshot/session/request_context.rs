@@ -786,6 +786,7 @@ mod tests {
     #[test]
     fn a_compaction_follows_its_message_past_a_pending_turn_drawn_ahead_of_it() {
         let pending = RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: "pending".into(),
             request_id: "request".into(),
             started_goal_id: None,

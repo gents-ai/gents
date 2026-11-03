@@ -153,6 +153,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
     .expect("snapshot");
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::UserMessage {
+            question_reply: None,
             started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: Some(format!("request-{index:03}")),
@@ -198,6 +199,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
     .expect("snapshot");
     snapshot.timeline_items = (0..81)
         .map(|index| RenderedTimelineItem::UserMessage {
+            question_reply: None,
             started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: None,
@@ -499,6 +501,37 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     assert!(matches!(snapshot.timeline_items.as_slice(), [
         RenderedTimelineItem::AutomatedInput { content: Some(content), .. }
     ] if content == "wake"));
+}
+
+#[test]
+fn question_reply_metadata_survives_the_published_user_turn() {
+    let mut rows = active_store().to_rows();
+    rows.requests[0].caused_by_source_doc_id = Some("question-doc".into());
+    rows.requests[0].input = Some(
+        serde_json::from_value(serde_json::json!({
+            "question_reply": {
+                "source_doc_id": "question-doc", "question_hash": "sha256:question",
+                "answer": { "option_ids": ["blue"] }
+            }
+        }))
+        .unwrap(),
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:req-1:prompt",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "Decision on colour: Blue",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
+        RenderedTimelineItem::UserMessage { question_reply: Some(reply), .. }
+        if reply.source_doc_id == "question-doc" && reply.answer.as_ref().unwrap().option_ids == ["blue"]
+    )));
 }
 
 #[test]
@@ -1127,6 +1160,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
     let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = vec![
         RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: "pending-interrupted".into(),
             request_id: "interrupted".into(),
             started_goal_id: None,
@@ -1167,6 +1201,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
     let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: format!("pending-{index}"),
             request_id: format!("request-{index}"),
             started_goal_id: None,
@@ -1203,6 +1238,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
 fn local_pending_history_pages_with_durable_anchor_cursor() {
     let mut full = empty_timeline_snapshot();
     let pending = RenderedTimelineItem::PendingUserTurn {
+        question_reply: None,
         item_key: "pending-old".into(),
         request_id: "old".into(),
         started_goal_id: None,
@@ -1241,6 +1277,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
     full.timeline_items = vec![
         assistant_item("latest", 2),
         RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: "pending-current".into(),
             request_id: "current".into(),
             started_goal_id: None,

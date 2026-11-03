@@ -586,6 +586,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     };
     let (messages, tool_calls) = project_transcript_rows(
         store,
+        transcript_store,
         &transcript,
         canonical_dependencies,
         &requests,
@@ -1718,6 +1719,7 @@ mod tests {
 /// resolves where a request came from.
 pub(super) fn project_transcript_rows(
     store: &ClientStore,
+    question_store: &ClientStore,
     transcript: &gents_desktop_core::client::TranscriptView<'_>,
     canonical_dependencies: Option<&gents_desktop_core::client::CanonicalTranscriptDependencies>,
     requests: &[&AgentRequestRow],
@@ -1824,6 +1826,25 @@ pub(super) fn project_transcript_rows(
                                 && request.requester_did == origin.message.requester_did
                         })
                 });
+            let authored_source = input_request.or_else(|| {
+                let origin = resolved_origin?;
+                let doc_id = origin.message.request_doc_id.as_deref()?;
+                let request = canonical_dependencies?
+                    .origin_requests
+                    .iter()
+                    .find(|request| {
+                        request.doc_id.as_deref() == Some(doc_id)
+                            && request.node_did.as_deref() == Some(origin.message.node_did.as_str())
+                            && request.session_id.as_deref()
+                                == Some(origin.message.session_id.as_str())
+                            && request.requester_did == origin.message.requester_did
+                    })?;
+                let (owner_doc, owner_key) =
+                    gents::request::lifecycle::input_message_owner(request)?;
+                (origin.message.request_doc_id.as_deref() == Some(owner_doc.as_str())
+                    && origin.message.message_key == owner_key)
+                    .then_some(request)
+            });
             let projection = project_message_with_dependencies(
                 row,
                 &observed_messages,
@@ -1908,6 +1929,13 @@ pub(super) fn project_transcript_rows(
             };
 
             MessageView {
+                question_reply: (origin_message.role == gents_protocol::output::MessageRole::User)
+                    .then(|| {
+                        authored_source.and_then(|request| {
+                            super::question_reply_view(store, question_store, request)
+                        })
+                    })
+                    .flatten(),
                 started_goal_id: None,
                 request_turn: row
                     .message
@@ -2114,6 +2142,7 @@ fn transcript_row_parts(
         .collect();
     let (messages, tool_calls) = project_transcript_rows(
         store,
+        &page.store,
         &transcript,
         Some(&page.canonical_dependencies),
         &requests,
