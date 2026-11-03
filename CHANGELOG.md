@@ -4,7 +4,7 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## 1.0.0-rc1 - 2026-10-31
+## 1.0.0-rc1 - 2026-11-03
 
 - P2P DAG fetches rank providers by measured health, rotate past a provider
   that answers busy instead of waiting on it, cut a fetch's closure below the
@@ -15,6 +15,11 @@ source consistency checks, not a separate runtime compatibility version.
   (defradb.rs#2542). `/metrics` adds the admission saturation lane, busy
   rotations, provider demotions and cooldown skips, busy CAR answers, and each
   peer's busy rate.
+- A session that a manual or automated Task delivery creates records the Task
+  from its fire receipt, so the session summary still names the Task after a
+  follow-up and task history includes the manual opening request. Existing
+  sessions keep their provenance; a mismatched or ambiguous receipt names no
+  Task.
 - Recover stalled conversation and file synchronization without resetting saved
   history, including reconnects and duplicate enrollment route records.
 - Improve mobile keyboard layout, touch targets, composer history, question

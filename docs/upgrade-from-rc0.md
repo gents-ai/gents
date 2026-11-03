@@ -31,9 +31,10 @@ manual migration command exists or is needed. Measured on a clone of a real
   register `AgentMessage`, `AgentRequest`, `AgentSession` and the other
   client-authored collections from the SDL they were built with, so those never
   change: every node, desktop and phone, RC0 or this release, holds the same
-  versions. v1.0.0-rc1's `AgentMessage.native_request_id` column is gone: this
-  release neither selects nor writes it, so request ids an RC1 store recorded
-  are not read back (RC1-created stores are re-created anyway, see below). The
+  versions. The `AgentMessage.native_request_id` column that pre-release main
+  builds added is gone: this release neither selects nor writes it, so request
+  ids such a store recorded are not read back (those stores are re-created
+  anyway, see below). The
   provider request id has a slot inside the `publication` JSON instead; this
   release reads it there but does not write it yet, because an RC0-era reader
   refuses the extra key (`PERSIST_NATIVE_REQUEST_ID` in
@@ -50,10 +51,11 @@ manual migration command exists or is needed. Measured on a clone of a real
   desktops, so this matters for every pairing. A client that registers SDL
   itself instead of running `gents_migration::ensure_migrations` must replay
   `gents_migration::canonical_schema_plan` for these two collections.
-- **Stores v1.0.0-rc1 created or upgraded** (main between 2026-11-02 13:40Z and
-  this change) are on a different lineage for `AgentMessage` (and, if rc1
-  created them, `InferenceBackend`); so is a `Node` that an RC2 build from
-  before the canonical lineage registered. They still start, but log an error naming
+- **Stores that pre-release main builds created or upgraded** (main between
+  2026-11-02 13:40Z and #3400, already versioned 1.0.0-rc1) are on a different
+  lineage for `AgentMessage` (and, if such a build created them,
+  `InferenceBackend`); so is a `Node` that a main build from before the
+  canonical lineage registered. They still start, but log an error naming
   each affected collection and how to re-create the store, and report them
   under `non_canonical_lineages` in `gents service update-check` (every managed
   collection) and `/status` (the replicated collections it advertises). A
@@ -61,10 +63,10 @@ manual migration command exists or is needed. Measured on a clone of a real
   asking for matching versions. Every node that reported its pins on
   2026-11-02 is on the RC0 pins and upgrades onto the canonical lineage in
   place.
-- **workstation-2 runs v0.21.0, not RC0.** Its store holds exactly the RC0
-  pins, but its upgrade path from v0.21.0 straight to this release is
-  unverified (home layout and config documents were not compared). Take a
-  backup of its home first.
+- **Mixed RC0 and v1.0.0-rc1 peers fetch from each other as before.** This
+  release answers a CAR request it sheds for a full serving lane as busy (an
+  additive header field) and rotates past busy providers. An RC0 peer ignores
+  the field and reads the reply as empty.
 - Check `<home>/network.json` matches how the service is started. The managed
   update preflight compares the running endpoint with it and refuses with
   "recorded endpoint must match this home's HTTP listener" when a node was
