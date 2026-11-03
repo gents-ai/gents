@@ -124,14 +124,16 @@ export function watchNotifications(
     queued = [];
     if (deps.focused()) return;
     for (const notice of noticesFor(events)) {
-      deps.platform.show({
-        title: notice.title,
-        body: notice.body,
-        onClick: () => {
-          pending = [];
-          deps.open(notice.to);
-        },
-      });
+      deps.platform
+        .show({
+          title: notice.title,
+          body: notice.body,
+          onClick: () => {
+            pending = [];
+            deps.open(notice.to);
+          },
+        })
+        .catch((error: unknown) => console.warn("notification not shown", error));
       pending.push({
         title: notice.title,
         action: notice.many ? "Show" : "Open",

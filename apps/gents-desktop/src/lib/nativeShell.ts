@@ -119,6 +119,25 @@ export async function pickDirectory(options: {
   return typeof picked === "string" ? picked : null;
 }
 
+/** Whether the desktop app may post notifications: the plugin answers
+    only granted or not, so asking again is what tells a refusal from a
+    question never asked. */
+export async function notificationsGranted(): Promise<boolean> {
+  return (await import("@tauri-apps/plugin-notification")).isPermissionGranted();
+}
+
+export async function requestNotifications() {
+  return (await import("@tauri-apps/plugin-notification")).requestPermission();
+}
+
+/** Posts a notification, settling once the system took it or failing with
+    why it didn't. The plugin's sendNotification neither waits for nor
+    returns the native call, so a refusal would vanish; this is the call it
+    makes. */
+export async function postNotification(options: { title: string; body?: string }) {
+  await invoke("plugin:notification|notify", { options });
+}
+
 export async function homeFolder(): Promise<string | null> {
   if (!inNativeShell()) return null;
   return homeDir();

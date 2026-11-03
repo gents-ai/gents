@@ -145,7 +145,7 @@ describe("the notification owner", () => {
   const platform = (reportsClicks: boolean): NotifyPlatform => ({
     permission: async () => "granted",
     request: async () => "granted",
-    show: (n) => void shown.push(n),
+    show: async (n) => void shown.push(n),
     reportsClicks,
   });
 
@@ -329,6 +329,30 @@ describe("the notification settings", () => {
     expect(screen.getByRole("switch", { name: "Finished" })).not.toBeChecked();
     act(() => preferences.setNotify("finished", true));
     expect(screen.getByRole("switch", { name: "Finished" })).toBeChecked();
+  });
+
+  it("say in place whether the test notification was refused or sent", async () => {
+    const { notifyPlatform } = await import("../src/ui/lib/notify/platform");
+    const { NotificationsGroup } =
+      await import("../src/ui/screens/settings/NotificationsGroup");
+    vi.spyOn(notifyPlatform, "permission").mockResolvedValue("granted");
+    const show = vi
+      .spyOn(notifyPlatform, "show")
+      .mockRejectedValueOnce(new Error("not allowed"))
+      .mockResolvedValueOnce();
+    render(<NotificationsGroup />);
+    const button = await screen.findByRole("button", {
+      name: "Send a test notification",
+    });
+    await vi.waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    expect(
+      await screen.findByText("Couldn't show a notification: not allowed"),
+    ).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(await screen.findByText(/^Sent\./)).toBeInTheDocument();
+    expect(show).toHaveBeenCalledTimes(2);
+    vi.restoreAllMocks();
   });
 
   it("have their own Settings section while the feature is on, and General otherwise", async () => {

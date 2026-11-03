@@ -1,3 +1,8 @@
+import {
+  notificationsGranted,
+  postNotification,
+  requestNotifications,
+} from "../../../lib/nativeShell";
 import { IN_DESKTOP } from "@/screens/shortcutKeys";
 
 export type NotifyPermission = "granted" | "denied" | "default";
@@ -14,28 +19,21 @@ export type Notice = {
 export type NotifyPlatform = {
   permission(): Promise<NotifyPermission>;
   request(): Promise<NotifyPermission>;
-  show(notice: Notice): void;
+  /** settles once the system took the notice, or fails with why it
+      didn't; the system may still drop it after taking it (Focus, or
+      notifications switched off for the app), and nothing reports that */
+  show(notice: Notice): Promise<void>;
   /** whether a click reaches `onClick`; where it doesn't, the click only
       brings the window forward */
   reportsClicks: boolean;
 };
 
-const plugin = () => import("@tauri-apps/plugin-notification");
-
-/* the plugin answers only granted or not; asking again is what tells a
-   refusal from a question never asked */
 const desktop: NotifyPlatform = {
   async permission() {
-    return (await plugin())
-      .isPermissionGranted()
-      .then((on) => (on ? "granted" : "default"));
+    return (await notificationsGranted()) ? "granted" : "default";
   },
-  async request() {
-    return (await plugin()).requestPermission();
-  },
-  show({ title, body }) {
-    void plugin().then(({ sendNotification }) => sendNotification({ title, body }));
-  },
+  request: () => requestNotifications(),
+  show: ({ title, body }) => postNotification({ title, body }),
   reportsClicks: false,
 };
 
@@ -46,8 +44,9 @@ const browser: NotifyPlatform = {
   async request() {
     return Notification.requestPermission();
   },
-  show({ title, body, onClick }) {
-    if (Notification.permission !== "granted") return;
+  async show({ title, body, onClick }) {
+    if (Notification.permission !== "granted")
+      throw new Error("Notifications aren't allowed for this page");
     const shown = new Notification(title, { body });
     shown.onclick = () => {
       window.focus();
@@ -65,7 +64,9 @@ const none: NotifyPlatform = {
   async request() {
     return "denied";
   },
-  show() {},
+  async show() {
+    throw new Error("This build can't show notifications");
+  },
   reportsClicks: false,
 };
 
