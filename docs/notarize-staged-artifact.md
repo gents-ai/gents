@@ -46,7 +46,7 @@ The workflow runs as one job with these steps, in order:
      level, the app is a real directory, and every symlink's real path stays
      inside the app.
    - Checks the signature: strict deep `codesign`, TeamIdentifier
-     `NXJ753WW5X`, bundle id `com.source-inc.gents`, the hardened runtime, and
+     `4LPKFKCXDA`, bundle id `com.source-inc.gents`, the hardened runtime, and
      the pinned leaf certificate SHA-256.
    - In submit mode, the app must not already be stapled.
    - Every Mach-O file in the artifact must be thin `arm64` (`lipo -archs`).
@@ -113,7 +113,7 @@ The default is `app`. The app path is unchanged by this option.
 - **Archive checks.** The single entry must be a regular file named `gents`.
   Directories, symlinks, extra entries and nested paths are rejected.
 - **Signature checks.** Strict `codesign`, identifier `com.source-inc.gents.cli`,
-  TeamIdentifier `NXJ753WW5X`, the hardened runtime, the pinned leaf
+  TeamIdentifier `4LPKFKCXDA`, the hardened runtime, the pinned leaf
   certificate, and `Format=Mach-O thin (arm64)` confirmed with `lipo -archs`.
   A universal binary is rejected, because one CDHash would not cover every
   slice. The verify step records the executable's SHA-256 and its CDHash.
@@ -156,7 +156,7 @@ Read from the authentic candidate binary with `codesign -dv --verbose=4`,
 | `Identifier` | `gents` |
 | `Format` | `Mach-O thin (arm64)`; `lipo -archs` prints `arm64` |
 | `CDHash` | `595a5f783971fe0d9271b8357395d52114f51438` |
-| `TeamIdentifier` | `NXJ753WW5X` (leaf certificate SHA-256 `ffe16122…1baf`) |
+| `TeamIdentifier` | `4LPKFKCXDA` (leaf certificate SHA-256 `02d9c8a2…0625`) |
 | Flags | hardened runtime; timestamped 2026-10-19 18:45:57 local |
 
 The file SHA-256 matches the build receipt
