@@ -45,6 +45,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
 
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("runtime");
+    let initial_root = root.path().join("initial-workspace");
+    std::fs::create_dir(&initial_root).unwrap();
     let executable = env!("CARGO_BIN_EXE_gents-client-host");
     let init = Command::new(executable)
         .args(["init", "--store-key-custody", "file", "--home"])
@@ -54,8 +56,10 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             "Gents",
             "--engineer",
             "--tool-package",
-            "minimal",
+            "write",
+            "--tool-root",
         ])
+        .arg(&initial_root)
         .output()
         .unwrap();
     assert!(
@@ -162,8 +166,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             assert!(child.try_wait().unwrap().is_none());
         }
     }
-    let changed_root = root.path().join("workspace");
-    std::fs::create_dir(&changed_root).unwrap();
+    let changed_root = root.path().canonicalize().unwrap();
     let mut changed = tokio::process::Command::new(executable)
         .args(["prepare-runtime", "--home"])
         .arg(&home)
@@ -200,6 +203,27 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         changed_root.canonicalize().unwrap().to_str().unwrap()
     );
     assert_eq!(after["tool_ceiling"], before["tool_ceiling"]);
+    let identity =
+        gents::KeyIdentity::load_or_create(before["key_path"].as_str().unwrap(), None).unwrap();
+    use gents::NodeIdentity as _;
+    assert_eq!(identity.did(), changed_did);
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://127.0.0.1:{port}/api/v0/graphql"),
+        identity.did(),
+    );
+    let status: serde_json::Value = endpoint
+        .authorize(reqwest::Client::new().get(format!("http://127.0.0.1:{port}/status")))
+        .unwrap()
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["tool_root"], changed_root.to_str().unwrap());
+    assert_eq!(status["tool_ceiling"], "readwrite");
     let paths = DesktopPaths::from_root(root.path().join("client"));
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
