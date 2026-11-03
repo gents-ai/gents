@@ -124,11 +124,12 @@ let failure = null;
 try {
   await step("welcome", async () => {
     await waitFor("welcome", textIncludes("Let’s get set up"));
-    const name = await first("#setup-node-name");
-    const root = await first("#managed-tool-root");
+    // The tool root mounts only after home-directory discovery resolves.
+    const filled = (id) => () =>
+      exec("return document.getElementById(arguments[0])?.value || null", id);
     return {
-      nodeName: await exec("return arguments[0].value", { [ELEMENT]: name }),
-      toolRoot: await exec("return arguments[0].value", { [ELEMENT]: root }),
+      nodeName: await waitFor("node name", filled("setup-node-name")),
+      toolRoot: await waitFor("tool root", filled("managed-tool-root")),
       ceiling: await exec(
         "return document.querySelector('[aria-labelledby=managed-tool-ceiling]')?.innerText",
       ),
