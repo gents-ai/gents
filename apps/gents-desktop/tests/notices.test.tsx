@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { GoalView } from "@source-inc/gents-desktop-client";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
@@ -13,6 +13,7 @@ import {
 } from "../src/lib/reasonText";
 import { Notice } from "../src/ui/components/Notice";
 import { Goal } from "../src/ui/screens/SessionHeader";
+import { toolSummary } from "../src/ui/screens/tool-summary";
 import { ToolBody } from "../src/ui/screens/tool-views";
 
 describe("a notice", () => {
@@ -25,21 +26,33 @@ describe("a notice", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Couldn't finish");
   });
 
-  it("keeps the raw report under Details, and its actions after it", () => {
+  it("opens the raw report from its line, and puts its actions after it", () => {
     render(
       <Notice
         tone="destructive"
         title="This turn couldn't finish"
+        description="The provider was overloaded."
         details="provider error: 529 overloaded_error"
         actions={<button type="button">Retry</button>}
-      >
-        <p>The provider was overloaded.</p>
-      </Notice>,
+      />,
     );
-    const details = screen.getByText("Details").closest("details")!;
-    expect(details).not.toHaveAttribute("open");
-    expect(details).toHaveTextContent("provider error: 529 overloaded_error");
+    const line = screen.getByRole("button", {
+      name: /The provider was overloaded\. Show details/,
+    });
+    expect(line).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("provider error: 529 overloaded_error")).not.toBeVisible();
+    fireEvent.click(line);
+    expect(line).toHaveAttribute("aria-expanded", "true");
+    expect(line).toHaveAccessibleName(/Hide details/);
+    expect(screen.getByText("provider error: 529 overloaded_error")).toBeVisible();
+    expect(screen.queryByText("Details")).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+  });
+
+  it("draws its line as plain text when there's nothing to open", () => {
+    render(<Notice title="Saved" description="All done." />);
+    expect(screen.getByText("All done.").tagName).toBe("P");
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
 
@@ -124,7 +137,7 @@ describe("where the words are used", () => {
     });
   });
 
-  it("says a stopped command was stopped, with the cause's ids under Details", () => {
+  it("lists a stopped command's particulars as rows, with no nested toggle", () => {
     const tool = {
       itemKey: "t",
       toolName: "bash",
@@ -153,9 +166,50 @@ describe("where the words are used", () => {
       },
     } as unknown as RenderedToolCallView;
     render(<ToolBody tool={tool} />);
-    expect(screen.getByText("You stopped it.")).toBeVisible();
-    const details = screen.getByText("Details").closest("details")!;
-    expect(details).toHaveTextContent("a stop request on this request");
+    expect(screen.getByText("Stopped by")).toBeVisible();
+    expect(screen.getByText("a stop request on this request")).toBeVisible();
+    expect(screen.getByText("interrupt request req-7f3a")).toBeVisible();
+    expect(screen.queryByText("Details")).toBeNull();
     expect(screen.queryByText(/userCancelled/)).toBeNull();
+    /* the step's own row says what happened */
+    expect(toolSummary(tool).secondary).toBe("You stopped it.");
+  });
+
+  it("lists a refusal's particulars once, leaving its reason to the step's row", () => {
+    const tool = {
+      itemKey: "d",
+      toolName: "bash",
+      statusKind: "error",
+      reconstruction: { state: "ready" },
+      denial: {
+        category: "network",
+        categoryLabel: "Network",
+        ruleId: "bash.network.deny_outbound",
+        reasonLine: "Outbound network access is turned off.",
+        deniedCommand: "curl",
+        deniedArgument: "https://example.com",
+        deniedSubcommand: null,
+        diagnostic: "policy=tools-default",
+      },
+      presentation: {
+        kind: "command",
+        command: "curl https://example.com",
+        exitCode: null,
+        timedOut: false,
+        failed: true,
+        durationMs: null,
+        cwd: null,
+        executionMode: null,
+        networkMode: null,
+        stdout: "",
+        stderr: "",
+        fallbackOutput: null,
+      },
+    } as unknown as RenderedToolCallView;
+    render(<ToolBody tool={tool} />);
+    expect(screen.getByText("bash.network.deny_outbound")).toBeVisible();
+    expect(screen.getByText("policy=tools-default")).toBeVisible();
+    expect(screen.queryByText("Outbound network access is turned off.")).toBeNull();
+    expect(toolSummary(tool).secondary).toBe("Outbound network access is turned off.");
   });
 });

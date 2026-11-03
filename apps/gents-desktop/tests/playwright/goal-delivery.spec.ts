@@ -48,7 +48,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(
       panel.getByRole("button", { name: "Resume saved goal change" }),
     ).toBeFocused();
-    await panel.locator("summary").focus();
+    await panel.getByRole("button", { name: /Show details/ }).focus();
     await page.keyboard.press("Enter");
     await expect(
       panel.getByText(

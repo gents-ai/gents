@@ -1,8 +1,7 @@
-import type { ComponentProps, ReactNode } from "react";
-import { CircleAlert, Info, TriangleAlert } from "lucide-react";
+import { useId, useState, type ComponentProps, type ReactNode } from "react";
+import { ChevronRight, CircleAlert, Info, TriangleAlert } from "lucide-react";
 import { Alert, AlertTitle } from "@gents/ui/components/alert";
 import { cn } from "@gents/ui/lib/utils";
-import { Disclosure } from "./Disclosure";
 
 export type NoticeTone = "info" | "warning" | "destructive";
 
@@ -14,13 +13,14 @@ const TONE: Record<NoticeTone, { box: string; icon: string }> = {
   destructive: { box: "border-destructive/30", icon: "text-destructive" },
 };
 
-/** The app's notice: a title, what to know or do, the person's choices,
-    and the raw report folded under Details. Errors and limits use it rather
-    than a box of their own, so they read the same everywhere. */
+/** The app's notice: a title, a line saying what happened, the person's
+    choices, and the raw report a click on that line away. Errors and limits
+    use it rather than a box of their own, so they read the same everywhere. */
 export function Notice({
   tone = "info",
   title,
   icon,
+  description,
   children,
   actions,
   details,
@@ -33,15 +33,21 @@ export function Notice({
   title: ReactNode;
   /** in place of the tone's icon, e.g. the provider's logo */
   icon?: ReactNode;
+  /** the line under the title; with details, it opens them */
+  description?: ReactNode;
   children?: ReactNode;
   actions?: ReactNode;
   /** the raw report, shown only on request */
   details?: ReactNode;
+  /** the line that opens the details when there is no description */
   detailsLabel?: string;
   /** the details are the person's own words, not a raw report */
   detailsText?: boolean;
 } & Omit<ComponentProps<"div">, "title">) {
   const Icon = ICON[tone];
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const line = description ?? (details ? detailsLabel : null);
   return (
     <Alert
       role={tone === "info" ? "status" : "alert"}
@@ -60,22 +66,47 @@ export function Notice({
         {icon ?? <Icon />}
       </span>
       <AlertTitle className="col-start-2">{title}</AlertTitle>
-      {(children || actions || details) && (
+      {(line || children || actions) && (
         <div className="col-start-2 grid gap-2 text-sm text-muted-foreground">
-          {children}
+          {line &&
+            (details ? (
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-controls={detailsId}
+                onClick={() => setOpen((was) => !was)}
+                className="group/line -mx-1 w-fit rounded-sm px-1 text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {line}
+                <span className="sr-only">
+                  {open ? " Hide details" : " Show details"}
+                </span>
+                <ChevronRight
+                  aria-hidden
+                  className={cn(
+                    "ml-1 inline size-3.5 align-[-2px] transition-transform",
+                    open && "rotate-90",
+                  )}
+                />
+              </button>
+            ) : (
+              <p>{line}</p>
+            ))}
+          {/* kept in the document while closed, so its text can be found */}
           {details && (
-            <Disclosure summary={detailsLabel} summaryClassName="text-xs">
+            <div id={detailsId} hidden={!open}>
               {detailsText ? (
-                <p className="mt-1 max-h-24 overflow-auto text-xs whitespace-pre-wrap break-words">
+                <p className="max-h-24 overflow-auto text-xs whitespace-pre-wrap break-words">
                   {details}
                 </p>
               ) : (
-                <pre className="mt-1 max-h-40 overflow-auto font-mono text-[11px] whitespace-pre-wrap break-words text-muted-foreground">
+                <pre className="max-h-40 overflow-auto font-mono text-[11px] whitespace-pre-wrap break-words text-muted-foreground">
                   {details}
                 </pre>
               )}
-            </Disclosure>
+            </div>
           )}
+          {children}
           {actions && (
             <div className="flex flex-wrap items-center gap-2 pt-1">{actions}</div>
           )}

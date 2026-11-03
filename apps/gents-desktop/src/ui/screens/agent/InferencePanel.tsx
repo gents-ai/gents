@@ -174,15 +174,14 @@ export function InferencePanel({
           tone="destructive"
           className="mb-4"
           title="Couldn't load the list of providers"
+          description={errorWords(catalog.error)}
           details={catalog.error}
           actions={
             <Button variant="outline" size="sm" onClick={catalog.retry}>
               Retry
             </Button>
           }
-        >
-          <p>{errorWords(catalog.error)}</p>
-        </Notice>
+        />
       )}
       {!item && (
         <AllProviderLimits

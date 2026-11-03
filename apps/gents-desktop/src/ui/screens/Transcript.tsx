@@ -95,12 +95,11 @@ function FailedEarlier({ message }: { message: string }) {
     <Notice
       tone="destructive"
       title="An earlier attempt couldn't finish, and the session carried on"
+      description={
+        failureText(message) ?? "Something went wrong while the agent was answering."
+      }
       details={message}
-    >
-      <p>
-        {failureText(message) ?? "Something went wrong while the agent was answering."}
-      </p>
-    </Notice>
+    />
   );
 }
 
@@ -1008,6 +1007,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                   <Notice
                     tone="destructive"
                     title="This turn couldn't finish"
+                    description={
+                      failureText(latest?.failureReason) ??
+                      (latest?.failureReason
+                        ? "Something went wrong while the agent was answering."
+                        : "The request failed before a response was available.")
+                    }
                     details={latest?.failureReason?.trim() || undefined}
                     actions={
                       session?.retryEligibility?.eligible && (
@@ -1022,12 +1027,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                       )
                     }
                   >
-                    <p>
-                      {failureText(latest?.failureReason) ??
-                        (latest?.failureReason
-                          ? "Something went wrong while the agent was answering."
-                          : "The request failed before a response was available.")}
-                    </p>
                     {session?.timelineItems.some(
                       (item) =>
                         (item.kind === "userMessage" ||

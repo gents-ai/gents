@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef } from "react";
+import { Fragment, lazy, Suspense, useRef } from "react";
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import type {
@@ -16,8 +16,7 @@ import { useHomeDid, useSelectedNode } from "../hooks/useClient";
 import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
 import { JobProgressCell } from "./JobProgressCell";
-import { cancelCauseText, sentence, stopSourceText } from "../../lib/reasonText";
-import { Disclosure } from "../components/Disclosure";
+import { stopSourceText } from "../../lib/reasonText";
 import {
   diffText,
   duration,
@@ -126,6 +125,29 @@ function Payload({
   );
 }
 
+/** A step's details as compact rows; the step's own row already says what
+    happened, so these are the particulars. */
+function Facts({
+  rows,
+}: {
+  rows: readonly (readonly [string, string | null | undefined])[];
+}) {
+  const shown = rows.filter((row): row is readonly [string, string] =>
+    Boolean(row[1]?.trim()),
+  );
+  if (!shown.length) return null;
+  return (
+    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11px]">
+      {shown.map(([label, value], i) => (
+        <Fragment key={`${label}-${i}`}>
+          <dt className="font-sans text-muted-foreground">{label}</dt>
+          <dd className="font-mono break-all text-foreground/80">{value}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
 function Meta({ items }: { items: (string | null | undefined)[] }) {
   const shown = items.filter(Boolean) as string[];
   if (!shown.length) return null;
@@ -211,43 +233,23 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
     <div className="grid gap-3">
       {(tool.jobProgress || tool.jobState) && <JobProgressCell tool={tool} />}
       {denial && (
-        <div className="grid gap-1.5">
-          <p className="font-sans text-sm">{sentence(denial.reasonLine)}</p>
-          <Disclosure summary="Details" summaryClassName="font-sans text-xs">
-            <div className="mt-2 grid gap-2">
-              <Meta
-                items={[
-                  `rule · ${denial.ruleId}`,
-                  denial.deniedCommand && `command · ${denial.deniedCommand}`,
-                  denial.deniedSubcommand && `subcommand · ${denial.deniedSubcommand}`,
-                  denial.deniedArgument && `argument · ${denial.deniedArgument}`,
-                ]}
-              />
-              <Payload value={denial.diagnostic} />
-            </div>
-          </Disclosure>
-        </div>
+        <Facts
+          rows={[
+            ["Rule", denial.ruleId],
+            ["Command", denial.deniedCommand],
+            ["Subcommand", denial.deniedSubcommand],
+            ["Argument", denial.deniedArgument],
+            ["Diagnostic", denial.diagnostic],
+          ]}
+        />
       )}
       {tool.cancelCause && (
-        <div className="grid gap-1.5">
-          <p className="font-sans text-sm">
-            {cancelCauseText(tool.cancelCause.cause)}
-            {tool.cancelCause.at &&
-              !Number.isNaN(Date.parse(tool.cancelCause.at)) &&
-              ` at ${new Date(tool.cancelCause.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}
-            .
-          </p>
-          <Disclosure summary="Details" summaryClassName="font-sans text-xs">
-            <div className="mt-2">
-              <Meta
-                items={[
-                  `stopped by · ${stopSourceText(tool.cancelCause.source)}`,
-                  ...tool.cancelCause.evidence,
-                ]}
-              />
-            </div>
-          </Disclosure>
-        </div>
+        <Facts
+          rows={[
+            ["Stopped by", stopSourceText(tool.cancelCause.source)],
+            ...tool.cancelCause.evidence.map((line) => ["Evidence", line] as const),
+          ]}
+        />
       )}
       <Meta
         items={[
