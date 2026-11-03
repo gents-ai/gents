@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   authChange,
   canPool,
+  movedCredential,
   isPool,
   poolAccounts,
 } from "../src/ui/screens/agent/backendRotation";
@@ -12,8 +13,14 @@ const backend = (authKind: string, accountRef: string | null = null) => ({
   accountRef,
   apiKeyConfigured: false,
 });
+const ENDPOINT = "https://saved.example";
+const saved = (providerKind = "ClaudeCliSubscription") => ({
+  providerKind,
+  endpoint: ENDPOINT,
+});
 const fields = (providerKind = "ClaudeCliSubscription") => ({
   providerKind,
+  endpoint: ENDPOINT,
   apiKey: "",
   apiKeyEnvVar: "",
 });
@@ -23,7 +30,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         backend("node_oauth_pool"),
-        "ClaudeCliSubscription",
+        saved("ClaudeCliSubscription"),
         fields(),
         isSubscriptionKind,
       ),
@@ -34,7 +41,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         backend("node_oauth", "acct-2"),
-        "ClaudeCliSubscription",
+        saved("ClaudeCliSubscription"),
         fields(),
         isSubscriptionKind,
       ),
@@ -42,7 +49,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         backend("node_oauth"),
-        "ClaudeCliSubscription",
+        saved("ClaudeCliSubscription"),
         fields(),
         isSubscriptionKind,
       ),
@@ -53,7 +60,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         backend("node_oauth_pool"),
-        "ClaudeCliSubscription",
+        saved("ClaudeCliSubscription"),
         fields("ChatGptCodex"),
         isSubscriptionKind,
       ),
@@ -65,7 +72,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         keyed,
-        "OpenAiCompatible",
+        saved("OpenAiCompatible"),
         { ...fields("OpenAiCompatible"), apiKey: "sk-x" },
         isSubscriptionKind,
       ),
@@ -73,7 +80,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         keyed,
-        "OpenAiCompatible",
+        saved("OpenAiCompatible"),
         { ...fields("OpenAiCompatible"), apiKeyEnvVar: " KEY " },
         isSubscriptionKind,
       ),
@@ -81,7 +88,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         keyed,
-        "OpenAiCompatible",
+        saved("OpenAiCompatible"),
         fields("OpenAiCompatible"),
         isSubscriptionKind,
       ),
@@ -89,7 +96,7 @@ describe("a field save and the account pool", () => {
     expect(
       authChange(
         backend("node_oauth"),
-        "ClaudeCliSubscription",
+        saved("ClaudeCliSubscription"),
         fields("OpenAiCompatible"),
         isSubscriptionKind,
       ),
@@ -103,7 +110,7 @@ describe("a field save and credentials the editor has no field for", () => {
       expect(
         authChange(
           backend(authKind),
-          "ClaudeBedrock",
+          saved("ClaudeBedrock"),
           fields("ClaudeBedrock"),
           isSubscriptionKind,
         ),
@@ -114,7 +121,7 @@ describe("a field save and credentials the editor has no field for", () => {
     expect(
       authChange(
         backend("node_oauth"),
-        "ClaudeGateway",
+        saved("ClaudeGateway"),
         fields("ClaudeGateway"),
         isSubscriptionKind,
       ),
@@ -125,7 +132,7 @@ describe("a field save and credentials the editor has no field for", () => {
     expect(
       authChange(
         backend("aws_credentials"),
-        "ClaudeBedrock",
+        saved("ClaudeBedrock"),
         { ...fields("ClaudeBedrock"), apiKey: "sk-x" },
         isSubscriptionKind,
       ),
@@ -133,11 +140,77 @@ describe("a field save and credentials the editor has no field for", () => {
     expect(
       authChange(
         { authKind: "environment", accountRef: null, apiKeyConfigured: false },
-        "OpenAiCompatible",
+        saved("OpenAiCompatible"),
         fields("OpenAiCompatible"),
         isSubscriptionKind,
       ),
     ).toEqual({ kind: "unauthenticated" });
+  });
+});
+
+describe("a field save that moves a kept credential's endpoint", () => {
+  const moved = (providerKind: string) => ({
+    ...fields(providerKind),
+    endpoint: "https://elsewhere.example",
+  });
+
+  it("is refused for a gateway sign-in and for cloud credentials", () => {
+    for (const [authKind, kind] of [
+      ["node_oauth", "ClaudeGateway"],
+      ["aws_credentials", "ClaudeBedrock"],
+      ["google_credentials", "ClaudeVertex"],
+    ]) {
+      expect(
+        movedCredential(
+          backend(authKind),
+          saved(kind),
+          moved(kind),
+          isSubscriptionKind,
+        ),
+      ).toBeTruthy();
+      expect(() =>
+        authChange(backend(authKind), saved(kind), moved(kind), isSubscriptionKind),
+      ).toThrow(/saved endpoint/);
+    }
+  });
+
+  it("goes through when a key is chosen for the new endpoint", () => {
+    const next = { ...moved("ClaudeGateway"), apiKey: "sk-x" };
+    expect(
+      movedCredential(
+        backend("node_oauth"),
+        saved("ClaudeGateway"),
+        next,
+        isSubscriptionKind,
+      ),
+    ).toBeUndefined();
+    expect(
+      authChange(
+        backend("node_oauth"),
+        saved("ClaudeGateway"),
+        next,
+        isSubscriptionKind,
+      ),
+    ).toEqual({ kind: "api_key", key: "sk-x" });
+  });
+
+  it("leaves a stored API key and a subscription as they were", () => {
+    expect(
+      movedCredential(
+        { authKind: "api_key" },
+        saved("OpenAiCompatible"),
+        moved("OpenAiCompatible"),
+        isSubscriptionKind,
+      ),
+    ).toBeUndefined();
+    expect(
+      movedCredential(
+        backend("node_oauth"),
+        saved(),
+        moved("ClaudeCliSubscription"),
+        isSubscriptionKind,
+      ),
+    ).toBeUndefined();
   });
 });
 

@@ -116,3 +116,29 @@ describe("a Claude backend's account rotation", () => {
     expect(screen.queryByRole("combobox", { name: "Accounts" })).toBeNull();
   });
 });
+
+describe("a gateway backend's sign-in", () => {
+  const gateway = () =>
+    claude({ providerKind: "ClaudeGateway", endpoint: "https://gateway.example" });
+
+  it("is kept when another field is saved", async () => {
+    const { api, user } = render(gateway());
+    const name = screen.getByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Gateway");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+    const [{ patches }] = api.patchConfigComponents.mock.calls[0]!;
+    expect(patches[0].changes).not.toHaveProperty("auth");
+  });
+
+  it("isn't sent to a new endpoint", async () => {
+    const { api, user } = render(gateway());
+    const endpoint = screen.getByLabelText("Endpoint");
+    await user.clear(endpoint);
+    await user.type(endpoint, "https://elsewhere.example");
+    expect(await screen.findByText(/sign-in is for its saved endpoint/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.patchConfigComponents).not.toHaveBeenCalled();
+  });
+});

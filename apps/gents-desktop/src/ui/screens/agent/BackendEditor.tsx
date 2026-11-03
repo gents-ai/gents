@@ -40,7 +40,13 @@ import { healthy, isSubscriptionKind, KINDS, SUBSCRIPTION } from "./inferenceKin
 import { UsageRows, UsageSkeleton } from "./ProviderUsage";
 import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
 import { errorText } from "../../../lib/errorText";
-import { authChange, canPool, isPool, poolAccounts } from "./backendRotation";
+import {
+  authChange,
+  canPool,
+  isPool,
+  movedCredential,
+  poolAccounts,
+} from "./backendRotation";
 
 export function backendSave(
   nodeDid: string,
@@ -135,11 +141,14 @@ export function BackendEditor({
       if (!name) throw new Error("Name is required");
       return name;
     },
-    endpoint: () =>
-      next.providerKind === "ClaudeCliSubscription" &&
-      next.endpoint === "claude-cli://subscription"
+    endpoint: () => {
+      const moved = movedCredential(backend, saved, next, isSubscriptionKind);
+      if (moved) throw new Error(moved);
+      return next.providerKind === "ClaudeCliSubscription" &&
+        next.endpoint === "claude-cli://subscription"
         ? next.endpoint
-        : requiredHttpUrl("Endpoint", next.endpoint),
+        : requiredHttpUrl("Endpoint", next.endpoint);
+    },
     apiKeyEnvVar: () => {
       if (next.apiKey.trim() && next.apiKeyEnvVar.trim())
         throw new Error("Choose an API key or an environment variable, not both");
@@ -165,7 +174,7 @@ export function BackendEditor({
       const maxQueueDepth = value.maxQueueDepth();
       const connectTimeoutSecs = value.connectTimeoutSecs();
       const discoveryTimeoutSecs = value.discoveryTimeoutSecs();
-      const auth = authChange(backend, saved.providerKind, next, isSubscriptionKind);
+      const auth = authChange(backend, saved, next, isSubscriptionKind);
 
       const changes: Partial<Omit<InferenceBackend, "node_did" | "backend_id">> = {
         name,
