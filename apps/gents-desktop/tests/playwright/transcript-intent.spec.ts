@@ -72,6 +72,95 @@ test.describe("transcript input at its scroll boundary", () => {
     });
   }
 
+  test("a delayed wheel scroll remains the reader's movement", async ({ page }) => {
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await viewport.evaluate((scroller) => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+      scroller.scrollTop = Math.floor(
+        (scroller.scrollHeight - scroller.clientHeight) / 2,
+      );
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await page.waitForTimeout(400);
+    const before = await viewport.evaluate((scroller) => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+      return scroller.scrollTop;
+    });
+    expect(before).toBeGreaterThan(100);
+    await page.waitForTimeout(400);
+    await viewport.evaluate((scroller, top) => {
+      scroller.scrollTop = top - 80;
+      scroller.dispatchEvent(new Event("scroll"));
+    }, before);
+    await page.waitForTimeout(400);
+    await expect
+      .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
+      .toBeLessThan(before - 40);
+  });
+
+  for (const input of [
+    "cancelled",
+    "cancelled after bubbling",
+    "nested",
+    "superseded by a click",
+  ] as const) {
+    test(`${input} wheel does not retain transcript intent`, async ({ page }) => {
+      const viewport = page.locator(
+        '[data-slot="scroll-area-viewport"][data-following]',
+      );
+      await viewport.evaluate((scroller) => {
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+        scroller.scrollTop = Math.floor(
+          (scroller.scrollHeight - scroller.clientHeight) / 2,
+        );
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      await page.waitForTimeout(400);
+      const before = await viewport.evaluate((scroller, input) => {
+        if (input === "superseded by a click") {
+          scroller.dispatchEvent(
+            new WheelEvent("wheel", { deltaY: -80, bubbles: true }),
+          );
+          scroller.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        } else if (input !== "nested") {
+          const event = new WheelEvent("wheel", {
+            deltaY: -80,
+            bubbles: true,
+            cancelable: true,
+          });
+          if (input === "cancelled") event.preventDefault();
+          else
+            window.addEventListener("wheel", (event) => event.preventDefault(), {
+              once: true,
+              passive: false,
+            });
+          scroller.dispatchEvent(event);
+        } else {
+          const nested = document.createElement("div");
+          nested.style.cssText =
+            "position: absolute; top: 0; width: 100px; height: 30px; overflow-y: scroll; display: block";
+          const child = document.createElement("div");
+          child.style.cssText = "height: 200px; min-height: 200px; width: 100px";
+          nested.append(child);
+          scroller.append(nested);
+          nested.scrollTop = 50;
+          if (nested.scrollTop === 0) throw new Error("nested fixture must scroll");
+          nested.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+          nested.remove();
+        }
+        return scroller.scrollTop;
+      }, input);
+      await page.waitForTimeout(400);
+      await viewport.evaluate((scroller, top) => {
+        scroller.scrollTop = top - 24;
+        scroller.dispatchEvent(new Event("scroll"));
+      }, before);
+      await expect
+        .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
+        .toBe(before);
+    });
+  }
+
   test("a jump to the top while a correction is carried stays at the top", async ({
     page,
   }) => {
