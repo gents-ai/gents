@@ -103,6 +103,14 @@ describe("finding in a session", () => {
     const field = screen.getByRole("textbox", { name: "Find in session" });
     expect(field).toHaveFocus();
     expect(field).toHaveAttribute("autocorrect", "off");
+    /* one character waits for Enter, since it matches nearly everything */
+    fireEvent.change(field, { target: { value: "s" } });
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByText("Enter to find")).toBeInTheDocument();
+    expect(screen.queryByText(/ of \d/)).toBeNull();
+    fireEvent.keyDown(field, { key: "Enter" });
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByText(/^1 of \d+\+?$/)).toBeInTheDocument();
 
     fireEvent.change(field, { target: { value: "snake" } });
     act(() => vi.advanceTimersByTime(200));

@@ -205,7 +205,10 @@ export function FindBar({
   const placing = useRef(0);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setQuery(text), TYPING_MS);
+    /* one character matches nearly everything, so typing finds from two;
+       Enter still finds one */
+    const typed = text.trim().length === 1 ? "" : text;
+    const timer = window.setTimeout(() => setQuery(typed), TYPING_MS);
     return () => window.clearTimeout(timer);
   }, [text]);
   const [found, setFound] = useState<Found>(NOTHING);
@@ -381,7 +384,9 @@ export function FindBar({
 
   if (!open) return null;
   const count = !query.trim()
-    ? null
+    ? text.trim()
+      ? "Enter to find"
+      : null
     : !done && !matches.length
       ? "Finding…"
       : matches.length
