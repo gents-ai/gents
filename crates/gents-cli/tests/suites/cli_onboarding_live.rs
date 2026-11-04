@@ -35,6 +35,8 @@ const FOLDER_QUESTION: &str = "Data folder [";
 const INFERENCE_QUESTION: &str = "How do you want to run inference?";
 const TOOLS_QUESTION: &str = "What may agents do?";
 const ENDPOINT_TEXT: &str = "127.0.0.1:21929";
+const OPENS_THREAD: Duration = Duration::from_secs(60);
+const OUTSIDE_THE_ROOT_TEXT: &str = "the thread will use";
 
 /// One test's temporary user. Owns the launchd job from the moment it exists,
 /// and every refusal happens before that, so `Drop` never removes a job this
@@ -51,6 +53,7 @@ struct InitializedHome {
     home: PathBuf,
     node_did: String,
     default_agent_id: String,
+    profile_id: String,
 }
 
 fn job_loaded(target: &str) -> Result<bool> {
@@ -113,9 +116,12 @@ impl LiveBox {
 
         let codex_home = root.join("codex-home");
         fs::create_dir_all(&codex_home)?;
+        // The first window caches the release it saw, and the next one would stop
+        // at Codex's update screen before opening a thread.
         fs::write(
             codex_home.join("config.toml"),
-            "# Existing user Codex config should remain client-side.\n",
+            "# Existing user Codex config should remain client-side.\n\
+             check_for_update_on_startup = false\n",
         )?;
         Ok(Self {
             _temp: temp,
@@ -193,7 +199,57 @@ impl LiveBox {
                 .as_str()
                 .context("init reports a default agent")?
                 .to_string(),
+            profile_id: init["inference_profile_id"]
+                .as_str()
+                .context("init reports an inference profile")?
+                .to_string(),
         })
+    }
+
+    /// Clones `home`'s default agent, with no restart, and waits for its publish.
+    async fn clone_agent(&self, home: &InitializedHome, display_name: &str) -> Result<String> {
+        let output = self
+            .gents()
+            .args(["config", "agent", "clone", &home.default_agent_id, "--home"])
+            .arg(&home.home)
+            .args(["--graphql", &graphql_url(HTTP_PORT)])
+            .args(["--display-name", display_name])
+            .args(["--profile-id", &home.profile_id])
+            .output()
+            .context("running gents config agent clone")?;
+        ensure!(
+            output.status.success(),
+            "gents config agent clone failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let cloned: Value = serde_json::from_slice(&output.stdout)?;
+        let agent = cloned["agent_id"]
+            .as_str()
+            .context("clone reports its agent")?
+            .to_string();
+        let deadline = Instant::now() + PROMPT;
+        loop {
+            let runtime: Value = reqwest::Client::builder()
+                .no_proxy()
+                .build()?
+                .get(format!("http://127.0.0.1:{SHIM_PORT}/runtime"))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            if runtime["runnable_agents"]
+                .as_array()
+                .is_some_and(|agents| agents.iter().any(|listed| listed == &agent))
+            {
+                return Ok(agent);
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "{agent} was never published: {runtime}"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// `gents --home <home>`, opening `interface` as its Codex binary.
@@ -201,6 +257,16 @@ impl LiveBox {
         let mut command = self.gents();
         command
             .env("GENTS_CODEX_BIN", interface)
+            .arg("--home")
+            .arg(home);
+        command
+    }
+
+    /// `gents --home <home>`, opening `interface` as its Grok binary.
+    fn bare_gents_grok(&self, interface: &str, home: &Path) -> Command {
+        let mut command = self.gents();
+        command
+            .env("GENTS_GROK_BIN", interface)
             .arg("--home")
             .arg(home);
         command
@@ -455,6 +521,21 @@ impl Terminal {
         }
     }
 
+    /// Returns once the interface has stopped drawing for a moment, or after `PROMPT`
+    /// if it never does. The outcome a caller asserts is what counts.
+    async fn settle(&self) {
+        let deadline = Instant::now() + PROMPT;
+        let mut seen = self.transcript.lock().expect("transcript lock").len();
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let now = self.transcript.lock().expect("transcript lock").len();
+            if now > 0 && now == seen {
+                return;
+            }
+            seen = now;
+        }
+    }
+
     async fn expect_exit(&mut self, code: u32) -> Result<()> {
         let actual = self.wait_exit(EXIT).await?;
         ensure!(
@@ -467,9 +548,14 @@ impl Terminal {
 }
 
 impl Drop for Terminal {
+    /// The child leads its PTY session, so its group also holds the interface `gents`
+    /// started. Real Grok still running when its runtime stops starts a detached stock
+    /// leader on the socket, so the interface must be gone before `LiveBox` stops it.
     fn drop(&mut self) {
-        if !matches!(self.child.try_wait(), Ok(Some(_))) {
-            let _ = self.child.kill();
+        if let Some(group) = self.child.process_id() {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", "--", &format!("-{group}")])
+                .output();
         }
     }
 }
@@ -547,6 +633,41 @@ async fn shim_call(route: &str, method: &str, params: Value) -> Result<Value> {
     bail!("the shim closed before answering {method}")
 }
 
+fn agent_route(agent: &str) -> String {
+    format!("/agents/{agent}")
+}
+
+async fn loaded_threads(route: &str) -> Result<Vec<String>> {
+    Ok(serde_json::from_value(
+        shim_call(route, "thread/loaded/list", json!({})).await?["data"].clone(),
+    )?)
+}
+
+/// Waits for `route` to load a thread outside `known`. A `--cd` makes real Codex ask
+/// whether to trust the directory, and it asks every time because the shim keeps no
+/// answer. Enter accepts that, and does nothing in an empty composer.
+async fn wait_for_loaded_thread(
+    terminal: &mut Terminal,
+    route: &str,
+    known: &[String],
+) -> Result<String> {
+    let deadline = Instant::now() + OPENS_THREAD;
+    loop {
+        if let Ok(loaded) = loaded_threads(route).await {
+            if let Some(thread) = loaded.into_iter().find(|thread| !known.contains(thread)) {
+                return Ok(thread);
+            }
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Codex loaded no thread on {route} within {OPENS_THREAD:?}; transcript:\n{}",
+            terminal.transcript()
+        );
+        terminal.send("\r")?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
 /// Holds the shim port for a test, as something that is not a Gents runtime would.
 struct HeldShimPort(tokio::task::JoinHandle<()>);
 
@@ -575,6 +696,121 @@ impl HeldShimPort {
 
 mod no_model {
     use super::*;
+
+    /// A home whose backend is down publishes no runnable agent, so `--agent` needs
+    /// one that answers. It runs no turn here and needs no model server.
+    fn answering_backend() -> Result<MockChatEndpoint> {
+        MockChatEndpoint::start(NO_MODEL_NAME, "unused")
+    }
+
+    /// A stand-in interface that writes its arguments to `args` and exits 0.
+    fn recording_interface(live: &LiveBox) -> Result<(PathBuf, PathBuf)> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let script = live.root.join("recording-interface");
+        let args = live.root.join("recorded-args");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", args.display()),
+        )?;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))?;
+        Ok((script, args))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn codex_opens_in_the_terminal_directory_only_inside_the_tool_root() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        let (interface, recorded) = recording_interface(&live)?;
+        let project = live.root.join("project");
+        fs::create_dir(&project)?;
+        let open = |directory: &Path, extra: &[&str], log: &str| {
+            let mut command = live.bare_gents(&interface.to_string_lossy(), &home.home);
+            command.current_dir(directory).args(extra);
+            Terminal::spawn(&command, &live.log(log))
+        };
+
+        let mut terminal = open(&project, &[], "inside")?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(
+            args.contains(&format!("--cd\n{}\n", project.display())),
+            "{args}"
+        );
+        ensure!(
+            !terminal.transcript().contains(OUTSIDE_THE_ROOT_TEXT),
+            "{}",
+            terminal.transcript()
+        );
+
+        let mut terminal = open(Path::new("/"), &[], "outside")?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(!args.contains("--cd"), "{args}");
+        ensure!(
+            terminal
+                .transcript()
+                .contains(&format!("{OUTSIDE_THE_ROOT_TEXT} {}", live.root.display())),
+            "{}",
+            terminal.transcript()
+        );
+
+        let mut terminal = open(&project, &["--agent", &home.default_agent_id], "agent")?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(
+            args.contains(&format!("--cd\n{}\n", project.display())),
+            "{args}"
+        );
+        ensure!(
+            !args.contains(&format!("127.0.0.1:{SHIM_PORT}")),
+            "--agent must connect through the relay: {args}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn the_first_open_after_a_start_waits_for_the_publish() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        live.bring_up(&home.home).await?;
+        live.gents_ok(&["service", "stop", "--home", &home.home.to_string_lossy()])?;
+
+        let mut command = live.bare_gents("/usr/bin/true", &home.home);
+        command.args(["--agent", &home.default_agent_id]);
+        let mut terminal = Terminal::spawn(&command, &live.log("first-open"))?;
+
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        ensure!(
+            !terminal.transcript().contains("unknown agent"),
+            "{}",
+            terminal.transcript()
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn an_unknown_agent_names_gents_config_agent_list() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        let mut command = live.bare_gents("/usr/bin/true", &home.home);
+        command.args(["--agent", "nosuch"]);
+
+        let mut terminal = Terminal::spawn(&command, &live.log("unknown"))?;
+
+        terminal.expect("unknown agent", RUNTIME_UP).await?;
+        terminal.expect("gents config agent list", EXIT).await?;
+        terminal.expect_exit(1).await
+    }
 
     #[test]
     #[ignore = "ignored only so `make live-onboarding` runs it; touches nothing"]
@@ -917,6 +1153,183 @@ mod no_model {
 mod with_model {
     use super::*;
 
+    fn unique_prompt() -> String {
+        format!("Reply with exactly this token: {}", uuid::Uuid::new_v4())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
+    async fn two_real_codex_windows_keep_agents_apart() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(codex) = real_interface("codex") else {
+            return Ok(());
+        };
+        let codex = codex.to_string_lossy();
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", &endpoint, &model)?;
+        live.bring_up(&home.home).await?;
+        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        let pid = live.service_pid().context("the service runs")?;
+        let a = home.default_agent_id.clone();
+        let b = live.clone_agent(&home, "other").await?;
+        let (route_a, route_b) = (agent_route(&a), agent_route(&b));
+        let (prompt_a, prompt_b) = (unique_prompt(), unique_prompt());
+
+        let window = |agent: &str, prompt: &str, log: &str| {
+            let mut command = live.gents();
+            command.env("GENTS_CODEX_BIN", &*codex).args([
+                "codex",
+                "--agent",
+                agent,
+                "--no-alt-screen",
+                prompt,
+            ]);
+            Terminal::spawn(&command, &live.log(log))
+        };
+        let mut window_a = window(&a, &prompt_a, "window-a")?;
+        let mut window_b = window(&b, &prompt_b, "window-b")?;
+
+        wait_for_loaded_thread(&mut window_a, &route_a, &[]).await?;
+        wait_for_loaded_thread(&mut window_b, &route_b, &[]).await?;
+        let graphql = graphql_url(HTTP_PORT);
+        let turns: Result<_> = async {
+            let (request_a, session_a, agent_a) =
+                wait_for_request(&graphql, &home.node_did, &prompt_a).await?;
+            let (request_b, session_b, agent_b) =
+                wait_for_request(&graphql, &home.node_did, &prompt_b).await?;
+            assert_eq!(agent_a, a);
+            assert_eq!(agent_b, b);
+            assert_ne!(session_a, session_b);
+            wait_for_request_lifecycle_state(&graphql, &request_a, &["completed"], TURN).await?;
+            wait_for_request_lifecycle_state(&graphql, &request_b, &["completed"], TURN).await?;
+            Ok((session_a, session_b))
+        }
+        .await;
+        let (session_a, session_b) = turns.with_context(|| {
+            format!(
+                "window A:\n{}\nwindow B:\n{}",
+                window_a.transcript(),
+                window_b.transcript()
+            )
+        })?;
+
+        for (route, own, other) in [
+            (&route_a, &session_a, &session_b),
+            (&route_b, &session_b, &session_a),
+        ] {
+            let listed = shim_call(route, "thread/list", json!({})).await?;
+            let listed = listed["data"].as_array().context("thread/list has data")?;
+            let has = |id: &String| listed.iter().any(|thread| &thread["id"] == id);
+            ensure!(has(own) && !has(other), "{route} lists {listed:?}");
+            let loaded = loaded_threads(route).await?;
+            ensure!(
+                loaded.contains(own) && !loaded.contains(other),
+                "{route} loads {loaded:?}"
+            );
+        }
+
+        let project = live.root.join("project");
+        fs::create_dir(&project)?;
+        let known = loaded_threads(&route_b).await?;
+        let mut from_project = live.bare_gents(&codex, &home.home);
+        from_project.current_dir(&project).args(["--agent", &b]);
+        let mut window_project = Terminal::spawn(&from_project, &live.log("window-project"))?;
+        let thread = wait_for_loaded_thread(&mut window_project, &route_b, &known).await?;
+        let listed = shim_call(&route_b, "thread/list", json!({})).await?;
+        let started = listed["data"]
+            .as_array()
+            .and_then(|threads| {
+                threads
+                    .iter()
+                    .find(|listed| listed["id"] == thread.as_str())
+            })
+            .with_context(|| format!("{thread} is not listed: {listed}"))?;
+        assert_eq!(started["cwd"], json!(project.to_string_lossy()));
+
+        assert_eq!(live.service_pid(), Some(pid));
+        Ok(())
+    }
+
+    /// Opens Grok through `command`, submits a prompt, and returns the request's agent
+    /// once it completes.
+    async fn turn_in_grok(
+        live: &LiveBox,
+        home: &InitializedHome,
+        command: &Command,
+        log: &str,
+    ) -> Result<String> {
+        let mut terminal = Terminal::spawn(command, &live.log(log))?;
+        terminal.settle().await;
+        let prompt = unique_prompt();
+        terminal.send(&prompt)?;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        terminal.send("\r")?;
+
+        let graphql = graphql_url(HTTP_PORT);
+        let result: Result<String> = async {
+            let (request, _, agent) = wait_for_request(&graphql, &home.node_did, &prompt).await?;
+            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+            Ok(agent)
+        }
+        .await;
+        result.with_context(|| format!("Grok transcript:\n{}", terminal.transcript()))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Grok; run through `make live-onboarding`"]
+    async fn real_grok_opens_by_setting_and_by_agent() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(grok) = real_interface("grok") else {
+            return Ok(());
+        };
+        let grok = grok.to_string_lossy();
+        let socket = Path::new("/tmp/gents-grok.sock");
+        ensure!(
+            !socket.exists(),
+            "{} exists, so another runtime holds Grok's socket",
+            socket.display()
+        );
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", &endpoint, &model)?;
+        let home_arg = home.home.to_string_lossy();
+        live.bring_up(&home.home).await?;
+        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        let b = live.clone_agent(&home, "other").await?;
+        let pid = live.service_pid().context("the service runs")?;
+
+        live.gents_ok(&["config", "client", "set", "grok", "--home", &home_arg])?;
+        let mut refused = Terminal::spawn(
+            &live.bare_gents_grok(&grok, &home.home),
+            &live.log("grok-socket-off"),
+        )?;
+        refused.expect("gents service restart", RUNTIME_UP).await?;
+        refused.expect_exit(1).await?;
+        assert_eq!(live.service_pid(), Some(pid));
+
+        live.gents_ok(&["service", "restart", "--home", &home_arg])?;
+        let agent = turn_in_grok(
+            &live,
+            &home,
+            &live.bare_gents_grok(&grok, &home.home),
+            "grok-default",
+        )
+        .await?;
+        assert_eq!(agent, home.default_agent_id);
+
+        let mut by_agent = live.bare_gents_grok(&grok, &home.home);
+        by_agent.args(["--agent", &b]);
+        let agent = turn_in_grok(&live, &home, &by_agent, "grok-agent").await?;
+        assert_eq!(agent, b);
+
+        drop(live);
+        ensure!(
+            !socket.exists(),
+            "{} outlived the runtime; `lsof` names what holds it",
+            socket.display()
+        );
+        Ok(())
+    }
+
     /// Runs first-run setup into `folder` against the model, up to opening the interface.
     async fn set_up(
         live: &LiveBox,
@@ -987,22 +1400,7 @@ mod with_model {
     }
 
     async fn turn_in_codex(live: &LiveBox, terminal: &mut Terminal, folder: &Path) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            let loaded = shim_call("/", "thread/loaded/list", json!({})).await;
-            if loaded.is_ok_and(|loaded| {
-                loaded["data"]
-                    .as_array()
-                    .is_some_and(|data| !data.is_empty())
-            }) {
-                break;
-            }
-            ensure!(
-                Instant::now() < deadline,
-                "Codex loaded no thread within 60 s"
-            );
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
+        wait_for_loaded_thread(terminal, "/", &[]).await?;
         let pid = live.service_pid().context("the service runs")?;
         crate::support::graphql::register_served_home(folder, HTTP_PORT)?;
 
@@ -1016,7 +1414,13 @@ mod with_model {
         wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
 
         terminal.send("\x03")?;
-        terminal.wait_exit(PROMPT).await?;
+        terminal.wait_exit(PROMPT).await.with_context(|| {
+            let events = folder.join("codex-ui/log/codex-shim-events.jsonl");
+            format!(
+                "what the shim last received:\n{}",
+                fs::read_to_string(events).unwrap_or_default()
+            )
+        })?;
         assert_eq!(live.service_pid(), Some(pid));
         shim_call("/", "thread/loaded/list", json!({})).await?;
         Ok(())

@@ -61,6 +61,12 @@ fn parse_env_var_name(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+fn parse_agent_id(value: &str) -> Result<String, String> {
+    crate::require_non_empty("agent", value)
+        .map(str::to_string)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Parser)]
 #[command(
     name = "gents",
@@ -74,6 +80,9 @@ pub(crate) struct Cli {
     /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
+    /// Agent to open instead of the node's default. See `gents config agent list`.
+    #[arg(long, value_name = "AGENT_ID", value_parser = parse_agent_id)]
+    pub(crate) agent: Option<String>,
     /// As on `init`: tests pass `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,

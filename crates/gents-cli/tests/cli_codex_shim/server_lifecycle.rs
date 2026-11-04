@@ -131,6 +131,7 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
         .error_for_status()?
         .json::<Value>()
         .await?;
+    let tool_root = fs::canonicalize(&home_dir)?;
 
     assert_eq!(
         identity,
@@ -138,6 +139,8 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
             "node_did": node_did,
             "home": home_dir.join(".gents").to_string_lossy(),
             "runnable_agents": null,
+            "tool_root": tool_root,
+            "default_thread_cwd": tool_root,
         })
     );
     Ok(())

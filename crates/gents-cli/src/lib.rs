@@ -198,6 +198,11 @@ Examples:
   gents codex
   gents codex \"what is in this directory?\"
   gents codex --remote ws://127.0.0.1:9292/
+  gents codex --agent ID
+  gents --agent ID
+
+`--agent` opens that agent instead of the node's default, in as many terminals
+as you like, with no restart. `gents config agent list` shows the agents.
 
 Requires a running `gents server` in another terminal and `codex` on PATH.
 Set GENTS_CODEX_BIN to use a different Codex executable.";
@@ -422,7 +427,7 @@ pub fn run_cli() -> Result<()> {
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
-        None => return commands::start::run(cli.home, cli.store_key_custody).await,
+        None => return commands::start::run(cli.home, cli.store_key_custody, cli.agent).await,
         Some(Command::NativeFsRunner(args)) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }

@@ -2,7 +2,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use super::{
-    parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, ToolCeilingArg,
+    parse_agent_id, parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg,
+    ToolCeilingArg,
 };
 use crate::cli::output_format::OutputFormat;
 
@@ -247,6 +248,13 @@ pub(crate) struct CodexArgs {
         help = "Environment variable containing the bearer token for the remote app server; requires wss:// or loopback ws://"
     )]
     pub(crate) remote_auth_token_env: Option<String>,
+    #[arg(
+        long,
+        value_name = "AGENT_ID",
+        value_parser = parse_agent_id,
+        help = "Agent to open instead of the node's default; requires a local ws:// endpoint"
+    )]
+    pub(crate) agent: Option<String>,
     #[arg(
         long,
         default_value_t = false,

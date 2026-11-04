@@ -26,6 +26,11 @@ source consistency checks, not a separate runtime compatibility version.
   configured interface. Without a terminal it prints help and exits 2, as a
   missing subcommand did. `gents` refuses a Codex endpoint that does not identify
   itself as this home's, and the shim answers that question at `GET /runtime`.
+- `gents --agent ID` and `gents codex --agent ID` open any runnable agent side by
+  side with no restart, with no saved agent setting. For Codex this needs a local
+  runtime with no pinned agent, and `--agent` is refused for any other endpoint.
+- When `gents` opens Codex from a directory inside the tool root, the thread starts
+  there. From outside it, `gents` prints the directory the thread will use.
 
 ## 1.0.0-rc1 - 2026-11-03
 

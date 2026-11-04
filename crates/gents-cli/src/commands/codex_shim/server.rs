@@ -29,6 +29,10 @@ pub(crate) struct RuntimeIdentity {
     pub(crate) home: PathBuf,
     /// The published runnable set, or `None` when `/agents/{agent_id}` is not mounted.
     pub(crate) runnable_agents: Option<Vec<String>>,
+    /// Admission refuses a placement outside this.
+    pub(crate) tool_root: Option<PathBuf>,
+    /// Where a thread starts when its client names no directory.
+    pub(crate) default_thread_cwd: PathBuf,
 }
 
 #[derive(Clone)]
@@ -139,10 +143,18 @@ pub(crate) async fn bind_codex_shim(
         .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
         .map_err(CodexShimBindError::DependencyMissing)?;
 
+    let thread_cwd = default_thread_cwd(
+        std::env::current_dir()
+            .context("resolving current working directory")
+            .map_err(CodexShimBindError::HostResource)?,
+        args.fs_root.as_deref(),
+    );
     let identity = RuntimeIdentity {
         node_did: args.node_did.clone(),
         home: crate::absolutize(args.home.clone()).map_err(CodexShimBindError::HostResource)?,
         runnable_agents: None,
+        tool_root: args.fs_root.clone(),
+        default_thread_cwd: thread_cwd.clone(),
     };
     let agent_routes = args.agent_routes && args.bind_addr.is_loopback();
 
@@ -150,12 +162,7 @@ pub(crate) async fn bind_codex_shim(
         usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
-        cwd: default_thread_cwd(
-            std::env::current_dir()
-                .context("resolving current working directory")
-                .map_err(CodexShimBindError::HostResource)?,
-            args.fs_root.as_deref(),
-        ),
+        cwd: thread_cwd,
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,

@@ -67,12 +67,13 @@ impl InterfaceEndpoint {
         }
     }
 
-    async fn open(self) -> Result<()> {
+    async fn open(self, agent: Option<String>) -> Result<()> {
         match self {
             Self::Codex { remote } => {
                 open_codex(CodexArgs {
                     remote,
                     remote_auth_token_env: None,
+                    agent,
                     no_alt_screen: false,
                     prompt: None,
                 })
@@ -82,7 +83,7 @@ impl InterfaceEndpoint {
                 launch_interface(
                     "Grok",
                     &interface_bin(GROK_BIN_ENV, "grok"),
-                    &grok_command_args(&socket),
+                    &grok_command_args(&socket, agent.as_deref()),
                     &interface_install_message(InterfaceClient::Grok),
                 )
                 .await
@@ -95,6 +96,7 @@ impl InterfaceEndpoint {
 pub(crate) async fn run(
     home: Option<PathBuf>,
     store_key_custody: Option<StoreKeyCustodyArg>,
+    agent: Option<String>,
 ) -> Result<()> {
     // Setup prompts go to stderr, so a redirected stderr would hide them.
     if !std::io::stdin().is_terminal()
@@ -115,7 +117,7 @@ pub(crate) async fn run(
     };
     let endpoint = InterfaceEndpoint::for_client(ClientSettings::read(&home)?.client)?;
     ensure_runtime(&home, &config.node_did, &endpoint).await?;
-    endpoint.open().await
+    endpoint.open(agent).await
 }
 
 async fn ensure_runtime(
@@ -179,12 +181,17 @@ fn no_service_manager_message(home: &Path) -> String {
     )
 }
 
-fn grok_command_args(socket: &Path) -> Vec<String> {
-    vec![
+fn grok_command_args(socket: &Path, agent: Option<&str>) -> Vec<String> {
+    let mut args = vec![
         "--leader".to_string(),
         "--leader-socket".to_string(),
         socket.display().to_string(),
-    ]
+    ];
+    if let Some(agent) = agent {
+        args.push("--agent".to_string());
+        args.push(agent.to_string());
+    }
+    args
 }
 
 pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
@@ -235,8 +242,22 @@ mod tests {
     #[test]
     fn grok_args_are_exact() {
         assert_eq!(
-            grok_command_args(Path::new("/tmp/leader.sock")),
+            grok_command_args(Path::new("/tmp/leader.sock"), None),
             ["--leader", "--leader-socket", "/tmp/leader.sock"]
+        );
+    }
+
+    #[test]
+    fn grok_args_carry_the_agent() {
+        assert_eq!(
+            grok_command_args(Path::new("/tmp/leader.sock"), Some("did:key:z:other")),
+            [
+                "--leader",
+                "--leader-socket",
+                "/tmp/leader.sock",
+                "--agent",
+                "did:key:z:other"
+            ]
         );
     }
 }
