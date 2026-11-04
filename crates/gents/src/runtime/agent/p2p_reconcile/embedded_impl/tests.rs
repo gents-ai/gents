@@ -322,7 +322,7 @@ async fn explicit_file_image_push_keeps_unselected_images_and_collection_interes
         .await
         .unwrap()
         .is_empty());
-    sender.shutdown().await;
-    receiver.shutdown().await;
-    outsider.shutdown().await;
+    sender.shutdown().await.expect("close test node");
+    receiver.shutdown().await.expect("close test node");
+    outsider.shutdown().await.expect("close test node");
 }

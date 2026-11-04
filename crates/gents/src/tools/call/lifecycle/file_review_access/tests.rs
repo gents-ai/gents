@@ -124,6 +124,6 @@ async fn file_image_read_grant_matches_signed_receipt_contract() {
         }
     }
     for node in nodes {
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

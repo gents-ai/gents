@@ -571,5 +571,5 @@ async fn wrappers_read_the_stored_turn() {
         Some(turn)
     );
     assert!(blocked_turn(&access, DID, "request-unknown").await.is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

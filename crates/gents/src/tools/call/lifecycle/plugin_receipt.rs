@@ -208,7 +208,7 @@ mod persistence_tests {
                 assert!(conflict.complete("model output").await.is_err());
             }
             drop(request_owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -273,7 +273,7 @@ mod persistence_tests {
             "running"
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -316,7 +316,7 @@ mod persistence_tests {
             receipt()
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -365,7 +365,7 @@ mod persistence_tests {
         );
         assert!(row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].is_null());
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }

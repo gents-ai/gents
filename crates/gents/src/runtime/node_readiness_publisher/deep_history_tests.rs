@@ -221,7 +221,7 @@ async fn fresh_peer_receives_readiness_past_8192_revisions_and_keeps_following()
     )
     .await?;
     await_snapshot(&receiver.node, source.did(), doc_id, &snapshot).await?;
-    receiver.node.shutdown().await;
-    source.node.shutdown().await;
+    receiver.node.shutdown().await.expect("close test node");
+    source.node.shutdown().await.expect("close test node");
     Ok(())
 }

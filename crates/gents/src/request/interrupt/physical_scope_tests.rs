@@ -67,7 +67,7 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
         result.data.unwrap()["AgentRequest"][0]["interrupt_requested_at"],
         first
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -126,5 +126,5 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
             .unwrap()
             .is_some()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

@@ -184,7 +184,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
         StreamPayload::Reasoning
     );
     assert_eq!(retained.streams[0].text, "received before shutdown");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
@@ -756,7 +756,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             "{}",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }
@@ -982,7 +982,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             terminal_selection: None,
         });
         assert_eq!(view, LiveView::Absent, "{}", case.name);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }

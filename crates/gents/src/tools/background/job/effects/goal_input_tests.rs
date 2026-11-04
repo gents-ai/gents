@@ -391,6 +391,6 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             Some("caller-goal")
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

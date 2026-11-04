@@ -250,7 +250,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             after_rows, before_rows,
             "old execution must neither retain its buffered chunk nor claim a new close"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         return;
     }
 
@@ -321,7 +321,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             closed_ids(&before_rows),
             "failed drain must not add a claimed source close"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         return;
     }
 
@@ -393,7 +393,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         assert_eq!(content.declaration.part_index, u32::try_from(part).unwrap());
         assert_eq!(content.text, text);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -923,7 +923,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             "provider emitted traffic after its last semantic progress"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1122,7 +1122,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         "interrupted"
     );
     assert!(!result["data"]["AgentRequestParent"][0]["terminal_output"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1268,7 +1268,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         "final output was truncated: {data}"
     );
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1430,5 +1430,5 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         .is_ok_and(|content| content.text == "received deadline reasoning")
     }));
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

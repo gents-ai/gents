@@ -945,7 +945,7 @@ pub(crate) mod tests {
         assert_eq!(children[2].0.target, ("did-owner".into(), "agent-b".into()));
         assert_eq!(children[0].1.title, "Alpha");
         assert_eq!(children[1].1.request_id, "a1");
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1004,7 +1004,7 @@ pub(crate) mod tests {
         assert_eq!(children[0].1.usage.input, 3);
         assert_eq!(children[0].1.usage.output, 4);
         assert_eq!(children[0].1.usage.total, 7);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1035,7 +1035,7 @@ pub(crate) mod tests {
         assert_eq!(children[0].1.duration_ms, 2_000);
         assert_eq!(children[0].1.output_bytes, 0);
         assert!(!children[0].1.truncated);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1101,7 +1101,7 @@ pub(crate) mod tests {
         assert_eq!(beta.1.usage.input, 7);
         assert_eq!(beta.1.usage.output, 8);
         assert_eq!(beta.1.usage.total, 15);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1144,7 +1144,7 @@ pub(crate) mod tests {
         assert_eq!(triple.unwrap().len(), 3);
         assert_eq!(single_queries, triple_queries);
         assert!(single_queries > 0);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     pub(crate) async fn completed_request(
@@ -1275,7 +1275,7 @@ pub(crate) mod tests {
             assert_eq!(view.truncated, truncated);
         }
         assert!(children[2].is_empty());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1306,7 +1306,7 @@ pub(crate) mod tests {
             error.to_string().contains("duplicate slot attempt"),
             "{error:#}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1331,7 +1331,7 @@ pub(crate) mod tests {
         let capped = derive_children(&access, &[chain.into()], 5).await.unwrap();
         assert_eq!(capped[0].1.output_bytes, 5);
         assert!(capped[0].1.truncated);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1369,7 +1369,7 @@ pub(crate) mod tests {
         let children = derive_children(&access, &[chain.into()], 64).await.unwrap();
         assert_eq!(children[0].0.state, JobChildState::Interrupted);
         assert_eq!(children[1].0.state, JobChildState::Live);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1414,7 +1414,7 @@ pub(crate) mod tests {
         assert_eq!(children[0].0.messages, 0);
         assert_eq!(children[0].1.state, JobChildState::Live);
         assert_eq!(children[0].1.duration_ms, 0);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     use std::collections::BTreeMap;
@@ -1778,7 +1778,7 @@ pub(crate) mod tests {
         assert_eq!(input.args, None);
         assert_eq!(input.script, None);
         assert_eq!(input.agent_budget, None);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1814,7 +1814,7 @@ pub(crate) mod tests {
         assert_eq!(input.argv, ["resume", "h"]);
         assert_eq!(input.job.chain, [root.clone(), resumed.clone()]);
         assert_eq!(input.job.chain_root_doc_id, root);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1856,7 +1856,7 @@ pub(crate) mod tests {
         );
         assert_eq!(input.pin, Some(pin));
         assert_eq!(input.origin, Some(JobOrigin::Installed));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1893,7 +1893,7 @@ pub(crate) mod tests {
             .map(|(slot, view)| (slot.as_str(), view.attempt, view.request_id.as_str()))
             .collect();
         assert_eq!(kept, [("slot-a", 1, "a1"), ("slot-b", 0, "b0")]);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1946,7 +1946,7 @@ pub(crate) mod tests {
         expected.sort_by(|a, b| a.row_doc_id.cmp(&b.row_doc_id));
         assert_eq!(input.jobs, expected);
         assert!(input.jobs.iter().all(|view| view.row_doc_id != unpinned));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1991,7 +1991,7 @@ pub(crate) mod tests {
                 (newest.as_str(), 3_000, None),
             ]
         );
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -2024,7 +2024,7 @@ pub(crate) mod tests {
         assert_eq!(input.control, None);
         assert!(input.scratch.is_empty());
         assert_eq!(input.jobs.len(), 1);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     fn json_keys(value: &Value, keys: &mut Vec<String>) {
@@ -2234,7 +2234,7 @@ pub(crate) mod tests {
         assert_eq!(input.origin, None);
         assert_eq!(input.job.chain, std::slice::from_ref(&row));
         assert_eq!(input.job.chain_root_doc_id, row);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
 
         let request_cwd = tempfile::tempdir().unwrap();
         let named = request_cwd.path().display().to_string();
@@ -2252,7 +2252,7 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(input.caller.cwd, named);
         assert!(input.scratch.is_empty());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -2324,7 +2324,7 @@ pub(crate) mod tests {
                 })
             );
         }
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -2352,6 +2352,6 @@ pub(crate) mod tests {
         );
         let (input, _) = job.later(&plain).await.unwrap();
         assert_eq!(input.control, None);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 }

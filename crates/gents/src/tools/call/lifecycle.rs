@@ -721,7 +721,7 @@ mod tests {
             ToolRowKind::SessionMessage
         );
         assert_eq!(kind_of("tool"), ToolRowKind::Native);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     use crate::lean_vocab_test::{

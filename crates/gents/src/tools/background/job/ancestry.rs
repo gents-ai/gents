@@ -247,7 +247,7 @@ mod tests {
         let chain = chain().await;
         let access = ConfigAccess::local(chain.node.clone());
         assert!(started_by_job(&access, &chain.child, 1).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -255,7 +255,7 @@ mod tests {
         let chain = chain().await;
         let access = ConfigAccess::local(chain.node.clone());
         assert!(started_by_job(&access, &chain.grand, 2).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -266,7 +266,7 @@ mod tests {
             .await
             .unwrap());
         assert!(!started_by_job(&access, &chain.plain_root, 1).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -282,6 +282,6 @@ mod tests {
         let (miss, miss_queries) = counted(&access, &chain.plain_child, 3).await;
         assert!(!miss.unwrap());
         assert!(miss_queries <= 2 * (3 + 1), "{miss_queries}");
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("close test node");
     }
 }

@@ -270,7 +270,7 @@ async fn cached_output_reconstruction_request_size_benchmark() {
             "cached canonical reconstruction benchmark"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 fn authored_segments(

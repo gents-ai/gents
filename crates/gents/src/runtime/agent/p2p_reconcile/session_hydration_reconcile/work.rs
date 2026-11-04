@@ -1168,7 +1168,7 @@ mod tests {
                 next_within(&mut work, "idle next").await;
                 assert_eq!(delivery.pushes().len(), 2, "no third attempt");
 
-                fixture.node.shutdown().await;
+                fixture.node.shutdown().await.expect("close test node");
             },
         )
         .await;
@@ -1280,7 +1280,7 @@ mod tests {
                     "A twice (initial attempt plus discovery retry), B once"
                 );
 
-                fixture.node.shutdown().await;
+                fixture.node.shutdown().await.expect("close test node");
             },
         )
         .await;
@@ -1379,7 +1379,7 @@ mod tests {
                     "no third attempt and no A retry after B completes"
                 );
 
-                fixture.node.shutdown().await;
+                fixture.node.shutdown().await.expect("close test node");
             },
         )
         .await;
@@ -1884,7 +1884,7 @@ mod tests {
                     "the released peer plus the still-running peer"
                 );
 
-                fixture.node.shutdown().await;
+                fixture.node.shutdown().await.expect("close test node");
             },
         )
         .await;

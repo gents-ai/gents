@@ -26,7 +26,7 @@ async fn row(node: &Node, doc_id: &str) -> serde_json::Value {
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

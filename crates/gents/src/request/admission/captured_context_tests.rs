@@ -109,5 +109,5 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         observed > 0,
         "generated captures must exercise fresh admission"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

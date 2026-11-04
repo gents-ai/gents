@@ -248,7 +248,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let reason = deleted.notification_reason.as_deref().unwrap();
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }
@@ -421,6 +421,6 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         resumed.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
         modeled["stopped_after_settlement"]
     );
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }

@@ -278,7 +278,7 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
         "{:?}",
         evidence.captures
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -328,7 +328,7 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
     assert!(evidence.request_id.is_some(), "the stage was submitted");
     assert_eq!(evidence.failure_kind, Some(OutcomeKind::Runtime));
     assert_eq!(evidence.provider_reason, None);
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -444,7 +444,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
             )
         })
         .unwrap();
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 
     let evidence = result.expect("the failed trigger must end the seed wait promptly");
     assert_failure_class(
@@ -507,7 +507,7 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
         stage_failure_kind(Some(&observed), true, stopped, &evidence),
         None
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }
 
 fn exited_runtime() -> RunningRuntime {

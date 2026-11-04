@@ -202,7 +202,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
                 case.name
             );
         }
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("close test node");
     }
 }
 

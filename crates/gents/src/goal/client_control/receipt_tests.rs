@@ -368,6 +368,6 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
             )
             .await;
         driver.assert_state(&case.expected, &case.name).await;
-        driver.fixture.node.shutdown().await;
+        driver.fixture.node.shutdown().await.expect("close test node");
     }
 }

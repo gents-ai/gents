@@ -193,7 +193,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         })
         .await?;
     assert_eq!(cursor(&access, "WorkA").await?, "1");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -221,7 +221,7 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
     publish(&access, vec![source("WorkA")]).await?;
     assert_eq!(cursor(&access, "WorkA").await?, "0");
     assert_eq!(cursor(&access, "WorkB").await?, "1");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -241,6 +241,6 @@ async fn source_registered_before_collection_retains_its_first_arrival() -> Resu
         page["data"]["_documentArrivals"]["entries"],
         json!([{"docID":first,"cursor":"1"}])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }

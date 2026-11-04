@@ -76,7 +76,7 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         reason.contains("inference slots") && reason.contains("profile_id"),
         "{reason}"
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 
     executor.provision(&spec).await;
     let evidence = executor.execute(&spec, CancellationToken::new()).await;
@@ -200,7 +200,7 @@ async fn provision_then_execute_on_a_bad_pack_digest_is_infrastructure() {
         .await
         .expect("the trial home survives the close");
     assert_eq!(reopened.did(), locator.trial_node_did);
-    reopened.node.shutdown().await;
+    reopened.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

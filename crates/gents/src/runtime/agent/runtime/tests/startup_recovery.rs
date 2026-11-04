@@ -476,7 +476,7 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
         format!("{error:#}").contains("injected slot drain failure"),
         "run_agent lost the slot drain failure: {error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1108,7 +1108,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
             "{case}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 async fn write_runtime_documents(

@@ -191,5 +191,5 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
     values.sort_unstable();
     assert_eq!(values, ["finalizer", "sibling"]);
     drop(guarded);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

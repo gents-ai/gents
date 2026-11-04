@@ -1735,7 +1735,7 @@ mod tool_writes {
         }
 
         async fn finish(self) {
-            self.node.shutdown().await;
+            self.node.shutdown().await.expect("close test node");
             std::fs::remove_dir_all(self.path).unwrap();
         }
     }
@@ -2097,7 +2097,7 @@ mod job_calls {
     }
 
     async fn finish(admission: PublishedAdmission) {
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 
@@ -2165,7 +2165,7 @@ mod job_calls {
         assert!(
             matches!(&answers["missing"], RoundResult::Error { error } if error.contains("nope"))
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -2267,7 +2267,7 @@ mod job_calls {
         )
         .await;
         assert!(call.outcome.output.get("job_calls").is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]

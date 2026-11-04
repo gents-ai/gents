@@ -149,7 +149,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
             case["name"]
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -247,5 +247,5 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         "{}",
         collected.tool_results[10]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

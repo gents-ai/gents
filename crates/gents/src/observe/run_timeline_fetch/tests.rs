@@ -43,7 +43,7 @@ async fn timeline_canonical_messages_share_one_request_payload_scan() {
         scans, 1,
         "one timeline session pass scans a shared request once"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -108,7 +108,7 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
         scans, 3,
         "each unbound fork header resolves its own origin request"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -159,7 +159,7 @@ async fn timeline_batches_request_local_events_and_restores_request_sequence_ord
             .collect::<Vec<_>>(),
         vec!["reduction-a-1", "reduction-b-1", "reduction-b-2"]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -402,7 +402,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     assert_eq!(tool.args, r#"{"path":"/tmp/pending-tool"}"#);
     assert!(tool.result.is_none());
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -569,6 +569,6 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     .is_empty());
 
     drop(owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admitted.path).unwrap();
 }

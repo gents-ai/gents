@@ -129,7 +129,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
         vec![tracing::Level::WARN, tracing::Level::WARN],
         "the generic desired-state owner warns for create/change, never an unchanged replay"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -187,7 +187,7 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
         "an identical desired-state replay must not add a whole-document commit"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -390,7 +390,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         read_queries, 2,
         "one page reads all expectations and one reads all planned documents"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -548,7 +548,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             assert!(message.contains("coding"), "{message}");
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1221,7 +1221,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
             .is_empty(),
         "a refused obligation publishes no surface"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1273,7 +1273,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1297,7 +1297,7 @@ async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Res
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1386,7 +1386,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         published_count_field(&access, owner, "created").await?,
         "total"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1448,7 +1448,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         published_count_field(&access, owner, "replaced").await?,
         "amount"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1593,7 +1593,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         published_event_sources(&node).await?.is_empty(),
         "a refused count field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1665,7 +1665,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         published_event_sources(&node).await?.len(),
         count_fields.len() + correlation_fields.len() + 1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1713,7 +1713,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
         published_event_sources(&node).await?.is_empty(),
         "a refused correlation field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1797,7 +1797,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "created").await?, "total");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1869,7 +1869,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "replaced").await?, "amount");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1958,7 +1958,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     );
     apply(&access, vec![source("LaterPing")]).await?;
     assert_eq!(triggers().await, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -2095,6 +2095,6 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         1,
         "an admitted trigger publishes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }

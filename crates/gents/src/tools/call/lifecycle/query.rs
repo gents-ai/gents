@@ -505,7 +505,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(fresh.state, ToolCallState::Completed);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 
@@ -605,7 +605,7 @@ mod tests {
         let selected = loaded.selected_tool_identity.expect("selected identity");
         assert_eq!(selected.service_id, "metrics-prod");
         assert_eq!(selected.tool_name, "query_metrics");
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(&data_path);
     }
 }

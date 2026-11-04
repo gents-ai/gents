@@ -80,5 +80,5 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     assert!(profile.unwrap().is_none());
     let schema: serde_json::Value = serde_json::from_str(&query_result.unwrap()).unwrap();
     assert!(schema.is_object());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

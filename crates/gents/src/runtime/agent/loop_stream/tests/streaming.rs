@@ -57,7 +57,7 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 2);
     assert!(format!("{:?}", histories[1]).contains("configured output obligation is unmet"));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

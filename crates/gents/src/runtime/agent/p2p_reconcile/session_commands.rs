@@ -363,6 +363,6 @@ mod tests {
         expected.sort();
         actual.sort();
         assert_eq!(actual, expected);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

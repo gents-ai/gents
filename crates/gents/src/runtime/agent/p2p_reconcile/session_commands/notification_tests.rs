@@ -128,5 +128,5 @@ async fn collection_block_notifications_never_enter_the_command_retry_queue() {
     }
     cancel.cancel();
     run.await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

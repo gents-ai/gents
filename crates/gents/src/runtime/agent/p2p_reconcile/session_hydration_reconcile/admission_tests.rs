@@ -127,7 +127,7 @@ async fn generated_hydration_routes_require_current_enrollment_materialization()
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(directory);
     Ok(())
 }

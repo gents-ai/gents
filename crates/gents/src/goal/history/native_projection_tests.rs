@@ -160,7 +160,7 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
             ))
         })
     }).await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let native = facts.iter().map(ReuseFacts::can_reuse).collect::<Vec<_>>();
     assert_eq!(
         native,

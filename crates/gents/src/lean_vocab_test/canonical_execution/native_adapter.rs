@@ -3122,7 +3122,7 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
             "{label} deadline must leave exact canonical output records unchanged"
         );
     }
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3267,7 +3267,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
         native.observe(false).await.unwrap(),
         *expected_after_recovery
     );
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3320,7 +3320,7 @@ async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejec
             .contains("native spawned child maps to symbolic document"),
         "unexpected adapter error: {error}"
     );
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3370,7 +3370,7 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     assert_eq!(after.tool_state.as_deref(), Some("running"));
     assert_eq!(after.tool_stuck_since, None);
     assert!(after.in_flight);
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

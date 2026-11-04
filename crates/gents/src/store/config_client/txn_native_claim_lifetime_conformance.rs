@@ -179,7 +179,7 @@ async fn shutdown_then_reacquire_store_lock(
     })
     .await
     .expect("the Gents-owned native operation drops its claimed gate");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     crate::store::local::home::lock_store(home, data)
         .expect("the store lock is reacquirable after the owned node shuts down")

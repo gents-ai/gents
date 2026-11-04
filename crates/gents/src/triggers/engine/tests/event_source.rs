@@ -27,7 +27,7 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
         ids.len(),
         "startup seeding must cover the full source collection"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 use events::{

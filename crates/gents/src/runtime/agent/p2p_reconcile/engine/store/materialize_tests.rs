@@ -127,7 +127,7 @@ async fn native_twins_reject_filter_upsert_but_repair_the_canonical_witness() {
         after.iter().find(|row| row["peer_id"] == "other"),
         before.iter().find(|row| row["peer_id"] == "other")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn conflicting_materialization_owners_leave_all_rows_unchanged() {
             .is_err()
         );
         assert_eq!(rows(&node).await, before);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -169,7 +169,7 @@ async fn expired_authority_rolls_back_the_whole_materialization_transaction() {
         })
     }).await.is_err());
     assert!(rows(&node).await.is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -234,6 +234,6 @@ async fn cached_generations_cannot_veto_the_current_verified_enrollment_request(
             after.iter().find(|row| row["_docID"] == parked),
             Some(&parked_before)
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

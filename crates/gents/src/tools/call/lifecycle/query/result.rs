@@ -1133,7 +1133,7 @@ mod tests {
                 "case {index}"
             );
             drop(request_owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -1268,7 +1268,7 @@ mod tests {
                 .is_err()
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -1319,7 +1319,7 @@ mod tests {
         assert!(presented.contains("partial output"));
         assert!(presented.contains("tool call deadline exceeded"));
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -1366,7 +1366,7 @@ mod tests {
             "{error:#}"
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -1446,7 +1446,7 @@ mod tests {
         })
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 
@@ -1490,7 +1490,7 @@ mod tests {
         })
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }

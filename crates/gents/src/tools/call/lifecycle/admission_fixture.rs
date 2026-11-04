@@ -752,7 +752,7 @@ mod lifecycle_tests {
     }
 
     async fn teardown(node: Arc<Node>, path: PathBuf) {
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 

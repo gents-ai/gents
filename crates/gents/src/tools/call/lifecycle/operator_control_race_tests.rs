@@ -111,7 +111,7 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
     .unwrap();
     assert_eq!(reloaded.state().as_str(), terminal);
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -209,7 +209,7 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
         .unwrap();
         assert_eq!(row.state().as_str(), terminal);
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 }
@@ -276,7 +276,7 @@ async fn operator_unverified_stop_preserves_running_tool() {
     assert_eq!(row.state().as_str(), expected.durable_state);
     drop(reservation);
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -339,6 +339,6 @@ async fn operator_cancels_released_native_future_without_process_record() {
         }
     );
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }

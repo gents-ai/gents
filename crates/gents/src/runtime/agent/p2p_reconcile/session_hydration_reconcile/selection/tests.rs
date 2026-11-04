@@ -50,7 +50,7 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
     assert_eq!(fresh.documents.len(), 1);
     assert!(fresh.documents.iter().all(|document| document.collection
         == gents_protocol::session_hydration::SessionHydrationCollection::CompactionEntry));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -164,7 +164,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
     )
     .await
     .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -197,7 +197,7 @@ async fn hydration_segment_selection_uses_the_session_index() {
         .to_string();
     assert!(plan.contains("AgentOutputSegment_session_id_ASC"), "{plan}");
     assert!(!plan.contains("AgentOutputSegment_node_did_ASC"), "{plan}");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -281,6 +281,6 @@ async fn generated_terminal_selections_preserve_superseded_session_hydration() -
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }

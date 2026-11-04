@@ -321,7 +321,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 "{case}: the restored checkpoint was the dispatched projection"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(data_path);
     }
 }
@@ -589,7 +589,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             );
             assert!(inputs[1].contains(&queued.content), "{}", case.name);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(data_path);
     }
 }

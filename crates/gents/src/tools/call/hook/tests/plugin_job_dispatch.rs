@@ -482,7 +482,7 @@ impl Step0 {
     }
 
     async fn finish(self) {
-        self.node.shutdown().await;
+        self.node.shutdown().await.expect("close test node");
     }
 }
 

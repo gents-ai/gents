@@ -437,7 +437,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 serde_json::to_value(&current).unwrap()
             );
         }
-        db.node.shutdown().await;
+        db.node.shutdown().await.expect("close test node");
     }
 }
 
@@ -465,5 +465,5 @@ async fn readiness_stop_rejects_a_replaced_claim_epoch() {
         serde_json::to_value(load_goal(&db).await).unwrap(),
         serde_json::to_value(&current).unwrap()
     );
-    db.node.shutdown().await;
+    db.node.shutdown().await.expect("close test node");
 }

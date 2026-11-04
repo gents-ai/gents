@@ -282,7 +282,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             "{} consumption drifted",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     assert!(!rendered_capture_cites_reduction(

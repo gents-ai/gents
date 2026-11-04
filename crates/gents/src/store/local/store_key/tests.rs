@@ -113,7 +113,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
         .await
         .unwrap();
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
 
     let reopened = Arc::new(
@@ -131,7 +131,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
         result["data"]["BudgetDocument"][0]["payload"].as_str(),
         Some(payload.as_str())
     );
-    reopened.shutdown().await;
+    reopened.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -151,7 +151,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
         .await
         .unwrap();
     write_credential(&node).await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     for token in [ACCESS_TOKEN, REFRESH_TOKEN] {
         let leaked = files_containing(&data, token.as_bytes());
@@ -169,7 +169,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
         read_refresh_token(&reopened).await.as_deref(),
         Some(REFRESH_TOKEN)
     );
-    reopened.shutdown().await;
+    reopened.shutdown().await.expect("close test node");
 
     let plain = temp.path().join("plain");
     let mut plain_options = crate::store::local::storage_backend::regolith_options();
@@ -184,7 +184,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
         .await
         .unwrap();
     write_credential(&control).await;
-    control.shutdown().await;
+    control.shutdown().await.expect("close test node");
     drop(control);
     assert!(
         !files_containing(&plain, REFRESH_TOKEN.as_bytes()).is_empty(),
@@ -301,7 +301,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
         .await
         .unwrap();
     write_credential(&plain).await;
-    plain.shutdown().await;
+    plain.shutdown().await.expect("close test node");
     drop(plain);
 
     let log = arrival_log();
@@ -351,7 +351,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     assert!(upgrade::pending_record(&data).unwrap().is_some());
     upgrade::finish(&data).unwrap();
     assert!(upgrade::pending_record(&data).unwrap().is_none());
-    encrypted.shutdown().await;
+    encrypted.shutdown().await.expect("close test node");
     drop(encrypted);
 
     let encrypted_store = storage::RegolithStore::open_with_options(
@@ -405,7 +405,7 @@ async fn a_store_with_data_but_no_recorded_key_is_refused() {
         .build()
         .await
         .unwrap();
-    legacy.shutdown().await;
+    legacy.shutdown().await.expect("close test node");
     drop(legacy);
 
     let error = reject_unrecorded_store(&data).unwrap_err();

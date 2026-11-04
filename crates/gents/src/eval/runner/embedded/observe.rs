@@ -538,7 +538,7 @@ mod tests {
             let response = home.node.execute(&query).await;
             assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
         }
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("close test node");
     }
 
     async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
@@ -700,7 +700,7 @@ mod tests {
             classify_request_outcome(Some(RequestLifecycleState::Failed), false, &evidence),
             Some("tool")
         );
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -815,7 +815,7 @@ mod tests {
                 case["outcome"].as_str()
             );
         }
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]

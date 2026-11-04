@@ -93,7 +93,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "receipt loss must not roll back the committed dispatch"
                 );
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
         }
     }
 }
@@ -293,7 +293,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     case.name,
                     owner.owner(),
                 );
-                node.shutdown().await;
+                node.shutdown().await.expect("close test node");
             }
         }
     }
@@ -586,7 +586,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     );
     assert!(bounded_len > 0, "bounded result should be non-empty");
     assert_eq!(collected.final_text.as_deref(), Some("ok"));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>) {
@@ -754,7 +754,7 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
         )],
         "image of {image_bytes} bytes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1008,7 +1008,7 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     .await;
     assert_eq!(result.unwrap(), crate::request::lifecycle::TerminalizeResult::Won);
     assert_eq!(scans, 1, "request output scanned once per accepted tool");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 async fn terminalization_with_principal_output(
@@ -1143,7 +1143,7 @@ async fn terminalization_with_principal_output(
         messages.len(),
         elapsed.as_millis()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     elapsed
 }
 
@@ -1315,7 +1315,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     );
     assert!(work[0] > 0);
     drop(lifecycle);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 struct ComposedChild {
@@ -1436,7 +1436,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
             "{name} {state}: {rows}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 struct ComposingParent {
@@ -1616,7 +1616,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                 "durable child {case}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -1818,7 +1818,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
         assert_eq!(matches[0]["request_doc_id"], lifecycle.request().doc_id);
         assert_eq!(matches[0]["verified_unchanged"], true);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 struct SerialReadMeasurement(Box<dyn ToolDyn>);

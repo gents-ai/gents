@@ -139,7 +139,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
                 .tool_calls_terminalized,
             0
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -185,5 +185,5 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
         reason.contains("its result arrives only as a completion message"),
         "{reason}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

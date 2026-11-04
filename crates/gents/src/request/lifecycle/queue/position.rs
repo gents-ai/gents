@@ -188,6 +188,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(slots, vec![(requested.clone(), requested)]);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

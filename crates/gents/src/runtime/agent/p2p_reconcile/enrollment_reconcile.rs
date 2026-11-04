@@ -1188,7 +1188,7 @@ mod tests {
         })
         .await
         .expect("both genuinely remote-merged twins become visible");
-        sender.shutdown().await;
+        sender.shutdown().await.expect("close test node");
         let before = access.execute(ROWS).await.unwrap();
         let before_rows = before["data"]["PeerPairingDesired"].as_array().unwrap();
         assert_eq!(before_rows.len(), 2);
@@ -1276,7 +1276,7 @@ mod tests {
             after,
             "a repeated sweep preserves both witnesses"
         );
-        receiver.shutdown().await;
+        receiver.shutdown().await.expect("close test node");
     }
 
     #[derive(Deserialize)]

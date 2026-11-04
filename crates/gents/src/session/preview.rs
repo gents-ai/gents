@@ -234,6 +234,6 @@ mod tests {
             })
             .await;
         observed.unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

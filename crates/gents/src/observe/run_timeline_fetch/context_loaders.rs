@@ -174,6 +174,6 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

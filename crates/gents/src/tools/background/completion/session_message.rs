@@ -711,7 +711,7 @@ mod turn_assignment_tests {
             session_message_notifications(node, did, admission.tool.session_id()).await,
             notifications
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(&admission.path).unwrap();
     }
 
@@ -790,7 +790,7 @@ mod turn_assignment_tests {
             redrive.side_effects_converged, 0,
             "side effects already converged; the replay republishes nothing"
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -841,7 +841,7 @@ mod turn_assignment_tests {
             "first notice names the absent assignment: {}",
             notifications[0]
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -899,7 +899,7 @@ mod turn_assignment_tests {
             "a complete assignment stays reasonless: {}",
             notifications[0]
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -1033,7 +1033,7 @@ mod turn_assignment_tests {
         );
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completed", "side effects converged");
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 

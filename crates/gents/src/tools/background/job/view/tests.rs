@@ -175,7 +175,7 @@ async fn running_job_view_has_address_state_pin_summary_progress_and_children() 
             live("slot-b", 0, "child-b0", "Beta"),
         ]
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -190,7 +190,7 @@ async fn settled_job_view_carries_outcome_for_a_host_code() {
     let outcome = loaded.outcome.unwrap();
     assert_eq!(outcome.code, "plugin_job_timed_out");
     assert!(!outcome.message.is_empty());
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -209,7 +209,7 @@ async fn settled_job_view_carries_outcome_for_a_guest_fail_code() {
             message: "boom".into(),
         })
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -227,7 +227,7 @@ async fn job_view_outcome_is_none_without_a_code() {
         let loaded = view(&job, &row).await.unwrap();
         assert_eq!(loaded.outcome, None, "case {}", index + 1);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -259,7 +259,7 @@ async fn job_view_state_follows_the_row_lifecycle_first() {
         let loaded = view(&job, &row).await.unwrap();
         assert_eq!(loaded.state, expected, "case {}", index + 1);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -286,7 +286,7 @@ async fn job_view_times_are_epoch_ms_from_the_row_and_pin() {
         view(&job, &unstarted).await,
         Err(JobReadError::Malformed { .. })
     ));
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -385,7 +385,7 @@ async fn job_read_errors_are_returned_per_class_and_classified_by_is_transient()
     for (error, transient) in classes {
         assert_eq!(error.is_transient(), transient, "{error}");
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 const EVERY_STATE: [JobState; 7] = [
@@ -461,7 +461,7 @@ async fn list_jobs_returns_two_session_jobs_newest_first() {
     };
 
     assert_eq!(listed(&job, &filter).await, vec![newer, older]);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -496,7 +496,7 @@ async fn repeated_script_runs_keep_their_children_and_controls_separate() {
         assert_eq!(view(&job, other).await.unwrap(), before);
         assert_eq!(list_jobs(&job.access, &every_job()).await.unwrap().len(), 2);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -507,7 +507,7 @@ async fn list_jobs_excludes_non_job_rows() {
     let pinned = pinned_job_row(&mut job, "call-2").await;
 
     assert_eq!(listed(&job, &every_job()).await, vec![pinned]);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -537,7 +537,7 @@ async fn list_jobs_query_count_is_independent_of_job_count() {
 
     assert!(one > 0);
     assert_eq!(three, one);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -550,7 +550,7 @@ async fn list_jobs_skips_an_undecodable_row_with_a_warning() {
     let good = pinned_job_row(&mut job, "call-2").await;
 
     assert_eq!(listed(&job, &every_job()).await, vec![good]);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 /// A running job row of `requester`, inserted directly because
@@ -587,7 +587,7 @@ async fn list_jobs_keeps_only_the_requesters_rows() {
 
     assert_eq!(listed(&job, &only(Some("a".into()))).await, vec![a.clone()]);
     assert_eq!(sorted(listed(&job, &only(None)).await), sorted(vec![a, b]));
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -613,7 +613,7 @@ async fn list_jobs_without_a_session_lists_job_rows_of_every_session() {
         sorted(listed(&job, &only(None)).await),
         sorted(vec![s1, s2])
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -653,7 +653,7 @@ async fn list_jobs_states_keeps_only_the_listed_states() {
         sorted(listed(&job, &only(EVERY_STATE.to_vec())).await),
         sorted(vec![running, paused, awaiting, completed])
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -680,7 +680,7 @@ async fn list_jobs_not_terminal_or_undelivered_keeps_running_and_undelivered_row
         sorted(listed(&job, &filter).await),
         sorted(vec![running, undelivered])
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -713,7 +713,7 @@ async fn list_jobs_keeps_only_the_named_plugins_rows() {
         sorted(listed(&job, &every_job()).await),
         sorted(vec![engine, other])
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -794,5 +794,5 @@ async fn job_view_reads_over_a_served_graphql_endpoint() {
         Some("engine_boom")
     );
     assert_eq!(over_http, over_local);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

@@ -376,7 +376,7 @@ resources:
         .await
         .unwrap();
         assert!(observation_visible(&node, &actor, &key).await.unwrap());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     fn key() -> InferenceKey {

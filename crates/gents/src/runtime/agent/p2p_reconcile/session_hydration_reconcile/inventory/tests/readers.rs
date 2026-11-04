@@ -244,6 +244,6 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
             .map(|case| case["name"].as_str().unwrap().to_owned())
             .collect()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

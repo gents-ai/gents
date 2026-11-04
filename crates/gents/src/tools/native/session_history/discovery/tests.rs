@@ -105,7 +105,7 @@ resources:
     assert!(error
         .to_string()
         .contains("unavailable or ambiguous under ACP"));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 async fn call_error(tool: &SessionHistoryTool, params: Value) -> String {
@@ -186,7 +186,7 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
         params = page["next_call"].clone();
     }
     assert_eq!(recovered, raw);
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -291,7 +291,7 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
 
     let help = call(&tool, json!({"action":"help","topic":"output"})).await;
     assert!(help["help"].as_str().unwrap().contains("next_call"));
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(fixture.path).unwrap();
 }
 
@@ -368,7 +368,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     )
     .await;
     assert_eq!(cross_agent["session"]["node_did"], foreign.did());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -506,5 +506,5 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
     .await;
     assert_eq!(second["messages"][0]["sequence"], 2);
     assert!(second["next_cursor"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

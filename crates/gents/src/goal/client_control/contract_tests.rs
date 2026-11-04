@@ -241,6 +241,6 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             "{} receipt replay",
             case.name
         );
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("close test node");
     }
 }

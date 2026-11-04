@@ -178,7 +178,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     );
     assert_eq!(read_as(&node, &actor).await.unwrap(), expected);
     assert_eq!(work_rows(&node, &actor).await, work);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     let node = Arc::new(
         Node::builder()
@@ -232,7 +232,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     .is_err());
     assert_eq!(read_as(&node, &actor).await.unwrap(), expected);
     assert_eq!(work_rows(&node, &actor).await, work);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -299,7 +299,7 @@ resources:
         read_as(&node, &reader).await.unwrap().archived_at,
         result.archived_at
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -328,7 +328,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
     );
     assert!(receipts.iter().all(|receipt| receipt.revision == "1"));
     assert_eq!(read_as(&node, &actor).await.unwrap().archive_revision, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -367,5 +367,5 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() {
         .unwrap();
     assert_eq!(receipt.outcome, SessionArchiveOutcome::Applied);
     assert_eq!(read_as(&node, &actor).await.unwrap().archive_revision, 2);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

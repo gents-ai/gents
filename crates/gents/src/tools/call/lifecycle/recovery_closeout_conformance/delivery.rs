@@ -80,7 +80,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
     );
     let (notifications, _) = completion_obligations(node, &session_id, &did).await;
     assert_eq!(notifications.len(), 1, "delivered exactly once");
-    message.admission.node.shutdown().await;
+    message.admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).expect("remove exact recovery fixture");
 }
 
@@ -212,7 +212,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     assert!(admitted, "{row}");
     assert_eq!(row["request_hop"], caller.request_hop);
     assert_eq!(row["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -326,6 +326,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     )
     .await
     .expect("the result resumes the client's session");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

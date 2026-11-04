@@ -2021,7 +2021,7 @@ mod tests {
             Some(2)
         );
         drop(lifecycle);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
     #[tokio::test]
     async fn claim_pins_configured_budget_and_reclaim_preserves_unlimited_or_zero() {

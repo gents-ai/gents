@@ -801,7 +801,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 actual.is_some()
             ),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -1282,7 +1282,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         (15_000, true),
         "each request seeds its own calibration; one request's observations never reach another's"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]

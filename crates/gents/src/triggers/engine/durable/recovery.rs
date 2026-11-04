@@ -173,7 +173,7 @@ mod tests {
                     Ok::<_, anyhow::Error>(())
                 })
             }).await.unwrap();
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
             drop(node);
             let node = std::sync::Arc::new(
                 Node::builder()
@@ -208,7 +208,7 @@ mod tests {
             let outcomes: Vec<serde_json::Value> =
                 crate::store::graphql::rows(&response, "FireOutcome").unwrap();
             assert_eq!(outcomes.len(), expected, "{name}");
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
         }
     }
 }

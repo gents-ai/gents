@@ -163,6 +163,6 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         "{} coalesced count drifted",
         case.name
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(path).unwrap();
 }

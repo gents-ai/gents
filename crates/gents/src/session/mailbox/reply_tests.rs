@@ -309,7 +309,7 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
         assert!(claim(&node, &replay, false).await.is_err());
         assert_eq!(stored_lifecycle(&node, &replay).await, "pending");
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -473,7 +473,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         Some(reply.doc_id.as_str())
     );
     assert!(modeled.linked_reply_accepted);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]

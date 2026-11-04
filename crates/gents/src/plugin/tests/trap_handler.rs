@@ -102,7 +102,7 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
         );
 
         echo_once(&echo, 2);
-        runtime.block_on(node.shutdown());
+        runtime.block_on(node.shutdown()).expect("close test node");
         return;
     }
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())

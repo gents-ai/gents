@@ -347,6 +347,6 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         } else {
             assert_eq!(after.is_some(), case.published, "{} session", case.name);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

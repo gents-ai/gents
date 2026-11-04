@@ -105,7 +105,7 @@ async fn preview_create_update_delete_and_fresh_reads_preserve_json() {
         access.execute("{Parcel{_docID}}").await.unwrap()["data"]["Parcel"],
         json!([])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -173,7 +173,7 @@ async fn changed_targets_and_overbroad_selection_never_apply() {
         let error = tool.execute(&malformed).await.unwrap_err();
         assert!(format!("{error:#}").contains("unknown filter field/operator"));
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -196,7 +196,7 @@ async fn managed_credentials_scope_and_injection_are_refused() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("identifier"), "{error}");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -226,7 +226,7 @@ async fn native_relationship_input_uses_the_target_document_id() {
         .await
         .unwrap();
     assert_eq!(rows["data"]["Volume"][0]["author"]["name"], "Nora");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -281,7 +281,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     .await
     .unwrap();
     assert_eq!(rows["data"]["Parcel"][0]["status"], "queued");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 mod plugin {
@@ -427,7 +427,7 @@ mod plugin {
         .await
         .unwrap();
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -452,7 +452,7 @@ mod plugin {
                 "{error:#}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -470,7 +470,7 @@ mod plugin {
             "{error:#}"
         );
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -488,7 +488,7 @@ mod plugin {
         .unwrap_err();
         assert!(error.to_string().contains("missing_field"), "{error:#}");
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -516,7 +516,7 @@ mod plugin {
         .await;
         assert!(forged.is_err());
         assert_eq!(notes(&node).await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
     #[tokio::test]
     async fn on_conflict_ignore_with_an_equal_row_is_a_no_op() {
@@ -532,7 +532,7 @@ mod plugin {
         assert_eq!(second[0]["_docID"], first[0]["_docID"]);
         assert!(second[0].get("duplicate").is_none());
         assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -552,7 +552,7 @@ mod plugin {
         let stored = rows(&node, "Keyed").await;
         assert_eq!(stored.as_array().unwrap().len(), 1);
         assert_eq!(stored[0]["body"], "x");
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -574,7 +574,7 @@ mod plugin {
             .unwrap_err();
         assert!(error.to_string().contains("duplicate Keyed a"), "{error:#}");
         assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -600,7 +600,7 @@ mod plugin {
             .unwrap_err();
         assert!(error.to_string().contains("key"), "{error:#}");
         assert_eq!(rows(&node, "Keyed").await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -661,6 +661,6 @@ mod plugin {
             .await
             .unwrap();
         assert_eq!(other[0], json!({"duplicate": true}));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

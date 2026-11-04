@@ -346,6 +346,6 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     )
     .await;
     assert_eq!(cancelled["status"], "cancelled");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(path).unwrap();
 }

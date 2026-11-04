@@ -233,7 +233,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         .unwrap();
     assert_eq!(repeated.requests_recovered, 0);
     assert_eq!(repeated.responses_recovered, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[derive(Clone)]
@@ -452,7 +452,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 data["AgentRequest"][0]["_docID"]
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -582,5 +582,5 @@ async fn oneshot_bash_uses_owned_request_context() {
         rows.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "completed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

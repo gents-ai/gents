@@ -66,7 +66,7 @@ async fn interrupt_request(admission: &PublishedAdmission, request_doc_id: &str)
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

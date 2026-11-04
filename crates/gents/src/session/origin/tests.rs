@@ -173,7 +173,7 @@ async fn caused_requests_projection_omits_a_call_with_two_requests() {
         projection,
         std::collections::BTreeMap::from([("call-one".to_owned(), "a1".to_owned())])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 fn scope(session_id: &str) -> SessionScope {
@@ -229,7 +229,7 @@ async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_d
         vec![(requested, scope("requested-session"))],
         "the direct-ID read must return only found requested documents with their stored scope"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -286,7 +286,7 @@ async fn a_parent_pointer_without_a_verified_starter_is_only_messaging() {
     let from_existing = lineage(&access, &scope("existing")).await.unwrap();
     assert_eq!(from_existing.started_by, None);
     assert_eq!(ids(&from_existing.received), ["parent"]);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 /// The recorded opening request is read by the session's exact scope: a
@@ -323,7 +323,7 @@ async fn recorded_opening_reads_the_exact_session_scope() {
     assert!(load_session(&access, "child", Some("did:test:node"))
         .await
         .is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 fn link() -> SessionLink {

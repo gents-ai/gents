@@ -78,7 +78,7 @@ async fn key_identity_signs_embedded_node_commits() {
             == Some(&expected_signer)
     }));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

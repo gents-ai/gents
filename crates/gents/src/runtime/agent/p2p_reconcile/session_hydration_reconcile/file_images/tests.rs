@@ -408,5 +408,5 @@ async fn signed_image_receipts_commit_only_to_the_exact_pending_demand() {
         saved["data"]["FileImageHydrationRequest"][0]["outcome_signature"],
         bs58::encode(&receipt.signature).into_string()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

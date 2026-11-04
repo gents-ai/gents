@@ -372,7 +372,7 @@ pub(super) async fn run(case: &Value) {
         .unwrap()
         .unwrap();
     assert_eq!(session.session, session_after.session);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]

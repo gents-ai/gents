@@ -319,7 +319,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
         processor.next_flush_deadline().await.is_none(),
         "the idle processor must let dispatch and finalization run"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(data_path);
 }
 
@@ -695,7 +695,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
                 == gents_protocol::output::StreamPayload::ReasoningSignature
     }));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1500,7 +1500,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .count();
     assert_eq!(result_count, 3);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1670,7 +1670,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
                 ToolResultContent::Text(text) if text.text == r#"{"hit":1}"#))));
     assert_eq!(history[2], final_message);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1861,7 +1861,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     assert_eq!(prefix.streams.len(), 2);
     assert_eq!(prefix.streams[0].text, "Hel");
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -2021,7 +2021,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         "the salvageable #589 payload must persist its intended object"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 

@@ -275,7 +275,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         assert_eq!(admitted.request_id, case.request.request_id);
         assert_eq!(admitted.purpose, native_purpose(case.request.purpose));
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

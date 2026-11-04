@@ -517,7 +517,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 .lock()
                 .await
                 .remove(&hook_execution_fixture_key(&hook, &request_id));
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
         }
     }
 }

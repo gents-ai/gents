@@ -72,7 +72,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
             if matches!(first_content(content), UserContent::Text(Text { text }) if text == "older steering")
     ));
     assert_eq!(history.get(1), Some(&tool_result));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -111,7 +111,7 @@ async fn history_reconstruction_scans_a_shared_request_once() {
         scans, 1,
         "one history pass scans a shared request's output once"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -153,7 +153,7 @@ async fn history_reconstruction_batches_distinct_requests() {
         scans <= 2,
         "history used {scans} output scans for {count} requests"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -382,7 +382,7 @@ async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
         stored_row["files_modified"].as_str(),
         Some(r#"{"version":1,"paths":["/new/write.rs"]}"#)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -849,7 +849,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         load_history(&node, SOURCE, AGENT, None).await.unwrap(),
         before
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -896,7 +896,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     let history = load_history(&node, CHILD, NODE, None).await.unwrap();
     assert_eq!(history.len(), 2);
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
 
     let node = std::sync::Arc::new(builder().build().await.unwrap());
@@ -949,7 +949,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     );
     assert_eq!(session_rewrite_rows(&node).await, unbound_before);
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1034,7 +1034,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
     assert_eq!(child_entries.len(), 2);
     assert_eq!(child_entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(child_entries[1].files_read, vec!["/tmp/a.rs", "/tmp/b.rs"]);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1099,7 +1099,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     assert_eq!(entries.len(), 2);
     assert_ne!(after.generation, before.generation);
     assert_eq!(after.compacted_through_sequence, Some(20));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[expect(
@@ -1351,7 +1351,7 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
             .unwrap()
             .is_empty()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1495,7 +1495,7 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
             .len(),
         2
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1615,7 +1615,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         } else {
             result.unwrap();
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -1733,7 +1733,7 @@ async fn retry_frontier_matches_lean_admission() {
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1805,5 +1805,5 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .unwrap()
         .started
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

@@ -419,7 +419,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         Some(crate::goal::GoalStatus::Complete)
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(data_path);
 }
 use crate::ensure_runtime_schemas;
@@ -478,7 +478,7 @@ async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
         Some("did:test:coordinator")
     );
     drop(state);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -504,7 +504,7 @@ async fn active_request_binding_rejects_a_half_bound_pair() {
     assert_eq!(state.current_request_doc_id, None);
     assert_eq!(state.current_requester_did, None);
     drop(state);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -553,7 +553,7 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
             .and_then(serde_json::Value::as_str),
         Some(expected_doc_id.as_str())
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
@@ -756,7 +756,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 after_replay["lifecycle_state"],
                 recovered["lifecycle_state"]
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
         }
     }
 }
@@ -848,7 +848,7 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                 .lock()
                 .await
                 .remove(&hook_execution_fixture_key(&hook, "control-receipt"));
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
         }
     }
 }
@@ -1803,7 +1803,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         .get("selected_tool_name")
         .is_none_or(serde_json::Value::is_null));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1943,7 +1943,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(false));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -2148,7 +2148,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             .expect("clear goal for next case");
     }
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -3976,7 +3976,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
         "the output is ordinary tool text and persists verbatim"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -4048,7 +4048,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         Some(text)
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -4243,7 +4243,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
     drop(persistence_hook);
     drop(hook);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -4316,7 +4316,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
         row.get("tool_failure_class")
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -4410,7 +4410,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
             .is_some_and(|result| result.contains("readOnlySubcommandNotAllowlisted")),
         "the denial payload must persist as the model-facing result"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -4581,7 +4581,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             "{name} {state}: {rows}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(data_path);
 }
 
@@ -4663,7 +4663,7 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
         }),
         "{rows}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(data_path);
 }
 

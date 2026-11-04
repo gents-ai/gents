@@ -298,5 +298,5 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
         old_plugin
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

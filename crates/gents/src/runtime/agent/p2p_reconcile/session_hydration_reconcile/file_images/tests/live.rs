@@ -1134,11 +1134,11 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     cancel.cancel();
     enrollment_task.await??;
     pairing_task.await??;
-    client_node.shutdown().await;
+    client_node.shutdown().await.expect("close test node");
     if let Some(author_test) = author_test {
-        author_test.node.shutdown().await;
+        author_test.node.shutdown().await.expect("close test node");
     }
-    source_node.shutdown().await;
+    source_node.shutdown().await.expect("close test node");
     Ok(())
 }
 

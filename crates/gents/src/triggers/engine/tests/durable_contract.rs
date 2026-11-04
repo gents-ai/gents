@@ -1134,7 +1134,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             case["post_receipts"].as_array().unwrap().len(),
             "{name}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 

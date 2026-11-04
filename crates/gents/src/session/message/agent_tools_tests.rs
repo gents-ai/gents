@@ -143,7 +143,7 @@ async fn steer_reachability_matches_lean() {
         .is_ok();
         assert_eq!(actual, case.expected, "{case:?}");
     }
-    message.admission.node.shutdown().await;
+    message.admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -276,7 +276,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             new["interrupt_requested_at"].is_null(),
             "{case:?}, rows={rows:?}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 }
@@ -448,7 +448,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         };
         assert_eq!(disposition, modeled.expected, "{name}");
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -474,7 +474,7 @@ async fn only_the_starting_session_may_interrupt() {
         .await
         .unwrap()
         .is_some());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -564,7 +564,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         .await
         .unwrap()
         .is_none());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -813,8 +813,8 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
             .as_str()
             .is_some()
     );
-    target.shutdown().await;
-    source.node.shutdown().await;
+    target.shutdown().await.expect("close test node");
+    source.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&source.path).unwrap();
 }
 
@@ -903,7 +903,7 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
             .unwrap(),
         None
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -980,7 +980,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         .unwrap()
         .is_some()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1059,7 +1059,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
         "late message admission must honor durable stop"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1109,7 +1109,7 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
         .unwrap()
         .is_some());
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1236,7 +1236,7 @@ async fn session_listing_pages_by_logical_labels_and_compares_timestamp_instants
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1422,7 +1422,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         .await
         .unwrap();
     drop(caller_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1515,6 +1515,6 @@ async fn caused_session_records_its_opening_request() {
     );
     materialize_session(&node, &without_call).await;
     assert_eq!(provenance().await, recorded);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

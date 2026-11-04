@@ -436,6 +436,6 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         .await
         .expect("join enrollment authority")
         .expect("enrollment authority shutdown");
-    coordinator.shutdown().await;
-    host.shutdown().await;
+    coordinator.shutdown().await.expect("close test node");
+    host.shutdown().await.expect("close test node");
 }

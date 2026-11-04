@@ -176,7 +176,7 @@ async fn generated_notification_cases_drive_durable_writes() {
             serde_json::to_value(Some(terminal)).unwrap()
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -262,7 +262,7 @@ async fn notification_updates_reject_route_policy_and_terminal_races() {
         .unwrap();
     assert_eq!(terminal.title, first.title);
     assert_eq!(terminal.parsed_status(), Some(MailboxStatus::Dismissed));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -328,7 +328,7 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
     assert!(notification::request_provenance(&node, "one", &wrong)
         .await
         .is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -375,7 +375,7 @@ async fn concurrent_notifications_converge_without_cross_requester_collisions() 
         item_ids.push(first.doc_id.clone());
     }
     assert_ne!(item_ids[0], item_ids[1]);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -394,7 +394,7 @@ async fn provenance_keeps_execution_owner_resolved_selection() {
             .await
             .is_err()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -511,5 +511,5 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         serde_json::from_str(&call(content("Note", Some("fyi"), None)).await.unwrap()).unwrap();
     assert_eq!(flag["item"]["kind"], "flag");
     assert_eq!(flag["item"]["action"], "ack");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
