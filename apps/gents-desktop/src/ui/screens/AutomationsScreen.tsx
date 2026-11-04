@@ -69,8 +69,8 @@ export function AutomationsScreen({ item }: { item?: string }) {
   const name = node ? (node.node.displayName ?? node.label) : "this node";
 
   return (
-    <ScrollArea className="h-full min-h-0" data-testid="automations-screen">
-      <div className="mx-auto grid max-w-3xl gap-8 px-6 py-8">
+    <ScrollArea className="h-full" data-testid="automations-screen">
+      <div className="mx-auto grid max-w-page gap-6 px-6 py-6">
         {open && node ? (
           <div className="grid gap-4">
             <a
@@ -86,10 +86,10 @@ export function AutomationsScreen({ item }: { item?: string }) {
             <header className="grid gap-3">
               <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
                 <div className="min-w-0 flex-1">
-                  <h1 className="font-heading text-xl font-medium text-heading">
+                  <h1 className="font-heading text-lg font-medium text-heading">
                     Automations
                   </h1>
-                  <p className="mt-1 text-sm text-muted-foreground">
+                  <p className="mt-0.5 text-sm text-muted-foreground">
                     What runs on its own on {name}: on a schedule, when something
                     happens, or when you start it.
                   </p>
@@ -142,7 +142,7 @@ export function AutomationsScreen({ item }: { item?: string }) {
                       <Search />
                     </Button>
                     {node && (
-                      <Button size="sm" variant="outline" onClick={() => start(null)}>
+                      <Button size="sm" variant="secondary" onClick={() => start(null)}>
                         <Plus /> New automation
                       </Button>
                     )}
@@ -290,7 +290,7 @@ function Empty({ node, onNew }: { node: string; onNew?: () => void }) {
         whenever you start it. Start from a template below, or from scratch.
       </p>
       {onNew && (
-        <Button size="sm" variant="outline" className="mt-2" onClick={onNew}>
+        <Button size="sm" variant="secondary" className="mt-2" onClick={onNew}>
           <Plus /> New automation
         </Button>
       )}
