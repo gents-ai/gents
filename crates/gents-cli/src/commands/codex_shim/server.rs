@@ -17,6 +17,20 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) poll_ms: u64,
 }
 
+/// What `GET /runtime` answers, so `gents` can tell whether the runtime on the
+/// fixed endpoint serves the home it was asked to open.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RuntimeIdentity {
+    pub(crate) node_did: String,
+    pub(crate) home: PathBuf,
+}
+
+#[derive(Clone)]
+struct RuntimeRouteState {
+    auth_token: Option<Arc<str>>,
+    identity: RuntimeIdentity,
+}
+
 pub(crate) struct BoundCodexShim {
     addr: SocketAddr,
     codex_home: PathBuf,
@@ -116,6 +130,17 @@ pub(crate) async fn bind_codex_shim(
         .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
         .map_err(CodexShimBindError::DependencyMissing)?;
 
+    let identity_route = Router::new()
+        .route("/runtime", get(runtime_identity))
+        .with_state(RuntimeRouteState {
+            auth_token: args.auth_token.as_deref().map(Arc::from),
+            identity: RuntimeIdentity {
+                node_did: args.node_did.clone(),
+                home: crate::absolutize(args.home.clone())
+                    .map_err(CodexShimBindError::HostResource)?,
+            },
+        });
+
     let state = ShimState {
         usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
@@ -141,7 +166,8 @@ pub(crate) async fn bind_codex_shim(
 
     let app = Router::new()
         .route("/", get(ws_upgrade))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .merge(identity_route);
     let addr = SocketAddr::new(args.bind_addr, args.port);
     let listener = TcpListener::bind(addr)
         .await
@@ -191,6 +217,13 @@ async fn ws_upgrade(
     }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
         .into_response()
+}
+
+async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: HeaderMap) -> Response {
+    if !request_is_authorized(&headers, state.auth_token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Json(state.identity).into_response()
 }
 
 pub(super) fn request_is_authorized(headers: &HeaderMap, expected: Option<&str>) -> bool {

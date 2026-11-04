@@ -84,6 +84,110 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_identity_names_node_and_home() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-identity-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "identified-shim",
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    let default_agent_id = init
+        .get("default_agent_id")
+        .and_then(Value::as_str)
+        .context("init reports a default agent")?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-agent-id",
+            default_agent_id,
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+
+    let identity = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{shim_port}/runtime"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+
+    assert_eq!(
+        identity,
+        json!({"node_did": node_did, "home": home_dir.join(".gents").to_string_lossy()})
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_identity_requires_configured_bearer_token() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-identity-auth-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "identified-authenticated-shim",
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-auth-token-env",
+            "GENTS_SHIM_TEST_TOKEN",
+        ],
+        &[("GENTS_SHIM_TEST_TOKEN", "correct-secret")],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    let url = format!("http://127.0.0.1:{shim_port}/runtime");
+    let client = reqwest::Client::new();
+
+    let unauthenticated = client.get(&url).send().await?;
+    assert_eq!(unauthenticated.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let authenticated = client
+        .get(&url)
+        .bearer_auth("correct-secret")
+        .send()
+        .await?;
+    assert_eq!(authenticated.status(), reqwest::StatusCode::OK);
+    Ok(())
+}
+
 fn assert_http_status(
     error: tokio_tungstenite::tungstenite::Error,
     expected: StatusCode,
