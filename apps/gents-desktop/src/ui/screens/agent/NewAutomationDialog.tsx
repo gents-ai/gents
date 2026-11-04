@@ -22,11 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@gents/ui/components/dialog";
-import {
-  Field,
-  FieldError,
-  FieldLabel,
-} from "@gents/ui/components/field";
+import { Field, FieldError, FieldLabel } from "@gents/ui/components/field";
 import { Input } from "@gents/ui/components/input";
 import {
   Select,
