@@ -4,6 +4,7 @@ use super::{
     PackAccountArgs, PackBuildArgs, PackFetchArgs, PackInfoArgs, PackInitArgs, PackInstallArgs,
     PackLoginArgs, PackOutdatedArgs, PackOwnerArgs, PackPruneArgs, PackPublishArgs, PackRemoveArgs,
     PackRunArgs, PackSearchArgs, PackSeedArgs, PackUpdateArgs, PackWireArgs, PackYankArgs,
+    PluginCommand, UxCommand,
 };
 
 #[derive(clap::Args)]
@@ -307,6 +308,16 @@ pub(crate) enum PackCommand {
     /// Download a pack without installing it, or admit it into the home's
     /// pack store with `--store`.
     Fetch(PackFetchArgs),
+    /// Build, publish, install, and run Afterburner plugins.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+    /// List and inspect the UX plugins the desktop loads from this home.
+    Ux {
+        #[command(subcommand)]
+        command: UxCommand,
+    },
 }
 
 #[derive(clap::Subcommand)]

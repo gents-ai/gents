@@ -27,7 +27,14 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     .to_string();
     let offline = run_cli_json(
         &home_dir,
-        &["document", "create", "Goal", "--json", &offline_fields],
+        &[
+            "data",
+            "document",
+            "create",
+            "Goal",
+            "--json",
+            &offline_fields,
+        ],
     )?;
     assert!(offline["doc_id"].as_str().is_some(), "{offline}");
     let mut serve = spawn_server(&home_dir, port)?;
@@ -47,6 +54,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let created = run_cli_json(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "Goal",
@@ -62,6 +70,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let rows = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -85,6 +94,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let unknown_field = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "Goal",
@@ -99,6 +109,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let metadata_field = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "Goal",
@@ -116,6 +127,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let unknown_collection = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "NoSuchCollection",
@@ -162,6 +174,7 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let refusal = run_cli_failure_stderr(
         &other_dir,
         &[
+            "data",
             "document",
             "create",
             "Goal",
@@ -180,6 +193,7 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let rows = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,

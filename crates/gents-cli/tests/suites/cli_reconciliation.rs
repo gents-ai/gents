@@ -187,6 +187,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let result = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",

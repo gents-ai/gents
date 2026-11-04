@@ -40,6 +40,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let submit = spawn_cli(
         &home_dir,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -125,6 +126,7 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
     let submit = spawn_cli(
         &home_dir,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -203,6 +205,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -245,6 +248,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let interrupted = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "interrupt",
             "--graphql",
@@ -331,6 +335,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -368,6 +373,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let interrupted = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "interrupt",
             "--graphql",
@@ -565,6 +571,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let json_output = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "show",
             "--graphql",
@@ -633,7 +640,14 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
 
     let text_output = run_cli_text(
         &home_dir,
-        &["request", "show", "--graphql", &graphql, &parent_request_id],
+        &[
+            "debug",
+            "request",
+            "show",
+            "--graphql",
+            &graphql,
+            &parent_request_id,
+        ],
     )?;
     assert!(text_output.contains("Transition history:"));
     assert!(text_output.contains("Backgrounded tools:"));
@@ -668,6 +682,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let limited = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "show",
             "--graphql",
@@ -799,6 +814,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
     let submitted = run_cli_json(
         &home,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -824,7 +840,12 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         "--output",
         "json",
     ];
-    let pending = || run_cli_json(&home, &[&["request", "pending"][..], &scope[..]].concat());
+    let pending = || {
+        run_cli_json(
+            &home,
+            &[&["debug", "request", "pending"][..], &scope[..]].concat(),
+        )
+    };
     let wait_for_pending = |expected: Vec<&'static str>| {
         let pending = &pending;
         async move {
@@ -859,6 +880,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         waiter.0 = Some(spawn_cli(
             &home,
             &[
+                "debug",
                 "request",
                 "submit",
                 "--graphql",
@@ -878,6 +900,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
             run_cli_json(
                 &home,
                 &[
+                    "debug",
                     "request",
                     "submit",
                     "--graphql",
@@ -908,7 +931,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         };
         let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
             let expected = expected_flags(snapshot);
-            let mut args = vec!["request", command];
+            let mut args = vec!["debug", "request", command];
             args.extend_from_slice(&scope);
             args.extend(expected.iter().map(String::as_str));
             args.extend_from_slice(extra);

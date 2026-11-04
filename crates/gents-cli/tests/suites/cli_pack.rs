@@ -63,6 +63,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     let echoed = run_cli_json(
         temp.path(),
         &[
+            "pack",
             "plugin",
             "run",
             "gents/echo_tool",
@@ -90,6 +91,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     let gone = run_cli_failure_stderr(
         temp.path(),
         &[
+            "pack",
             "plugin",
             "run",
             "gents/echo_tool",

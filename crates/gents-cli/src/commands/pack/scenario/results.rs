@@ -64,6 +64,7 @@ pub(super) async fn render_projection_artifacts(
     let mut artifacts = BTreeMap::new();
     for stage in stages {
         let timeline_args = vec![
+            "debug".to_string(),
             "trace".to_string(),
             "timeline".to_string(),
             "--home".to_string(),
@@ -84,6 +85,7 @@ pub(super) async fn render_projection_artifacts(
             BTreeMap::from([("timeline".to_string(), path_arg(&timeline_path))]);
         for projection in projections {
             let project_args = vec![
+                "debug".to_string(),
                 "trace".to_string(),
                 "project".to_string(),
                 "--home".to_string(),

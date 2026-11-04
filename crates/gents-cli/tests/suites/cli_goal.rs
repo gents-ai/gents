@@ -209,6 +209,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",

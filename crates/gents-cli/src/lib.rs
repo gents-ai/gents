@@ -460,36 +460,48 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Service { command } => service_command(command).await,
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
-        Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
-        Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
-        Command::Accounts { command } => commands::accounts::dispatch(command).await,
-        Command::GrokLogin(args) => commands::grok_login::grok_login(args).await,
-        Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
-        Command::ClaudeLogin(args) => commands::claude_login::claude_login(args).await,
-        Command::ClaudeGatewayLogin(args) => {
-            commands::claude_gateway_login::claude_gateway_login(args).await
-        }
+        Command::Auth { command } => match command {
+            AuthCommand::Login { command } => match command {
+                AuthLoginCommand::Codex(args) => commands::codex_login::codex_login(args).await,
+                AuthLoginCommand::Grok(args) => commands::grok_login::grok_login(args).await,
+                AuthLoginCommand::Claude(args) => commands::claude_login::claude_login(args).await,
+                AuthLoginCommand::ClaudeGateway(args) => {
+                    commands::claude_gateway_login::claude_gateway_login(args).await
+                }
+            },
+            AuthCommand::Probe { command } => match command {
+                AuthProbeCommand::Codex(args) => {
+                    commands::codex_auth_probe::codex_auth_probe(args).await
+                }
+                AuthProbeCommand::Grok(args) => {
+                    commands::grok_auth_probe::grok_auth_probe(args).await
+                }
+            },
+            AuthCommand::Accounts { command } => commands::accounts::dispatch(command).await,
+        },
         Command::Cloud { command } => commands::cloud::dispatch(command).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
-        Command::Schema { command } => commands::schema::dispatch(command).await,
-        Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,
-        Command::Query(args) => commands::query::query(args).await,
-        Command::Export(args) => commands::export::export(args).await,
-        Command::Write(args) => commands::write::write(args).await,
-        Command::Document { command } => commands::document::dispatch(command).await,
-        Command::Background { command } => commands::background::dispatch(command).await,
+        Command::Data { command } => match command {
+            DataCommand::Query(args) => commands::query::query(args).await,
+            DataCommand::Write(args) => commands::write::write(args).await,
+            DataCommand::Export(args) => commands::export::export(args).await,
+            DataCommand::Document { command } => commands::document::dispatch(command).await,
+            DataCommand::Schema { command } => commands::schema::dispatch(command).await,
+        },
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
-        Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Task { command } => commands::task::dispatch(command).await,
         Command::Pack { command } => commands::pack::dispatch(command).await,
-        Command::Plugin { command } => commands::plugin::dispatch(command).await,
-        Command::Ux { command } => commands::ux::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,
-        Command::Request { command } => commands::request::dispatch(command).await,
-        Command::Response { command } => commands::response::dispatch(command).await,
+        Command::Debug { command } => match command {
+            DebugCommand::Request { command } => commands::request::dispatch(command).await,
+            DebugCommand::Response { command } => commands::response::dispatch(command).await,
+            DebugCommand::Trace { command } => commands::trace::dispatch(command).await,
+            DebugCommand::Background { command } => commands::background::dispatch(command).await,
+            DebugCommand::Fleet { command } => commands::fleet::dispatch(command).await,
+        },
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Goal { command } => commands::goal::dispatch(command).await,
         Command::Job { command } => commands::job::dispatch(command).await,

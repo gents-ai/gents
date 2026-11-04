@@ -3,11 +3,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::{
-    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CLOUD_AFTER_HELP, CODEX_AFTER_HELP,
-    CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP,
-    P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
-    RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP,
-    STATUS_AFTER_HELP, TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
+    CHAT_AFTER_HELP, CLI_AFTER_HELP, CLOUD_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
+    DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
+    RESET_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP,
+    TOOLS_AFTER_HELP,
 };
 
 mod accounts;
@@ -15,6 +14,7 @@ mod backend;
 mod config;
 mod config_documents;
 mod eval;
+mod groups;
 mod optimization;
 mod p2p;
 mod pack;
@@ -34,6 +34,7 @@ pub use config::ToolCeilingArg;
 pub(crate) use config::*;
 pub(crate) use config_documents::*;
 pub(crate) use eval::*;
+pub(crate) use groups::*;
 pub(crate) use optimization::*;
 pub(crate) use p2p::*;
 pub(crate) use pack::*;
@@ -80,7 +81,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: DesktopCommand,
     },
-    #[command(about = "Initialize a local node home directory", after_help = INIT_AFTER_HELP)]
+    #[command(
+        about = "Initialize a local node home directory",
+        after_help = INIT_AFTER_HELP,
+        hide = true
+    )]
     Init(InitArgs),
     #[command(
         about = "Provision a local node home from a portable manifest root",
@@ -95,7 +100,10 @@ pub(crate) enum Command {
         after_help = SERVER_AFTER_HELP
     )]
     Server(ServeArgs),
-    #[command(about = "Prepare an initialized local runtime and serve until shutdown")]
+    #[command(
+        about = "Prepare an initialized local runtime and serve until shutdown",
+        hide = true
+    )]
     PrepareRuntime(PrepareRuntimeArgs),
     #[command(about = "Install and control the per-user native Gents runtime service")]
     Service {
@@ -112,38 +120,11 @@ pub(crate) enum Command {
         after_help = CODEX_AFTER_HELP
     )]
     Codex(CodexArgs),
-    #[command(about = "Sign in with ChatGPT and store OAuth credentials in DefraDB")]
-    CodexLogin(CodexLoginArgs),
-    #[command(about = "Probe a DefraDB-backed ChatGPT OAuth credential")]
-    CodexAuthProbe(CodexAuthProbeArgs),
-    #[command(
-        about = "List, label, disable or remove the subscription accounts signed in on this node"
-    )]
-    Accounts {
+    #[command(about = "Sign in, check credentials and manage subscription accounts")]
+    Auth {
         #[command(subcommand)]
-        command: AccountsCommand,
+        command: AuthCommand,
     },
-    #[command(
-        name = "grok-login",
-        about = "Sign in with Grok / xAI subscription OAuth and store credentials in DefraDB"
-    )]
-    GrokLogin(GrokLoginArgs),
-    #[command(
-        name = "grok-auth-probe",
-        about = "Probe a DefraDB-backed Grok / xAI OAuth credential (read-only)"
-    )]
-    GrokAuthProbe(GrokAuthProbeArgs),
-    #[command(
-        name = "claude-gateway-login",
-        about = "Sign in to a Claude Code cloud gateway and store the account in DefraDB"
-    )]
-    ClaudeGatewayLogin(ClaudeGatewayLoginArgs),
-    #[command(
-        name = "claude-login",
-        about = "Sign in with the Claude subscription (OAuth) and store credentials in DefraDB",
-        after_help = "Default: opens the browser and listens on a localhost callback. Use --manual on hosts without a browser: open the printed URL anywhere, then paste the code shown on Anthropic's page."
-    )]
-    ClaudeLogin(ClaudeLoginArgs),
     #[command(about = "Sign in to and work with a gents cloud", after_help = CLOUD_AFTER_HELP)]
     Cloud {
         #[command(subcommand)]
@@ -156,49 +137,17 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: P2pCommand,
     },
-    #[command(about = "Apply app-specific collection schemas", after_help = SCHEMA_AFTER_HELP)]
-    Schema {
-        #[command(subcommand)]
-        command: SchemaCommand,
-    },
-    #[command(
-        about = "Export persisted tool-call traces for measurement",
-        after_help = TRACE_AFTER_HELP
-    )]
-    Trace {
-        #[command(subcommand)]
-        command: TraceCommand,
-    },
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
-    #[command(about = "Run a read-only structured query against a DefraDB collection")]
-    Query(QueryArgs),
-    #[command(about = "Export full-fidelity application records from the home node")]
-    Export(ExportArgs),
-    #[command(about = "Preview and apply scoped application document mutations")]
-    Write(WriteArgs),
-    #[command(about = "Create documents as the home node")]
-    Document {
+    #[command(about = "Query, write, export and create application documents and schemas")]
+    Data {
         #[command(subcommand)]
-        command: DocumentCommand,
-    },
-    #[command(
-        about = "Inspect backgrounded tool calls",
-        after_help = BACKGROUND_AFTER_HELP
-    )]
-    Background {
-        #[command(subcommand)]
-        command: BackgroundCommand,
+        command: DataCommand,
     },
     #[command(about = "Probe registered MCP service health", after_help = MCP_AFTER_HELP)]
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
-    },
-    #[command(about = "Inspect fleet admission slot accounting", after_help = FLEET_AFTER_HELP)]
-    Fleet {
-        #[command(subcommand)]
-        command: FleetCommand,
     },
     #[command(
         about = "Trigger configured Task documents on demand",
@@ -213,16 +162,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: PackCommand,
     },
-    #[command(about = "Build, publish, install, and run Afterburner plugins")]
-    Plugin {
-        #[command(subcommand)]
-        command: PluginCommand,
-    },
-    #[command(about = "List and inspect the UX plugins the desktop loads from this home")]
-    Ux {
-        #[command(subcommand)]
-        command: UxCommand,
-    },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
     #[command(about = "Explain resolved agent tool surfaces", after_help = TOOLS_AFTER_HELP)]
@@ -235,15 +174,12 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    #[command(about = "Low-level request submission and inspection", after_help = REQUEST_AFTER_HELP)]
-    Request {
+    #[command(
+        about = "Inspect low-level requests, responses, traces, background calls and fleet slots"
+    )]
+    Debug {
         #[command(subcommand)]
-        command: RequestCommand,
-    },
-    #[command(about = "Low-level response inspection", after_help = RESPONSE_AFTER_HELP)]
-    Response {
-        #[command(subcommand)]
-        command: ResponseCommand,
+        command: DebugCommand,
     },
     #[command(about = "Manage and fork sessions", after_help = SESSION_AFTER_HELP)]
     Session {

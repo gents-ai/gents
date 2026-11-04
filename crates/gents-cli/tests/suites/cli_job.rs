@@ -919,6 +919,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     run_cli_json(
         &served.home,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -964,6 +965,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     let predecessor_receipt = run_cli_json(
         &served.home,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
