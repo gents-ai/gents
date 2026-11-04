@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use gents::codex_shim_binding::admits_connection;
 use relay::AgentRelay;
 use tokio::net::TcpStream;
@@ -16,7 +16,7 @@ use crate::commands::start::interface_install_message;
 mod relay;
 
 const SHIM_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const PUBLISH_WAIT: Duration = Duration::from_secs(5);
+pub(crate) const PUBLISH_WAIT: Duration = Duration::from_secs(5);
 pub(crate) const CODEX_BIN_ENV: &str = "GENTS_CODEX_BIN";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,6 +209,30 @@ async fn preflight_agent(
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
+    }
+}
+
+/// With nothing runnable an interface only fails in its own words, as Codex does with
+/// `model/list returned no models for TUI bootstrap`. No cross-process notification of a
+/// publish exists, so an empty set is looked at again until the wait ends. A pinned runtime
+/// publishes no set, and a runtime that cannot say is left for the interface to report.
+pub(crate) async fn ensure_an_agent_can_run(
+    remote: &str,
+    home: &Path,
+    publish_wait: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + publish_wait;
+    loop {
+        let identity = runtime_identity_at(remote).await;
+        if !identity.is_some_and(|identity| identity.runnable_agents == Some(Vec::new())) {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "no agent can run yet on this home's runtime. Check `gents status --home {}`.",
+            home.display()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -641,6 +665,53 @@ pub(crate) mod tests {
             error.to_string().contains("gents config agent list"),
             "{error:#}"
         );
+    }
+
+    #[tokio::test]
+    async fn no_runnable_agent_says_so_after_the_wait_and_names_gents_status() {
+        let authority = runtime_answering(vec![published(&[])]).await;
+
+        let error = ensure_an_agent_can_run(
+            &format!("ws://{authority}/"),
+            Path::new("/srv/home"),
+            Duration::from_millis(250),
+        )
+        .await
+        .expect_err("nothing is ever published");
+
+        assert!(error.to_string().contains("no agent can run"), "{error:#}");
+        assert!(
+            error.to_string().contains("gents status --home /srv/home"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_published_during_the_wait_can_run() {
+        let authority =
+            runtime_answering(vec![published(&[]), published(&[]), published(&["a"])]).await;
+
+        ensure_an_agent_can_run(
+            &format!("ws://{authority}/"),
+            Path::new("/srv/home"),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("an agent is published on the third look");
+    }
+
+    #[tokio::test]
+    async fn a_pinned_runtime_skips_the_runnable_check_without_waiting() {
+        let pinned = serde_json::to_value(identity(None)).unwrap();
+        let authority = runtime_answering(vec![pinned]).await;
+
+        ensure_an_agent_can_run(
+            &format!("ws://{authority}/"),
+            Path::new("/srv/home"),
+            Duration::from_secs(600),
+        )
+        .await
+        .expect("a pinned runtime publishes no set to check");
     }
 
     #[test]

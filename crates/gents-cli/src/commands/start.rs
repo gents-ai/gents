@@ -9,8 +9,8 @@ use crate::cli::args::{CodexArgs, StoreKeyCustodyArg};
 use crate::cli::Cli;
 use crate::client_settings::{ensure_client_supported, ClientSettings, InterfaceClient};
 use crate::commands::codex::{
-    endpoint_answers, ensure_endpoint_is_this_homes, interface_bin, launch_interface, open_codex,
-    runtime_identity_at,
+    endpoint_answers, ensure_an_agent_can_run, ensure_endpoint_is_this_homes, interface_bin,
+    launch_interface, open_codex, runtime_identity_at, PUBLISH_WAIT,
 };
 use crate::graphql_access::graphql_endpoint_available;
 use crate::home_state::{read_init_config, read_runtime_state, resolve_home_dir};
@@ -140,6 +140,7 @@ pub(crate) async fn run(
     };
     let endpoint = InterfaceEndpoint::for_client(ClientSettings::read(&home)?.client)?;
     ensure_runtime(&home, &config.node_did, &endpoint).await?;
+    ensure_an_agent_can_run(crate::DEFAULT_CODEX_REMOTE, &home, PUBLISH_WAIT).await?;
     endpoint.open(agent).await
 }
 

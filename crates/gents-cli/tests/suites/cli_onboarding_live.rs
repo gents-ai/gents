@@ -867,8 +867,9 @@ mod no_model {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn a_stopped_home_starts_its_service_and_reports_the_missing_interface() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
-        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
 
         let mut terminal = Terminal::spawn(
             &live.bare_gents(MISSING_BIN, &home.home),
@@ -889,9 +890,38 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn a_running_runtime_is_left_alone() -> Result<()> {
+    async fn a_home_with_no_runnable_agent_says_so_and_opens_nothing() -> Result<()> {
         let live = LiveBox::new()?;
         let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home_arg = home.home.to_string_lossy();
+        let (interface, recorded) = recording_interface(&live)?;
+        let interface = interface.to_string_lossy();
+
+        for (client, command) in [
+            ("codex", live.bare_gents(&interface, &home.home)),
+            ("grok", live.bare_gents_grok(&interface, &home.home)),
+        ] {
+            live.gents_ok(&["config", "client", "set", client, "--home", &home_arg])?;
+            if client == "grok" {
+                live.gents_ok(&["service", "restart", "--home", &home_arg])?;
+            }
+
+            let mut terminal = Terminal::spawn(&command, &live.log(client))?;
+
+            terminal.expect("no agent can run", RUNTIME_UP).await?;
+            terminal.expect("gents status", EXIT).await?;
+            terminal.expect_exit(1).await?;
+            ensure!(!recorded.exists(), "{client}: nothing may open");
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_running_runtime_is_left_alone() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         live.bring_up(&home.home).await?;
         let pid = live.service_pid().context("the service runs")?;
         let mtime = live.plist_mtime()?;
@@ -911,8 +941,9 @@ mod no_model {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn a_stopped_service_is_started_without_reinstalling() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
-        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         live.bring_up(&home.home).await?;
         let pid = live.service_pid().context("the service runs")?;
         let mtime = live.plist_mtime()?;
@@ -929,8 +960,9 @@ mod no_model {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn another_homes_runtime_is_refused_and_named() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
-        let a = live.init_home("home-a", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let a = live.init_home("home-a", backend.endpoint(), NO_MODEL_NAME)?;
         let b = live.init_home("home-b", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
         live.bring_up(&a.home).await?;
         let pid = live.service_pid().context("home A's service runs")?;
@@ -1022,6 +1054,7 @@ mod no_model {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn first_run_sets_up_and_leaves_the_runtime_up() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
         let folder = live.folder("my data");
 
@@ -1041,7 +1074,7 @@ mod no_model {
             .answer(FOLDER_QUESTION, &folder.to_string_lossy())
             .await?;
         terminal
-            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .answer_inference_and_tools(backend.endpoint(), NO_MODEL_NAME)
             .await?;
         terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
         terminal.expect("gents chat", EXIT).await?;
