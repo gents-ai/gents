@@ -87,7 +87,8 @@ export function AutomationsScreen({ item }: { item?: string }) {
     <ScrollArea className="h-full" data-testid="automations-screen">
       <div className="mx-auto grid max-w-page gap-6 px-6 py-6">
         {item === NEW_AUTOMATION && node ? (
-          <div className="grid gap-4">
+          /* rises in as the new session page does */
+          <div className="grid gap-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
             <a
               href={href({ name: "automations" })}
               onClick={(e) => {
