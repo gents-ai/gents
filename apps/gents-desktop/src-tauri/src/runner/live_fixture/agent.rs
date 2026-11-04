@@ -242,7 +242,7 @@ fn live_backend_candidate(
 }
 
 async fn wait_for_runtime_process_state(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     node_did: &str,
     expected_process_state: &str,
 ) -> Result<()> {
