@@ -8,6 +8,7 @@ use rapidhash::RapidHashMap;
 mod args;
 mod bash_tools;
 mod cli_tool;
+pub mod command_observability;
 mod context_budget;
 pub mod edit_match;
 mod file_tools;

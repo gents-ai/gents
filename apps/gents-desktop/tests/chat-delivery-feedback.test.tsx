@@ -99,7 +99,7 @@ it("shows a verified refusal and dismisses only that saved change", async () => 
   });
   f.ack.mockResolvedValue(undefined);
   fireEvent.click(screen.getByRole("button", { name: "Check message delivery" }));
-  await screen.findByText("Message was not delivered");
+  await screen.findByText("The message wasn't delivered");
   expect(screen.queryByRole("button", { name: "Resume saved message" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Dismiss saved message" }));
   await waitFor(() =>

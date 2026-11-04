@@ -1,17 +1,20 @@
 import {
   Fragment,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { CircleAlert, CircleCheck } from "lucide-react";
+import { ChevronRight, CircleAlert, CircleCheck } from "lucide-react";
 
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { Mark } from "@/app/Mark";
+import { Notice } from "@/components/Notice";
+import { CopyButton } from "../Markdown";
 import type { LoadingStepState, StartupStep } from "../../../lib/loadingStatus";
 import {
   describeManagedServerWait,
@@ -337,9 +340,8 @@ export function StartupProgress({
         </ManagedServerWaitNotice>
       ) : null}
       {error ? (
-        <div className="grid gap-3">
-          <p className="text-sm text-destructive">{error}</p>
-          <DiagnosticsHint hint={diagnosticsHint} />
+        <div className="grid gap-4">
+          <StartupError error={error} hint={diagnosticsHint} />
           {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
         </div>
       ) : null}
@@ -348,15 +350,53 @@ export function StartupProgress({
   );
 }
 
+/* the reason's first sentence as the notice's title and the rest, usually
+   what to do about it, under it */
+function StartupError({ error, hint }: { error: string; hint: string | null }) {
+  const split = /^(.+?[.!?])\s+(\S[\s\S]*)$/.exec(error.trim());
+  return (
+    <Notice
+      tone="destructive"
+      title={split ? split[1] : error}
+      description={split?.[2]}
+      data-testid="startup-error"
+    >
+      <DiagnosticsHint hint={hint} />
+    </Notice>
+  );
+}
+
+/** Where the logs are, a click away: a command or a file to open, one per line. */
 export function DiagnosticsHint({ hint }: { hint: string | null | undefined }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
   if (!hint) return null;
   return (
-    <p
-      className="text-xs break-words text-muted-foreground"
-      data-testid="diagnostics-hint"
-    >
-      Logs: <span className="font-mono">{hint}</span>
-    </p>
+    <div className="grid gap-1.5 text-xs" data-testid="diagnostics-hint">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((was) => !was)}
+        className="-mx-1 w-fit rounded-sm px-1 text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Where to find the logs
+        <ChevronRight
+          aria-hidden
+          className={cn(
+            "ml-1 inline size-3.5 align-[-2px] transition-transform",
+            open && "rotate-90",
+          )}
+        />
+      </button>
+      {/* kept in the document while closed, so its text can be found */}
+      <div id={id} hidden={!open} className="relative rounded-md bg-muted/60">
+        <pre className="max-h-40 overflow-auto py-2 pr-9 pl-2.5 font-mono text-[11px] whitespace-pre-wrap break-words">
+          {hint.replace(/\.\s+(?=[A-Z])/g, ".\n")}
+        </pre>
+        <CopyButton className="absolute top-1 right-1" getText={() => hint} />
+      </div>
+    </div>
   );
 }
 

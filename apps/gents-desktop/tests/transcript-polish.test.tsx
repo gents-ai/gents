@@ -171,11 +171,22 @@ function command(
 }
 
 describe("long command output", () => {
-  it("says how many lines a multi-line output holds", () => {
+  it("labels output only where two need telling apart, and tints errors", () => {
     const stdout =
       Array.from({ length: 1200 }, (_, i) => `line ${i}`).join("\n") + "\n";
-    render(<ToolBody tool={tool(command({ stdout, stderr: "one warning" }))} />);
-    expect(screen.getByText(/1,200 lines/)).toBeInTheDocument();
+    const { rerender } = render(
+      <ToolBody tool={tool(command({ stdout, stderr: "" }))} />,
+    );
+    /* output alone reads as itself, like a terminal's */
+    expect(screen.queryByText(/^stdout$/i)).toBeNull();
+    expect(screen.queryByText(/ lines$/)).toBeNull();
+    rerender(<ToolBody tool={tool(command({ stdout: "", stderr: "a\nb\nc" }))} />);
+    expect(screen.queryByText(/^stderr$|^errors/i)).toBeNull();
+    expect(
+      document.querySelector("pre")!.closest("[data-slot=scroll-area]"),
+    ).toHaveClass("border-destructive/30");
+    rerender(<ToolBody tool={tool(command({ stdout, stderr: "a\nb\nc" }))} />);
+    expect(screen.getByText(/^Errors/)).toHaveTextContent("Errors · 3 lines");
     expect(screen.getAllByText(/ lines$/)).toHaveLength(1);
   });
 

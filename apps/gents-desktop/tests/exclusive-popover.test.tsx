@@ -4,13 +4,28 @@ import { describe, expect, it } from "vitest";
 import { useExclusivePopover } from "../src/ui/hooks/useExclusivePopover";
 
 describe("exclusive shell popovers", () => {
+  it("keeps the replacement closed while a completed popup is still mounted", () => {
+    const { result, unmount } = renderHook(() => ({
+      first: useExclusivePopover(),
+      second: useExclusivePopover(),
+    }));
+    act(() => result.current.first.onOpenChange(true));
+    act(() => result.current.first.popupRef(document.createElement("div")));
+    act(() => result.current.second.onOpenChange(true));
+    act(() => result.current.first.onOpenChangeComplete(false));
+    expect(result.current.second.open).toBe(false);
+    act(() => result.current.first.popupRef(null));
+    expect(result.current.second.open).toBe(true);
+    unmount();
+  });
+
   it("ignores a captured open handler after its owner unmounts", () => {
     const first = renderHook(() => useExclusivePopover());
     const staleOpen = first.result.current.onOpenChange;
     first.unmount();
     const second = renderHook(() => useExclusivePopover());
     act(() => second.result.current.onOpenChange(true));
-    second.result.current.popupRef.current = document.createElement("div");
+    act(() => second.result.current.popupRef(document.createElement("div")));
     act(() => staleOpen(true));
     expect(second.result.current.open).toBe(true);
     second.unmount();
@@ -25,13 +40,14 @@ describe("exclusive shell popovers", () => {
 
     act(() => result.current.first.onOpenChange(true));
     expect(result.current.first.open).toBe(true);
-    result.current.first.popupRef.current = document.createElement("div");
+    act(() => result.current.first.popupRef(document.createElement("div")));
 
     act(() => result.current.second.onOpenChange(true));
     expect(result.current.first.open).toBe(false);
     expect(result.current.second.open).toBe(false);
 
     act(() => result.current.first.onOpenChangeComplete(false));
+    act(() => result.current.first.popupRef(null));
     expect(result.current.second.open).toBe(true);
     unmount();
   });
@@ -45,7 +61,7 @@ describe("exclusive shell popovers", () => {
 
     act(() => result.current.first.onOpenChange(true));
     expect(result.current.first.open).toBe(true);
-    result.current.first.popupRef.current = document.createElement("div");
+    act(() => result.current.first.popupRef(document.createElement("div")));
 
     act(() => {
       result.current.first.onOpenChange(false);
@@ -55,6 +71,7 @@ describe("exclusive shell popovers", () => {
     expect(result.current.second.open).toBe(false);
 
     act(() => result.current.first.onOpenChangeComplete(false));
+    act(() => result.current.first.popupRef(null));
     expect(result.current.second.open).toBe(true);
     unmount();
   });
@@ -84,11 +101,12 @@ describe("exclusive shell popovers", () => {
     });
 
     act(() => result.current.first.onOpenChange(true));
-    result.current.first.popupRef.current = document.createElement("div");
+    act(() => result.current.first.popupRef(document.createElement("div")));
     act(() => result.current.second.onOpenChange(true));
     act(() => result.current.second.onOpenChange(false));
     act(() => result.current.third.onOpenChange(true));
     act(() => result.current.first.onOpenChangeComplete(false));
+    act(() => result.current.first.popupRef(null));
     expect(result.current.second.open).toBe(false);
     expect(result.current.third.open).toBe(true);
     unmount();
@@ -102,7 +120,7 @@ describe("exclusive shell popovers", () => {
     });
 
     act(() => result.current.first.onOpenChange(true));
-    result.current.first.popupRef.current = document.createElement("div");
+    act(() => result.current.first.popupRef(document.createElement("div")));
     act(() => result.current.first.onOpenChange(false));
     act(() => result.current.first.onOpenChange(true));
     act(() => result.current.first.onOpenChangeComplete(false));
@@ -112,6 +130,7 @@ describe("exclusive shell popovers", () => {
     expect(result.current.first.open).toBe(false);
     expect(result.current.second.open).toBe(false);
     act(() => result.current.first.onOpenChangeComplete(false));
+    act(() => result.current.first.popupRef(null));
     expect(result.current.second.open).toBe(true);
     unmount();
   });
@@ -123,11 +142,12 @@ describe("exclusive shell popovers", () => {
       return { first, second };
     });
     act(() => result.current.first.onOpenChange(true));
-    result.current.first.popupRef.current = document.createElement("div");
+    act(() => result.current.first.popupRef(document.createElement("div")));
     act(() => result.current.second.onOpenChange(true));
     act(() => result.current.first.onOpenChange(true));
     act(() => result.current.first.onOpenChange(false));
     act(() => result.current.first.onOpenChangeComplete(false));
+    act(() => result.current.first.popupRef(null));
     expect(result.current.second.open).toBe(false);
     unmount();
   });
@@ -140,10 +160,11 @@ describe("exclusive shell popovers", () => {
       return { first, second, third };
     });
     act(() => result.current.first.onOpenChange(true));
-    result.current.first.popupRef.current = document.createElement("div");
+    act(() => result.current.first.popupRef(document.createElement("div")));
     act(() => result.current.second.onOpenChange(true));
     act(() => result.current.third.onOpenChange(true));
     act(() => result.current.first.onOpenChangeComplete(false));
+    act(() => result.current.first.popupRef(null));
     expect(result.current.second.open).toBe(false);
     expect(result.current.third.open).toBe(true);
     unmount();
@@ -153,7 +174,7 @@ describe("exclusive shell popovers", () => {
     const first = renderHook(() => useExclusivePopover());
     const second = renderHook(() => useExclusivePopover());
     act(() => first.result.current.onOpenChange(true));
-    first.result.current.popupRef.current = document.createElement("div");
+    act(() => first.result.current.popupRef(document.createElement("div")));
     act(() => second.result.current.onOpenChange(true));
     expect(second.result.current.open).toBe(false);
     first.unmount();
@@ -166,10 +187,11 @@ describe("exclusive shell popovers", () => {
     const second = renderHook(() => useExclusivePopover());
     const third = renderHook(() => useExclusivePopover());
     act(() => first.result.current.onOpenChange(true));
-    first.result.current.popupRef.current = document.createElement("div");
+    act(() => first.result.current.popupRef(document.createElement("div")));
     act(() => second.result.current.onOpenChange(true));
     second.unmount();
     act(() => first.result.current.onOpenChangeComplete(false));
+    act(() => first.result.current.popupRef(null));
     act(() => third.result.current.onOpenChange(true));
     expect(third.result.current.open).toBe(true);
     first.unmount();
