@@ -2177,7 +2177,7 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     .unwrap_err();
     assert!(
         format!("{}", ErrorChain(&error))
-            .contains("cannot execute mutation in read-only transaction"),
+            .contains("No sets or deletes are allowed in a read-only transaction"),
         "mutation must reach DefraDB's native read-only transaction guard: {}",
         ErrorChain(&error)
     );
