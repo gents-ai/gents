@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{ensure, Context, Result};
 use clap::Parser as _;
 use gents::store::local::home::remember_home;
+use gents::tools::surface::refuse_too_broad_root;
 
 use crate::cli::args::{InitArgs, StoreKeyCustodyArg};
 use crate::cli::{Cli, Command};
@@ -11,7 +12,9 @@ use crate::client_settings::InterfaceClient;
 use crate::commands::codex::{interface_bin, CODEX_BIN_ENV};
 use crate::commands::init::init_home;
 use crate::home_state::{read_init_config, resolve_home_dir};
-use crate::interactive_backend::{prompt_line, prompt_line_default, resolve_backend_interactively};
+use crate::interactive_backend::{
+    confirm, prompt_line, prompt_line_default, resolve_backend_interactively,
+};
 
 use super::interface_install_message;
 
@@ -70,14 +73,12 @@ pub(super) fn init_argv(home: &Path, access: ToolAccess, tool_root: Option<&Path
     ];
     match access {
         ToolAccess::ReadOnly => {}
-        ToolAccess::Write => {
-            argv.push("--write".to_string());
-            if let Some(root) = tool_root {
-                argv.push("--tool-root".to_string());
-                argv.push(root.to_string_lossy().into_owned());
-            }
-        }
+        ToolAccess::Write => argv.push("--write".to_string()),
         ToolAccess::Unrestricted => argv.push("--yolo".to_string()),
+    }
+    if let Some(root) = tool_root {
+        argv.push("--tool-root".to_string());
+        argv.push(root.to_string_lossy().into_owned());
     }
     argv
 }
@@ -153,20 +154,8 @@ pub(super) async fn setup(
             None => eprintln!("Answer 1, 2 or 3."),
         }
     };
-    let tool_root = if access == ToolAccess::Write {
-        let answer =
-            prompt_line_default("Folder agents may write in", &cwd.to_string_lossy()).await?;
-        let root = resolve_folder_answer(&answer, &cwd, &user_home, &cwd);
-        ensure!(
-            root.is_dir(),
-            "{} is not an existing folder; choose a folder agents may write in",
-            root.display()
-        );
-        Some(root)
-    } else {
-        None
-    };
-    let chosen = parse_init_args(&init_argv(&home, access, tool_root.as_deref()))?;
+    let tool_root = ask_tool_root(&cwd, &user_home).await?;
+    let chosen = parse_init_args(&init_argv(&home, access, Some(&tool_root)))?;
     args.write_tools = chosen.write_tools;
     args.yolo = chosen.yolo;
     args.tool_root = chosen.tool_root;
@@ -179,6 +168,48 @@ pub(super) async fn setup(
         remember_home(&home)?;
     }
     Ok(home)
+}
+
+/// What the folder question accepts. A symlink or `..` is judged by where it leads.
+pub(super) fn check_tool_root(
+    answer: &Path,
+    user_home: Option<&Path>,
+) -> std::result::Result<PathBuf, String> {
+    let root = std::fs::canonicalize(answer)
+        .ok()
+        .filter(|root| root.is_dir())
+        .ok_or_else(|| {
+            format!(
+                "{} is not an existing folder; choose a folder agents may work in.",
+                answer.display()
+            )
+        })?;
+    refuse_too_broad_root(&root, user_home).map_err(|refusal| refusal.to_string())?;
+    Ok(root)
+}
+
+/// A person's home is a legal root, but a new terminal starts there, so answering with the
+/// default can hand over the whole of it without anyone choosing that.
+async fn ask_tool_root(cwd: &Path, user_home: &Path) -> Result<PathBuf> {
+    let canonical_home = std::fs::canonicalize(user_home).ok();
+    loop {
+        let answer =
+            prompt_line_default("Which folder may agents work in?", &cwd.to_string_lossy()).await?;
+        let answer = resolve_folder_answer(&answer, cwd, user_home, cwd);
+        match check_tool_root(&answer, canonical_home.as_deref()) {
+            Err(refusal) => eprintln!("{refusal}"),
+            Ok(root) if canonical_home.as_deref() == Some(root.as_path()) => {
+                eprintln!(
+                    "{} is your whole home folder. Agents can reach everything in it, and Codex opens every folder under it without asking.",
+                    root.display()
+                );
+                if confirm("Use it?", false).await {
+                    return Ok(root);
+                }
+            }
+            Ok(root) => return Ok(root),
+        }
+    }
 }
 
 /// A sign-in declined during setup leaves its step only in what `init_home` returns.
@@ -248,6 +279,41 @@ mod tests {
         assert_eq!(resolve("~user/x"), cwd.join("~user/x"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_question_accepts_only_a_narrow_existing_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let user_home = base.join("users/me");
+        let inside = user_home.join("my project");
+        std::fs::create_dir_all(&inside).unwrap();
+        let file = base.join("a-file");
+        std::fs::write(&file, "").unwrap();
+        let to_root = base.join("to-root");
+        std::os::unix::fs::symlink("/", &to_root).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&inside, &link).unwrap();
+        let check = |answer: &Path| check_tool_root(answer, Some(&user_home));
+
+        assert_eq!(check(&inside).unwrap(), inside);
+        assert_eq!(check(&link).unwrap(), inside);
+        assert_eq!(check(&user_home.join("my project/..")).unwrap(), user_home);
+
+        assert!(check(&base.join("missing"))
+            .unwrap_err()
+            .contains("not an existing folder"));
+        assert!(check(&file).unwrap_err().contains("not an existing folder"));
+        for too_broad in [Path::new("/"), to_root.as_path()] {
+            assert!(
+                check(too_broad).unwrap_err().contains("too broad"),
+                "{too_broad:?}"
+            );
+        }
+        assert!(check(&base.join("users"))
+            .unwrap_err()
+            .contains("broader than your home"));
+    }
+
     #[test]
     fn a_binary_with_a_separator_is_checked_directly() {
         let dir = tempfile::tempdir().unwrap();
@@ -264,31 +330,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn init_argv_parses_and_initializes() {
-        let cwd = std::env::current_dir().unwrap();
         let root = Path::new("/srv/agents");
-        for (access, tool_root, ceiling, recorded_root) in [
-            (
-                ToolAccess::ReadOnly,
-                None,
-                ToolCeilingArg::Readonly,
-                cwd.as_path(),
-            ),
-            (
-                ToolAccess::Write,
-                Some(root),
-                ToolCeilingArg::Readwrite,
-                root,
-            ),
-            (
-                ToolAccess::Unrestricted,
-                None,
-                ToolCeilingArg::Readwrite,
-                cwd.as_path(),
-            ),
+        for (access, ceiling) in [
+            (ToolAccess::ReadOnly, ToolCeilingArg::Readonly),
+            (ToolAccess::Write, ToolCeilingArg::Readwrite),
+            (ToolAccess::Unrestricted, ToolCeilingArg::Readwrite),
         ] {
             let temp = tempfile::tempdir().unwrap();
             let home = temp.path().join("my home");
-            let mut argv = init_argv(&home, access, tool_root);
+            let mut argv = init_argv(&home, access, Some(root));
             argv.extend(
                 [
                     "--store-key-custody",
@@ -308,11 +358,7 @@ mod tests {
 
             let config = crate::home_state::read_init_config(&home).unwrap().unwrap();
             assert_eq!(config.tool_ceiling, ceiling, "{access:?}");
-            assert_eq!(
-                config.tool_root.as_deref(),
-                recorded_root.to_str(),
-                "{access:?}"
-            );
+            assert_eq!(config.tool_root.as_deref(), root.to_str(), "{access:?}");
         }
     }
 }

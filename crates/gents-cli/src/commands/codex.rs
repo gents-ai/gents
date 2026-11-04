@@ -58,14 +58,24 @@ pub(crate) async fn open_codex(mut args: CodexArgs) -> Result<()> {
         }
         _ => None,
     };
-    let cd = terminal_cd(&endpoint, bearer.as_deref()).await;
-    launch_interface(
+    let (cd, outside_notice) = terminal_placement(&endpoint, bearer.as_deref())
+        .await
+        .unwrap_or_default();
+    if let Some(notice) = &outside_notice {
+        eprintln!("{notice}");
+    }
+    let opened = launch_interface(
         "Codex",
         &interface_bin(CODEX_BIN_ENV, "codex"),
         &codex_command_args(&args, cd.as_deref()),
         &interface_install_message(InterfaceClient::Codex),
     )
-    .await
+    .await;
+    // Codex takes the screen right after the first notice, which hides it until now.
+    if let Some(notice) = &outside_notice {
+        eprintln!("{notice}");
+    }
+    opened
 }
 
 pub(crate) fn interface_bin(env_name: &str, default: &str) -> String {
@@ -250,7 +260,10 @@ fn agent_relay_upstream(endpoint: &RemoteEndpoint) -> Result<String> {
 
 /// A directory on this machine means nothing to a runtime on another, so only a
 /// loopback endpoint gets one, and only one that says where its threads may go.
-async fn terminal_cd(endpoint: &RemoteEndpoint, bearer: Option<&str>) -> Option<PathBuf> {
+async fn terminal_placement(
+    endpoint: &RemoteEndpoint,
+    bearer: Option<&str>,
+) -> Option<(Option<PathBuf>, Option<String>)> {
     let RemoteEndpoint::WebSocket {
         authority,
         loopback: true,
@@ -262,10 +275,10 @@ async fn terminal_cd(endpoint: &RemoteEndpoint, bearer: Option<&str>) -> Option<
     let mut identity = read_runtime_identity(authority, bearer).await?;
     identity.tool_root = canonical_tool_root(identity.tool_root).await;
     let cwd = std::env::current_dir().ok()?;
-    if let Some(notice) = outside_tool_root_notice(&cwd, &identity) {
-        eprintln!("{notice}");
-    }
-    terminal_cd_arg(&cwd, identity.tool_root.as_deref())
+    Some((
+        terminal_cd_arg(&cwd, identity.tool_root.as_deref()),
+        outside_tool_root_notice(&cwd, &identity),
+    ))
 }
 
 /// `current_dir` is already physical, so a root recorded through a symlink would read a

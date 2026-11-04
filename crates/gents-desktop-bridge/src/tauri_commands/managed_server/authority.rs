@@ -78,23 +78,9 @@ pub(super) fn validate_tool_root(path: &Path) -> Result<PathBuf, BridgeError> {
             format!("{} is not a directory.", canonical.display()),
         ));
     }
-    if canonical.parent().is_none() {
-        return Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            "The filesystem root is too broad. Choose your home directory or a folder inside it.",
-        ));
-    }
-    if let Some(home) = dirs::home_dir().and_then(|home| std::fs::canonicalize(home).ok()) {
-        if home.starts_with(&canonical) && home != canonical {
-            return Err(BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                format!(
-                    "{} is broader than your home directory. Choose your home directory or a more specific folder.",
-                    canonical.display()
-                ),
-            ));
-        }
-    }
+    let user_home = dirs::home_dir().and_then(|home| std::fs::canonicalize(home).ok());
+    gents::tools::surface::refuse_too_broad_root(&canonical, user_home.as_deref())
+        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))?;
     std::fs::read_dir(&canonical).map_err(|error| {
         BridgeError::new(
             BridgeErrorCode::InvalidArgument,

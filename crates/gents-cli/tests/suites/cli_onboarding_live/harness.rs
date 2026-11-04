@@ -29,6 +29,10 @@ pub(super) const TURN: Duration = Duration::from_secs(240);
 pub(super) const FOLDER_QUESTION: &str = "Data folder [";
 pub(super) const INFERENCE_QUESTION: &str = "How do you want to run inference?";
 pub(super) const TOOLS_QUESTION: &str = "What may agents do?";
+pub(super) const ROOT_QUESTION: &str = "Which folder may agents work in?";
+/// A relative answer to `ROOT_QUESTION`, because every test's terminal starts in its
+/// temporary `HOME`. `LiveBox::new` creates it.
+pub(super) const WORK_FOLDER: &str = "work";
 pub(super) const ENDPOINT_TEXT: &str = "127.0.0.1:21929";
 pub(super) const OPENS_THREAD: Duration = Duration::from_secs(60);
 pub(super) const OUTSIDE_THE_ROOT_TEXT: &str = "the thread will use";
@@ -109,6 +113,7 @@ impl LiveBox {
             );
         }
 
+        fs::create_dir(root.join(WORK_FOLDER))?;
         let codex_home = root.join("codex-home");
         fs::create_dir_all(&codex_home)?;
         // The first window caches the release it saw, and the next one would stop
@@ -503,14 +508,15 @@ impl Terminal {
         self.answer("Model name:", model).await
     }
 
-    /// The questions after the folder: a custom backend, and the default tools.
+    /// The questions after the folder: a custom backend, the default tools and where they work.
     pub(super) async fn answer_inference_and_tools(
         &mut self,
         endpoint: &str,
         model: &str,
     ) -> Result<()> {
         self.answer_inference(endpoint, model).await?;
-        self.answer(TOOLS_QUESTION, "").await
+        self.answer(TOOLS_QUESTION, "").await?;
+        self.answer(ROOT_QUESTION, WORK_FOLDER).await
     }
 
     /// Returns once the child exited and its output reached the transcript.

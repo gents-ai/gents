@@ -80,8 +80,10 @@ mod no_model {
         ensure!(
             terminal
                 .transcript()
-                .contains(&format!("{OUTSIDE_THE_ROOT_TEXT} {}", live.root.display())),
-            "{}",
+                .matches(&format!("{OUTSIDE_THE_ROOT_TEXT} {}", live.root.display()))
+                .count()
+                == 2,
+            "the notice comes before the interface and again after it: {}",
             terminal.transcript()
         );
 
@@ -407,9 +409,11 @@ mod no_model {
         terminal.expect("gents chat", EXIT).await?;
         terminal.expect_exit(1).await?;
 
+        let init = read_json_file(&folder.join("init.json"))?;
+        assert_eq!(init["tool_ceiling"], json!("Readonly"));
         assert_eq!(
-            read_json_file(&folder.join("init.json"))?["tool_ceiling"],
-            json!("Readonly")
+            init["tool_root"],
+            json!(live.root.join(WORK_FOLDER).to_string_lossy())
         );
         assert_eq!(
             fs::read_to_string(live.remembered_home())?.trim_end_matches('\n'),
@@ -498,7 +502,7 @@ mod no_model {
             .await?;
         terminal.answer(TOOLS_QUESTION, "2").await?;
         terminal
-            .answer("Folder agents may write in", &write_root.to_string_lossy())
+            .answer(ROOT_QUESTION, &write_root.to_string_lossy())
             .await?;
         terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
@@ -513,11 +517,15 @@ mod no_model {
             .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
         terminal.answer(TOOLS_QUESTION, "3").await?;
+        terminal
+            .answer(ROOT_QUESTION, &write_root.to_string_lossy())
+            .await?;
         terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
         let init = read_json_file(&folder.join("init.json"))?;
         assert_eq!(init["tool_package"], json!("Yolo"));
         assert_eq!(init["tool_ceiling"], json!("Readwrite"));
+        assert_eq!(init["tool_root"], json!(write_root.to_string_lossy()));
 
         held.release().await;
         Ok(())
@@ -525,29 +533,54 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn setup_refuses_a_write_folder_that_is_not_an_existing_folder() -> Result<()> {
+    async fn setup_asks_again_until_the_work_folder_is_usable() -> Result<()> {
         let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
         let file = live.root.join("a-file");
         fs::write(&file, "not a folder")?;
 
-        for (name, answer) in [("missing", live.root.join("missing")), ("file", file)] {
-            let folder = live.folder(name);
-            let mut terminal = setup_of(&live, &folder, name)?;
-            terminal
-                .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-                .await?;
-            terminal.answer(TOOLS_QUESTION, "2").await?;
-            terminal
-                .answer("Folder agents may write in", &answer.to_string_lossy())
-                .await?;
+        let folder = live.folder("data");
+        let mut terminal = setup_of(&live, &folder, "refused")?;
+        terminal
+            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.answer(TOOLS_QUESTION, "").await?;
+        terminal.answer(ROOT_QUESTION, "missing").await?;
+        terminal.expect("is not an existing folder", PROMPT).await?;
+        terminal
+            .answer(ROOT_QUESTION, &file.to_string_lossy())
+            .await?;
+        terminal.expect("is not an existing folder", PROMPT).await?;
+        terminal.answer(ROOT_QUESTION, "/").await?;
+        terminal.expect("too broad", PROMPT).await?;
+        terminal.answer(ROOT_QUESTION, "~").await?;
+        terminal.expect("your whole home folder", PROMPT).await?;
+        terminal.answer("Use it?", "n").await?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        assert_eq!(
+            read_json_file(&folder.join("init.json"))?["tool_root"],
+            json!(live.root.join(WORK_FOLDER).to_string_lossy())
+        );
 
-            terminal.expect("is not an existing folder", PROMPT).await?;
-            terminal.expect_exit(1).await?;
-            ensure!(
-                !folder.join("init.json").exists(),
-                "{name}: nothing is set up"
-            );
-        }
+        let folder = live.folder("data-home");
+        let mut terminal = setup_of(&live, &folder, "home")?;
+        terminal
+            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.answer(TOOLS_QUESTION, "").await?;
+        terminal.answer(ROOT_QUESTION, "").await?;
+        terminal.expect("your whole home folder", PROMPT).await?;
+        terminal.answer("Use it?", "y").await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        assert_eq!(
+            read_json_file(&folder.join("init.json"))?["tool_root"],
+            json!(live.root.to_string_lossy())
+        );
+
+        held.release().await;
         Ok(())
     }
 
@@ -565,6 +598,7 @@ mod no_model {
             .await?;
         terminal.answer(TOOLS_QUESTION, PASTED).await?;
         terminal.answer("Answer 1, 2 or 3", "1").await?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
 
@@ -592,6 +626,7 @@ mod no_model {
         let mut terminal = setup_of(&live, &folder, "declined")?;
         terminal.answer(INFERENCE_QUESTION, "4").await?;
         terminal.answer(TOOLS_QUESTION, "").await?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer("Log in to ChatGPT now", "n").await?;
 
         terminal

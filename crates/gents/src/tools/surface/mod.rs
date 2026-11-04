@@ -26,8 +26,8 @@ pub use policy::{
 #[doc(hidden)]
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, load_workspace_root_policy,
-    project_workspace_root_policy, resolve_configured_tool_root, WorkspaceRootDocument,
-    WorkspaceRootPolicy,
+    project_workspace_root_policy, refuse_too_broad_root, resolve_configured_tool_root,
+    TooBroadRoot, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, resolve_admitted_tool_root, RootExecutionGuard,
