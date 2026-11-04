@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::defra_node::QueryRequest;
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,

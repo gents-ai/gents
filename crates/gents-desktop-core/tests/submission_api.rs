@@ -251,7 +251,7 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
     Ok((runtime, client, node_did))
 }
 
-async fn query_single<T>(node: &defra_node::EmbeddedNode, query: &str, root: &str) -> Result<T>
+async fn query_single<T>(node: &defra_node::Node, query: &str, root: &str) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {

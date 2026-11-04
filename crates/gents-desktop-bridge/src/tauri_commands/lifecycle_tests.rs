@@ -314,7 +314,7 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
 async fn a_plaintext_client_upgrade_returns_a_started_core_with_lifecycle_exclusion() {
     let temp = tempfile::tempdir().expect("tempdir");
     let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
-    let legacy = gents::defra_node::EmbeddedNode::builder()
+    let legacy = gents::defra_node::Node::builder()
         .data_path(paths.node_data_dir())
         .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
         .build()

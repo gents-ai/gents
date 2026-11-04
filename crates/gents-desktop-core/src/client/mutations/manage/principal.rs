@@ -1,7 +1,7 @@
 use anyhow::Result;
 mod editor;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 pub use editor::*;
 use gents::documents::Node;
 use gents::store::collection::Collection;

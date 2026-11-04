@@ -293,17 +293,26 @@ pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
         },
     )
     .await;
-    if let Some(node) = access.local_node() {
-        node.shutdown().await;
-    }
+    let shutdown_result = if let Some(node) = access.local_node() {
+        node.shutdown().await.context("closing job promotion node")
+    } else {
+        Ok(())
+    };
     let report = result.map_err(|error| {
         let code = promote::refusal_code(&error);
         let error = anyhow::Error::new(error);
-        match code {
+        let error = match code {
             Some(code) => error.context(code),
             None => error,
+        };
+        match &shutdown_result {
+            Ok(()) => error,
+            Err(shutdown_error) => {
+                error.context(format!("node shutdown also failed: {shutdown_error:#}"))
+            }
         }
     })?;
+    shutdown_result?;
     match format {
         OutputFormat::Json => print_json(&report),
         _ => {
@@ -1234,7 +1243,7 @@ mod tests {
 
     #[tokio::test]
     async fn watch_refuses_local_access() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
         let error = require_served(&ConfigAccess::local(node))
             .unwrap_err()
             .to_string();

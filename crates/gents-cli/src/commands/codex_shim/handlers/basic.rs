@@ -284,7 +284,7 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use gents::defra_node::EmbeddedNode;
+    use gents::defra_node::Node as EmbeddedNode;
     use gents::documents::{AdvertisedModel, BackendAuth, BackendModelCatalog};
     use gents::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,

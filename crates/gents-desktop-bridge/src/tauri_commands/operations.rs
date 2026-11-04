@@ -4,7 +4,7 @@ use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::backends::registry::{list_all_backends, lookup_backend_observation};
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;

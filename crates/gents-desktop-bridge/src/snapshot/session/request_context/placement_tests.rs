@@ -13,7 +13,7 @@ fn placement_entry(
 
 /// `(requester, request_doc_id, sequence)` messages in session `session` on `node`.
 async fn seed_placement_messages(
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
     messages: &[(String, String, i64)],
 ) {
     for chunk in messages.chunks(64) {

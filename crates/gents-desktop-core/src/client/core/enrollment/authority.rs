@@ -15,7 +15,7 @@ use super::rows::{
 };
 
 pub(super) async fn load_status_enrollment_approvals(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     principal: &PrincipalIdentity,
     local_peer_id: &str,
 ) -> Result<(

@@ -329,7 +329,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
 
 async fn wait_for_runtime_agent_request(
     graphql: &str,
-    client_node: &gents::defra_node::EmbeddedNode,
+    client_node: &gents::defra_node::Node,
     node_did: &str,
     content: &str,
 ) -> Result<(String, String, String)> {
@@ -698,7 +698,7 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
 }
 
 async fn query_collection_dids(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     collection: &str,
 ) -> Result<Vec<String>> {
     let response = node

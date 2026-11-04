@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::collection::Collection;
 use gents::store::config_client::{
     apply_desired_state_plan, list_inference_profiles_in_txn, read_desired_state_record_in_txn,

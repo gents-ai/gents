@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::session::origin::load_session;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};

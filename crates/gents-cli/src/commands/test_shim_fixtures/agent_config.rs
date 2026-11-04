@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 #[cfg(unix)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 #[cfg(unix)]
 pub(crate) async fn configure_runtime_agent(

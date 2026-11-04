@@ -385,7 +385,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let proposal = facts.proposal(&first["intent"], &first["proposal"]).await?;
     let home = tempfile::tempdir()?;
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
@@ -405,7 +405,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     drop(node);
 
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
@@ -437,7 +437,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     result?;
 
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()

@@ -7,7 +7,7 @@ use defra_p2p_adapter::ReplicationFilter;
 use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::runtime::agent::p2p_reconcile::{
     resolve_embedded_collection_id, resolve_embedded_collection_name, to_replication_filters,
     PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,

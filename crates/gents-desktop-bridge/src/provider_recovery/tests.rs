@@ -17,7 +17,7 @@ impl Fixture {
             gents::KeyIdentity::load_or_create(directory.path().join("identity.key"), None)
                 .unwrap();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await

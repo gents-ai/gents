@@ -392,7 +392,7 @@ fn test_access(url: &str) -> ConfigAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};

@@ -97,7 +97,7 @@ pub(in crate::client::core) fn enrollment_record_lacks_current_authority(
 }
 
 pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     principal: &Arc<PrincipalIdentity>,
     local_peer_id: &str,

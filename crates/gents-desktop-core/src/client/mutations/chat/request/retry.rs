@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::request::lifecycle::{ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
 use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};

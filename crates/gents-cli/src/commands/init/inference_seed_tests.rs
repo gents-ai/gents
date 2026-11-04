@@ -72,7 +72,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         )?);
         let owner = identity.did();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.to_string())
                 .build()
                 .await?,
@@ -209,7 +209,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     )?);
     let owner = identity.did();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(owner.to_string())
             .build()
             .await?,

@@ -90,7 +90,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
     let temp = tempfile::tempdir()?;
     let signer = gents::KeyIdentity::load_or_create(temp.path().join("node.key"), None)?;
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(signer.did())
             .build()
             .await?,

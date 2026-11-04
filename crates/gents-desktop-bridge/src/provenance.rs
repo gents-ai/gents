@@ -312,11 +312,7 @@ mod tests {
     use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
-    async fn run(
-        node: &gents::defra_node::EmbeddedNode,
-        mutation: String,
-        collection: &str,
-    ) -> String {
+    async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
@@ -398,7 +394,7 @@ mod tests {
     /// are written as one group, re-created with a different `max_retries`
     /// (which no reader selects) until their native order matches the model's.
     async fn seed_lineage_case(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         case: &Value,
         did: &str,
     ) -> BTreeMap<String, String> {

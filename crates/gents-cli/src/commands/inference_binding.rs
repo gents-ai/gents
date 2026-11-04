@@ -1,7 +1,7 @@
 //! Shared node-scoped inference selection for protocol adapters.
 
 use anyhow::{anyhow, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::load_node;
 use std::sync::Arc;
 

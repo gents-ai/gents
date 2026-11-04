@@ -207,7 +207,7 @@ async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
-    use gents::defra_node::{EmbeddedNode, StorageBackend};
+    use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
     use gents_protocol::row::{
         decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
     };

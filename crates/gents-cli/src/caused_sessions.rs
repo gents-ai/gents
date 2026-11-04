@@ -2,7 +2,7 @@ use rapidhash::RapidHashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::session::load_latest_request_in_txn;
 pub(crate) use gents::session::origin::SessionScope;
 use gents::session::origin::{
@@ -264,7 +264,7 @@ pub(crate) mod fixtures {
     /// starter index at create, then the receipt [`fixture_signer`] signs for
     /// the created physical document, binding `source`, `parent` and `opening`.
     pub(crate) async fn create_started_session(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         mut session: gents_protocol::session::AgentSession,
         source: gents_protocol::session::SessionReference,
         parent: &str,
@@ -352,11 +352,7 @@ pub(crate) mod fixtures {
         }
     }
 
-    async fn run(
-        node: &gents::defra_node::EmbeddedNode,
-        mutation: String,
-        collection: &str,
-    ) -> String {
+    async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
@@ -438,7 +434,7 @@ pub(crate) mod fixtures {
     /// are written as one group, re-created with a different `max_retries`
     /// (which no reader selects) until their native order matches the model's.
     pub(crate) async fn seed_lineage_case(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         case: &Value,
         did: &str,
     ) -> BTreeMap<String, String> {
@@ -570,7 +566,7 @@ pub(crate) mod fixtures {
     /// each opened by a request naming the same tool call (of no session-message
     /// kind). Returns the parent request's `_docID`.
     pub(crate) async fn seed_one_call_two_sessions(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         did: &str,
         parent_session: &str,
     ) -> String {

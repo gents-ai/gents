@@ -172,7 +172,7 @@ fn a_single_recorded_file_is_returned_from_a_capture_larger_than_one_metadata_pa
 }
 
 async fn insert(
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
     collection: &'static str,
     input: serde_json::Value,
 ) -> Result<String> {
@@ -190,7 +190,7 @@ async fn insert(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn recorded_origin_review_retains_metadata_without_a_route_but_does_not_grant_images(
 ) -> Result<()> {
-    use gents::defra_node::{EmbeddedNode, HttpConfig};
+    use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
     use gents_protocol::file_inventory::{
         FileInventoryPage, FileInventoryPageDemand, FileInventoryPageReceipt, FileInventoryReply,
         FILE_INVENTORY_RECEIPT_VERSION,

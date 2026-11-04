@@ -119,7 +119,7 @@ async fn file_image_review_admission_reuses_only_the_exact_reference() {
     let root = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(root.path().join("client.key"), None).unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(root.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -157,7 +157,7 @@ async fn explicit_file_review_retry_preserves_refusals_and_resumes_verified_deli
     let root = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(root.path().join("node.key"), None).unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(root.path().join("db"))
             .with_node_identity_did(identity.did())
             .build()
@@ -365,7 +365,7 @@ async fn inventory_bound_admission_and_signed_receipt_keep_structured_reference(
     let root = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(root.path().join("node.key"), None).unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

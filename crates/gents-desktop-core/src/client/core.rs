@@ -23,7 +23,7 @@ use std::sync::RwLock as StdRwLock;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::store::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
@@ -714,7 +714,10 @@ impl ClientCore {
             pause.node_shutdown_started.notify_one();
             pause.allow_node_shutdown.notified().await;
         }
-        self.node.shutdown().await;
+        self.node
+            .shutdown()
+            .await
+            .context("shutting down desktop node")?;
         #[cfg(test)]
         if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
             pause.node_shutdown_returned.notify_one();

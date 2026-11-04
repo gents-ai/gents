@@ -180,7 +180,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .unwrap();
     let owner = identity.did().to_owned();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(&owner)
             .with_node_acp_enabled()
             .build()
@@ -380,7 +380,7 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         .await
         .unwrap();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
             .build()

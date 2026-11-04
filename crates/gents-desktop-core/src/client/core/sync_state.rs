@@ -422,7 +422,7 @@ impl ClientSyncStateOwner {
 
     pub(super) async fn finish_runtime_schema_observation(
         &self,
-        local: &Arc<defra_node::EmbeddedNode>,
+        local: &Arc<defra_node::Node>,
         observation: &RuntimeSchemaObservation,
         status: &Value,
     ) -> anyhow::Result<()> {
@@ -434,7 +434,7 @@ impl ClientSyncStateOwner {
     /// authenticated, so an unverified `/status` cannot set or clear skew.
     pub(super) async fn compare_runtime_schema(
         &self,
-        local: &Arc<defra_node::EmbeddedNode>,
+        local: &Arc<defra_node::Node>,
         runtime_did: &str,
         status: &Value,
     ) -> anyhow::Result<()> {
@@ -444,7 +444,7 @@ impl ClientSyncStateOwner {
 
     async fn local_replicated_schema(
         &self,
-        local: &Arc<defra_node::EmbeddedNode>,
+        local: &Arc<defra_node::Node>,
     ) -> anyhow::Result<&ReplicatedSchema> {
         self.local_replicated_schema
             .get_or_try_init(|| read_client_replicated_schema(Arc::clone(local)))
