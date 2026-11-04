@@ -351,6 +351,34 @@ async fn unknown_agents_get_404() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handshake_with_an_origin_is_refused_before_admission() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    shim.wait_until_runnable(&shim.default_agent, None).await?;
+    let default_route = agent_route(&shim.default_agent);
+    let unknown_route = agent_route("nosuch");
+
+    for route in ["/", default_route.as_str(), unknown_route.as_str()] {
+        for origin in ["https://example.com", "null"] {
+            let mut request = shim.url(route).into_client_request()?;
+            request.headers_mut().insert("Origin", origin.parse()?);
+
+            let refused = connect_async(request)
+                .await
+                .expect_err("a browser origin is refused");
+
+            super::server_lifecycle::assert_http_status(refused, StatusCode::FORBIDDEN)
+                .with_context(|| format!("{route} with Origin: {origin}"))?;
+        }
+    }
+    for route in ["/", default_route.as_str()] {
+        connect_async(shim.url(route))
+            .await
+            .with_context(|| format!("{route} with no Origin"))?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_routes_need_the_same_bearer_token() -> Result<()> {
     let shim = AgentShim::start(
         |_| {

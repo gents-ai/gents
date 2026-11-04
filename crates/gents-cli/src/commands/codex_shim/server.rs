@@ -1,5 +1,6 @@
 use super::*;
 use axum::extract::Path as RoutePath;
+use axum::http::header::ORIGIN;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::OnceLock;
 
@@ -252,11 +253,28 @@ pub(super) fn validate_bind_security(
     Ok(())
 }
 
+/// A web page can attempt a WebSocket handshake to loopback, because WebSockets are not
+/// bound by same-origin, and a default runtime on loopback asks for no token. Browsers send
+/// `Origin` on every handshake and no client of the shim does: real Codex 0.153.3 sends
+/// none, directly or through the agent relay, and the desktop does not connect here.
+fn browser_origin_refusal(headers: &HeaderMap) -> Option<Response> {
+    headers.contains_key(ORIGIN).then(|| {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected app-server WebSocket handshake carrying an Origin header"
+        );
+        StatusCode::FORBIDDEN.into_response()
+    })
+}
+
 async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<ShimState>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(refusal) = browser_origin_refusal(&headers) {
+        return refusal;
+    }
     if !request_is_authorized(&headers, state.auth_token.as_deref()) {
         tracing::warn!(
             target: "gents_cli::commands::codex_shim",
@@ -276,6 +294,9 @@ async fn agent_ws_upgrade(
     State(routes): State<RuntimeRouteState>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(refusal) = browser_origin_refusal(&headers) {
+        return refusal;
+    }
     if !request_is_authorized(&headers, routes.shim.auth_token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
