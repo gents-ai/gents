@@ -423,13 +423,14 @@ pub fn run_cli() -> Result<()> {
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
-        Command::NativeFsRunner(args) => {
+        None => return commands::start::run(cli.home).await,
+        Some(Command::NativeFsRunner(args)) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
-        Command::Codex(args) => {
+        Some(Command::Codex(args)) => {
             return commands::codex::codex(args).await;
         }
-        command => command,
+        Some(command) => command,
     };
     if let Command::Eval { command } = &command {
         if let Some(message) = commands::eval::usage_error(command) {

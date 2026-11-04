@@ -20,7 +20,7 @@ pub(crate) fn optimization_command(argv: &[&str]) -> OptimizationCommand {
     )
     .unwrap_or_else(|error| panic!("{error}"));
     match cli.command {
-        Command::Optimization { command } => command,
+        Some(Command::Optimization { command }) => command,
         _ => panic!("not an optimization command"),
     }
 }

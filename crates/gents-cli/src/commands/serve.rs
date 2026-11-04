@@ -1865,7 +1865,7 @@ mod grok_shim_tests {
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("server should parse");
         match cli.command {
-            Command::Server(args) => args,
+            Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
     }

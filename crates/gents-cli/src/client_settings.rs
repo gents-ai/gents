@@ -147,7 +147,7 @@ mod tests {
             .expect("server should parse")
             .command
         {
-            Command::Server(args) => args,
+            Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
     }

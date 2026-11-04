@@ -75,6 +75,7 @@ help:
 	@echo
 	@echo "Live:"
 	@echo "  make live-cli              Run live CLI smoke test"
+	@echo "  make live-onboarding       Run bare gents against real launchd and a PTY (macOS)"
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
@@ -254,9 +255,13 @@ desktop-native-dev: build-cli
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
-.PHONY: live-cli live-agent live-desktop-smoke
+.PHONY: live-cli live-onboarding live-agent live-desktop-smoke
 live-cli:
 	$(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+
+LIVE_FILTER ?= cli_onboarding_live::
+live-onboarding:
+	$(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live -- --ignored --nocapture --test-threads=1

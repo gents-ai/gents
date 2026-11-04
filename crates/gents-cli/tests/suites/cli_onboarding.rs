@@ -95,6 +95,47 @@ fn explicit_home_never_changes_the_remembered_file() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn bare_gents_without_a_terminal_prints_help_and_exits_2() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+    let home = tempfile::tempdir()?;
+
+    for args in [&[][..], &["--home", &*home.path().to_string_lossy()][..]] {
+        let output = run_gents(user_home.path(), args)?;
+
+        let stderr = stderr_of(&output);
+        assert_eq!(output.status.code(), Some(2), "{args:?} stderr:\n{stderr}");
+        assert!(
+            stderr.contains("Data and debugging"),
+            "{args:?} stderr:\n{stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{args:?} wrote to stdout");
+        assert_eq!(
+            fs::read_dir(user_home.path())?.count(),
+            0,
+            "{args:?} wrote to HOME"
+        );
+        assert_eq!(
+            fs::read_dir(home.path())?.count(),
+            0,
+            "{args:?} wrote to the home"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn root_flags_conflict_with_subcommands() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+
+    let output = run_gents(user_home.path(), &["--home", "X", "status"])?;
+
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(stderr.contains("cannot be used with"), "stderr:\n{stderr}");
+    Ok(())
+}
+
 fn init_home(user_home: &Path, home: &Path) -> Result<()> {
     let output = run_gents(
         user_home,

@@ -65,11 +65,15 @@ fn parse_env_var_name(value: &str) -> Result<String, String> {
 #[command(
     name = "gents",
     about = "Local-first CLI for bootstrapping, running, and inspecting a gents runtime",
-    help_template = ROOT_HELP_TEMPLATE
+    help_template = ROOT_HELP_TEMPLATE,
+    args_conflicts_with_subcommands = true
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
-    pub(crate) command: Command,
+    pub(crate) command: Option<Command>,
+    /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]

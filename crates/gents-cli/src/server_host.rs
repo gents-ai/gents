@@ -172,7 +172,7 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         argv.extend(["--store-key-custody".to_string(), "file".to_string()]);
     }
     let cli = Cli::try_parse_from(argv).context("building standard Gents provision request")?;
-    let Command::Init(args) = cli.command else {
+    let Some(Command::Init(args)) = cli.command else {
         unreachable!("standard provision argv must parse as init")
     };
     crate::commands::init::init(args).await

@@ -162,7 +162,7 @@ pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand {
     let cli = Cli::try_parse_from(["gents", "eval"].into_iter().chain(argv.iter().copied()))
         .unwrap_or_else(|error| panic!("{error}"));
     match cli.command {
-        Command::Eval { command } => command,
+        Some(Command::Eval { command }) => command,
         _ => panic!("not an eval command"),
     }
 }

@@ -141,6 +141,7 @@ acp.workspace = true
 crypto.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
+portable-pty = "0.9"
 tokio-tungstenite = "0.26.2"
 
 [target.'cfg(unix)'.dev-dependencies]

@@ -486,7 +486,7 @@ mod tests {
 
         let advertised = message.split('`').nth(1).expect("retry command");
         let argv = shlex::split(advertised).expect("shell words");
-        let crate::cli::Command::Desktop {
+        let Some(crate::cli::Command::Desktop {
             command:
                 DesktopCommand::Reset {
                     home: retry_home,
@@ -495,7 +495,7 @@ mod tests {
                     confirm,
                     ..
                 },
-        } = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
+        }) = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
             .unwrap()
             .command
         else {
@@ -528,9 +528,9 @@ mod tests {
         let selected = select_desktop(None, Some("rel/desktop".into()), &first).unwrap();
         assert_eq!(selected.root(), first.join("rel/desktop"));
         let retry = retry_command(&temp.path().join("home"), selected.root()).unwrap();
-        let crate::cli::Command::Desktop {
+        let Some(crate::cli::Command::Desktop {
             command: DesktopCommand::Reset { desktop_home, .. },
-        } = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
+        }) = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
             .unwrap()
             .command
         else {

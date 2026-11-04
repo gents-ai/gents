@@ -48,7 +48,7 @@ fn parse_case(case: &SeedCase) -> InitArgs {
             argv.extend([flag.to_string(), value]);
         }
     }
-    let Command::Init(args) = Cli::try_parse_from(argv).unwrap().command else {
+    let Some(Command::Init(args)) = Cli::try_parse_from(argv).unwrap().command else {
         panic!("expected init");
     };
     assert_eq!(case.local_default, crate::DEFAULT_INIT_MODEL_NAME);
@@ -199,7 +199,8 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
 
 #[tokio::test]
 async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits() -> Result<()> {
-    let Command::Init(args) = Cli::try_parse_from(["gents", "init", "--engineer"])?.command else {
+    let Some(Command::Init(args)) = Cli::try_parse_from(["gents", "init", "--engineer"])?.command
+    else {
         panic!("expected init");
     };
     let temp = tempfile::tempdir()?;
