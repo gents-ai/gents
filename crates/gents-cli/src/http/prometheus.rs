@@ -442,6 +442,10 @@ pub(crate) async fn render_prometheus_metrics(
     );
 
     render_inference_metrics(&mut lines, &inference_metrics);
+    render_command_policy_metrics(
+        &mut lines,
+        gents::tools::native::command_observability::snapshot(),
+    );
     render_background_completion_metrics(
         &mut lines,
         local_node_did,
@@ -452,6 +456,27 @@ pub(crate) async fn render_prometheus_metrics(
 
     lines.push(String::new());
     Ok(lines.join("\n"))
+}
+
+fn render_command_policy_metrics(
+    lines: &mut Vec<String>,
+    snapshot: gents::tools::native::command_observability::CommandPolicyMetrics,
+) {
+    for (name, help, value) in [
+        (
+            "gents_command_policy_rejections_total",
+            "Command policy decisions that refused a launch or guard operation in this process.",
+            snapshot.policy_rejections,
+        ),
+        (
+            "gents_command_credential_inspection_failures_total",
+            "Failed inspections of protected credential namespaces in this process.",
+            snapshot.credential_inspection_failures,
+        ),
+    ] {
+        push_metric_prelude_with_type(lines, name, help, "counter");
+        push_metric_sample(lines, name, &[], value);
+    }
 }
 
 fn runtime_inventory(data: &MetricsQueryData) -> impl Iterator<Item = &NodeReadinessRow> {
@@ -1633,6 +1658,25 @@ fn rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_policy_metrics_expose_process_counts() {
+        let mut lines = Vec::new();
+        render_command_policy_metrics(
+            &mut lines,
+            gents::tools::native::command_observability::CommandPolicyMetrics {
+                policy_rejections: 17,
+                credential_inspection_failures: 5,
+            },
+        );
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("# TYPE gents_command_policy_rejections_total counter"));
+        assert!(rendered.contains("gents_command_policy_rejections_total 17"));
+        assert!(
+            rendered.contains("# TYPE gents_command_credential_inspection_failures_total counter")
+        );
+        assert!(rendered.contains("gents_command_credential_inspection_failures_total 5"));
+    }
 
     #[test]
     fn backend_capacity_metrics_resolve_nullable_config_through_backend_defaults() {
