@@ -220,8 +220,18 @@ describe("an opened item", () => {
   it("renders a JSON payload as a code block and a text payload as markdown", () => {
     renderMailbox(
       mailboxWith([
-        item({ itemId: "a", title: "json", payload: '{"pr":42}' }),
-        item({ itemId: "b", title: "text", payload: "## Next\n1. review" }),
+        item({
+          itemId: "a",
+          title: "json",
+          payload: '{"pr":42}',
+          createdAt: "2026-11-04T10:00:00.001Z",
+        }),
+        item({
+          itemId: "b",
+          title: "text",
+          payload: "## Next\n1. review",
+          createdAt: "2026-11-04T10:00:00.000Z",
+        }),
       ]),
     );
     open("json");
