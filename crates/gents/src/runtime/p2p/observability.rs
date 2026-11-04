@@ -9,6 +9,9 @@ pub struct P2pSyncStatusSnapshot {
     pub broadcast_coalesced_total: u64,
     pub push_updates_coalesced_total: u64,
     pub gossip_direction_filtered_total: u64,
+    /// Absent on nodes predating the unfollowed-gossip counter.
+    #[serde(default)]
+    pub gossip_unfollowed_dropped_total: u64,
     pub pending_dags: usize,
     pub pending_dag_capacity: usize,
     pub pending_dag_high_water: u64,
