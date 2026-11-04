@@ -100,29 +100,23 @@ const DEFAULT_LOG_FILTER: &str = concat!(
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
-const CLI_AFTER_HELP: &str = "\
-Quick start:
-  gents init
-  gents server
-  gents codex
+const ROOT_HELP_TEMPLATE: &str = "\
+{about-with-newline}
+{usage-heading} {usage}
 
-Or without the Codex TUI:
-  gents chat
+Start               chat  codex  status
+Work                session  goal  task  job  mailbox
+Accounts            auth  cloud
+Configure           config  tools  mcp  pack
+Runtime             server  service  provision  reset  diagnose  p2p  desktop
+Data and debugging  data  debug
+Measure             eval  optimization
+                    version
 
-Inspect the local runtime:
-  gents status
-  gents response show REQUEST_ID
-  gents task list
-  gents task show TASK_ID
-  gents task run TASK_ID --wait
-  gents background list
-  gents mcp probe --all
-  gents reset
+Run `gents <command> --help` for details.
 
-Update runtime documents:
-  gents config backend set ...
-  gents config agent set ...
-  gents config tools set ...";
+Options:
+{options}";
 const INIT_AFTER_HELP: &str = "\
 Bootstrap a local home directory with one default backend, one default agent, and a safe read-only Tools document.
 

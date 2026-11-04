@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::{
-    CHAT_AFTER_HELP, CLI_AFTER_HELP, CLOUD_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
-    DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
-    RESET_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP,
+    CHAT_AFTER_HELP, CLOUD_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP,
+    INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, RESET_AFTER_HELP,
+    ROOT_HELP_TEMPLATE, SERVER_AFTER_HELP, SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP,
     TOOLS_AFTER_HELP,
 };
 
@@ -65,7 +65,7 @@ fn parse_env_var_name(value: &str) -> Result<String, String> {
 #[command(
     name = "gents",
     about = "Local-first CLI for bootstrapping, running, and inspecting a gents runtime",
-    after_help = CLI_AFTER_HELP
+    help_template = ROOT_HELP_TEMPLATE
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]

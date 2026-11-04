@@ -4,28 +4,41 @@ use anyhow::{Context, Result};
 use std::fs;
 
 #[test]
-fn top_level_help_shows_quickstart_workflow() -> Result<()> {
+fn top_level_help_is_sectioned() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
     let output = run_cli_text(&home_dir, &["--help"])?;
     assert!(
-        output.contains("Quick start:"),
-        "expected quick start section in help output, got:\n{output}"
+        output.contains("Start               chat  codex  status"),
+        "expected the Start section in help output, got:\n{output}"
     );
     assert!(
-        output.contains("gents init"),
-        "expected init example in help output, got:\n{output}"
+        output.contains("Data and debugging  data  debug"),
+        "expected the Data and debugging section in help output, got:\n{output}"
     );
     assert!(
-        output.contains("gents server"),
-        "expected server example in help output, got:\n{output}"
+        !output.contains("Quick start"),
+        "the quick start section should be gone, got:\n{output}"
     );
-    assert!(
-        output.contains("gents chat"),
-        "expected chat example in help output, got:\n{output}"
-    );
+
+    Ok(())
+}
+
+#[test]
+fn group_help_lists_its_own_subcommands() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let output = run_cli_text(&home_dir, &["auth", "--help"])?;
+    for subcommand in ["login", "probe", "accounts"] {
+        assert!(
+            output.contains(subcommand),
+            "expected {subcommand} in auth help output, got:\n{output}"
+        );
+    }
 
     Ok(())
 }

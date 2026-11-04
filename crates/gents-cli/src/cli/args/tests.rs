@@ -1,4 +1,5 @@
 use clap::error::ErrorKind;
+use clap::CommandFactory;
 
 use super::*;
 
@@ -89,4 +90,40 @@ fn old_names_stop_working() {
         };
         assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "{name}");
     }
+}
+
+#[test]
+fn root_help_lists_every_visible_command_exactly_once() {
+    const SECTIONS: &[&str] = &[
+        "Start",
+        "Work",
+        "Accounts",
+        "Configure",
+        "Runtime",
+        "Data and debugging",
+        "Measure",
+        "",
+    ];
+    let mut listed: Vec<&str> = crate::ROOT_HELP_TEMPLATE
+        .lines()
+        .filter(|line| {
+            line.get(..20)
+                .is_some_and(|label| SECTIONS.contains(&label.trim_end()))
+        })
+        .flat_map(|line| line[20..].split_whitespace())
+        .collect();
+    assert_eq!(listed.len(), 26, "{listed:?}");
+    for hidden in ["init", "prepare-runtime", "__native-fs-runner"] {
+        assert!(!listed.contains(&hidden), "{hidden} is hidden: {listed:?}");
+    }
+
+    let cli = Cli::command();
+    let mut visible: Vec<&str> = cli
+        .get_subcommands()
+        .filter(|command| !command.is_hide_set())
+        .map(|command| command.get_name())
+        .collect();
+    listed.sort_unstable();
+    visible.sort_unstable();
+    assert_eq!(listed, visible);
 }
