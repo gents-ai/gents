@@ -24,6 +24,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return this.props.children;
     }
     const message = this.state.error.message || String(this.state.error);
+    const stack = this.state.error.stack ?? "";
+    // WebKit's stack lists frames only, without the error's message.
+    const trace = stack.includes(message) ? stack : `${message}\n\n${stack}`;
     return (
       <>
         <div className="titlebar-drag-region" data-tauri-drag-region>
@@ -45,9 +48,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               The view hit an unexpected error. Reloading usually recovers; your agents
               and data are unaffected.
             </p>
+            <p
+              className="font-mono text-xs break-words text-foreground"
+              data-testid="error-boundary-message"
+            >
+              {message}
+            </p>
             <Disclosure summary="Error details" className="min-w-0">
-              <pre className="mt-2 overflow-auto font-mono text-xs">
-                {this.state.error.stack || message}
+              <pre
+                className="mt-2 max-h-[40vh] overflow-auto rounded-lg bg-raised/50 p-3 font-mono text-xs"
+                tabIndex={0}
+              >
+                {trace.trim()}
                 {this.state.componentStack
                   ? `\n\nComponent stack:${this.state.componentStack}`
                   : null}

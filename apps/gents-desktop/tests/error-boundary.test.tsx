@@ -54,6 +54,26 @@ describe("ErrorBoundary", () => {
     }
   });
 
+  it("shows the error's message when the stack leaves it out, and keeps the details to a scrolling box", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    function FramesOnly(): never {
+      const error = new Error("MenuGroupContext is missing");
+      error.stack = "iTe@http://localhost:1420/assets/index.js:71:15951";
+      throw error;
+    }
+    render(
+      <ErrorBoundary>
+        <FramesOnly />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByTestId("error-boundary-message")).toHaveTextContent(
+      "MenuGroupContext is missing",
+    );
+    const details = screen.getByTestId("error-boundary").querySelector("pre")!;
+    expect(details.textContent).toMatch(/^MenuGroupContext is missing\s+iTe@/);
+    expect(details).toHaveClass("max-h-[40vh]", "overflow-auto");
+  });
+
   it("App wraps the shell in the boundary (the actual white-screen fix)", () => {
     expect(App({}).type).toBe(ErrorBoundary);
   });
