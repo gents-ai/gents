@@ -8,6 +8,8 @@ import {
   type Route as ShellRoute,
 } from "@gents/shell";
 
+import { isAppLink, linkRoute, parseLink } from "./links";
+
 /* the desktop's routes: the kit's, and a UX plugin's own page. The kit's
    memory history carries any route object and never re-parses, so the
    extra route costs it nothing; only the path functions must know it. */
@@ -93,6 +95,18 @@ export function navigate(route: Route) {
   navigateReviewed(route);
 }
 
+/** Follows a `gents:` link, from a message or from outside the app. A link
+    only goes somewhere: it never installs, joins or sends. False when the
+    link names nothing this app opens, or the person stayed where they were. */
+export function openLink(href: string): boolean {
+  const link = parseLink(href);
+  if (!link) {
+    console.warn("ignored a gents link this app doesn't open", href);
+    return false;
+  }
+  return navigateReviewed(linkRoute(link));
+}
+
 /* a draft's save can settle after the person has left it, and must not
    take them back */
 const navShowing = (route: Route) =>
@@ -155,6 +169,11 @@ export function interceptNavClicks(root: ParentNode = document): () => void {
     const raw = a.getAttribute("href");
     if (!raw || raw === "#") return;
     if (/^(https?:|mailto:|tel:)/i.test(raw)) return;
+    if (isAppLink(raw)) {
+      mouse.preventDefault();
+      if (!openLink(raw)) mouse.stopImmediatePropagation();
+      return;
+    }
     if (!(raw.startsWith("/") || raw.startsWith("#/"))) return;
     mouse.preventDefault();
     if (!navigateReviewed(parseRoute(raw))) mouse.stopImmediatePropagation();

@@ -1,3 +1,5 @@
+#[cfg(desktop)]
+mod links;
 mod product_telemetry;
 #[cfg(target_os = "macos")]
 mod swipe;
@@ -70,7 +72,9 @@ pub fn run() {
 
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
-    let builder = builder.plugin(single_instance());
+    let builder = builder
+        .plugin(single_instance())
+        .plugin(tauri_plugin_deep_link::init());
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(browser_store_lock());
     let builder = builder
@@ -88,6 +92,7 @@ pub fn run() {
             }
             #[cfg(desktop)]
             {
+                links::setup(app)?;
                 setup_tray(app)?;
                 #[cfg(target_os = "macos")]
                 windows::setup(app)?;
@@ -104,11 +109,19 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         windows::desktop_window_setup_complete,
         swipe::swipe_scroll_edges,
+        links::desktop_take_links,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled
     ]);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(desktop, not(target_os = "macos")))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        links::desktop_take_links,
+        product_telemetry::product_telemetry_app_opened,
+        product_telemetry::product_telemetry_status,
+        product_telemetry::product_telemetry_set_enabled
+    ]);
+    #[cfg(not(desktop))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
