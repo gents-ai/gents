@@ -42,6 +42,7 @@ import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
 import { AgentPicker } from "../BehaviorPicker";
+import { CollectionPicker, OTHER } from "./CollectionPicker";
 
 const NEW = "new:";
 export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -176,8 +177,8 @@ export function AutomationForm({
   const [cron, setCron] = useState("");
   const [eventId, setEventId] = useState(NEW);
   // The watched collection must be explicit to avoid self-triggering task writes.
+  const [watch, setWatch] = useState("");
   const [collection, setCollection] = useState("");
-  const [eventKind, setEventKind] = useState("created");
   const [taskId, setTaskId] = useState(task ?? NEW);
   const [enable, setEnable] = useState(false);
   const [reuse, setReuse] = useState(false);
@@ -203,7 +204,10 @@ export function AutomationForm({
       (!task && deployment.tasks.length > 0));
 
   // an answer to the last refusal clears it
-  useEffect(() => setError(null), [prompt, kind, preset, collection, agentId, taskId]);
+  useEffect(
+    () => setError(null),
+    [prompt, kind, preset, watch, collection, agentId, taskId],
+  );
 
   const create = async () => {
     setError(null);
@@ -258,14 +262,15 @@ export function AutomationForm({
       } else if (kind === "event") {
         let event_source_id = eventId;
         if (eventId === NEW) {
-          if (!collection.trim()) throw new Error("Name the collection to watch.");
+          const source_collection = watch === OTHER ? collection.trim() : watch;
+          if (!source_collection) throw new Error("Choose what to watch.");
           event_source_id = idFor("event", "evsrc");
           const doc = {
             node_did,
             event_source_id,
             display_name: null as string | null,
-            source_collection: collection.trim(),
-            event_kind: eventKind.trim() || null,
+            source_collection,
+            event_kind: "created",
           };
           doc.display_name = eventInWords(doc);
           eventSources.push(doc);
@@ -375,31 +380,28 @@ export function AutomationForm({
           ))}
         </div>
         {kind === "schedule" && scheduleId === NEW && (
-          <div className="flex flex-wrap items-center gap-2">
-            <div
-              role="radiogroup"
-              aria-label="How often"
-              className="flex flex-wrap gap-1.5"
-            >
-              {PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={preset === p.id}
-                  onClick={() => setPreset(p.id)}
-                  className={cn(
-                    "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                    preset === p.id
-                      ? "border-ring bg-raised text-foreground"
-                      : "border-border/60 text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {SHORT[p.id]}
-                </button>
-              ))}
-            </div>
-            <span className="text-xs text-muted-foreground">Times are in {TZ}.</span>
+          <div
+            role="radiogroup"
+            aria-label="How often"
+            className="flex flex-wrap gap-1.5"
+          >
+            {PRESETS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={preset === p.id}
+                onClick={() => setPreset(p.id)}
+                className={cn(
+                  "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                  preset === p.id
+                    ? "border-ring bg-raised text-foreground"
+                    : "border-border/60 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {SHORT[p.id]}
+              </button>
+            ))}
           </div>
         )}
         {kind === "schedule" && scheduleId === NEW && preset === "custom" && (
@@ -412,27 +414,28 @@ export function AutomationForm({
           />
         )}
         {kind === "event" && eventId === NEW && (
-          <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-            <Field>
-              <FieldLabel htmlFor="auto-collection">Collection to watch</FieldLabel>
+          <Field>
+            {/* the runtime fires event triggers only for new documents */}
+            <FieldLabel htmlFor="auto-collection">
+              When something new is added to
+            </FieldLabel>
+            <CollectionPicker
+              id="auto-collection"
+              node={deployment}
+              value={watch}
+              onPick={setWatch}
+            />
+            {watch === OTHER && (
               <Input
-                id="auto-collection"
+                aria-label="Collection name"
+                autoFocus
                 className="font-mono"
                 placeholder="MailboxItem"
                 value={collection}
                 onChange={(e) => setCollection(e.target.value)}
               />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="auto-event-kind">Event kind</FieldLabel>
-              <Input
-                id="auto-event-kind"
-                className="font-mono"
-                value={eventKind}
-                onChange={(e) => setEventKind(e.target.value)}
-              />
-            </Field>
-          </div>
+            )}
+          </Field>
         )}
       </section>
       {taskId === NEW ? (

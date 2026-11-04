@@ -9,6 +9,11 @@ import {
   type Automation,
 } from "../src/ui/screens/automations/model";
 import { AutomationsScreen } from "../src/ui/screens/AutomationsScreen";
+import {
+  OTHER,
+  collectionGroups,
+  collectionInWords,
+} from "../src/ui/screens/agent/CollectionPicker";
 import { renderIn, renderRouted, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
@@ -83,6 +88,39 @@ describe("the node's automations", () => {
     expect(
       runsOf(byId(automationsOf(node), "trigger-a")).map((r) => r.requestId),
     ).toEqual(["r3", "r1"]);
+  });
+});
+
+describe("what an event automation can watch", () => {
+  it("names collections in words", () => {
+    expect(collectionInWords("MailboxItem")).toBe("Mailbox items");
+    expect(collectionInWords("acme_doc_comment")).toBe("Acme doc comments");
+  });
+
+  it("offers the safe core collections, the packs' own, those already watched, and Other", () => {
+    const node: DeploymentView = {
+      ...deployment,
+      datastoreToolSurfaces: [
+        {
+          surface_id: "s",
+          node_did: deployment.nodeDid,
+          entries: [{ kind: "query", tool_name: "find_notes", collection: "AcmeNote" }],
+        },
+      ],
+      eventSources: [
+        {
+          node_did: deployment.nodeDid,
+          event_source_id: "e",
+          source_collection: "GameMove",
+        },
+      ],
+    } as DeploymentView;
+    expect(collectionGroups(node)).toEqual([
+      { value: "Gents", items: ["MailboxItem"] },
+      { value: "From your packs", items: ["AcmeNote"] },
+      { value: "Already watched", items: ["GameMove"] },
+      { value: "", items: [OTHER] },
+    ]);
   });
 });
 
@@ -164,7 +202,6 @@ describe("the Automations page", () => {
     ).toContain("Summarize what happened");
     expect(screen.getByRole("radio", { name: /On a schedule/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Weekdays · 9:00" })).toBeChecked();
-    expect(screen.getByText(/^Times are in /)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await act(async () => {
       fireEvent.click(screen.getByRole("radio", { name: "Hourly" }));
