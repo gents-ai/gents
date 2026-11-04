@@ -51,6 +51,23 @@ async fn startup_subscriptions_use_one_batch_with_the_exact_allowed_scope() {
 }
 
 #[tokio::test]
+async fn failed_node_shutdown_retains_claim_and_reports_same_error_to_waiters() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = DesktopPaths::from_root(temp.path().join("client"));
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+            .await
+            .unwrap(),
+    );
+    core.shutdown_test_error.store(true, Ordering::SeqCst);
+    let first = core.shutdown().await.unwrap_err().to_string();
+    let second = core.shutdown().await.unwrap_err().to_string();
+    assert!(first.contains("injected database close failure"), "{first}");
+    assert_eq!(first, second);
+    assert!(gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).is_err());
+}
+
+#[tokio::test]
 #[expect(
     clippy::disallowed_methods,
     reason = "retries a file lock on a blocking-pool thread; the lock has no release notification"

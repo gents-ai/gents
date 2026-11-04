@@ -1876,6 +1876,43 @@ mod grok_shim_tests {
         }
     }
 
+    #[test]
+    fn server_p2p_configuration_preserves_file_identity_and_admission() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = temp.path().join("existing-peer.key");
+        let args = parse_server(&[
+            "--p2p-port",
+            "9123",
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-secret-key-path",
+            key.to_str().unwrap(),
+            "--p2p-max-pending-dags",
+            "123",
+            "--p2p-max-concurrent-push-tasks",
+            "17",
+            "--p2p-max-concurrent-dag-fetches",
+            "9",
+            "--p2p-rate-limit-burst",
+            "501",
+            "--p2p-rate-limit-rate",
+            "51.5",
+        ]);
+        let config = resolve_server_p2p_config(temp.path(), &args)
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.port, Some(9123));
+        assert_eq!(config.bind_addr, Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert_eq!(config.peer_key, defra_node::PeerKeySource::File);
+        assert_eq!(config.secret_key_path.as_deref(), Some(key.as_path()));
+        let admission = p2p_admission_state(&config);
+        assert_eq!(admission.max_pending_dags, 123);
+        assert_eq!(admission.max_concurrent_push_tasks, 17);
+        assert_eq!(admission.max_concurrent_dag_fetches, 9);
+        assert_eq!(admission.rate_limit_burst, 501);
+        assert_eq!(admission.rate_limit_rate, 51.5);
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_older_insecure_home_key_exits_with_the_insecure_key_status() {
