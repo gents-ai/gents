@@ -88,31 +88,31 @@ export function AutomationDetail({
             {a.when} · {a.does}
           </p>
         </div>
-        <AutomationMenu node={node} automation={a} />
+        <div className="flex shrink-0 items-center gap-2">
+          <Hint label={blocked ?? "Start it now, as its schedule or event would"}>
+            <span>
+              <Button
+                size="sm"
+                variant="brand"
+                disabled={blocked !== null || running}
+                onClick={() => void run()}
+              >
+                <Play /> {running ? "Starting…" : "Run now"}
+              </Button>
+            </span>
+          </Hint>
+          <AutomationMenu node={node} automation={a} />
+        </div>
       </header>
-      <div className="flex flex-wrap items-center gap-3">
-        <Hint label={blocked ?? "Start it now, as its schedule or event would"}>
-          <span>
-            <Button
-              size="sm"
-              variant="brand"
-              disabled={blocked !== null || running}
-              onClick={() => void run()}
-            >
-              <Play /> {running ? "Starting…" : "Run now"}
-            </Button>
-          </span>
-        </Hint>
-        <span
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
+        <dt className="text-muted-foreground">Status</dt>
+        <dd
           className={cn(
-            "text-sm",
-            a.readiness.ok && !a.lastFailed ? "text-muted-foreground" : "text-warning",
+            a.readiness.ok && !a.lastFailed ? "text-foreground" : "text-warning",
           )}
         >
           {state}
-        </span>
-      </div>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
+        </dd>
         <dt className="text-muted-foreground">Runs</dt>
         <dd className="tabular-nums">{a.runs}</dd>
         <dt className="text-muted-foreground">Last run</dt>
