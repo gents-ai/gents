@@ -50,6 +50,18 @@ pub struct P2pSyncStatusSnapshot {
     pub pending_dag_terminal_quarantined: u64,
     pub quarantined_pending_dags: usize,
     pub peers: Vec<P2pPeerSummarySnapshot>,
+    /// DAG-fetch arbitration estimates (defradb.rs observe-only estimators);
+    /// absent from pins that predate them.
+    #[serde(default)]
+    pub pending_dag_attempt_ewma_median_ms: Option<u64>,
+    #[serde(default)]
+    pub pending_dag_attempt_ewma_max_ms: Option<u64>,
+    #[serde(default)]
+    pub pending_dag_no_progress_median_ppm: Option<u64>,
+    #[serde(default)]
+    pub pending_dag_tie_reorders: u64,
+    #[serde(default)]
+    pub pending_dag_peer_occupancy: Vec<P2pPendingPeerOccupancySnapshot>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -77,6 +89,28 @@ pub struct P2pPeerFetchSnapshot {
     pub busy_ppm: u64,
     pub in_flight: u64,
     pub in_flight_bytes: u64,
+    /// Time-decayed (60 s half-life) per-provider estimates; absent until a
+    /// fetch finishes and from pins that predate them.
+    #[serde(default)]
+    pub success_latency_micros: Option<u64>,
+    #[serde(default)]
+    pub useful_ewma_ppm: Option<u64>,
+    #[serde(default)]
+    pub attempt_cost_micros: Option<u64>,
+    #[serde(default)]
+    pub expected_useful_micros: Option<u64>,
+    #[serde(default)]
+    pub ewma_age_millis: Option<u64>,
+}
+
+/// One source peer's share of the pending-DAG map: entries held now and a
+/// ~177 s average of them in Q8 (entries × 256).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct P2pPendingPeerOccupancySnapshot {
+    pub peer: String,
+    pub held: usize,
+    pub occupancy_q8: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
