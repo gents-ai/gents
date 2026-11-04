@@ -164,10 +164,7 @@ async fn load_tool_call(node: &gents::defra_node::Node, tool_call_id: &str) -> T
     first_row(&node.execute(&query).await, "AgentToolCall")
 }
 
-async fn load_messages(
-    node: &gents::defra_node::Node,
-    session_id: &str,
-) -> Vec<MessageRow> {
+async fn load_messages(node: &gents::defra_node::Node, session_id: &str) -> Vec<MessageRow> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -224,10 +221,7 @@ async fn load_messages(
     messages
 }
 
-async fn load_wakes(
-    node: &gents::defra_node::Node,
-    session_id: &str,
-) -> Vec<serde_json::Value> {
+async fn load_wakes(node: &gents::defra_node::Node, session_id: &str) -> Vec<serde_json::Value> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{

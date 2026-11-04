@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::{Node as EmbeddedNode, HttpConfig};
+use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
 use gents::goal::{
     claim_continuation, claim_retry_continuation, create_goal_for_session,
     delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
