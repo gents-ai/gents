@@ -4,6 +4,23 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- CLI commands are grouped under `auth`, `data`, `debug` and `pack`, and
+  `gents --help` lists the root commands by section. The old names stop working;
+  there are no aliases, so update scripts that call them.
+
+  | Old | New |
+  | --- | --- |
+  | `codex-login`, `grok-login`, `claude-login`, `claude-gateway-login` | `auth login codex`, `grok`, `claude`, `claude-gateway` |
+  | `codex-auth-probe`, `grok-auth-probe` | `auth probe codex`, `grok` |
+  | `accounts ...` | `auth accounts ...` |
+  | `query`, `write`, `export`, `document`, `schema` | `data query`, `data write`, `data export`, `data document`, `data schema` |
+  | `request`, `response`, `trace`, `background`, `fleet` | `debug request`, `debug response`, `debug trace`, `debug background`, `debug fleet` |
+  | `plugin ...`, `ux ...` | `pack plugin ...`, `pack ux ...` |
+  | `init` | hidden, still works |
+  | `prepare-runtime` | hidden, still works |
+
 ## 1.0.0-rc1 - 2026-11-03
 
 - P2P DAG fetches rank providers by measured health, rotate past a provider

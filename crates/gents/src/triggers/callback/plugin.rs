@@ -8,7 +8,7 @@
 //!
 //! A stage binds the path its source names with no working folder and nobody
 //! to ask, so the path is reachable only inside a folder the operator allowed
-//! (`gents plugin dirs add`, or a pack scenario's `allowed_folders`), at the
+//! (`gents pack plugin dirs add`, or a pack scenario's `allowed_folders`), at the
 //! access that call asks for.
 
 use std::sync::Arc;
@@ -801,7 +801,7 @@ mod tests {
         assert!(invocation["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("gents plugin dirs add"));
+            .contains("gents pack plugin dirs add"));
         assert!(rows(&node, "{ Echoed { run_ref } }", "Echoed")
             .await
             .is_empty());

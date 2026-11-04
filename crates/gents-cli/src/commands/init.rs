@@ -357,7 +357,7 @@ fn added_account_note(sign_in: &gents::inference::auth::credential::SignIn) -> O
     .then(|| {
         format!(
             "This sign-in was stored as another account, {}. The backend set up here runs on \
-             the provider's original account; see `gents accounts`.",
+             the provider's original account; see `gents auth accounts`.",
             gents::inference::auth::credential::effective_account_label(&sign_in.credential)
         )
     })
@@ -582,7 +582,7 @@ async fn maybe_inline_codex_login(
         Err(error) => {
             eprintln!(
                 "ChatGPT login did not complete: {error:#}\n\
-                 The backend is configured; finish later with `gents codex-login` \
+                 The backend is configured; finish later with `gents auth login codex` \
                  (add --device-auth on a headless machine)."
             );
             InlineCodexLoginState::Unauthenticated
@@ -1401,15 +1401,15 @@ fn init_next_steps(
 ) -> Vec<String> {
     let mut steps = Vec::new();
     if summary.provider_kind == gents::BackendProviderKind::ChatGptCodex && !codex_logged_in {
-        steps.push("gents codex-login".to_string());
+        steps.push("gents auth login codex".to_string());
     }
     if summary.provider_kind == gents::BackendProviderKind::XaiGrokOAuth && !grok_logged_in {
-        steps.push("gents grok-login".to_string());
+        steps.push("gents auth login grok".to_string());
     }
     if summary.provider_kind == gents::BackendProviderKind::ClaudeCliSubscription
         && !claude_logged_in
     {
-        steps.push("gents claude-login".to_string());
+        steps.push("gents auth login claude".to_string());
     }
     if summary.model_name.is_empty() {
         steps.push(

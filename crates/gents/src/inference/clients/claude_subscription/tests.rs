@@ -169,7 +169,7 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     .expect_err("missing");
     assert!(
         err.to_string()
-            .contains("gents claude-login --node-did did:key:z6MkNobody"),
+            .contains("gents auth login claude --node-did did:key:z6MkNobody"),
         "{err:#}"
     );
 }

@@ -404,7 +404,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .await
         .unwrap_err();
     assert!(
-        format!("{refused:#}").contains("gents plugin remove"),
+        format!("{refused:#}").contains("gents pack plugin remove"),
         "{refused:#}"
     );
 
@@ -1971,7 +1971,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
     format!("{error:#}")
 }
 
-const DEPENDENCY_NEXT_STEP: &str = "install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`";
+const DEPENDENCY_NEXT_STEP: &str = "install it with `gents pack install` or `gents pack plugin install`, then remove it from `dependencies`";
 
 #[tokio::test]
 async fn an_assets_dependency_is_refused_with_a_next_step() {

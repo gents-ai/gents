@@ -44,7 +44,7 @@ args = sys.argv[1:]
 log = pathlib.Path(os.environ["CALL_LOG"])
 with log.open("a") as stream:
     stream.write(json.dumps(args) + "\\n")
-if args[0] == "query":
+if args[:2] == ["data", "query"]:
     print(json.dumps({"results": [{"node_did": "did:test:node"}]}))
 elif args[:2] == ["eval", "batch"]:
     plan = json.loads(pathlib.Path(args[args.index("--plan") + 1]).read_text())

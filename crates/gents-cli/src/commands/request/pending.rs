@@ -37,10 +37,10 @@ pub(super) async fn request_pending(args: RequestPendingArgs) -> Result<()> {
         signer.did(),
     )
     .await?;
-    match args
-        .output
-        .ensure_supported("request pending", &[OutputFormat::Text, OutputFormat::Json])?
-    {
+    match args.output.ensure_supported(
+        "debug request pending",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )? {
         OutputFormat::Json => print_json(&serde_json::to_value(&snapshot)?)?,
         OutputFormat::Text => {
             let mut output = std::io::stdout().lock();

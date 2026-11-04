@@ -107,7 +107,7 @@ impl ConfigCommandTool {
         ordered! {
             "resource": "accounts",
             "items": items,
-            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation.",
+            "note": "Read-only. Accounts are managed by the operator with `gents auth accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation.",
         }
         .pretty()
     }

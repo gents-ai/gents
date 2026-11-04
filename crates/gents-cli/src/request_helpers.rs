@@ -995,7 +995,7 @@ where
 
 pub(crate) fn request_diagnostic_hint(request_id: &str) -> String {
     format!(
-        "Next:\n  1. Run `gents request show {request_id}`\n  2. Run `gents response show {request_id}`\n  3. Inspect the runtime with `gents status`"
+        "Next:\n  1. Run `gents debug request show {request_id}`\n  2. Run `gents debug response show {request_id}`\n  3. Inspect the runtime with `gents status`"
     )
 }
 

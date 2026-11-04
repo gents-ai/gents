@@ -615,7 +615,7 @@ async fn discover_models_claude_401_is_an_auth_error() {
         .chain()
         .find_map(|cause| cause.downcast_ref::<ModelDiscoveryHttpError>())
         .expect(
-            "401 must surface as ModelDiscoveryHttpError so the CLI appends claude-login guidance",
+            "401 must surface as ModelDiscoveryHttpError so the CLI appends `auth login claude` guidance",
         );
     assert!(http.is_auth(), "{http}");
 }

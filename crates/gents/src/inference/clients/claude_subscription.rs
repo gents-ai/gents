@@ -188,7 +188,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         .await?;
         if rows.is_empty() {
             anyhow::bail!(
-                "no enabled Claude account on this node; sign in with `gents claude-login`"
+                "no enabled Claude account on this node; sign in with `gents auth login claude`"
             );
         }
         // One concurrent bootstrap per account; an account whose sign-in cannot be
@@ -215,7 +215,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         if accounts.is_empty() {
             return Err(first_error
                 .unwrap_or_else(|| anyhow::anyhow!("no Claude account could be loaded"))
-                .context("no Claude account of this node could be loaded; sign in again with `gents claude-login`"));
+                .context("no Claude account of this node could be loaded; sign in again with `gents auth login claude`"));
         }
         let credential_ids: Arc<[String]> =
             accounts.iter().map(|a| a.credential_id.clone()).collect();

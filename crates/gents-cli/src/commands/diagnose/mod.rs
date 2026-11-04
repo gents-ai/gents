@@ -557,7 +557,7 @@ mod tests {
         assert!(entries[1]["guidance"]
             .as_str()
             .unwrap()
-            .contains("claude-login"));
+            .contains("auth login claude"));
         assert_eq!(entries[2]["ok"], false);
         assert!(entries[2]["guidance"].as_str().unwrap().contains("expired"));
         assert!(entries
@@ -587,7 +587,7 @@ mod tests {
             "credential_id": "claude-subscription:did:key:z6MkT",
             "guidance": "expired or revoked",
         });
-        let missing = json!({"ok": false, "guidance": "run gents claude-login"});
+        let missing = json!({"ok": false, "guidance": "run gents auth login claude"});
         let read_error = json!({"ok": false, "error": "querying OAuthCredential returned errors"});
         assert!(claude_auth_gate(true, &fresh));
         assert!(

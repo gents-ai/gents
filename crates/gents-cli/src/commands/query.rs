@@ -226,7 +226,7 @@ mod tests {
             &scope,
         )
         .await
-        .expect_err("EvalVerdict must never be readable through `gents query`");
+        .expect_err("EvalVerdict must never be readable through `gents data query`");
         let message = format!("{error:#}");
         assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
         assert!(message.contains("protected"), "{message}");

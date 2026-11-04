@@ -1,4 +1,4 @@
-//! `gents ux`: the UX plugins the desktop loads from a home, seen from the
+//! `gents pack ux`: the UX plugins the desktop loads from a home, seen from the
 //! terminal. `list` and `module` are the same two reads the desktop bridge
 //! makes (`gents_server::packs::{ux_list, ux_module}`), so an author can see
 //! exactly what the webview will receive; `lint` runs the static lint on

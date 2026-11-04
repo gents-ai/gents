@@ -647,8 +647,8 @@ async fn a_stale_binding_runs_the_plugin_without_a_model_and_says_so() {
     let note = call.binding_note.unwrap();
     assert!(
         note.contains("chandra")
-            && note.contains("gents plugin bind")
-            && note.contains("gents plugin unbind"),
+            && note.contains("gents pack plugin bind")
+            && note.contains("gents pack plugin unbind"),
         "{note}"
     );
 }

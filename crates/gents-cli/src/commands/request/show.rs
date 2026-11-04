@@ -26,10 +26,10 @@ pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let snapshot = load_request_show_snapshot(&graphql, &request_id).await?;
-    match args
-        .output
-        .ensure_supported("request show", &[OutputFormat::Text, OutputFormat::Json])?
-    {
+    match args.output.ensure_supported(
+        "debug request show",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )? {
         OutputFormat::Json => {
             let value = serde_json::to_value(&snapshot)?;
             print_json(&value)?;

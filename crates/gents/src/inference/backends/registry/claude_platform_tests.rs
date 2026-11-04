@@ -187,7 +187,7 @@ fn a_platform_credential_must_suit_the_platform() {
             assert_eq!(violations, vec![mismatch], "{kind}");
         }
     }
-    // A gateway takes a signed-in account (`claude-gateway-login`) or a static token.
+    // A gateway takes a signed-in account (`auth login claude-gateway`) or a static token.
     for auth in [
         json!({"kind": "node_oauth"}),
         json!({"kind": "node_oauth", "account_ref": "a1"}),

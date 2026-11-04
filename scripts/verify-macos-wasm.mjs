@@ -88,7 +88,7 @@ const manifold = {
 };
 writeFileSync(join(source, "manifold.json"), JSON.stringify(manifold));
 const artifact = join(root, "echo.afb");
-run("plugin", "build", source, "--out", artifact);
+run("pack", "plugin", "build", source, "--out", artifact);
 const bytes = readFileSync(artifact);
 const digest = createHash("sha256").update(bytes).digest("hex");
 mkdirSync(join(home, "plugins/store"), { recursive: true });
@@ -114,6 +114,7 @@ writeFileSync(
 );
 const input = { signed_wasm_execution: "ok" };
 const output = run(
+  "pack",
   "plugin",
   "run",
   "gents/release-echo",

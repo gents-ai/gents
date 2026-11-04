@@ -240,7 +240,7 @@ def main():
             denied = home / "data/unreadable-fixture"
             denied.write_bytes(b"force a real cold-copy failure before candidate startup")
             denied.chmod(0)
-        request = json.loads(cli("request", "submit", "--home", home, "--content", "Update your runtime and finish the turn.", "--no-wait").stdout)
+        request = json.loads(cli("debug", "request", "submit", "--home", home, "--content", "Update your runtime and finish the turn.", "--no-wait").stdout)
         assert tool_result_seen.wait(90), f"agent did not return acceptance: {captured[-1].get('messages') if captured else 'no provider requests'}"
         assert (home / "service-updates" / operation / "receipt.json").is_file(), captured[-1].get("messages")
         receipt = read_receipt()
@@ -327,7 +327,7 @@ def main():
         assert final["node_did"] == init["node_did"]
         status = json.loads(cli("service", "update-status", "--home", home, operation).stdout)
         assert status["phase"] == "healthy" and status["session_id"] == receipt["session_id"]
-        stored = json.loads(cli("request", "show", "--home", home, "--output", "json", request["request_id"]).stdout)
+        stored = json.loads(cli("debug", "request", "show", "--home", home, "--output", "json", request["request_id"]).stdout)
         assert stored["request"]["lifecycle_state"] == "completed", stored
         assert stored["request"]["session_id"] == receipt["session_id"], stored
         item = eventually(notice)

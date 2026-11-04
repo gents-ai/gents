@@ -317,7 +317,7 @@ fn classifies_not_entitled_without_relogin_guidance() {
     );
     assert!(msg.contains("not entitled"), "{msg}");
     assert!(
-        !msg.contains("gents grok-login"),
+        !msg.contains("gents auth login grok"),
         "tier gate should not push re-login as the fix: {msg}"
     );
     assert!(msg.contains("api.x.ai"), "{msg}");

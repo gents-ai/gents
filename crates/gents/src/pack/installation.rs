@@ -775,7 +775,7 @@ pub async fn remove_pack(
                 anyhow::ensure!(
                     !record.plugin_store,
                     "{coordinate} is not installed as a pack for {owner}: only its plugins \
-                     are, through gents plugin install; remove them with gents plugin remove"
+                     are, through gents pack plugin install; remove them with gents pack plugin remove"
                 );
                 if !record.required_by.is_empty() {
                     let dependents: Vec<&str> =

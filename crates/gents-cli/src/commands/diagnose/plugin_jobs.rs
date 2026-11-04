@@ -95,7 +95,7 @@ fn plugin_rows(
                 "plugin_record_unreadable",
                 "fail",
                 format!("{plugin}: {error:#}"),
-                format!("gents plugin install {plugin}"),
+                format!("gents pack plugin install {plugin}"),
             ));
             return;
         }
@@ -587,7 +587,7 @@ mod tests {
         only(&rows, "plugin_record_unreadable", "fail");
         assert_eq!(
             report["agents"][0]["checks"][0]["next_call"],
-            "gents plugin install acme/runner"
+            "gents pack plugin install acme/runner"
         );
         assert_eq!(report["ok"], false);
     }

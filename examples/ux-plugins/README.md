@@ -33,12 +33,12 @@ gents pack check   examples/ux-plugins/board_pack
 gents pack install ./examples/ux-plugins/board_pack --home ~/.gents
 
 # see what the desktop will receive
-gents ux list
-gents ux module focus_timer
-gents ux module examples/board_pack/board
+gents pack ux list
+gents pack ux module focus_timer
+gents pack ux module examples/board_pack/board
 ```
 
-Every example passes `gents ux lint` and is covered by
+Every example passes `gents pack ux lint` and is covered by
 `apps/gents-desktop/tests/ux-examples.test.ts`, which loads each one into an
 in-process frame over the real port protocol and, for the board, drives its
 `ctx.data` reads and writes.

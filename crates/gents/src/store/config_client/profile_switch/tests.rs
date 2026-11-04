@@ -563,7 +563,7 @@ async fn no_candidate_says_how_to_add_one() {
     let error = fixture.plan().await.unwrap_err();
     assert_eq!(
         format!("{error:#}"),
-        "no other Claude account offers model-x; add one with `gents claude-login --label <label>`"
+        "no other Claude account offers model-x; add one with `gents auth login claude --label <label>`"
     );
 }
 

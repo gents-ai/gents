@@ -165,7 +165,7 @@ DID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node_did"
 GRAPHQL="http://127.0.0.1:$PORT/api/v0/graphql"
 served() {
   grep -qF "127.0.0.1:$PORT/" "$EVAL_HOME/runtime.json" 2>/dev/null &&
-    "$GENTS" query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection Node --field node_did 2>/dev/null |
+    "$GENTS" data query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection Node --field node_did 2>/dev/null |
       python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(r.get("node_did")==sys.argv[1] for r in d.get("results",[])) else 1)' "$DID" 2>/dev/null
 }
 if ! served; then

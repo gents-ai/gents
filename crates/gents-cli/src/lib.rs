@@ -125,7 +125,7 @@ Examples:
   gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
   gents init --backend-preset openrouter --model-name MODEL
   gents init --backend-preset openai --model-name MODEL
-  gents init --backend-preset claude-cli-subscription   # then: gents claude-login
+  gents init --backend-preset claude-cli-subscription   # then: gents auth login claude
   gents init --write
   gents init --yolo
   gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
@@ -188,7 +188,7 @@ Examples:
 
 Diagnostics:
   gents status
-  gents response show REQUEST_ID";
+  gents debug response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
 Launches the `codex` terminal UI as a separate process connected to the local
 node's Codex shim. Codex-side approvals and sandboxing are bypassed: the tool
@@ -225,9 +225,9 @@ const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
 
 Examples:
-  gents schema apply ./app-schemas
-  gents schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
-  gents schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
+  gents data schema apply ./app-schemas
+  gents data schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents data schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
 
 Directory inputs apply *.graphql and *.gql files, then additive patch files
 named *.patch.json or *.json-patch. Patch files contain a JSON Patch array, or
@@ -245,12 +245,12 @@ Live native-process enrichment requires --graphql pointing at the running runtim
 Native-process matches are scoped by tool name because runtime liveness does not expose per-call native process IDs.
 
 Examples:
-  gents background list
-  gents background list --home /path/to/home
-  gents background list --graphql http://127.0.0.1:9191/api/v0/graphql
-  gents background list --request REQUEST_ID
-  gents background list --state running --age-gt 5m
-  gents background list --output json";
+  gents debug background list
+  gents debug background list --home /path/to/home
+  gents debug background list --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents debug background list --request REQUEST_ID
+  gents debug background list --state running --age-gt 5m
+  gents debug background list --output json";
 const MCP_AFTER_HELP: &str = "\
 Examples:
   gents mcp register web --endpoint http://127.0.0.1:9213/mcp
@@ -263,9 +263,9 @@ const FLEET_AFTER_HELP: &str = "\
 Shows the live fleet slot-accounting snapshot exposed by the local runtime HTTP API.
 
 Examples:
-  gents fleet slots
-  gents fleet slots --home /path/to/home
-  gents fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
+  gents debug fleet slots
+  gents debug fleet slots --home /path/to/home
+  gents debug fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
 const CLOUD_AFTER_HELP: &str = "\
 Signs in through another device: the cloud prints a short code, you approve it on the
 console page it names, and the workspace token is stored as an OAuthCredential document
@@ -294,16 +294,16 @@ AgentToolCall rows, then infers Amy baseline fields without mutating runtime
 state.
 
 Examples:
-  gents trace export --home /path/to/home
-  gents trace export --graphql http://127.0.0.1:9191/api/v0/graphql
-  gents trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
-  gents trace timeline --request-id REQUEST_ID --home /path/to/home
-  gents trace project --projection atif --request-id REQUEST_ID --format native-json --output-file /logs/agent/trajectory.json --home /path/to/home
-  gents trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
-  gents trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
-  gents trace project --projection multi-agent --request-id REQUEST_ID --scope-node-did DID --home /path/to/home
-  gents trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
-  gents trace project-schema --projection multi-agent --format eval-jsonl";
+  gents debug trace export --home /path/to/home
+  gents debug trace export --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents debug trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
+  gents debug trace timeline --request-id REQUEST_ID --home /path/to/home
+  gents debug trace project --projection atif --request-id REQUEST_ID --format native-json --output-file /logs/agent/trajectory.json --home /path/to/home
+  gents debug trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
+  gents debug trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
+  gents debug trace project --projection multi-agent --request-id REQUEST_ID --scope-node-did DID --home /path/to/home
+  gents debug trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
+  gents debug trace project-schema --projection multi-agent --format eval-jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   gents config validate --root infra/agents/default
@@ -315,18 +315,18 @@ Examples:
   gents config agent set --graphql URL --node-did <NODE_DID> --context-id <context-id> --inference-profile-id <profile-id>
   gents config tools set --graphql URL --file tools.json";
 const REQUEST_AFTER_HELP: &str = "\
-`request` is the low-level document path. Most users should prefer `gents chat`.
+`debug request` is the low-level document path. Most users should prefer `gents chat`.
 
 Examples:
-  gents request submit --content \"summarize this repo\"
-  gents request show REQUEST_ID";
+  gents debug request submit --content \"summarize this repo\"
+  gents debug request show REQUEST_ID";
 const RESPONSE_AFTER_HELP: &str = "\
 Views the canonical terminal output of a request: the request row's
 lifecycle_state and terminal_output selection.
 
 Examples:
-  gents response wait REQUEST_ID
-  gents response show REQUEST_ID";
+  gents debug response wait REQUEST_ID
+  gents debug response show REQUEST_ID";
 const SESSION_AFTER_HELP: &str = "\
 Fork a conversation into a new session seeded from a user-turn prefix \
 of the source. Child inherits node identity; agent can be swapped with \
