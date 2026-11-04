@@ -1,4 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
+import { errorWords } from "../../../lib/reasonText";
+import { Notice } from "../../components/Notice";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useState } from "react";
@@ -168,15 +170,18 @@ export function InferencePanel({
         </div>
       )}
       {catalog.error && !item && (
-        <div
-          role="alert"
-          className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"
-        >
-          <span>Couldn’t load the provider catalog: {catalog.error}</span>
-          <Button variant="outline" size="sm" onClick={catalog.retry}>
-            Retry
-          </Button>
-        </div>
+        <Notice
+          tone="destructive"
+          className="mb-4"
+          title="Couldn't load the list of providers"
+          description={errorWords(catalog.error)}
+          details={catalog.error}
+          actions={
+            <Button variant="outline" size="sm" onClick={catalog.retry}>
+              Retry
+            </Button>
+          }
+        />
       )}
       {!item && (
         <AllProviderLimits
