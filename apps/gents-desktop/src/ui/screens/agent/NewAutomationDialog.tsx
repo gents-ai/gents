@@ -1,7 +1,7 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { useEffect, useRef, useState } from "react";
-import { Hand, Timer, Zap } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, Hand, Timer, Zap } from "lucide-react";
 import type {
   ConfigComponentsApplyRequest,
   EventSource,
@@ -24,7 +24,6 @@ import {
 } from "@gents/ui/components/dialog";
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldLabel,
 } from "@gents/ui/components/field";
@@ -47,7 +46,7 @@ import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
 import { AgentPicker } from "../BehaviorPicker";
-import { Disclosure } from "../../components/Disclosure";
+import { Hint } from "../Hint";
 import { CollectionPicker, OTHER } from "./CollectionPicker";
 
 const NEW = "new:";
@@ -83,14 +82,12 @@ export type AutomationStart = {
 
 function Choice({
   id,
-  label,
   value,
   onChange,
   items,
   newLabel,
 }: {
   id: string;
-  label: string;
   value: string;
   onChange: (v: string) => void;
   items: { value: string; label: string }[];
@@ -98,23 +95,53 @@ function Choice({
 }) {
   const all = [...items, { value: NEW, label: newLabel }];
   return (
-    <Field>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
-      <Select items={all} value={value} onValueChange={(v) => v && onChange(v)}>
-        <SelectTrigger id={id} className="w-full">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {items.map((i) => (
-            <SelectItem key={i.value} value={i.value}>
-              {i.label}
-            </SelectItem>
-          ))}
-          {items.length > 0 && <SelectSeparator />}
-          <SelectItem value={NEW}>{newLabel}</SelectItem>
-        </SelectContent>
-      </Select>
-    </Field>
+    <Select items={all} value={value} onValueChange={(v) => v && onChange(v)}>
+      <SelectTrigger id={id} className="w-64 max-w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((i) => (
+          <SelectItem key={i.value} value={i.value}>
+            {i.label}
+          </SelectItem>
+        ))}
+        {items.length > 0 && <SelectSeparator />}
+        <SelectItem value={NEW}>{newLabel}</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+/* one of More options: its label on the left, its control on the right */
+function OptionRow({
+  label,
+  htmlFor,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2.5">
+      {hint ? (
+        <Hint label={hint}>
+          <label
+            htmlFor={htmlFor}
+            className="text-sm underline decoration-muted-foreground/50 decoration-dotted underline-offset-4"
+          >
+            {label}
+          </label>
+        </Hint>
+      ) : (
+        <label htmlFor={htmlFor} className="text-sm">
+          {label}
+        </label>
+      )}
+      {children}
+    </div>
   );
 }
 
@@ -200,7 +227,7 @@ export function AutomationForm({
   const [collection, setCollection] = useState("");
   const [taskId, setTaskId] = useState(task ?? NEW);
   const [enable, setEnable] = useState(false);
-  const [reuse, setReuse] = useState(false);
+  const [more, setMore] = useState(false);
   const ids = useRef<Record<string, string>>({});
   const idFor = (key: string, prefix: string) => (ids.current[key] ??= newId(prefix));
   const [prompt, setPrompt] = useState(start?.prompt ?? "");
@@ -216,6 +243,7 @@ export function AutomationForm({
   const agentOff = readiness !== null && !readiness.ready;
   const fromPrompt = prompt.trim().split("\n")[0].slice(0, 60);
 
+  const hasMore = () => taskId === NEW || kind !== "manual" || canReuse;
   const canReuse =
     !forTask &&
     (deployment.schedules.length > 0 ||
@@ -376,35 +404,33 @@ export function AutomationForm({
           className="h-auto rounded-none border-0 bg-transparent px-0 py-0 font-heading text-lg font-medium text-heading shadow-none focus-visible:ring-0 md:text-lg dark:bg-transparent"
         />
       )}
-      <section aria-labelledby="auto-when" className="grid gap-3">
+      <section aria-labelledby="auto-when" className="grid gap-2.5">
         <h3 id="auto-when" className="text-sm">
           When should it run?
         </h3>
         <div
           role="radiogroup"
           aria-labelledby="auto-when"
-          className="grid gap-2 sm:grid-cols-3"
+          className="flex flex-wrap gap-1.5"
         >
           {KINDS.filter((k) => k.id !== "manual" || !task).map((k) => (
-            <button
-              key={k.id}
-              type="button"
-              role="radio"
-              aria-checked={kind === k.id}
-              onClick={() => setKind(k.id)}
-              className={cn(
-                "flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                kind === k.id
-                  ? "border-ring bg-raised"
-                  : "border-border/60 hover:bg-accent/50",
-              )}
-            >
-              <k.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              <span className="grid gap-0.5">
-                <span className="text-sm">{k.label}</span>
-                <span className="text-xs text-muted-foreground">{k.hint}</span>
-              </span>
-            </button>
+            <Hint key={k.id} label={k.hint}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={kind === k.id}
+                onClick={() => setKind(k.id)}
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                  kind === k.id
+                    ? "border-ring bg-raised text-foreground"
+                    : "border-border/60 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <k.icon className="size-4" />
+                {k.label}
+              </button>
+            </Hint>
           ))}
         </div>
         {kind === "schedule" && scheduleId === NEW && (
@@ -475,7 +501,7 @@ export function AutomationForm({
           onChange={(e) => setPrompt(e.target.value)}
           className={cn(
             "overflow-y-auto",
-            layout === "page" ? "min-h-40 max-h-[50vh]" : "min-h-28 max-h-64",
+            layout === "page" ? "min-h-24 max-h-[50vh]" : "min-h-20 max-h-64",
           )}
         />
       ) : (
@@ -483,99 +509,94 @@ export function AutomationForm({
           Runs {existingTask?.name ?? taskId}, with its own prompt and agent.
         </p>
       )}
-      {taskId === NEW && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          Runs with
-          <AgentPicker
-            deployment={deployment}
-            agentId={agentId}
-            onChange={setAgentId}
-          />
-        </div>
-      )}
-      {(taskId === NEW || kind !== "manual") && (
-        <Disclosure
-          summary="More options"
-          summaryClassName="text-xs text-muted-foreground hover:text-foreground"
-        >
-          <div className="mt-3 grid gap-4">
-            {kind !== "manual" && (
-              <Field>
-                <FieldLabel htmlFor="auto-overlap">
-                  If it's still running when it's due again
-                </FieldLabel>
-                <Select
-                  items={OVERLAP}
-                  value={concurrency}
-                  onValueChange={(v) => v && setConcurrency(v as Concurrency)}
-                >
-                  <SelectTrigger id="auto-overlap" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {OVERLAP.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
-            {taskId === NEW && (
-              <>
-                <Field>
-                  <FieldLabel htmlFor="auto-goal">Keep going until</FieldLabel>
-                  <Input
-                    id="auto-goal"
-                    placeholder="Every failing test passes"
-                    value={goal}
-                    onChange={(e) => setGoal(e.target.value)}
-                  />
-                  <FieldDescription>
-                    A goal it works toward across turns, instead of stopping after one
-                    reply.
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="auto-goal-budget">
-                    Token budget for the goal
-                  </FieldLabel>
-                  <Input
-                    id="auto-goal-budget"
-                    inputMode="numeric"
-                    placeholder="No limit"
-                    value={goalBudget}
-                    onChange={(e) => setGoalBudget(e.target.value)}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="auto-description">Description</FieldLabel>
-                  <Input
-                    id="auto-description"
-                    placeholder="What it's for, in a line"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
-                </Field>
-              </>
-            )}
-          </div>
-        </Disclosure>
-      )}
-      {agentOff && agent && (
-        <p className="text-sm text-warning">
-          {agent.displayName} can’t run ({readiness?.reason}), so the automation is
-          created off.
-        </p>
-      )}
-      {canReuse &&
-        (reuse ? (
-          <div className="grid gap-3 rounded-xl bg-raised/50 p-3">
-            {kind === "schedule" && (
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        {taskId === NEW && (
+          <>
+            Runs with
+            <AgentPicker
+              deployment={deployment}
+              agentId={agentId}
+              onChange={setAgentId}
+            />
+          </>
+        )}
+        {hasMore() && (
+          <button
+            type="button"
+            aria-expanded={more}
+            onClick={() => setMore(!more)}
+            className="ml-auto inline-flex cursor-pointer items-center gap-1 text-xs hover:text-foreground"
+          >
+            More options
+            <ChevronRight
+              aria-hidden
+              className={cn("size-3.5 transition-transform", more && "rotate-90")}
+            />
+          </button>
+        )}
+      </div>
+      {more && (
+        <div className="divide-y divide-border/60 rounded-xl bg-raised/50">
+          {kind !== "manual" && (
+            <OptionRow label="If it's still running when due" htmlFor="auto-overlap">
+              <Select
+                items={OVERLAP}
+                value={concurrency}
+                onValueChange={(v) => v && setConcurrency(v as Concurrency)}
+              >
+                <SelectTrigger id="auto-overlap" className="w-64 max-w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {OVERLAP.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </OptionRow>
+          )}
+          {taskId === NEW && (
+            <>
+              <OptionRow
+                label="Keep going until"
+                htmlFor="auto-goal"
+                hint="A goal it works toward across turns, instead of stopping after one reply."
+              >
+                <Input
+                  id="auto-goal"
+                  className="w-64 max-w-full"
+                  placeholder="Every failing test passes"
+                  value={goal}
+                  onChange={(e) => setGoal(e.target.value)}
+                />
+              </OptionRow>
+              <OptionRow label="Token budget" htmlFor="auto-goal-budget">
+                <Input
+                  id="auto-goal-budget"
+                  inputMode="numeric"
+                  className="w-32"
+                  placeholder="No limit"
+                  value={goalBudget}
+                  onChange={(e) => setGoalBudget(e.target.value)}
+                />
+              </OptionRow>
+              <OptionRow label="Description" htmlFor="auto-description">
+                <Input
+                  id="auto-description"
+                  className="w-64 max-w-full"
+                  placeholder="What it's for, in a line"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </OptionRow>
+            </>
+          )}
+          {canReuse && kind === "schedule" && (
+            <OptionRow label="Schedule" htmlFor="auto-schedule">
               <Choice
                 id="auto-schedule"
-                label="Schedule"
                 value={scheduleId}
                 onChange={setScheduleId}
                 items={deployment.schedules.map((s) => ({
@@ -584,11 +605,12 @@ export function AutomationForm({
                 }))}
                 newLabel="Its own schedule"
               />
-            )}
-            {kind === "event" && (
+            </OptionRow>
+          )}
+          {canReuse && kind === "event" && (
+            <OptionRow label="Event" htmlFor="auto-event">
               <Choice
                 id="auto-event"
-                label="Event"
                 value={eventId}
                 onChange={setEventId}
                 items={deployment.eventSources.map((e) => ({
@@ -597,11 +619,12 @@ export function AutomationForm({
                 }))}
                 newLabel="Its own event"
               />
-            )}
-            {!task && (
+            </OptionRow>
+          )}
+          {canReuse && !task && (
+            <OptionRow label="Task" htmlFor="auto-task">
               <Choice
                 id="auto-task"
-                label="Task"
                 value={taskId}
                 onChange={setTaskId}
                 items={deployment.tasks.map((t) => ({
@@ -610,17 +633,16 @@ export function AutomationForm({
                 }))}
                 newLabel="Its own task"
               />
-            )}
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setReuse(true)}
-            className="w-fit cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-          >
-            Use an existing schedule or task
-          </button>
-        ))}
+            </OptionRow>
+          )}
+        </div>
+      )}
+      {agentOff && agent && (
+        <p className="text-sm text-warning">
+          {agent.displayName} can’t run ({readiness?.reason}), so the automation is
+          created off.
+        </p>
+      )}
       {error && <FieldError>{error}</FieldError>}
       <div
         className={cn(

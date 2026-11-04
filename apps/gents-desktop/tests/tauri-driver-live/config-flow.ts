@@ -420,9 +420,7 @@ export async function createTriggerDocument({
   await driver.user.click(
     screen.getByRole("radio", { name: /When something happens/ }),
   );
-  await driver.user.click(
-    screen.getByRole("button", { name: "Use an existing schedule or task" }),
-  );
+  await driver.user.click(screen.getByRole("button", { name: "More options" }));
   await chooseField(driver, "auto-event", /^Config Flow Events$/);
   await chooseField(driver, "auto-task", /^Config Flow Smoke Task$/);
   await driver.user.click(

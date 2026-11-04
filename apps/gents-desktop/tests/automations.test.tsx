@@ -236,7 +236,7 @@ describe("the Automations page", () => {
       target: { value: "Fix the failing tests" },
     });
     fireEvent.click(screen.getByText("More options"));
-    fireEvent.change(screen.getByLabelText("Token budget for the goal"), {
+    fireEvent.change(screen.getByLabelText("Token budget"), {
       target: { value: "50000" },
     });
     await act(async () => {
