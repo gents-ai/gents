@@ -188,6 +188,56 @@ async fn runtime_identity_requires_configured_bearer_token() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_starts_in_the_tool_root_when_the_runtime_runs_elsewhere() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let tool_root = fs::canonicalize(tempdir.path())?.join("tool-root");
+    fs::create_dir_all(&tool_root)?;
+    let model_name = format!("mock-thread-cwd-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "thread-cwd-shim",
+            "--tool-root",
+            &tool_root.to_string_lossy(),
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &["--codex-shim-port", &shim_port_string],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/")).await?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(1),
+            params: codex::ThreadStartParams::default(),
+        },
+    )
+    .await?;
+    let started: codex::ThreadStartResponse = read_typed_response(&mut ws, request_id(1)).await?;
+
+    assert_eq!(started.cwd.as_path(), tool_root.as_path());
+    Ok(())
+}
+
 fn assert_http_status(
     error: tokio_tungstenite::tungstenite::Error,
     expected: StatusCode,

@@ -58,7 +58,7 @@ pub(crate) use server::{
     CodexShimBindError, RuntimeIdentity,
 };
 #[cfg(test)]
-use server::{request_is_authorized, validate_bind_security};
+use server::{default_thread_cwd, request_is_authorized, validate_bind_security};
 #[allow(unused_imports)]
 pub(crate) use state::{CodexSidecar, DEFAULT_MEMORY_MODE};
 use state::{ConnectionState, Outbound, ShimState, TurnStreamControl};

@@ -145,9 +145,12 @@ pub(crate) async fn bind_codex_shim(
         usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
-        cwd: std::env::current_dir()
-            .context("resolving current working directory")
-            .map_err(CodexShimBindError::HostResource)?,
+        cwd: default_thread_cwd(
+            std::env::current_dir()
+                .context("resolving current working directory")
+                .map_err(CodexShimBindError::HostResource)?,
+            args.fs_root.as_deref(),
+        ),
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
@@ -184,6 +187,17 @@ pub(crate) async fn bind_codex_shim(
         agent_id: bound_agent_id,
         auth_required,
     })
+}
+
+/// A service manager starts the runtime in `/`, and Codex with `--remote` leaves a
+/// thread's directory to this server, so the process directory says nothing about
+/// where work belongs. Admission refuses a placement outside the tool root, so a
+/// thread defaults to the root unless the process runs inside it.
+pub(super) fn default_thread_cwd(process_cwd: PathBuf, tool_root: Option<&Path>) -> PathBuf {
+    match tool_root {
+        Some(root) if !process_cwd.starts_with(root) => root.to_path_buf(),
+        _ => process_cwd,
+    }
 }
 
 pub(super) fn validate_bind_security(
