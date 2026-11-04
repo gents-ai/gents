@@ -654,3 +654,133 @@ fn archive_preflight_refuses_a_cross_filesystem_rename_before_anything_moves() {
     );
     assert!(home.join("data/MANIFEST").is_file());
 }
+
+fn plant_remembered(config_dir: &std::path::Path, contents: &str) -> std::path::PathBuf {
+    let remembered = config_dir.join("gents/home");
+    std::fs::create_dir_all(remembered.parent().unwrap()).unwrap();
+    std::fs::write(&remembered, contents).unwrap();
+    remembered
+}
+
+#[test]
+fn gents_home_env_wins_over_the_remembered_file() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    plant_remembered(config.path(), "/srv/remembered\n");
+
+    let resolved = super::default_home_from(
+        Some("/srv/env".into()),
+        Some(config.path()),
+        Some(user.path()),
+    );
+
+    assert_eq!(resolved.unwrap(), std::path::Path::new("/srv/env"));
+}
+
+#[test]
+fn remembered_home_wins_over_dot_gents() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    plant_remembered(config.path(), "/srv/remembered\n");
+
+    let resolved = super::default_home_from(None, Some(config.path()), Some(user.path()));
+
+    assert_eq!(resolved.unwrap(), std::path::Path::new("/srv/remembered"));
+}
+
+#[test]
+fn no_file_means_dot_gents() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+
+    let resolved = super::default_home_from(None, Some(config.path()), Some(user.path()));
+
+    assert_eq!(resolved.unwrap(), user.path().join(".gents"));
+}
+
+#[test]
+fn a_directory_at_the_file_path_is_a_read_error() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    let remembered = config.path().join("gents/home");
+    std::fs::create_dir_all(&remembered).unwrap();
+
+    let error = super::default_home_from(None, Some(config.path()), Some(user.path())).unwrap_err();
+
+    assert!(
+        matches!(&error, super::HomeError::RememberedHomeRead { path, .. } if *path == remembered),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains(&*remembered.to_string_lossy()));
+}
+
+#[test]
+fn empty_or_relative_contents_are_invalid() {
+    let user = tempfile::tempdir().unwrap();
+    for contents in ["", "\n", "relative/home\n"] {
+        let config = tempfile::tempdir().unwrap();
+        let remembered = plant_remembered(config.path(), contents);
+
+        let error =
+            super::default_home_from(None, Some(config.path()), Some(user.path())).unwrap_err();
+
+        assert!(
+            matches!(&error, super::HomeError::RememberedHomeInvalid { path } if *path == remembered),
+            "{contents:?}: {error:?}"
+        );
+        assert!(error.to_string().contains(&*remembered.to_string_lossy()));
+    }
+}
+
+#[test]
+fn path_with_spaces_round_trips() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    let chosen = std::path::Path::new("/srv/my gents home ");
+
+    super::remember_home_in(config.path(), user.path(), chosen).unwrap();
+    let resolved = super::default_home_from(None, Some(config.path()), Some(user.path()));
+
+    assert_eq!(resolved.unwrap(), chosen);
+}
+
+#[test]
+fn remember_writes_the_absolute_path_at_gents_slash_home() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    let remembered = config.path().join("gents/home");
+
+    super::remember_home_in(
+        config.path(),
+        user.path(),
+        std::path::Path::new("/srv/gents"),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&remembered).unwrap(),
+        "/srv/gents\n"
+    );
+
+    super::remember_home_in(config.path(), user.path(), std::path::Path::new("relative")).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&remembered).unwrap(),
+        format!(
+            "{}\n",
+            std::env::current_dir().unwrap().join("relative").display()
+        )
+    );
+}
+
+#[test]
+fn remembering_dot_gents_removes_the_file() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    let dot_gents = user.path().join(".gents");
+    let remembered = plant_remembered(config.path(), "/srv/remembered\n");
+
+    super::remember_home_in(config.path(), user.path(), &dot_gents).unwrap();
+    assert!(!remembered.exists());
+
+    super::remember_home_in(config.path(), user.path(), &dot_gents)
+        .expect("nothing remembered is already the wanted state");
+}

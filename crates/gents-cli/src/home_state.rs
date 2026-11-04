@@ -8,6 +8,7 @@ use gents::store::config_client::GraphqlEndpoint;
 use gents::store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 use crate::{DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME};
@@ -18,13 +19,29 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
         .unwrap_or_else(default_home_dir)
 }
 
+/// Exits on a bad remembered file: `resolve_home_dir`'s many callers hold no
+/// `Result`, and falling back would open the wrong data.
 fn default_home_dir() -> PathBuf {
-    gents::store::local::home::default_home_dir().unwrap_or_else(|_| PathBuf::from(".gents"))
+    use gents::store::local::home::HomeError;
+    match gents::store::local::home::default_home_dir() {
+        Ok(home) => home,
+        Err(
+            error
+            @ (HomeError::RememberedHomeRead { .. } | HomeError::RememberedHomeInvalid { .. }),
+        ) => {
+            eprintln!("Error: {}", ErrorChain(&error));
+            std::process::exit(1);
+        }
+        Err(_) => PathBuf::from(".gents"),
+    }
 }
 
+/// Never exits: a service started with `--home` must not depend on the
+/// remembered file.
 pub(crate) fn is_default_home(home_dir: &Path) -> bool {
     let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    canonical(home_dir) == canonical(&default_home_dir())
+    gents::store::local::home::default_home_dir()
+        .is_ok_and(|default| canonical(home_dir) == canonical(&default))
 }
 
 pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
