@@ -195,11 +195,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
     };
     let (access, owner) = super::resolve_scope_owner(&scope).await?;
     let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
-    let result = crate::finish_node_operation(
-        result.map_err(Into::into),
-        access.local_node().map(AsRef::as_ref),
-    )
-    .await;
+    let result = crate::finish_node_operation(result, access.local_node().map(AsRef::as_ref)).await;
     drop(access);
     #[cfg(test)]
     if result.is_ok() {

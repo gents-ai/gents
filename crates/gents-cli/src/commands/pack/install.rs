@@ -420,8 +420,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 .as_ref()
                 .and_then(|(access, _)| access.local_node())
                 .map(AsRef::as_ref);
-            let (record, installed_plugins) =
-                crate::finish_node_operation(result.map_err(Into::into), node).await?;
+            let (record, installed_plugins) = crate::finish_node_operation(result, node).await?;
             let root = home.join(&record.assets);
             let mut output = json!({
                 "pack": pack.manifest().name,

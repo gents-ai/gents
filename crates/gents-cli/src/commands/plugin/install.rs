@@ -51,8 +51,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         .as_ref()
         .and_then(|(access, _)| access.local_node())
         .map(AsRef::as_ref);
-    let (record, installed) =
-        crate::finish_node_operation(result.map_err(Into::into), node).await?;
+    let (record, installed) = crate::finish_node_operation(result, node).await?;
 
     crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),
