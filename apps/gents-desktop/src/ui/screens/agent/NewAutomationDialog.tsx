@@ -343,33 +343,6 @@ export function AutomationForm({
           className="h-auto rounded-none border-0 bg-transparent px-0 py-0 font-heading text-lg font-medium text-heading shadow-none focus-visible:ring-0 md:text-lg dark:bg-transparent"
         />
       )}
-      {taskId === NEW ? (
-        <Textarea
-          aria-label="What the agent should do"
-          autoFocus={Boolean(start)}
-          placeholder="What should the agent do? For example: read the mailbox items from the last day and post a short digest."
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          className={cn(
-            "overflow-y-auto",
-            layout === "page" ? "min-h-40 max-h-[50vh]" : "min-h-28 max-h-64",
-          )}
-        />
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Runs {existingTask?.name ?? taskId}, with its own prompt and agent.
-        </p>
-      )}
-      {taskId === NEW && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          Runs with
-          <AgentPicker
-            deployment={deployment}
-            agentId={agentId}
-            onChange={setAgentId}
-          />
-        </div>
-      )}
       <section aria-labelledby="auto-when" className="grid gap-3">
         <h3 id="auto-when" className="text-sm">
           When should it run?
@@ -462,6 +435,33 @@ export function AutomationForm({
           </div>
         )}
       </section>
+      {taskId === NEW ? (
+        <Textarea
+          aria-label="What the agent should do"
+          autoFocus={Boolean(start)}
+          placeholder="What should the agent do? For example: read the mailbox items from the last day and post a short digest."
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          className={cn(
+            "overflow-y-auto",
+            layout === "page" ? "min-h-40 max-h-[50vh]" : "min-h-28 max-h-64",
+          )}
+        />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Runs {existingTask?.name ?? taskId}, with its own prompt and agent.
+        </p>
+      )}
+      {taskId === NEW && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          Runs with
+          <AgentPicker
+            deployment={deployment}
+            agentId={agentId}
+            onChange={setAgentId}
+          />
+        </div>
+      )}
       {agentOff && agent && (
         <p className="text-sm text-warning">
           {agent.displayName} can’t run ({readiness?.reason}), so the automation is
