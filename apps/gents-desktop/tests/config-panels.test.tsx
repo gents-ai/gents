@@ -2398,9 +2398,9 @@ describe("configuration panels", () => {
 
     await user.click(screen.getByRole("button", { name: "Event" }));
     const dialog = await screen.findByRole("dialog", { name: "When it runs" });
-    expect(
-      within(dialog).getByLabelText("When something new is added to"),
-    ).toHaveTextContent("Choose what to watch");
+    expect(within(dialog).getByLabelText("When something new is added to")).toHaveValue(
+      "",
+    );
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(
       await within(dialog).findByText("Choose what to watch."),

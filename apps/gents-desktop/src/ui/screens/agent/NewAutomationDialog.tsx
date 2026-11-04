@@ -43,7 +43,7 @@ import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
 import { AgentPicker } from "../BehaviorPicker";
 import { Hint } from "../Hint";
-import { CollectionPicker, OTHER } from "./CollectionPicker";
+import { CollectionPicker } from "./CollectionPicker";
 
 const NEW = "new:";
 export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -121,7 +121,9 @@ function OptionRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2.5">
+    /* side by side where there's room; on a phone the control sits under
+       its label and takes the row's width */
+    <div className="grid gap-2 px-4 py-2.5 sm:flex sm:items-center sm:justify-between sm:gap-4">
       {hint ? (
         <Hint label={hint}>
           <label
@@ -136,9 +138,18 @@ function OptionRow({
           {label}
         </label>
       )}
-      {children}
+      <div className="min-w-0 max-sm:[&>*]:w-full">{children}</div>
     </div>
   );
+}
+
+/* a positive whole number typed in a field, or null when it's left empty */
+function wholeNumber(text: string, what: string): number | null {
+  if (!text.trim()) return null;
+  const n = Number(text);
+  if (!Number.isInteger(n) || n <= 0)
+    throw new Error(`${what} is a whole number above 0.`);
+  return n;
 }
 
 const KINDS: {
@@ -220,7 +231,10 @@ export function AutomationForm({
   const [goal, setGoal] = useState("");
   const [goalBudget, setGoalBudget] = useState("");
   const [watch, setWatch] = useState("");
-  const [collection, setCollection] = useState("");
+  const [filter, setFilter] = useState("");
+  const [groupCount, setGroupCount] = useState("");
+  const [groupField, setGroupField] = useState("");
+  const [groupWait, setGroupWait] = useState("");
   const [taskId, setTaskId] = useState(task ?? NEW);
   const [enable, setEnable] = useState(false);
   const [more, setMore] = useState(false);
@@ -249,7 +263,19 @@ export function AutomationForm({
   // an answer to the last refusal clears it
   useEffect(
     () => setError(null),
-    [prompt, kind, preset, watch, collection, agentId, taskId, goal, goalBudget],
+    [
+      prompt,
+      kind,
+      preset,
+      watch,
+      agentId,
+      taskId,
+      goal,
+      goalBudget,
+      groupCount,
+      groupField,
+      groupWait,
+    ],
   );
 
   const create = async () => {
@@ -314,15 +340,25 @@ export function AutomationForm({
       } else if (kind === "event") {
         let event_source_id = eventId;
         if (eventId === NEW) {
-          const source_collection = watch === OTHER ? collection.trim() : watch;
+          const source_collection = watch.trim();
           if (!source_collection) throw new Error("Choose what to watch.");
+          const count = wholeNumber(groupCount, "How many to wait for");
+          const wait = wholeNumber(groupWait, "How long to wait");
+          if ((count !== null || wait !== null) && !groupField.trim())
+            throw new Error("Say which field a group's documents share.");
           event_source_id = idFor("event", "evsrc");
-          const doc = {
+          const doc: EventSource = {
             node_did,
             event_source_id,
-            display_name: null as string | null,
+            display_name: null,
             source_collection,
             event_kind: "created",
+            filter: filter.trim() || null,
+            correlation_field: groupField.trim() || null,
+            group:
+              count !== null || wait !== null
+                ? { expected_count: count, timeout_secs: wait }
+                : null,
           };
           doc.display_name = eventInWords(doc);
           eventSources.push(doc);
@@ -475,16 +511,6 @@ export function AutomationForm({
               value={watch}
               onPick={setWatch}
             />
-            {watch === OTHER && (
-              <Input
-                aria-label="Collection name"
-                autoFocus
-                className="font-mono"
-                placeholder="MailboxItem"
-                value={collection}
-                onChange={(e) => setCollection(e.target.value)}
-              />
-            )}
           </Field>
         )}
       </section>
@@ -552,6 +578,58 @@ export function AutomationForm({
                 </SelectContent>
               </Select>
             </OptionRow>
+          )}
+          {kind === "event" && eventId === NEW && (
+            <>
+              <OptionRow
+                label="Only when"
+                htmlFor="auto-filter"
+                hint="A filter on the new document's fields, written as the database's filters are."
+              >
+                <Input
+                  id="auto-filter"
+                  className="w-64 max-w-full font-mono text-xs"
+                  placeholder='{ status: { _eq: "open" } }'
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                />
+              </OptionRow>
+              <OptionRow
+                label="Wait for a group"
+                htmlFor="auto-group-count"
+                hint="Run once for several new documents that share a field: when that many have arrived, or when the wait runs out."
+              >
+                <span className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+                  <Input
+                    id="auto-group-count"
+                    aria-label="How many to wait for"
+                    inputMode="numeric"
+                    className="w-16"
+                    placeholder="3"
+                    value={groupCount}
+                    onChange={(e) => setGroupCount(e.target.value)}
+                  />
+                  sharing
+                  <Input
+                    aria-label="Field they share"
+                    className="w-32 font-mono text-xs"
+                    placeholder="upload_id"
+                    value={groupField}
+                    onChange={(e) => setGroupField(e.target.value)}
+                  />
+                  for up to
+                  <Input
+                    aria-label="How long to wait, in seconds"
+                    inputMode="numeric"
+                    className="w-16"
+                    placeholder="60"
+                    value={groupWait}
+                    onChange={(e) => setGroupWait(e.target.value)}
+                  />
+                  s
+                </span>
+              </OptionRow>
+            </>
           )}
           {taskId === NEW && (
             <>

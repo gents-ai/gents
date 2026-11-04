@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import {
@@ -10,7 +11,6 @@ import {
 } from "../src/ui/screens/automations/model";
 import { AutomationsScreen } from "../src/ui/screens/AutomationsScreen";
 import {
-  OTHER,
   collectionGroups,
   collectionInWords,
 } from "../src/ui/screens/agent/CollectionPicker";
@@ -125,7 +125,6 @@ describe("what an event automation can watch", () => {
       { value: "Gents", items: ["MailboxItem"] },
       { value: "From your packs", items: ["AcmeNote", "ChessMove"] },
       { value: "Already watched", items: ["GameMove"] },
-      { value: "", items: [OTHER] },
     ]);
   });
 });
@@ -257,6 +256,56 @@ describe("the Automations page", () => {
       }),
     );
     expect(document.triggers[0].concurrency).toBe("serial");
+  });
+
+  it("watches a typed collection, with a filter and a group, from the event options", async () => {
+    withFlags({ automations: true });
+    const changeConfig = vi.fn().mockResolvedValue({});
+    const app = testApp({
+      api: { applyConfigComponents: changeConfig },
+      snapshot: { bootstrap, client: { deployments: [deployment] } },
+    });
+    renderRouted(app, { name: "automations", item: "new" }, (route) =>
+      route.name === "automations" ? <AutomationsScreen item={route.item} /> : null,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /When something happens/ }));
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByLabelText("When something new is added to"),
+      "ChessMove",
+    );
+    await user.click(await screen.findByRole("option", { name: /Watch ChessMove/ }));
+    fireEvent.change(screen.getByLabelText("What the agent should do"), {
+      target: { value: "Answer the move" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    fireEvent.change(screen.getByLabelText("Only when"), {
+      target: { value: '{ player: { _eq: "jack" } }' },
+    });
+    fireEvent.change(screen.getByLabelText("How many to wait for"), {
+      target: { value: "2" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    expect(
+      screen.getByText("Say which field a group's documents share."),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Field they share"), {
+      target: { value: "game_id" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    expect(changeConfig.mock.calls[0][0].document.event_sources[0]).toEqual(
+      expect.objectContaining({
+        source_collection: "ChessMove",
+        event_kind: "created",
+        filter: '{ player: { _eq: "jack" } }',
+        correlation_field: "game_id",
+        group: { expected_count: 2, timeout_secs: null },
+      }),
+    );
   });
 
   it("asks when a blank automation runs instead of assuming, and drops the ask once answered", async () => {

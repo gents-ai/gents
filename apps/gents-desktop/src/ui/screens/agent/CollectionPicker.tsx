@@ -1,5 +1,5 @@
 import type { NodeView } from "../../../hooks/fleetStore";
-import { useExclusivePopover } from "@/hooks/useExclusivePopover";
+import { useState } from "react";
 import {
   Combobox,
   ComboboxCollection,
@@ -10,12 +10,7 @@ import {
   ComboboxItem,
   ComboboxLabel,
   ComboboxList,
-  ComboboxTrigger,
 } from "@gents/ui/components/combobox";
-import { SEARCH_FIELD } from "@/lib/textAssist";
-
-/** Typing a name instead of choosing one. */
-export const OTHER = "\u0000other";
 
 /* Core collections a triggered task doesn't write to itself, so watching
    them can't set off its own trigger. Requests, messages and tool calls are
@@ -66,15 +61,15 @@ export function collectionGroups(node: NodeView): Group[] {
     { value: "Gents", items: CORE },
     { value: "From your packs", items: [...fromPacks].sort() },
     { value: "Already watched", items: [...watched].sort() },
-    { value: "", items: [OTHER] },
   ].filter((g) => g.items.length > 0);
 }
 
-const TRIGGER =
-  "flex h-9 w-full items-center justify-between gap-1.5 rounded-2xl border border-transparent bg-input/50 px-3 text-sm whitespace-nowrap outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20";
+/* a name the runtime would accept as a collection's */
+const COLLECTION_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Which collection an event trigger watches, chosen by its name in words,
-    or typed when it isn't listed. */
+/** Which collection an event trigger watches. The field is the search:
+    what it lists is named in words, and a name it doesn't list can be
+    typed and watched as it is. */
 export function CollectionPicker({
   id,
   node,
@@ -83,51 +78,43 @@ export function CollectionPicker({
 }: {
   id: string;
   node: NodeView;
-  /** a collection's name, OTHER while one is being typed, or "" */
+  /** a collection's name, or "" */
   value: string;
   onPick: (value: string) => void;
 }) {
-  const popover = useExclusivePopover();
-  const groups = collectionGroups(node);
-  const label = (v: string) => (v === OTHER ? "Other…" : collectionInWords(v));
+  const [query, setQuery] = useState("");
+  const listed = collectionGroups(node);
+  const known = new Set(listed.flatMap((g) => g.items));
+  const typed = query.trim();
+  const own = [
+    ...new Set(
+      [value, COLLECTION_NAME.test(typed) ? typed : ""].filter(
+        (v) => v && !known.has(v),
+      ),
+    ),
+  ];
+  const groups = own.length ? [...listed, { value: "", items: own }] : listed;
+  const label = (v: string) => (known.has(v) ? collectionInWords(v) : v);
+  const fromPacks = listed.some((g) => g.value === "From your packs");
   return (
     <Combobox
       items={groups}
       value={value || null}
-      open={popover.open}
-      onOpenChange={popover.onOpenChange}
-      onOpenChangeComplete={popover.onOpenChangeComplete}
-      onValueChange={(v) => {
-        if (v == null) return;
-        popover.onOpenChange(false);
-        onPick(v as string);
-      }}
+      onValueChange={(v) => v != null && onPick(v as string)}
+      onInputValueChange={(v) => setQuery(String(v))}
       itemToStringLabel={label}
-      filter={(v: string, query: string) => {
-        const q = query.trim().toLowerCase();
-        return !q || v === OTHER || `${label(v)} ${v}`.toLowerCase().includes(q);
+      filter={(v: string, q: string) => {
+        const t = q.trim().toLowerCase();
+        return !t || !known.has(v) || `${label(v)} ${v}`.toLowerCase().includes(t);
       }}
     >
-      <ComboboxTrigger id={id} className={TRIGGER}>
-        <span className={`truncate ${value ? "" : "text-muted-foreground"}`}>
-          {value ? label(value) : "Choose what to watch"}
-        </span>
-      </ComboboxTrigger>
-      <ComboboxContent
-        ref={popover.popupRef}
-        aria-label="Choose what to watch"
-        className="w-80 min-w-80 max-md:w-[calc(100vw-2rem)] max-md:min-w-0"
-      >
-        <ComboboxInput
-          showTrigger={false}
-          aria-label="Search collections"
-          {...SEARCH_FIELD}
-        />
-        <ComboboxEmpty>Nothing by that name.</ComboboxEmpty>
+      <ComboboxInput id={id} placeholder="Choose, or type a collection's name" />
+      <ComboboxContent aria-label="Collections to watch">
+        <ComboboxEmpty>Type a collection's name to watch it.</ComboboxEmpty>
         <ComboboxList>
           {(group: Group) => (
             <ComboboxGroup
-              key={group.value || "other"}
+              key={group.value || "typed"}
               items={group.items}
               aria-label={group.value || undefined}
             >
@@ -135,20 +122,29 @@ export function CollectionPicker({
               <ComboboxCollection>
                 {(v: string) => (
                   <ComboboxItem key={v} value={v}>
-                    <span className="flex min-w-0 flex-1 items-baseline justify-between gap-4">
-                      <span className="truncate">{label(v)}</span>
-                      {v !== OTHER && (
-                        <span className="max-w-36 shrink-0 truncate font-mono text-xs text-muted-foreground">
+                    {known.has(v) ? (
+                      <span className="flex min-w-0 flex-1 items-baseline justify-between gap-4">
+                        <span className="truncate">{label(v)}</span>
+                        <span className="max-w-40 shrink-0 truncate font-mono text-xs text-muted-foreground">
                           {v}
                         </span>
-                      )}
-                    </span>
+                      </span>
+                    ) : (
+                      <span className="truncate">
+                        Watch <span className="font-mono">{v}</span>
+                      </span>
+                    )}
                   </ComboboxItem>
                 )}
               </ComboboxCollection>
             </ComboboxGroup>
           )}
         </ComboboxList>
+        {!fromPacks && (
+          <p className="px-3 pt-1 pb-2.5 text-xs text-muted-foreground">
+            Packs you install can add more.
+          </p>
+        )}
       </ComboboxContent>
     </Combobox>
   );
