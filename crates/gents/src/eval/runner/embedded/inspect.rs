@@ -248,7 +248,7 @@ resources:
             .as_array()
             .unwrap()
             .is_empty());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         drop(node);
         let key = std::fs::read(path.join("node.key")).unwrap();
         let at = locator(&did, "trial");
@@ -351,7 +351,7 @@ resources:
             .build()
             .await
             .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         drop(node);
         for _ in 0..2 {
             let error =
