@@ -1,7 +1,7 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { useRef, useState } from "react";
-import { ChevronDown, Hand, Timer, Zap } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Hand, Timer, Zap } from "lucide-react";
 import type {
   ConfigComponentsApplyRequest,
   EventSource,
@@ -22,14 +22,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@gents/ui/components/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@gents/ui/components/dropdown-menu";
 import { Field, FieldError, FieldLabel } from "@gents/ui/components/field";
 import { Input } from "@gents/ui/components/input";
 import {
@@ -110,7 +102,41 @@ function Choice({
   );
 }
 
-const KIND_ICON = { schedule: Timer, event: Zap, manual: Hand };
+const KINDS: {
+  id: Kind;
+  label: string;
+  hint: string;
+  icon: typeof Timer;
+}[] = [
+  {
+    id: "schedule",
+    label: "On a schedule",
+    hint: "Every day, hour or week",
+    icon: Timer,
+  },
+  {
+    id: "event",
+    label: "When something happens",
+    hint: "A new document arrives",
+    icon: Zap,
+  },
+  {
+    id: "manual",
+    label: "Only when I start it",
+    hint: "Run it from its page",
+    icon: Hand,
+  },
+];
+
+/* how often, short enough for a chip */
+const SHORT: Record<Preset, string> = {
+  "15min": "Every 15 minutes",
+  hourly: "Hourly",
+  daily: "Daily · 9:00",
+  weekdays: "Weekdays · 9:00",
+  weekly: "Mondays · 9:00",
+  custom: "Custom…",
+};
 
 /** What a new automation is, shaped like the composer: its name, what the
     agent should do, and chips for when it runs and who runs it. It makes
@@ -142,11 +168,11 @@ export function AutomationForm({
   const defaultAgent =
     defaultAgentOf(deployment)?.agentId ?? deployment.agents[0]?.agentId ?? "";
   const [name, setName] = useState(start?.name ?? "");
-  const [kind, setKind] = useState<Kind>(
-    start ? "schedule" : forTask ? "manual" : (initialKind ?? "schedule"),
+  const [kind, setKind] = useState<Kind | null>(
+    start ? "schedule" : forTask ? "manual" : (initialKind ?? null),
   );
   const [scheduleId, setScheduleId] = useState(NEW);
-  const [preset, setPreset] = useState<Preset>(start?.preset ?? "daily");
+  const [preset, setPreset] = useState<Preset | null>(start?.preset ?? null);
   const [cron, setCron] = useState("");
   const [eventId, setEventId] = useState(NEW);
   // The watched collection must be explicit to avoid self-triggering task writes.
@@ -170,32 +196,25 @@ export function AutomationForm({
   const agentOff = readiness !== null && !readiness.ready;
   const fromPrompt = prompt.trim().split("\n")[0].slice(0, 60);
 
-  const when =
-    kind === "manual"
-      ? "Only by hand"
-      : kind === "event"
-        ? eventId === NEW
-          ? collection.trim()
-            ? `When ${collection.trim()} is ${eventKind.trim() || "created"}`
-            : "When something happens"
-          : (deployment.eventSources.find((e) => e.event_source_id === eventId)
-              ?.display_name ?? "When something happens")
-        : scheduleId === NEW
-          ? PRESETS.find((p) => p.id === preset)!.label.replace(
-              "Custom cron…",
-              "Custom",
-            )
-          : (deployment.schedules.find((s) => s.schedule_id === scheduleId)
-              ?.display_name ?? "On a schedule");
-  const WhenIcon = KIND_ICON[kind];
   const canReuse =
     !forTask &&
     (deployment.schedules.length > 0 ||
       deployment.eventSources.length > 0 ||
       (!task && deployment.tasks.length > 0));
 
+  // an answer to the last refusal clears it
+  useEffect(() => setError(null), [prompt, kind, preset, collection, agentId, taskId]);
+
   const create = async () => {
     setError(null);
+    if (!kind) {
+      setError("Choose when it runs.");
+      return;
+    }
+    if (kind === "schedule" && scheduleId === NEW && !preset) {
+      setError("Choose how often it runs.");
+      return;
+    }
     if (taskId === NEW && !prompt.trim()) {
       setError("Say what the agent should do.");
       return;
@@ -311,16 +330,6 @@ export function AutomationForm({
     }
   };
 
-  const chooseWhen = (value: string) => {
-    if (value === "event" || value === "manual") {
-      setKind(value);
-      return;
-    }
-    setKind("schedule");
-    setScheduleId(NEW);
-    setPreset(value as Preset);
-  };
-
   return (
     <div className="grid gap-4">
       {!task && (
@@ -351,82 +360,108 @@ export function AutomationForm({
           Runs {existingTask?.name ?? taskId}, with its own prompt and agent.
         </p>
       )}
-      <div className="flex flex-wrap items-center gap-2">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="secondary" size="sm" aria-label={`When: ${when}`} />
-            }
-          >
-            <WhenIcon /> {when} <ChevronDown className="text-muted-foreground" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-60">
-            <DropdownMenuRadioGroup
-              value={kind === "schedule" && scheduleId === NEW ? preset : kind}
-              onValueChange={(value) => chooseWhen(value as string)}
-            >
-              {PRESETS.map((p) => (
-                <DropdownMenuRadioItem key={p.id} value={p.id}>
-                  {p.id === "custom" ? "Custom schedule…" : p.label}
-                </DropdownMenuRadioItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuRadioItem value="event">
-                When something happens…
-              </DropdownMenuRadioItem>
-              {!task && (
-                <DropdownMenuRadioItem value="manual">
-                  Only by hand
-                </DropdownMenuRadioItem>
-              )}
-            </DropdownMenuRadioGroup>
-            <DropdownMenuSeparator />
-            {/* plain text: the kit's menu label must sit inside a group */}
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              Times are in {TZ}.
-            </p>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {taskId === NEW && (
+      {taskId === NEW && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          Runs with
           <AgentPicker
             deployment={deployment}
             agentId={agentId}
             onChange={setAgentId}
           />
-        )}
-      </div>
-      {kind === "schedule" && scheduleId === NEW && preset === "custom" && (
-        <Input
-          aria-label="Cron expression"
-          className="font-mono"
-          placeholder="0 9 * * 1-5"
-          value={cron}
-          onChange={(e) => setCron(e.target.value)}
-        />
-      )}
-      {kind === "event" && eventId === NEW && (
-        <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-          <Field>
-            <FieldLabel htmlFor="auto-collection">Collection to watch</FieldLabel>
-            <Input
-              id="auto-collection"
-              className="font-mono"
-              placeholder="MailboxItem"
-              value={collection}
-              onChange={(e) => setCollection(e.target.value)}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="auto-event-kind">Event kind</FieldLabel>
-            <Input
-              id="auto-event-kind"
-              className="font-mono"
-              value={eventKind}
-              onChange={(e) => setEventKind(e.target.value)}
-            />
-          </Field>
         </div>
       )}
+      <section aria-labelledby="auto-when" className="grid gap-3">
+        <h3 id="auto-when" className="text-sm">
+          When should it run?
+        </h3>
+        <div
+          role="radiogroup"
+          aria-labelledby="auto-when"
+          className="grid gap-2 sm:grid-cols-3"
+        >
+          {KINDS.filter((k) => k.id !== "manual" || !task).map((k) => (
+            <button
+              key={k.id}
+              type="button"
+              role="radio"
+              aria-checked={kind === k.id}
+              onClick={() => setKind(k.id)}
+              className={cn(
+                "flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                kind === k.id
+                  ? "border-ring bg-raised"
+                  : "border-border/60 hover:bg-accent/50",
+              )}
+            >
+              <k.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              <span className="grid gap-0.5">
+                <span className="text-sm">{k.label}</span>
+                <span className="text-xs text-muted-foreground">{k.hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        {kind === "schedule" && scheduleId === NEW && (
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="radiogroup"
+              aria-label="How often"
+              className="flex flex-wrap gap-1.5"
+            >
+              {PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={preset === p.id}
+                  onClick={() => setPreset(p.id)}
+                  className={cn(
+                    "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                    preset === p.id
+                      ? "border-ring bg-raised text-foreground"
+                      : "border-border/60 text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {SHORT[p.id]}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-muted-foreground">Times are in {TZ}.</span>
+          </div>
+        )}
+        {kind === "schedule" && scheduleId === NEW && preset === "custom" && (
+          <Input
+            aria-label="Cron expression"
+            className="font-mono"
+            placeholder="0 9 * * 1-5"
+            value={cron}
+            onChange={(e) => setCron(e.target.value)}
+          />
+        )}
+        {kind === "event" && eventId === NEW && (
+          <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+            <Field>
+              <FieldLabel htmlFor="auto-collection">Collection to watch</FieldLabel>
+              <Input
+                id="auto-collection"
+                className="font-mono"
+                placeholder="MailboxItem"
+                value={collection}
+                onChange={(e) => setCollection(e.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="auto-event-kind">Event kind</FieldLabel>
+              <Input
+                id="auto-event-kind"
+                className="font-mono"
+                value={eventKind}
+                onChange={(e) => setEventKind(e.target.value)}
+              />
+            </Field>
+          </div>
+        )}
+      </section>
       {agentOff && agent && (
         <p className="text-sm text-warning">
           {agent.displayName} can’t run ({readiness?.reason}), so the automation is

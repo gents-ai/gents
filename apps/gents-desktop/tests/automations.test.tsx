@@ -126,25 +126,52 @@ describe("the Automations page", () => {
     expect(
       (screen.getByLabelText("What the agent should do") as HTMLTextAreaElement).value,
     ).toContain("Summarize what happened");
-    expect(
-      screen.getByRole("button", { name: "When: Every weekday at 09:00" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /On a schedule/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Weekdays · 9:00" })).toBeChecked();
+    expect(screen.getByText(/^Times are in /)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^When:/ }));
+      fireEvent.click(screen.getByRole("radio", { name: "Hourly" }));
     });
-    expect(await screen.findByText(/^Times are in /)).toBeInTheDocument();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("menuitemradio", { name: "Every hour" }));
-    });
-    expect(
-      screen.getByRole("button", { name: "When: Every hour" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Hourly" })).toBeChecked();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
     });
     expect(changeConfig).toHaveBeenCalled();
     expect(screen.queryByLabelText("What the agent should do")).not.toBeInTheDocument();
+  });
+
+  it("asks when a blank automation runs instead of assuming, and drops the ask once answered", async () => {
+    withFlags({ automations: true });
+    const changeConfig = vi.fn().mockResolvedValue({});
+    const app = testApp({
+      api: { applyConfigComponents: changeConfig },
+      snapshot: { bootstrap, client: { deployments: [deployment] } },
+    });
+    renderRouted(app, { name: "automations", item: "new" }, (route) =>
+      route.name === "automations" ? <AutomationsScreen item={route.item} /> : null,
+    );
+    for (const radio of screen.getAllByRole("radio")) expect(radio).not.toBeChecked();
+    fireEvent.change(screen.getByLabelText("What the agent should do"), {
+      target: { value: "Tidy the inbox" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    expect(screen.getByText("Choose when it runs.")).toBeInTheDocument();
+    expect(changeConfig).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("radio", { name: /Only when I start it/ }));
+    });
+    expect(screen.queryByText("Choose when it runs.")).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    expect(changeConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.not.objectContaining({ triggers: expect.anything() }),
+      }),
+    );
   });
 
   it("turns an open automation off", async () => {

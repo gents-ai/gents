@@ -417,9 +417,8 @@ export async function createTriggerDocument({
   await driver.openConfigSection("triggers");
   await driver.user.click(screen.getByRole("button", { name: "New trigger" }));
   changeField("auto-name", "Config Flow Event Trigger");
-  await driver.user.click(screen.getByRole("button", { name: /^When:/ }));
   await driver.user.click(
-    await screen.findByRole("menuitemradio", { name: /^When something happens/ }),
+    screen.getByRole("radio", { name: /When something happens/ }),
   );
   await driver.user.click(
     screen.getByRole("button", { name: "Use an existing schedule or task" }),

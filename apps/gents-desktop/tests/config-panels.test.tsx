@@ -2367,6 +2367,7 @@ describe("configuration panels", () => {
     expect(api.saveScheduleConfig).not.toHaveBeenCalled();
     expect(api.saveTriggerConfig).not.toHaveBeenCalled();
 
+    await user.click(within(dialog).getByRole("radio", { name: "Daily · 9:00" }));
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(await within(dialog).findByText("offline")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
