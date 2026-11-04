@@ -509,6 +509,6 @@ async fn p2p_replicated_doc_fires_event_trigger() {
 
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();
-    db_writer.node.shutdown().await;
-    db_agent.node.shutdown().await;
+    db_writer.node.shutdown().await.expect("close test node");
+    db_agent.node.shutdown().await.expect("close test node");
 }

@@ -387,7 +387,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             );
         }
         if case.expectation == "offline_diagnosis" {
-            remote.node.shutdown().await;
+            remote.node.shutdown().await.expect("close test node");
         }
         let before = rows(
             &local,
@@ -619,8 +619,8 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             serde_json::to_vec_pretty(&reports)?,
         )?;
         runtime.shutdown().await;
-        local.node.shutdown().await;
-        remote.node.shutdown().await;
+        local.node.shutdown().await.expect("close test node");
+        remote.node.shutdown().await.expect("close test node");
     }
     Ok(())
 }

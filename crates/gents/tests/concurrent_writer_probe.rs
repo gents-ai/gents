@@ -124,7 +124,7 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
         "shared-owner",
         json!({"measurements": measurements, "counter":committed.len()}),
     )?;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -190,7 +190,7 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
         "native-distinct",
         json!({"concurrency":64,"committed":committed.len(),"typed_conflicts":64-committed.len(),"max_open_transactions":maximum.load(Ordering::SeqCst),"elapsed_ms":started.elapsed().as_secs_f64()*1000.0}),
     )?;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -346,7 +346,7 @@ async fn measure_encrypted_admission(
             report_name,
             json!({"measurements": measurements, "retries": false}),
         )?;
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
     Ok(())
 }

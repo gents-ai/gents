@@ -370,8 +370,8 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     );
     assert_eq!(final_peer.node_did.as_deref(), Some(OWNER_DID));
 
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    owner.node.shutdown().await.expect("close test node");
+    peer.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -428,8 +428,8 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
         .expect("redrive remains exhausted after peer replay");
     assert!(still_exhausted.is_noop());
 
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    owner.node.shutdown().await.expect("close test node");
+    peer.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -495,6 +495,6 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
         "request wave-volume reduction must be at least 5x; former={former_pushes}, current={measured_pushes}"
     );
 
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    owner.node.shutdown().await.expect("close test node");
+    peer.node.shutdown().await.expect("close test node");
 }

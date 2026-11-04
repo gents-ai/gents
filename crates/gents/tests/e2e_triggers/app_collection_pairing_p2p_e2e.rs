@@ -856,8 +856,8 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let _ = shutdown_b_tx.send(true);
     handle_a.await.unwrap().unwrap();
     handle_b.await.unwrap().unwrap();
-    db_a.node.shutdown().await;
-    db_b.node.shutdown().await;
+    db_a.node.shutdown().await.expect("close test node");
+    db_b.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -979,8 +979,8 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let _ = shutdown_b_tx.send(true);
     handle_a.await.unwrap().unwrap();
     handle_b.await.unwrap().unwrap();
-    db_a.node.shutdown().await;
-    db_b.node.shutdown().await;
+    db_a.node.shutdown().await.expect("close test node");
+    db_b.node.shutdown().await.expect("close test node");
 }
 
 #[derive(Debug, Deserialize)]
@@ -1578,6 +1578,6 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
     enrollment_cancel.cancel();
     hydration_handle.await.unwrap().unwrap();
     enrollment_handle.await.unwrap().unwrap();
-    server.node.shutdown().await;
-    client.node.shutdown().await;
+    server.node.shutdown().await.expect("close test node");
+    client.node.shutdown().await.expect("close test node");
 }

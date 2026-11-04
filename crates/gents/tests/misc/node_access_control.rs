@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::defra_node::{Node as EmbeddedNode, HttpConfig, StorageBackend};
+use gents::defra_node::{HttpConfig, Node as EmbeddedNode, StorageBackend};
 use gents::runtime::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use gents::store::config_client::ConfigAccess;
 use gents::{KeyIdentity, NodeIdentity};
@@ -142,7 +142,7 @@ fn serve_phase(
         let address = free_address();
         let node = served_home(data_dir, principal, address).await;
         let result = phase(&node, address).await;
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         result
     });
     drop(runtime);
