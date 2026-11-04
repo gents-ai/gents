@@ -125,21 +125,21 @@ pub async fn session_snapshot(
                     "selected request projection became stale; refresh is pending",
                 ));
             }
+            // A session whose node has not returned its row arrives as a typed
+            // delivery state; only a genuine read failure stays untyped.
             Err(error) => {
-                if let Some(error) = error.downcast_ref::<BridgeError>() {
-                    return Err(error.clone());
+                let error = BridgeError::classify_transport_error(error);
+                if error.code == BridgeErrorCode::Unknown {
+                    tracing::warn!(
+                        target: "gents_desktop::chat",
+                        node_did,
+                        session_id = %session_id,
+                        request_id,
+                        error = %error,
+                        "selected request projection unavailable"
+                    );
                 }
-                tracing::warn!(
-                    target: "gents_desktop::chat",
-                    node_did,
-                    session_id = %session_id,
-                    request_id,
-                    error = %error,
-                    "selected request projection unavailable"
-                );
-                return Err(BridgeError::untyped(format!(
-                    "selected request projection unavailable: {error}"
-                )));
+                return Err(error);
             }
         }
     } else {
@@ -262,6 +262,10 @@ pub async fn session_snapshot(
     )
     .await;
     if let Some(snapshot) = snapshot.as_mut() {
+        snapshot.read_through_operator = node_did
+            .as_deref()
+            .is_some_and(|node| core.session_read_through_operator(&session_id, node))
+            .then_some(true);
         if let (Some(node), Some(requests), Some(selected)) = (
             node_did.as_deref(),
             fresh_requests.as_ref(),

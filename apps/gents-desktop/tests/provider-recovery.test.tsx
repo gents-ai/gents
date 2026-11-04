@@ -18,7 +18,11 @@ const api = vi.hoisted(() => ({
   fetchProviderRecovery: vi.fn(),
   applyProviderRecovery: vi.fn(),
 }));
-vi.mock("@/app/AppContext", () => ({ useApp: () => ({ api }) }));
+vi.mock("@/app/AppContext", () => ({
+  useApp: () => ({ api, actions: { signInToProvider: vi.fn() } }),
+}));
+/* no node in the fleet: the card names nothing it can't find */
+vi.mock("@/hooks/useFleet", () => ({ useFleet: () => null }));
 
 function plan(overrides: Partial<ProviderRecoveryPlan> = {}): ProviderRecoveryPlan {
   return {
@@ -63,24 +67,26 @@ describe("provider account recovery", () => {
   ])("shows the native %s state without switching", async (reason, text) => {
     api.fetchProviderRecovery.mockResolvedValue(plan({ reason }));
     mount();
-    expect(await screen.findByText(`Work ${text}.`)).toBeInTheDocument();
+    expect(await screen.findByText(`Work ${text}`)).toBeInTheDocument();
     expect(api.applyProviderRecovery).not.toHaveBeenCalled();
   });
 
-  it("shows unknown resets, affected Agents, cache cost, and a default-off Goal opt-in", async () => {
+  it("shows unknown resets, affected agents, cache cost, and a default-off goal opt-in", async () => {
     mount();
-    expect(await screen.findByText("Reset time not reported.")).toBeInTheDocument();
     expect(
-      screen.getByText("Moving this profile affects 2 Agents."),
+      await screen.findByText(/It didn't report when it resets\./),
     ).toBeInTheDocument();
+    expect(screen.getByText(/Its profile is used by 2 agents\./)).toBeInTheDocument();
     expect(
       screen.getByText("The new account's prompt cache starts empty."),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("checkbox", { name: /Automatically resume/ }),
+      screen.getByRole("checkbox", { name: /Resume this goal automatically/ }),
     ).not.toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /companion profiles: compact, summary/ }),
+      screen.getByRole("checkbox", {
+        name: /profiles it works with \(compact, summary\)/,
+      }),
     ).not.toBeChecked();
   });
 
@@ -96,7 +102,9 @@ describe("provider account recovery", () => {
     mount();
     await screen.findByText(/Work has reached/);
     await user.click(
-      screen.getByRole("checkbox", { name: /companion profiles: compact, summary/ }),
+      screen.getByRole("checkbox", {
+        name: /profiles it works with \(compact, summary\)/,
+      }),
     );
     await user.dblClick(screen.getByRole("button", { name: "Move profile" }));
     expect(api.applyProviderRecovery).toHaveBeenCalledTimes(1);
@@ -133,7 +141,7 @@ describe("provider account recovery", () => {
     });
     mount();
     const checkbox = await screen.findByRole("checkbox", {
-      name: /Automatically resume/,
+      name: /Resume this goal automatically/,
     });
     fireEvent.click(checkbox);
     expect(await screen.findByRole("alert")).toHaveTextContent("The Goal changed.");
@@ -172,10 +180,26 @@ describe("provider account recovery", () => {
 
   it("shows a countdown only for a reported future reset", () => {
     const now = Date.parse("2026-10-23T18:00:00Z");
-    expect(resetDescription("2026-10-23T19:10:00Z", now)).toContain("Reset in 1h 10m");
+    expect(resetDescription("2026-10-23T19:10:00Z", now)).toBe("Resets in 1h 10m.");
     expect(resetDescription("2026-10-23T17:59:00Z", now)).toBe(
-      "The reported reset time has passed.",
+      "Its reported reset time has passed.",
     );
-    expect(resetDescription(null, now)).toBe("Reset time not reported.");
+    expect(resetDescription(null, now)).toBe("It didn't report when it resets.");
+  });
+
+  it("offers to add an account instead of a command to type, and names no command", async () => {
+    api.fetchProviderRecovery.mockResolvedValue(
+      plan({
+        candidates: [],
+        unavailableReason:
+          "no other Claude account offers claude-sonnet-5-5; add one with `gents claude-login --label <label>`",
+      }),
+    );
+    mount();
+    expect(
+      await screen.findByText("No other Claude account offers claude-sonnet-5-5."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/gents claude-login/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh account state" })).toBeEnabled();
   });
 });

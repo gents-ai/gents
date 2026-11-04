@@ -3,6 +3,15 @@ use crate::client::schema::ensure_runtime_schemas;
 use gents_protocol::schemas::AGENT_MESSAGE_NAME;
 use std::sync::Arc;
 
+fn visible(read: SelectedSessionRead) -> ClientStore {
+    match read {
+        SelectedSessionRead::Visible(patch) => *patch,
+        SelectedSessionRead::Absent(submitted) => {
+            panic!("expected the canonical session row, found {submitted:?}")
+        }
+    }
+}
+
 #[tokio::test]
 async fn pending_edit_request_patch_reads_only_selected_and_replacement_documents() {
     let node = Arc::new(
@@ -420,9 +429,11 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(&access, "did:test:agent", "sess-selected", None, None, &[])
-        .await
-        .expect("selected local chat patch");
+    let patch = visible(
+        load_chat_patch(&access, "did:test:agent", "sess-selected", None, None, &[])
+            .await
+            .expect("selected local chat patch"),
+    );
     assert_eq!(patch.requests.len(), 1);
     assert_eq!(patch.requests[0].request_id, "req-selected");
     assert_eq!(
@@ -455,16 +466,18 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let terminal_patch = load_chat_patch(
-        &access,
-        "did:test:agent",
-        "sess-selected",
-        Some("req-selected"),
-        None,
-        &[],
-    )
-    .await
-    .expect("terminal selected chat patch");
+    let terminal_patch = visible(
+        load_chat_patch(
+            &access,
+            "did:test:agent",
+            "sess-selected",
+            Some("req-selected"),
+            None,
+            &[],
+        )
+        .await
+        .expect("terminal selected chat patch"),
+    );
     assert_eq!(terminal_patch.requests[0].terminal_output, Some(terminal));
 }
 
@@ -589,6 +602,102 @@ fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
     assert!(error.downcast_ref::<crate::error::BridgeError>().is_none());
 }
 
+/// Signals 1, 3 and 4 come from one read: no row and the request as this
+/// database holds it, including the node's replicated claim.
+#[tokio::test]
+async fn load_chat_patch_reports_the_submitted_request_while_the_session_row_is_absent() {
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let access = gents::ConfigAccess::local(node.clone());
+    let absent = |read: SelectedSessionRead| match read {
+        SelectedSessionRead::Absent(submitted) => submitted,
+        SelectedSessionRead::Visible(patch) => panic!("no session row exists: {patch:?}"),
+    };
+
+    let read = load_chat_patch(&access, "did:test:agent", "sess-new", None, None, &[])
+        .await
+        .expect("an empty session read is not a failure");
+    assert_eq!(absent(read), None);
+
+    let response = node
+        .execute(
+            r#"mutation {
+                create_AgentRequest(input: {
+                    request_id: "req-new",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: "did:test:requester",
+                    agent_id: "default",
+                    session_id: "sess-new",
+                    content: "hello",
+                    lifecycle_state: "pending",
+                    created_at: "2026-07-24T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let submitted = absent(
+        load_chat_patch(&access, "did:test:agent", "sess-new", None, None, &[])
+            .await
+            .expect("submitted request read"),
+    )
+    .expect("the local request is the sending signal");
+    assert_eq!(submitted.attempt.request.request_id, "req-new");
+    assert!(!submitted.claimed);
+    assert!(!submitted.node_has_it());
+
+    let response = node
+        .execute(
+            r#"mutation {
+                update_AgentRequest(
+                    filter: { request_id: { _eq: "req-new" } }
+                    input: { claimed_at: "2026-07-24T00:00:01Z" }
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let submitted = absent(
+        load_chat_patch(
+            &access,
+            "did:test:agent",
+            "sess-new",
+            Some("req-new"),
+            None,
+            &[],
+        )
+        .await
+        .expect("claimed request read"),
+    )
+    .expect("tracked request");
+    assert!(submitted.claimed);
+    assert!(submitted.node_has_it());
+    assert_eq!(
+        absent(
+            load_chat_patch(
+                &access,
+                "did:test:agent",
+                "sess-new",
+                Some("req-other"),
+                None,
+                &[]
+            )
+            .await
+            .expect("untracked request read"),
+        ),
+        None,
+        "a tracked request this database lacks is not another request's signal"
+    );
+}
+
 #[tokio::test]
 async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
     let node = Arc::new(
@@ -627,16 +736,18 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(
-        &access,
-        "did:test:agent",
-        "sess-public",
-        Some("req-public"),
-        None,
-        &[],
-    )
-    .await
-    .expect("canonical nullable requester resolves");
+    let patch = visible(
+        load_chat_patch(
+            &access,
+            "did:test:agent",
+            "sess-public",
+            Some("req-public"),
+            None,
+            &[],
+        )
+        .await
+        .expect("canonical nullable requester resolves"),
+    );
     assert_eq!(patch.sessions.len(), 1);
     assert_eq!(patch.sessions[0].requester_did, None);
     assert_eq!(patch.requests.len(), 1);
