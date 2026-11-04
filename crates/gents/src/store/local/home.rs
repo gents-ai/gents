@@ -334,6 +334,8 @@ pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
 /// Host-local listen addresses for `gents server`; binding precedes opening
 /// the store, so they cannot live in a document.
 pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
+/// The interface `gents` opens for this home; no file means Codex.
+pub const CLIENT_CONFIG_FILE_NAME: &str = "client.json";
 pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
 pub const PACKS_DIR_NAME: &str = "packs";
 pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
@@ -360,6 +362,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
     NETWORK_CONFIG_FILE_NAME,
+    CLIENT_CONFIG_FILE_NAME,
     P2P_SECRET_KEY_FILE_NAME,
     PACKS_DIR_NAME,
     PLUGINS_DIR_NAME,

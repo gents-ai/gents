@@ -94,3 +94,84 @@ fn explicit_home_never_changes_the_remembered_file() -> Result<()> {
     assert_eq!(fs::read(&remembered)?, planted);
     Ok(())
 }
+
+fn init_home(user_home: &Path, home: &Path) -> Result<()> {
+    let output = run_gents(
+        user_home,
+        &[
+            "init",
+            "--home",
+            &home.to_string_lossy(),
+            "--store-key-custody",
+            "file",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
+    anyhow::ensure!(
+        output.status.success(),
+        "gents init failed:\n{}",
+        stderr_of(&output)
+    );
+    Ok(())
+}
+
+#[test]
+fn config_client_set_and_show() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+    let home = tempfile::tempdir()?;
+    init_home(user_home.path(), home.path())?;
+    let home_arg = home.path().to_string_lossy();
+    let show = || -> Result<String> {
+        let output = run_gents(
+            user_home.path(),
+            &["config", "client", "show", "--home", &home_arg],
+        )?;
+        assert!(output.status.success(), "stderr:\n{}", stderr_of(&output));
+        Ok(String::from_utf8(output.stdout)?)
+    };
+    assert_eq!(show()?.trim(), "codex");
+
+    let set = run_gents(
+        user_home.path(),
+        &["config", "client", "set", "grok", "--home", &home_arg],
+    )?;
+
+    let stderr = stderr_of(&set);
+    assert!(set.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("gents service restart"),
+        "stderr:\n{stderr}"
+    );
+    assert_eq!(show()?.trim(), "grok");
+    assert!(
+        !home.path().join("runtime.json").exists(),
+        "setting the client must not start a runtime"
+    );
+    Ok(())
+}
+
+#[test]
+fn config_client_refuses_an_uninitialized_home() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+    let home = tempfile::tempdir()?;
+    let home_arg = home.path().to_string_lossy();
+
+    for args in [
+        &["config", "client", "set", "grok", "--home", &home_arg][..],
+        &["config", "client", "show", "--home", &home_arg][..],
+    ] {
+        let output = run_gents(user_home.path(), args)?;
+
+        let stderr = stderr_of(&output);
+        assert!(!output.status.success(), "{args:?} stderr:\n{stderr}");
+        assert!(
+            stderr.contains(&format!("gents --home {home_arg}")),
+            "{args:?} stderr:\n{stderr}"
+        );
+    }
+    assert!(!home.path().join("client.json").exists());
+    Ok(())
+}

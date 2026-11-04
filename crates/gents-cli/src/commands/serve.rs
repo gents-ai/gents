@@ -634,6 +634,12 @@ async fn serve_foreground(
     };
     let store_lock = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
+    crate::client_settings::apply_client_setting(
+        &mut args,
+        &crate::client_settings::ClientSettings::read(&home_dir)?,
+        startup.is_some(),
+        cfg!(unix),
+    );
     let http_ip = args
         .http_addr
         .unwrap_or(crate::network_settings::DEFAULT_HTTP_ADDR);

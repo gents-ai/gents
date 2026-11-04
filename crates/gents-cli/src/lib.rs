@@ -21,6 +21,7 @@ pub mod enrollment {
 }
 mod caused_sessions;
 mod cli;
+mod client_settings;
 mod commands;
 mod config_bundle;
 mod config_import;

@@ -9,6 +9,7 @@ use super::{
     ConfigValidateArgs, InferenceProfileCommand,
 };
 use crate::cli::output_format::OutputFormat;
+use crate::client_settings::InterfaceClient;
 use crate::CONFIG_EXPORT_AFTER_HELP;
 
 #[derive(Subcommand)]
@@ -64,8 +65,29 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: WorkspaceRootCommand,
     },
+    #[command(about = "Choose the interface `gents` opens for a home")]
+    Client {
+        #[command(subcommand)]
+        command: ClientConfigCommand,
+    },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ClientConfigCommand {
+    #[command(about = "Set the interface; applies at the next start")]
+    Set {
+        #[arg(value_enum)]
+        client: InterfaceClient,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    #[command(about = "Show the interface")]
+    Show {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
