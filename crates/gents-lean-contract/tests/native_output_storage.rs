@@ -1,11 +1,11 @@
-use defra_node::{EmbeddedNode, QueryRequest};
+use defra_node::{Node, QueryRequest};
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
 
 #[tokio::test]
 async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
-    let node = EmbeddedNode::builder().build().await.unwrap();
+    let node = Node::builder().build().await.unwrap();
     node.add_collection(gents_schemas::AGENT_OUTPUT_SEGMENT)
         .await
         .unwrap();
@@ -59,5 +59,5 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
     let observed: OutputSegment =
         serde_json::from_value(data["AgentOutputSegment"][0].clone()).unwrap();
     assert_eq!(observed, segment);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
