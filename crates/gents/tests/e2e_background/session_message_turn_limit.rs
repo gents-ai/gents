@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};

@@ -581,20 +581,24 @@ pub async fn published_admission_with_owner(
 
 pub(crate) fn test_p2p_config() -> defra_node::P2PConfig {
     defra_node::P2PConfig {
-        port: 0,
+        port: Some(0),
         bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
         relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
         discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: None,
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: false,
-        max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-        max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-        rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
-        rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
+            max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
+            rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
+            rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+            replicator_retry_intervals: None,
+        },
         rebroadcast_on_merge: false,
     }
 }

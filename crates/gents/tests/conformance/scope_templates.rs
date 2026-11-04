@@ -48,7 +48,7 @@ fn lean_collection_rules(definition: &str) -> Vec<(String, String, String)> {
 }
 
 async fn route_selects_request(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     template: &ScopeTemplate,
     request_doc_id: &str,
     peer_did: &str,
@@ -77,7 +77,7 @@ async fn route_selects_request(
 }
 
 async fn store_request_row(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     fields: &[(&str, &str)],
 ) -> String {
     let input = fields
@@ -591,7 +591,7 @@ async fn sixteen_peer_request_wave_is_reduced_to_one_target() {
     let caller = "did:key:coordinator-07";
     let target = "did:key:host-07";
 
-    let node = gents::defra_node::EmbeddedNode::builder()
+    let node = gents::defra_node::Node::builder()
         .build()
         .await
         .expect("route evaluation node");

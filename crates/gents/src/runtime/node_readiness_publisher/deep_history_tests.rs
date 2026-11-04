@@ -19,21 +19,25 @@ use super::upsert_node_readiness;
 
 fn loopback_config(path: &std::path::Path) -> P2PConfig {
     P2PConfig {
-        port: 0,
+        port: Some(0),
         bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
         discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(path.join("p2p.key")),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: true,
-        max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-        max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        // This qualifies history depth, independently of the peer intake-rate budget.
-        rate_limit_burst: 100_000,
-        rate_limit_rate: 10_000.0,
-        max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
+            max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            // This qualifies history depth, independently of the peer intake-rate budget.
+            rate_limit_burst: 100_000,
+            rate_limit_rate: 10_000.0,
+            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+            replicator_retry_intervals: None,
+        },
         rebroadcast_on_merge: false,
     }
 }

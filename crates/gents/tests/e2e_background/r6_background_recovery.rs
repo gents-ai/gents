@@ -11,7 +11,7 @@ struct ToolCallRow {
     cancel_cause: Option<String>,
 }
 
-async fn wait_for_running_tool(node: &gents::defra_node::EmbeddedNode, session_id: &str) -> String {
+async fn wait_for_running_tool(node: &gents::defra_node::Node, session_id: &str) -> String {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
     for _ in 0..100 {
         let response = node
@@ -151,7 +151,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     std::future::pending::<()>().await;
 }
 
-async fn load_tool_call(node: &gents::defra_node::EmbeddedNode, tool_call_id: &str) -> ToolCallRow {
+async fn load_tool_call(node: &gents::defra_node::Node, tool_call_id: &str) -> ToolCallRow {
     let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
@@ -165,7 +165,7 @@ async fn load_tool_call(node: &gents::defra_node::EmbeddedNode, tool_call_id: &s
 }
 
 async fn load_messages(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
 ) -> Vec<MessageRow> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
@@ -225,7 +225,7 @@ async fn load_messages(
 }
 
 async fn load_wakes(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
 ) -> Vec<serde_json::Value> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
@@ -311,7 +311,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         "persisted crash-worker key must retain the exact node principal"
     );
     let node = std::sync::Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .data_path(&ready.data_path)
             .with_node_identity_did(&ready.node_did)
             .build()

@@ -136,7 +136,7 @@ async fn boot_two_running_recovery_bashes(
 }
 
 async fn accepted_tool_call_doc_id(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
     provider_tool_call_id: &str,
 ) -> Option<String> {
@@ -866,7 +866,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
 }
 
 async fn background_wake_retry_rows(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
 ) -> Vec<AgentRequestRow> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
@@ -895,7 +895,7 @@ async fn background_wake_retry_rows(
 }
 
 async fn recover_interrupted_request_after_crash(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     doc_id: &str,
     expected_active_child_doc_id: Option<&str>,
 ) {
@@ -1024,7 +1024,7 @@ async fn recover_interrupted_request_after_crash(
 }
 
 async fn seed_accepted_request_projection(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
     request_id: &str,
 ) {
@@ -1041,7 +1041,7 @@ async fn seed_accepted_request_projection(
 /// Fixture fault injection only: force the exact stored lease fields the
 /// production recovery predicate compares; no live path writes them directly.
 async fn seed_expired_execution_lease(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
     generation: Option<&str>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -1120,7 +1120,7 @@ fn canonical_created_doc_id(
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_completed_canonical_output(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1211,7 +1211,7 @@ async fn seed_completed_canonical_output(
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_open_canonical_flush(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,

@@ -374,7 +374,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
 }
 
 pub(super) async fn request_state(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_id: &str,
 ) -> Option<String> {
     let response = node

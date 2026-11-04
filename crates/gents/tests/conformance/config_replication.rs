@@ -184,7 +184,7 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
     );
 }
 
-async fn wait_for_config(node: &gents::defra_node::EmbeddedNode, timeout: Duration) -> Value {
+async fn wait_for_config(node: &gents::defra_node::Node, timeout: Duration) -> Value {
     let deadline = Instant::now() + timeout;
     loop {
         let response = node

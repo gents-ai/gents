@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::{ensure_runtime_schemas, run_openai_oneshot};
 
 use crate::support::fixtures::{bind_agent_backend, test_agent};

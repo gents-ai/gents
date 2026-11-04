@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::{EmbeddedNode, HttpConfig};
+use gents::defra_node::{Node as EmbeddedNode, HttpConfig};
 use gents::goal::{
     claim_continuation, claim_retry_continuation, create_goal_for_session,
     delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
@@ -1836,7 +1836,7 @@ fn free_address() -> std::net::SocketAddr {
 }
 
 async fn seed_usage(
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
     node_did: &str,
     request_id: &str,
     call_id: &str,
@@ -4047,7 +4047,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
 }
 
 async fn seed_goal_fields(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     goal: &gents::goal::GoalDocument,
     fields: &str,
 ) -> anyhow::Result<()> {

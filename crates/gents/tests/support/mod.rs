@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
+use gents::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::store::graphql::escape_graphql_string;
 use gents::{request::watcher::AgentRequest, NodeIdentity};
@@ -153,20 +153,24 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
 
 pub fn test_p2p_config(admission: &TestP2pAdmission, data_path: &std::path::Path) -> P2PConfig {
     P2PConfig {
-        port: 0,
+        port: Some(0),
         bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
         relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
         discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(data_path.join("p2p.key")),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: true,
-        max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
-        max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
-        rate_limit_burst: admission.rate_limit_burst,
-        rate_limit_rate: admission.rate_limit_rate,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: admission.max_pending_dags,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
+            max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
+            rate_limit_burst: admission.rate_limit_burst,
+            rate_limit_rate: admission.rate_limit_rate,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags: admission.max_pending_dags,
+            replicator_retry_intervals: None,
+        },
         rebroadcast_on_merge: false,
     }
 }
@@ -946,7 +950,7 @@ where
 
 pub async fn begin_owned_execution(
     lifecycle: &mut gents::RequestLifecycle,
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
 ) -> anyhow::Result<String> {
     let writer = gents::DefraStreamWriter::new(
         node.clone(),

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use serde_json::Value;
 use tempfile::TempDir;

@@ -32,8 +32,8 @@ async fn sessions_reads_cross_agent_documents_only_when_acp_allows_the_caller() 
     let denied = KeyIdentity::load_or_create(identities.path().join("denied.key"), None).unwrap();
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let policy = node
-        .add_dac_policy(
-            owner.did(),
+        .add_dac_policy_as(
+            &defra_core::RequestContext::ambient().with_identity(Some((owner.did()).to_string())),
             r#"
 name: Sessions reader test
 resources:

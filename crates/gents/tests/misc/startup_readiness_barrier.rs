@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use events::EventName;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::startup_readiness::StartupReadinessOptions;
 use gents::store::graphql::escape_graphql_string;
 use gents::{

@@ -24,7 +24,7 @@ struct Imported {
 }
 
 async fn import_message(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session: &str,
     sequence: u32,
     role: MessageRole,
@@ -35,7 +35,7 @@ async fn import_message(
 }
 
 async fn import_scoped_message(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session: &str,
     sequence: u32,
     role: MessageRole,
@@ -144,7 +144,7 @@ fn created_id(response: &defra_node::QueryResponse, collection: &str) -> String 
 }
 
 async fn headers(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session: &str,
 ) -> Vec<gents::session::canonical_rows::TranscriptMessageRow> {
     let session = escape_graphql_string(session);
@@ -158,7 +158,7 @@ async fn headers(
         .collect()
 }
 
-async fn setup(node: &defra_node::EmbeddedNode, session: &str) {
+async fn setup(node: &defra_node::Node, session: &str) {
     create_agent_session(node, session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent(node, AGENT_NAME, NODE_DID).await;
 }
@@ -261,7 +261,7 @@ async fn fork_via_http_uses_same_header_contract() {
     let identity =
         gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(gents::NodeIdentity::did(&identity))
             .with_http(defra_node::HttpConfig::with_addr(address))
             .build()
