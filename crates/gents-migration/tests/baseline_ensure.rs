@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::schemas;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -113,7 +113,7 @@ async fn fresh_node_runtime_baseline_is_diagnostics_only() {
     assert!(!field_names.contains("default_agent_id"));
     assert!(field_names.contains("reconcile_phase"));
     assert!(field_names.contains("updated_at"));
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -224,7 +224,7 @@ async fn existing_agent_session_schema_upgrades_in_place_and_preserves_rows() {
         .expect("read repeated AgentSession schema")
         .expect("repeated AgentSession exists");
     assert_eq!(repeated.version_id, migrated.version_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -277,7 +277,7 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
         );
     }
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -356,7 +356,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
         "re-run must not move AgentRequest off its baseline root"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -394,7 +394,7 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
         duplicate.has_errors(),
         "duplicate creation_key must violate the unique index"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -520,7 +520,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         overwrite.data
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -544,7 +544,7 @@ async fn multi_version_lineage_is_rejected() {
         other => panic!("unexpected error: {other}"),
     }
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -562,7 +562,7 @@ async fn single_version_unknown_root_is_rejected() {
         .expect("load expected root")
         .expect("expected root exists")
         .version_id;
-    authoring_node.shutdown().await;
+    authoring_node.shutdown().await.expect("shutdown node");
 
     let node = fresh_node().await;
     node.add_collection(FOREIGN_SDL)
@@ -586,7 +586,7 @@ async fn single_version_unknown_root_is_rejected() {
         "unexpected error: {err}"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -605,7 +605,7 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         .expect("load expected root")
         .expect("expected root exists")
         .version_id;
-    authoring_node.shutdown().await;
+    authoring_node.shutdown().await.expect("shutdown node");
 
     let node = fresh_node().await;
     node.add_collection(OLD_SDL)
@@ -659,7 +659,7 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         "classification reads the version DAG without changing it"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -674,13 +674,13 @@ async fn empty_registry_injectable_for_tests() {
         .await
         .expect("empty registry");
     assert_eq!(report.baseline_registered, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
 async fn retained_file_images_require_a_native_owner_before_schema_install() {
     let directory = tempfile::tempdir().unwrap();
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(directory.path())
         .build()
         .await
@@ -694,7 +694,7 @@ async fn retained_file_images_require_a_native_owner_before_schema_install() {
     );
     assert!(node.get_collection("ToolFileChange").unwrap().is_none());
     assert!(node.get_collection("AgentToolCall").unwrap().is_none());
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -729,14 +729,14 @@ async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
         .unwrap()
         .policy
         .is_none());
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
 async fn file_observation_install_preserves_retained_collection_lineages_and_documents() {
     let directory = tempfile::tempdir().unwrap();
     let identity = common::node_identity();
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(directory.path())
         .with_node_identity_did(&identity)
         .build()
@@ -792,10 +792,10 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
             )
         })
         .collect::<Vec<_>>();
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
     drop(node);
 
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(directory.path())
         .with_node_identity_did(&identity)
         .build()
@@ -839,7 +839,7 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         ensure_migrations(&node).await.unwrap().baseline_registered,
         0
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -871,7 +871,7 @@ async fn file_image_receipt_is_local_and_matches_its_pinned_root() {
         Some(collection.version_id.as_str()),
         baseline.expected_version
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -880,7 +880,7 @@ async fn archive_columns_preserve_existing_sessions_and_field_identities() {
     let data = home.path().join("data");
     let did = common::node_identity();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(&data)
             .with_node_identity_did(&did)
             .build()
@@ -962,9 +962,9 @@ async fn archive_columns_preserve_existing_sessions_and_field_identities() {
     let repeated = node.execute(query).await;
     assert!(!repeated.has_errors(), "{repeated:?}");
     assert_eq!(repeated.data.unwrap(), rows);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
     drop(node);
-    let node = EmbeddedNode::builder()
+    let node = Node::builder()
         .data_path(&data)
         .with_node_identity_did(&did)
         .build()
@@ -981,7 +981,7 @@ async fn archive_columns_preserve_existing_sessions_and_field_identities() {
     let reopened = node.execute(query).await;
     assert!(!reopened.has_errors(), "{reopened:?}");
     assert_eq!(reopened.data.unwrap(), rows);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -1015,8 +1015,8 @@ async fn node_memory_text_schema_pins_match() {
             "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkhdovvrzyiaris3rkmtu"
         )
     );
-    fresh.shutdown().await;
-    old.shutdown().await;
+    fresh.shutdown().await.expect("shutdown node");
+    old.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -1055,8 +1055,8 @@ async fn node_avatar_schema_pins_match() {
         gents_migration::canonical_versions().unwrap()["Node"],
         patched.version_id
     );
-    fresh.shutdown().await;
-    old.shutdown().await;
+    fresh.shutdown().await.expect("shutdown node");
+    old.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -1139,7 +1139,7 @@ async fn starter_columns_preserve_each_supported_session_lineage() {
         );
         assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0);
         assert_eq!(node.execute(query).await.data, retained.data);
-        node.shutdown().await;
+        node.shutdown().await.expect("shutdown node");
     }
 }
 
@@ -1158,7 +1158,7 @@ async fn tool_file_content_schema_pin_matches() {
         actual,
         "bafyreibqziwhiq4dxkeqfeokkt22yajmnimxegww4lbr3r7k57b6dvetby"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 /// `AgentMessage` is client-authored, so it keeps its v1.0.0-rc0 schema: a fresh store and an
@@ -1216,6 +1216,6 @@ async fn agent_message_keeps_its_rc0_schema_and_rows() {
     assert_eq!(rows[0]["native_id"], "msg_1");
     let second = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(second.steps_applied, 0);
-    fresh.shutdown().await;
-    node.shutdown().await;
+    fresh.shutdown().await.expect("shutdown node");
+    node.shutdown().await.expect("shutdown node");
 }

@@ -16,7 +16,7 @@ async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
     );
     ensure_migrations(node.as_ref()).await.unwrap();
     check_migration_compatibility(&node.get_all_collection_versions().await.unwrap()).unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -38,5 +38,5 @@ async fn preflight_and_startup_refuse_the_same_unknown_lineage() {
         serde_json::to_value(&before).unwrap(),
         serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }

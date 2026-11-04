@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::error::{Error, Result};
 use crate::expectation::CollectionExpectation;
@@ -156,7 +156,7 @@ macro_rules! updated_at_upgrade {
 /// append fields through versioned patches; fresh stores retain the current
 /// canonical roots. Only these exact source and destination versions qualify.
 pub(crate) fn include_existing(
-    node: &EmbeddedNode,
+    node: &Node,
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {

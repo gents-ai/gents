@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
@@ -23,7 +23,7 @@ use crate::report::MaterializationStats;
 /// parked state in the report, and continues. A foreign stale doc must never
 /// be a poison pill.
 pub async fn materialize_collections(
-    node: &EmbeddedNode,
+    node: &Node,
     collections: &[&str],
 ) -> Result<MaterializationStats> {
     let mut stats = MaterializationStats {
@@ -89,7 +89,7 @@ fn is_safe_graphql_identifier(name: &str) -> bool {
 }
 
 async fn describe_parked_unique_conflict(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     error: &defra_node::Error,
 ) -> String {

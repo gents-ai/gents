@@ -2,7 +2,8 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use defra_node::{CollectionVersion, EmbeddedNode};
+use defra_core::RequestContext;
+use defra_node::{CollectionVersion, Node};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -17,7 +18,15 @@ use crate::report::MigrationReport;
 /// Process-wide lock: desktop and runtime paths can race within one process.
 static ENSURE_LOCK: Mutex<()> = Mutex::const_new(());
 
-pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
+fn node_context(node: &Node) -> RequestContext {
+    let context = RequestContext::ambient();
+    match node.node_identity_did() {
+        Some(did) => context.with_identity(Some(did.to_owned())),
+        None => context,
+    }
+}
+
+pub async fn ensure_migrations(node: &Node) -> Result<MigrationReport> {
     let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
     let mut steps = DEFAULT_REGISTRY.steps.to_vec();
     crate::upgrades::include_existing(node, &mut baseline, &mut steps)?;
@@ -32,7 +41,7 @@ pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
 }
 
 /// Logs and returns the managed collections this store cannot sync with canonical peers.
-async fn warn_non_canonical(node: &EmbeddedNode) -> Result<Vec<String>> {
+async fn warn_non_canonical(node: &Node) -> Result<Vec<String>> {
     let versions = node.get_all_collection_versions().await?;
     let mismatches = non_canonical_store_lineages(&versions)?;
     for mismatch in &mismatches {
@@ -47,7 +56,7 @@ async fn warn_non_canonical(node: &EmbeddedNode) -> Result<Vec<String>> {
 }
 
 pub async fn ensure_migrations_with_registry(
-    node: &EmbeddedNode,
+    node: &Node,
     registry: &Registry<'_>,
 ) -> Result<MigrationReport> {
     let _guard = ENSURE_LOCK.lock().await;
@@ -127,7 +136,7 @@ fn manages_file_images(registry: &Registry<'_>) -> bool {
 }
 
 async fn register_file_image_policy<'n>(
-    node: &'n EmbeddedNode,
+    node: &'n Node,
     registry: &Registry<'_>,
 ) -> Result<Option<&'n str>> {
     if !manages_file_images(registry)
@@ -149,7 +158,11 @@ async fn register_file_image_policy<'n>(
     }
     let owner = node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
     let policy = node
-        .add_dac_policy_with_counter(owner, gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY, 0)
+        .add_dac_policy_with_counter_as(
+            &node_context(node),
+            gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
+            0,
+        )
         .await?;
     if policy != gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID {
         return Err(Error::FileImagePolicyMismatch);
@@ -174,7 +187,7 @@ fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) 
 /// DefraDB's branchable read guard falls back to the collection object when a
 /// document has no local ACP registration. That fallback must remain private.
 async fn register_file_image_owner(
-    node: &EmbeddedNode,
+    node: &Node,
     owner: &str,
     registry: &Registry<'_>,
 ) -> Result<()> {
@@ -228,12 +241,12 @@ fn versioned_step_collections<'a>(registry: &Registry<'a>) -> Vec<&'a str> {
         .collect()
 }
 
-pub async fn ensure_migrations_arc(node: Arc<EmbeddedNode>) -> Result<MigrationReport> {
+pub async fn ensure_migrations_arc(node: Arc<Node>) -> Result<MigrationReport> {
     ensure_migrations(node.as_ref()).await
 }
 
 pub async fn ensure_migrations_dynamic(
-    node: &EmbeddedNode,
+    node: &Node,
     registry: &DynamicRegistry,
 ) -> Result<MigrationReport> {
     let (baseline, steps) = registry.as_registry();
@@ -246,7 +259,7 @@ pub async fn ensure_migrations_dynamic(
 }
 
 async fn register_baseline(
-    node: &EmbeddedNode,
+    node: &Node,
     registry: &Registry<'_>,
     report: &mut MigrationReport,
 ) -> Result<()> {
@@ -286,7 +299,7 @@ async fn register_baseline(
     Ok(())
 }
 
-async fn reconcile_ordinary_indexes(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+async fn reconcile_ordinary_indexes(node: &Node, registry: &Registry<'_>) -> Result<()> {
     for index in registry.ordinary_indexes {
         let fields = index
             .fields
@@ -303,7 +316,7 @@ async fn reconcile_ordinary_indexes(node: &EmbeddedNode, registry: &Registry<'_>
 }
 
 async fn apply_steps(
-    node: &EmbeddedNode,
+    node: &Node,
     registry: &Registry<'_>,
     report: &mut MigrationReport,
 ) -> Result<()> {
@@ -363,7 +376,7 @@ fn collection_already_exists(error: &defra_node::Error) -> bool {
 }
 
 async fn apply_add_collection(
-    node: &EmbeddedNode,
+    node: &Node,
     id: &str,
     sdl: &str,
     expected_version: Option<&str>,
@@ -416,7 +429,7 @@ struct StepContext<'a> {
 }
 
 async fn apply_patch_versioned(
-    node: &EmbeddedNode,
+    node: &Node,
     ctx: StepContext<'_>,
     patch: &str,
     expected_version: Option<&str>,
@@ -488,13 +501,16 @@ async fn apply_patch_versioned(
         None => {
             if let Some(spec) = lens_spec {
                 let cfg = lens::lens_config(&spec, &active.version_id, pin);
-                node.set_migration(cfg)
-                    .await
-                    .map_err(|e| Error::StepFailed {
-                        step: id.to_string(),
-                        collection: collection.to_string(),
-                        source: e.into(),
-                    })?;
+                node.set_migration_as(
+                    &node_context(node),
+                    &serde_json::to_value(cfg).map_err(defra_node::Error::from)?,
+                )
+                .await
+                .map_err(|e| Error::StepFailed {
+                    step: id.to_string(),
+                    collection: collection.to_string(),
+                    source: e.into(),
+                })?;
             }
             let patched = node
                 .patch_collection(collection, patch)
@@ -518,7 +534,7 @@ async fn apply_patch_versioned(
                     step: id.to_string(),
                     detail,
                 })?;
-            node.set_active_collection_version(pin)
+            node.set_active_collection_version_as(&node_context(node), pin)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
@@ -550,7 +566,7 @@ async fn apply_patch_versioned(
                     step: id.to_string(),
                     detail,
                 })?;
-            node.set_active_collection_version(pin)
+            node.set_active_collection_version_as(&node_context(node), pin)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
@@ -579,7 +595,7 @@ async fn apply_patch_versioned(
                 )
                 .await?;
             }
-            node.set_active_collection_version(pin)
+            node.set_active_collection_version_as(&node_context(node), pin)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
@@ -591,7 +607,10 @@ async fn apply_patch_versioned(
         Some(v) => {
             verify_active_step(node, ctx, pin, expected_transform, report).await?;
             if v.version_id == pin {
-                if let Err(e) = node.set_active_collection_version(pin).await {
+                if let Err(e) = node
+                    .set_active_collection_version_as(&node_context(node), pin)
+                    .await
+                {
                     warn!(
                         step = id,
                         collection,
@@ -636,7 +655,7 @@ fn version_descends_from(
 }
 
 async fn verify_active_step(
-    node: &EmbeddedNode,
+    node: &Node,
     ctx: StepContext<'_>,
     pin: &str,
     expected_transform: Option<&str>,
@@ -680,7 +699,7 @@ async fn verify_active_step(
 }
 
 async fn repair_transform_if_needed(
-    node: &EmbeddedNode,
+    node: &Node,
     ctx: StepContext<'_>,
     source: &str,
     dest: &str,
@@ -711,13 +730,16 @@ async fn repair_transform_if_needed(
         });
     };
     let cfg = lens::lens_config(&spec, source, dest);
-    node.set_migration(cfg)
-        .await
-        .map_err(|e| Error::StepFailed {
-            step: id.to_string(),
-            collection: collection.to_string(),
-            source: e.into(),
-        })?;
+    node.set_migration_as(
+        &node_context(node),
+        &serde_json::to_value(cfg).map_err(defra_node::Error::from)?,
+    )
+    .await
+    .map_err(|e| Error::StepFailed {
+        step: id.to_string(),
+        collection: collection.to_string(),
+        source: e.into(),
+    })?;
     report.edges_repaired += 1;
     info!(
         step = id,
@@ -727,7 +749,7 @@ async fn repair_transform_if_needed(
 }
 
 async fn apply_patch_in_place(
-    node: &EmbeddedNode,
+    node: &Node,
     id: &str,
     collection: &str,
     patch: &str,
@@ -779,7 +801,7 @@ fn versions_by_name(
 
 /// Reject a store whose existing managed collections descend from a lineage
 /// this registry does not know, before anything is registered or patched.
-async fn reject_unknown_lineage(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+async fn reject_unknown_lineage(node: &Node, registry: &Registry<'_>) -> Result<()> {
     let all_versions = node.get_all_collection_versions().await?;
     check_lineage_versions(&all_versions, registry)
 }
@@ -999,7 +1021,7 @@ fn check_lineage_versions(
 }
 
 async fn verify_managed_lineages(
-    node: &EmbeddedNode,
+    node: &Node,
     registry: &Registry<'_>,
     _report: &mut MigrationReport,
 ) -> Result<()> {

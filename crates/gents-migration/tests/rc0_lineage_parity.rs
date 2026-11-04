@@ -51,9 +51,7 @@ const CANONICAL: &[(&str, &str)] = &[
     ),
 ];
 
-async fn active_versions(
-    node: &defra_node::EmbeddedNode,
-) -> std::collections::BTreeMap<String, String> {
+async fn active_versions(node: &defra_node::Node) -> std::collections::BTreeMap<String, String> {
     node.get_all_collection_versions()
         .await
         .unwrap()
@@ -160,8 +158,8 @@ async fn rc0_born_store_upgrades_onto_every_fresh_version() {
             "{name}"
         );
     }
-    upgraded.shutdown().await;
-    fresh.shutdown().await;
+    upgraded.shutdown().await.expect("shutdown node");
+    fresh.shutdown().await.expect("shutdown node");
 }
 
 /// A store born on v1.0.0-rc1 registered rc1's SDL directly. It must still start, and say
@@ -226,7 +224,7 @@ async fn rc1_born_store_starts_and_reports_its_lineage_split() {
         schemas::AGENT_SESSION_NAME,
         "bafyother"
     ));
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 /// An rc0 store that v1.0.0-rc1 upgraded took rc1's `AgentMessage.native_request_id` patch.
@@ -244,9 +242,12 @@ async fn rc0_store_upgraded_by_rc1_starts_and_reports_agent_message() {
         .patch_collection(schemas::AGENT_MESSAGE_NAME, MESSAGE_RC1_PATCH)
         .await
         .unwrap();
-    node.set_active_collection_version(&patched.version_id)
-        .await
-        .unwrap();
+    node.set_active_collection_version_as(
+        &defra_core::RequestContext::default(),
+        &patched.version_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(patched.version_id, MESSAGE_RC1_PATCHED);
 
     let report = ensure_migrations(node.as_ref()).await.unwrap();
@@ -274,7 +275,7 @@ async fn rc0_store_upgraded_by_rc1_starts_and_reports_agent_message() {
     );
     let rerun = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(rerun.steps_applied, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 /// Phones and apps register client-authored collections from the SDL they were built with,
@@ -376,5 +377,5 @@ async fn node_registered_from_the_current_sdl_starts_and_is_reported() {
     ));
     let rerun = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(rerun.steps_applied, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
