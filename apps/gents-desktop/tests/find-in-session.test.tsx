@@ -3,8 +3,13 @@ import { useState } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { closeFind, findMatches, openFind } from "@/screens/session/find";
-import { FindBar } from "@/screens/session/FindBar";
+import {
+  closeFind,
+  findMatches,
+  openFind,
+  type FindMatch,
+} from "@/screens/session/find";
+import { FindBar, redrawn } from "@/screens/session/FindBar";
 import { IS_MAC } from "@/screens/shortcutKeys";
 import { useGroupState } from "@/screens/ActivityGroup";
 import { groupTranscript, type TranscriptEntry } from "@/screens/transcript-groups";
@@ -396,5 +401,30 @@ describe("finding in a session", () => {
       fireEvent.keyDown(field, { key: "Enter" });
       expect(held).toContain("g2");
     });
+  });
+});
+
+describe("counting a drawn part as the page draws it", () => {
+  const m = (part: Partial<FindMatch>, nth: number): FindMatch => ({
+    rowKey: "r1",
+    nth,
+    ...part,
+  });
+  const step = { group: { key: "g", step: "s1" } };
+  const data = [m({}, 0), m(step, 0), m(step, 1), m(step, 2), { rowKey: "r2", nth: 0 }];
+
+  it("takes a drawn part's count from the page, in the data's place", () => {
+    const out = redrawn(data, { rowKey: "r1", counts: { "": 1, "step:s1": 2 } });
+    expect(out.map((x) => [x.rowKey, x.group?.step ?? "", x.nth])).toEqual([
+      ["r1", "", 0],
+      ["r1", "s1", 0],
+      ["r1", "s1", 1],
+      ["r2", "", 0],
+    ]);
+  });
+
+  it("keeps the data's matches for a part the page draws none of", () => {
+    const out = redrawn(data, { rowKey: "r1", counts: { "": 1, "step:s1": 0 } });
+    expect(out.filter((x) => x.group?.step === "s1")).toHaveLength(3);
   });
 });

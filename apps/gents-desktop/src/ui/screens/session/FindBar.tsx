@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
@@ -157,18 +157,36 @@ function rangesUnder(root: Element, needle: string): Range[] {
   return out;
 }
 
-/* the ranges of a row's part (see findPart): one step's output or one
-   reasoning, or for "" the row's text outside every part */
-function rangesInPart(row: Element, part: string, needle: string): Range[] {
-  if (part) {
-    const el = [...row.querySelectorAll("[data-find-part]")].find(
-      (e) => e.getAttribute("data-find-part") === part,
-    );
-    return el ? rangesUnder(el, needle) : [];
+/* the part of its row a drawn match sits in (see findPart) */
+const partOf = (range: Range) =>
+  range.startContainer.parentElement
+    ?.closest("[data-find-part]")
+    ?.getAttribute("data-find-part") ?? "";
+
+/* the matches with the current row's drawn parts counted as the page draws
+   them: each drawn part's matches become as many as it shows, in place of
+   the data's; a part the data has no match in stays without, and one that
+   draws none keeps the data's */
+export function redrawn(
+  matches: readonly FindMatch[],
+  drawn: { rowKey: string; counts: Record<string, number> },
+): FindMatch[] {
+  const out: FindMatch[] = [];
+  const placed = new Set<string>();
+  for (const m of matches) {
+    const part = findPart(m);
+    const count = m.rowKey === drawn.rowKey ? drawn.counts[part] : undefined;
+    /* none drawn: the data's text isn't on the page as such; its matches
+       stay, so stepping passes through rather than losing its place */
+    if (!count) {
+      out.push(m);
+      continue;
+    }
+    if (placed.has(part)) continue;
+    placed.add(part);
+    for (let nth = 0; nth < count; nth++) out.push({ ...m, nth });
   }
-  return rangesUnder(row, needle).filter(
-    (range) => !range.startContainer.parentElement?.closest("[data-find-part]"),
-  );
+  return out;
 }
 
 const rowOf = (list: Element, key: string) =>
@@ -212,7 +230,17 @@ export function FindBar({
   const [pick, setPick] = useState<{
     query: string;
     rowKey: string;
+    part: string;
     nth: number;
+  } | null>(null);
+  /* how many matches the current row's drawn parts hold, as the page draws
+     them: a part's own text can differ from the data's (a step's header
+     line, reformatted input, output cut short), so once drawn, the page's
+     count is the one stepped through */
+  const [drawn, setDrawn] = useState<{
+    query: string;
+    rowKey: string;
+    counts: Record<string, number>;
   } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
@@ -232,10 +260,18 @@ export function FindBar({
     () => (open ? startFind(entries, keyOf, query, setFound) : setFound(NOTHING)),
     [open, entries, keyOf, query],
   );
-  const { matches, more, done } = found;
+  const { more, done } = found;
+  const matches = useMemo(
+    () =>
+      drawn && drawn.query === query ? redrawn(found.matches, drawn) : found.matches,
+    [found.matches, drawn, query],
+  );
   const at =
     pick && pick.query === query
-      ? matches.findIndex((m) => m.rowKey === pick.rowKey && m.nth === pick.nth)
+      ? matches.findIndex(
+          (m) =>
+            m.rowKey === pick.rowKey && findPart(m) === pick.part && m.nth === pick.nth,
+        )
       : -1;
   const current = at === -1 ? null : matches[at]!;
   const refold = useRefold(scroller, opener, open);
@@ -280,7 +316,7 @@ export function FindBar({
   };
 
   const choose = (match: FindMatch) =>
-    setPick({ query, rowKey: match.rowKey, nth: match.nth });
+    setPick({ query, rowKey: match.rowKey, part: findPart(match), nth: match.nth });
   const step = (way: 1 | -1) => {
     if (!matches.length) return;
     const from = at === -1 ? (way === 1 ? -1 : 0) : at;
@@ -330,10 +366,30 @@ export function FindBar({
     let frame = 0;
     const paint = () => {
       frame = 0;
-      CSS.highlights.set("find", new Highlight(...rangesUnder(list, needle)));
+      const all = rangesUnder(list, needle);
+      CSS.highlights.set("find", new Highlight(...all));
       const target = shown.current;
       const row = target && rowOf(list, target.rowKey);
-      const mine = row && target ? rangesInPart(row, findPart(target), needle) : [];
+      const parts: Record<string, Range[]> = {};
+      if (row)
+        for (const r of all)
+          if (row.contains(r.startContainer)) (parts[partOf(r)] ??= []).push(r);
+      if (row && target) {
+        const counts = Object.fromEntries(
+          [...row.querySelectorAll("[data-find-part]")]
+            .map((e) => e.getAttribute("data-find-part")!)
+            .concat("")
+            .map((part) => [part, parts[part]?.length ?? 0]),
+        );
+        setDrawn((was) =>
+          was?.query === query &&
+          was.rowKey === target.rowKey &&
+          JSON.stringify(was.counts) === JSON.stringify(counts)
+            ? was
+            : { query, rowKey: target.rowKey, counts },
+        );
+      }
+      const mine = (target && parts[findPart(target)]) ?? [];
       const range = mine[Math.min(target?.nth ?? 0, mine.length - 1)];
       if (!range) return CSS.highlights.delete("find-current");
       CSS.highlights.set("find-current", new Highlight(range));

@@ -31,7 +31,7 @@
     "test:ui:live:e2e:real": "node ./tests/run-live-playwright.mjs --require-real-inference",
     "test:ui:ios:e2e": "node ./tests/run-ios-simulator-e2e.mjs",
     "perf:mobile": "node ./tests/run-mobile-performance.mjs",
-    "perf:find": "vitest run --config vitest.perf.config.ts",
+    "perf:find": "vitest run --config vitest.perf.config.ts && FIND_PERF=1 playwright test tests/playwright/transcript-find-cost.spec.ts",
     "test:ui:native:preflight": "npm run build && cargo build -p gents-desktop-tauri && npm run tauri -- --version",
     "test:ui:native:local": "node ./tests/run-native-local-e2e.mjs",
     "test:live": "node ./tests/run-live-test.mjs",

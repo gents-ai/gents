@@ -4,6 +4,9 @@ import { expect, gotoHarness, test } from "./desktopTest";
    at once (render, the list placing the row, opening what holds it), and
    the time until the frame after it, when the marks are drawn */
 test("stepping between matches costs about a frame", async ({ page }, testInfo) => {
+  /* a budget in milliseconds fails on a busy or slower machine, as CI's
+     shared runners are; npm run perf:find runs it on its own */
+  test.skip(!process.env.FIND_PERF, "timings run with npm run perf:find");
   test.skip(
     !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
     "one layout per engine",
