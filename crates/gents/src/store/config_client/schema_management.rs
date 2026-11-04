@@ -63,9 +63,12 @@ impl ConfigAccess {
                 let version_id = version_id.to_owned();
                 local
                     .run_owned(move |node| async move {
-                        node.set_active_collection_version(&version_id)
-                            .await
-                            .map_err(Into::into)
+                        node.set_active_collection_version_as(
+                            &defra_core::RequestContext::default(),
+                            &version_id,
+                        )
+                        .await
+                        .map_err(Into::into)
                     })
                     .await
             }
@@ -93,9 +96,11 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => Ok(local
                 .run_owned(move |node| async move {
-                    Ok::<_, ConfigClientError>(
-                        json!({"lensId":node.set_migration(config).await?.to_string()}),
-                    )
+                    let config = serde_json::to_value(config)?;
+                    let id = node
+                        .set_migration_as(&defra_core::RequestContext::default(), &config)
+                        .await?;
+                    Ok::<_, ConfigClientError>(json!({"lensId": id}))
                 })
                 .await?),
             Self::Graphql(_) => Ok(self
