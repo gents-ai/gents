@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::{EmbeddedNode, HttpConfig};
+use gents::defra_node::{Node, HttpConfig};
 use gents::documents::{BackendAuth, Node, PackConfig};
 use gents::store::config_client::{
     apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
             .context("creating or loading node identity key")?,
     );
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(&data_dir)
             .with_regolith_options(gents::store::local::storage_backend::regolith_options())
             .with_http(HttpConfig::with_addr(http_addr))
@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
 }
 
 async fn seed_demo_documents(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     backend_id: &str,
     model_endpoint: &str,
@@ -182,7 +182,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let identity = KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await?,
