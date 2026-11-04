@@ -95,20 +95,31 @@ describe("the Automations page", () => {
       snapshot: { bootstrap, client: { deployments: [deployment] } },
     });
     renderIn(app, <AutomationsScreen item={item} />);
-    return { changeConfig, runTask };
+    return { changeConfig, runTask, app };
   };
 
-  it("lists the active node's automations, the hand-run ones on their own", () => {
+  it("lists the active node's automations, the hand-run ones under their own heading", () => {
     page();
-    expect(screen.getByText("Trigger A")).toBeInTheDocument();
-    const byHand = screen.getByRole("region", { name: "Run by hand" });
-    expect(within(byHand).getByText("Task B")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Trigger A/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Run by hand" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Task B/ })).toBeInTheDocument();
   });
 
-  it("turns an automation off from its row", async () => {
-    const { changeConfig } = page();
+  it("offers templates while none is open, each starting New automation filled in", async () => {
+    page();
+    const templates = screen.getByLabelText("Templates");
     await act(async () => {
-      fireEvent.click(screen.getByRole("switch", { name: "Trigger A on" }));
+      fireEvent.click(
+        within(templates).getByRole("button", { name: /Morning summary/ }),
+      );
+    });
+    expect(await screen.findByDisplayValue("Morning summary")).toBeInTheDocument();
+  });
+
+  it("turns an open automation off", async () => {
+    const { changeConfig } = page("trigger-a");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Trigger A is on" }));
     });
     expect(changeConfig).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -119,7 +130,26 @@ describe("the Automations page", () => {
     );
   });
 
-  it("opens one in a sheet and runs it now", async () => {
+  it("duplicates an open hand-run automation from its menu", async () => {
+    const saveTaskConfig = vi.fn().mockResolvedValue({});
+    withFlags({ automations: true });
+    const app = testApp({
+      api: { saveTaskConfig },
+      snapshot: { bootstrap, client: { deployments: [deployment] } },
+    });
+    renderIn(app, <AutomationsScreen item="task:task-b" />);
+    fireEvent.click(screen.getByRole("button", { name: "More for Task B" }));
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Duplicate" }));
+    });
+    expect(saveTaskConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({ display_name: "Task B copy" }),
+      }),
+    );
+  });
+
+  it("shows an open one beside the list, and runs it now", async () => {
     const { runTask } = page("trigger-a");
     const run = await screen.findByRole("button", { name: /Run now/ });
     await act(async () => {

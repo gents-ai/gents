@@ -1,4 +1,4 @@
-import { Inbox, LayoutGrid, ListTree, Plus, Settings, Workflow } from "lucide-react";
+import { Inbox, LayoutGrid, ListTree, Play, Plus, Settings } from "lucide-react";
 import { navigate } from "@/lib/router";
 import { flag } from "@/preferences";
 import { registerCommand } from "./commands";
@@ -28,7 +28,7 @@ registerCommand({
   id: "page.automations",
   title: "Go to automations",
   group: "Pages",
-  icon: Workflow,
+  icon: Play,
   when: () => flag("automations"),
   run: () => navigate({ name: "automations" }),
 });

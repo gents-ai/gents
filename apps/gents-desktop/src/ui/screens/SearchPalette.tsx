@@ -13,6 +13,7 @@ import { useShallow } from "zustand/react/shallow";
 import {
   Bell,
   Command as CommandIcon,
+  Play,
   Search,
   Waypoints,
   Workflow,
@@ -216,7 +217,7 @@ function useEntries(): SearchEntry[] {
               id: a.id,
               name: a.name,
               when: a.when,
-              icon: Workflow,
+              icon: Play,
             }))
           : [],
       agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),

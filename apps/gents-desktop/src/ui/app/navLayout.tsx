@@ -13,12 +13,12 @@ import {
   History,
   Inbox,
   Pin,
+  Play,
   Plus,
   RefreshCw,
   ScrollText,
   SlidersHorizontal,
   Waypoints,
-  Workflow,
 } from "lucide-react";
 import type { Route } from "@/lib/router";
 import type { FlagId } from "@/lib/flags";
@@ -127,7 +127,7 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
     id: "automations",
     label: "Automations",
     command: "page.automations",
-    icon: <Workflow className="size-4" />,
+    icon: <Play className="size-4" />,
     to: { name: "automations" },
     active: (route) => route.name === "automations",
     placement: "primary",

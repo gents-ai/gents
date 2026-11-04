@@ -1,6 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ConfigComponentsApplyRequest,
   EventSource,
@@ -106,6 +106,7 @@ export function NewAutomationDialog({
   task,
   initialKind,
   onCreated,
+  template,
 }: {
   deployment: NodeView;
   open: boolean;
@@ -114,6 +115,12 @@ export function NewAutomationDialog({
   task?: string;
   initialKind?: "schedule" | "event";
   onCreated?: (triggerId: string) => void;
+  /** a starting point: its name, schedule and prompt fill the form */
+  template?: {
+    name: string;
+    preset: (typeof PRESETS)[number]["id"];
+    prompt: string;
+  } | null;
 }) {
   const { changeConfig } = useApp().actions;
   const defaultAgent =
@@ -136,6 +143,15 @@ export function NewAutomationDialog({
   const [agentId, setAgentId] = useState(defaultAgent);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !template) return;
+    setName(template.name);
+    setKind("schedule");
+    setScheduleId(NEW);
+    setPreset(template.preset);
+    setTaskId(NEW);
+    setPrompt(template.prompt);
+  }, [open, template]);
 
   const close = (next: boolean) => {
     if (busy) return;
