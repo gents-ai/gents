@@ -3,6 +3,30 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import { isWindowsTauriShell } from "../lib/shellPlatform";
 import { WindowControls } from "../ui/app/WindowControls";
 import { Disclosure } from "../ui/components/Disclosure";
+import { useCopied } from "../ui/lib/clipboard";
+
+/* the details in their own scrolling box, with a way to copy them whole
+   for a report */
+function ErrorDetails({ text }: { text: string }) {
+  const { copied, copy } = useCopied();
+  return (
+    <div className="relative mt-2">
+      <pre
+        className="max-h-[40vh] overflow-auto rounded-lg bg-raised/50 p-3 pr-16 font-mono text-xs [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
+        tabIndex={0}
+      >
+        {text}
+      </pre>
+      <button
+        type="button"
+        onClick={() => copy(text)}
+        className="absolute top-2 right-3 rounded-md bg-background/80 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
 
 type ErrorBoundaryProps = { children: ReactNode };
 type ErrorBoundaryState = { error: Error | null; componentStack: string | null };
@@ -55,15 +79,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               {message}
             </p>
             <Disclosure summary="Error details" className="min-w-0">
-              <pre
-                className="mt-2 max-h-[40vh] overflow-auto rounded-lg bg-raised/50 p-3 font-mono text-xs"
-                tabIndex={0}
-              >
-                {trace.trim()}
-                {this.state.componentStack
-                  ? `\n\nComponent stack:${this.state.componentStack}`
-                  : null}
-              </pre>
+              <ErrorDetails
+                text={`${trace.trim()}${
+                  this.state.componentStack
+                    ? `\n\nComponent stack:${this.state.componentStack}`
+                    : ""
+                }`}
+              />
             </Disclosure>
             <button
               autoFocus
