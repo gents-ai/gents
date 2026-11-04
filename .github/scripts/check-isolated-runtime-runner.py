@@ -16,36 +16,42 @@ def runtime_is_running(fleet_home: Path, owner: int, processes: str) -> bool:
             args = shlex.split(fields[1])
         except ValueError:
             continue
-        if len(args) < 4 or Path(args[0]).name != "gents" or args[1] != "server":
+        if len(args) < 3 or Path(args[0]).name != "gents" or args[1] != "server":
             continue
         for index, arg in enumerate(args[2:], start=2):
             if arg == "--home" and index + 1 < len(args):
-                if Path(args[index + 1]).resolve() == fleet_home:
+                if Path(args[index + 1]) == fleet_home:
                     return True
             elif arg.startswith("--home="):
-                if Path(arg.removeprefix("--home=")).resolve() == fleet_home:
+                if Path(arg.removeprefix("--home=")) == fleet_home:
                     return True
     return False
 
 
-def check(account_home: Path, environment: dict[str, str], uid: int, processes: str) -> None:
+def check(
+    account_home: Path, environment: dict[str, str], uid: int, fleet_uid: int, processes: str
+) -> None:
     fleet = environment.get("GENTS_CI_FLEET_HOME", "")
-    if not fleet or not Path(fleet).is_absolute():
+    if not fleet or not Path(fleet).is_absolute() or ".." in Path(fleet).parts:
         raise ValueError("GENTS_CI_FLEET_HOME must name the live fleet runtime home")
-    fleet_home = Path(fleet).resolve(strict=True)
-    if not fleet_home.is_dir():
-        raise ValueError("GENTS_CI_FLEET_HOME must be an existing directory")
+    fleet_home = Path(fleet)
+    account_home_unresolved = account_home.absolute()
     account_home = account_home.resolve(strict=True)
     process_home = environment.get("HOME", "")
     if not process_home or Path(process_home).resolve(strict=True) != account_home:
         raise ValueError("HOME must match the runner's OS account home")
-    if fleet_home == account_home or account_home in fleet_home.parents:
+    if any(
+        home == fleet_home or home in fleet_home.parents
+        for home in (account_home_unresolved, account_home)
+    ):
         raise ValueError("fleet runtime home is inside the runner account home")
-    owner = fleet_home.stat().st_uid
-    if uid == 0 or owner == uid:
-        raise ValueError("fleet runtime home is owned by the runner account")
-    if not runtime_is_running(fleet_home, owner, processes):
-        raise ValueError("configured fleet home does not match a running gents server")
+    if uid == 0 or fleet_uid == uid:
+        raise ValueError("fleet runtime uses the runner account")
+    if not runtime_is_running(fleet_home, fleet_uid, processes):
+        raise ValueError(
+            "configured fleet user and home do not match a visible running gents server; "
+            "check the configuration and process visibility"
+        )
     if os.access(fleet_home, os.R_OK) or os.access(fleet_home, os.X_OK):
         raise ValueError("runner account can access the fleet runtime home")
     if os.path.lexists(account_home / ".gents"):
@@ -56,10 +62,19 @@ def check(account_home: Path, environment: dict[str, str], uid: int, processes: 
 
 def main() -> int:
     try:
+        fleet_user = os.environ.get("GENTS_CI_FLEET_USER", "")
+        if not fleet_user:
+            raise ValueError("GENTS_CI_FLEET_USER must name the live fleet runtime user")
         processes = subprocess.run(
             ["ps", "-axo", "uid=,args="], check=True, capture_output=True, text=True
         ).stdout
-        check(Path(pwd.getpwuid(os.getuid()).pw_dir), dict(os.environ), os.getuid(), processes)
+        check(
+            Path(pwd.getpwuid(os.getuid()).pw_dir),
+            dict(os.environ),
+            os.getuid(),
+            pwd.getpwnam(fleet_user).pw_uid,
+            processes,
+        )
     except (KeyError, OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"::error::Isolated runtime runner check failed: {error}", file=sys.stderr)
         return 1

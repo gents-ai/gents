@@ -174,6 +174,7 @@ jobs:
         if: matrix.suite == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true'
         env:
           GENTS_CI_FLEET_HOME: ${{ vars.GENTS_CI_FLEET_HOME }}
+          GENTS_CI_FLEET_USER: ${{ vars.GENTS_CI_FLEET_USER }}
         run: |
           python3 .github/scripts/check-isolated-runtime-runner.py
           echo "LEAN_CACHE_ROOT=$HOME/.cache/gents-lean" >> "$GITHUB_ENV"
