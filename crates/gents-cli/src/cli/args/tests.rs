@@ -8,7 +8,7 @@ fn parse_init(extra: &[&str]) -> InitArgs {
     argv.extend_from_slice(extra);
     let cli = Cli::try_parse_from(argv).expect("init should parse");
     match cli.command {
-        Command::Init(args) => args,
+        Some(Command::Init(args)) => args,
         _ => panic!("expected `init`"),
     }
 }

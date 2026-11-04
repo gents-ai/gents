@@ -18,6 +18,20 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) poll_ms: u64,
 }
 
+/// What `GET /runtime` answers, so `gents` can tell whether the runtime on the
+/// fixed endpoint serves the home it was asked to open.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RuntimeIdentity {
+    pub(crate) node_did: String,
+    pub(crate) home: PathBuf,
+}
+
+#[derive(Clone)]
+struct RuntimeRouteState {
+    auth_token: Option<Arc<str>>,
+    identity: RuntimeIdentity,
+}
+
 pub(crate) struct BoundCodexShim {
     addr: SocketAddr,
     codex_home: PathBuf,
@@ -153,13 +167,27 @@ pub(crate) async fn bind_codex_shim(
             .context("the Codex shim's User client DID")
             .map_err(CodexShimBindError::DependencyMissing)?,
     );
+    let identity_route = Router::new()
+        .route("/runtime", get(runtime_identity))
+        .with_state(RuntimeRouteState {
+            auth_token: args.auth_token.as_deref().map(Arc::from),
+            identity: RuntimeIdentity {
+                node_did: args.node_did.clone(),
+                home: crate::absolutize(args.home.clone())
+                    .map_err(CodexShimBindError::HostResource)?,
+            },
+        });
+
     let state = ShimState {
         usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
-        cwd: std::env::current_dir()
-            .context("resolving current working directory")
-            .map_err(CodexShimBindError::HostResource)?,
+        cwd: default_thread_cwd(
+            std::env::current_dir()
+                .context("resolving current working directory")
+                .map_err(CodexShimBindError::HostResource)?,
+            args.fs_root.as_deref(),
+        ),
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
@@ -178,7 +206,8 @@ pub(crate) async fn bind_codex_shim(
 
     let app = Router::new()
         .route("/", get(ws_upgrade))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .merge(identity_route);
     let addr = SocketAddr::new(args.bind_addr, args.port);
     let listener = TcpListener::bind(addr)
         .await
@@ -195,6 +224,17 @@ pub(crate) async fn bind_codex_shim(
         agent_did: bound_agent_did,
         auth_required,
     })
+}
+
+/// A service manager starts the runtime in `/`, and Codex with `--remote` leaves a
+/// thread's directory to this server, so the process directory says nothing about
+/// where work belongs. Admission refuses a placement outside the tool root, so a
+/// thread defaults to the root unless the process runs inside it.
+pub(super) fn default_thread_cwd(process_cwd: PathBuf, tool_root: Option<&Path>) -> PathBuf {
+    match tool_root {
+        Some(root) if !process_cwd.starts_with(root) => root.to_path_buf(),
+        _ => process_cwd,
+    }
 }
 
 pub(super) fn validate_bind_security(
@@ -228,6 +268,13 @@ async fn ws_upgrade(
     }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
         .into_response()
+}
+
+async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: HeaderMap) -> Response {
+    if !request_is_authorized(&headers, state.auth_token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Json(state.identity).into_response()
 }
 
 pub(super) fn request_is_authorized(headers: &HeaderMap, expected: Option<&str>) -> bool {

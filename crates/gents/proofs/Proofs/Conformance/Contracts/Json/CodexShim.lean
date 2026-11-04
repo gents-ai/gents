@@ -854,4 +854,54 @@ def codexShimBindingCases : List CodexShimBindingCase :=
 def codexShimBindingCasesJson : String :=
   jsonArray (codexShimBindingCases.map codexShimBindingCaseJson)
 
+structure CodexShimConnectionAdmissionCase where
+  witness : String
+  leanTheorems : List String
+  agent : AgentId
+  runnable : List AgentId
+
+def codexShimAdmissionSnapshot (runnable : List AgentId) : ActiveRuntimeSnapshot :=
+  let published := runnable.foldr insert ∅
+  { generation := 1
+  , defaultAgent := 0
+  , runnable := published
+  , unavailable := ∅
+  , dependenciesSatisfied := published
+  , dispatchers := published
+  }
+
+def codexShimConnectionAdmissionCaseJson
+    (c : CodexShimConnectionAdmissionCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString c.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray c.leanTheorems ++ ","
+    ++ "\"agent\":" ++ toString c.agent ++ ","
+    ++ "\"runnable\":" ++ jsonArray (c.runnable.map toString) ++ ","
+    ++ "\"admitted\":"
+      ++ boolString
+        (CodexShim.Binding.admitConnection c.agent (codexShimAdmissionSnapshot c.runnable))
+    ++ "}"
+
+def codexShimConnectionAdmissionCases : List CodexShimConnectionAdmissionCase :=
+  [ { witness := "codex_shim.admission.runnable_agent"
+    , leanTheorems := [ "CodexShim.Binding.admitConnection_iff_runnable" ]
+    , agent := 1
+    , runnable := [1, 2]
+    }
+  , { witness := "codex_shim.admission.unknown_agent"
+    , leanTheorems := [ "CodexShim.Binding.never_admits_unrunnable" ]
+    , agent := 3
+    , runnable := [1, 2]
+    }
+  , { witness := "codex_shim.admission.before_first_publish"
+    , leanTheorems := [ "CodexShim.Binding.never_admits_unrunnable" ]
+    , agent := 1
+    , runnable := []
+    }
+  ]
+
+def codexShimConnectionAdmissionCasesJson : String :=
+  jsonArray
+    (codexShimConnectionAdmissionCases.map codexShimConnectionAdmissionCaseJson)
+
 end Conformance.Contracts
