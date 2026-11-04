@@ -875,6 +875,7 @@ async fn serve_foreground(
         );
         let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
         let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
+        let grok_socket_held = Arc::new(std::sync::OnceLock::new());
         let (configuration_tx, mut configuration_rx) =
             watch::channel::<Option<RuntimeConfigurationObservation>>(None);
 
@@ -973,6 +974,7 @@ async fn serve_foreground(
                 runnable: runnable_rx.clone(),
                 agent_routes: args.codex_shim_agent_id.is_none()
                     && args.codex_shim_public_url.is_none(),
+                grok_socket: grok_socket_held.clone(),
             };
             let mut codex_shim_handle = if args.no_codex_shim {
                 None
@@ -1244,7 +1246,10 @@ async fn serve_foreground(
                     })
                     .await
                     {
-                        Ok(handle) => grok_shim_handle = Some(handle),
+                        Ok(handle) => {
+                            grok_shim_handle = Some(handle);
+                            grok_socket_held.set(socket_path.clone()).ok();
+                        }
                         Err(error) => {
                             tracing::error!(
                                 socket = %socket_path.display(),

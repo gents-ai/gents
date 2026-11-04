@@ -1,6 +1,7 @@
 use super::*;
 use axum::extract::Path as RoutePath;
 use rapidhash::{HashMapExt, RapidHashMap};
+use std::sync::OnceLock;
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
@@ -19,6 +20,8 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) poll_ms: u64,
     pub(crate) runnable: watch::Receiver<Vec<String>>,
     pub(crate) agent_routes: bool,
+    /// Set once this runtime's Grok leader holds its socket.
+    pub(crate) grok_socket: Arc<OnceLock<PathBuf>>,
 }
 
 /// What `GET /runtime` answers, so `gents` can tell whether the runtime on the
@@ -33,6 +36,9 @@ pub(crate) struct RuntimeIdentity {
     pub(crate) tool_root: Option<PathBuf>,
     /// Where a thread starts when its client names no directory.
     pub(crate) default_thread_cwd: PathBuf,
+    /// The Grok socket this runtime holds. A socket answering says nothing about
+    /// whose it is, because a stock Grok leader can hold it too.
+    pub(crate) grok_socket: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -41,6 +47,7 @@ struct RuntimeRouteState {
     shim: ShimState,
     agent_routes: bool,
     runnable: watch::Receiver<Vec<String>>,
+    grok_socket: Arc<OnceLock<PathBuf>>,
     sidecars: Arc<Mutex<RapidHashMap<String, Arc<Mutex<CodexSidecar>>>>>,
 }
 
@@ -155,6 +162,7 @@ pub(crate) async fn bind_codex_shim(
         runnable_agents: None,
         tool_root: args.fs_root.clone(),
         default_thread_cwd: thread_cwd.clone(),
+        grok_socket: None,
     };
     let agent_routes = args.agent_routes && args.bind_addr.is_loopback();
 
@@ -190,6 +198,7 @@ pub(crate) async fn bind_codex_shim(
         shim: state.clone(),
         agent_routes,
         runnable: args.runnable,
+        grok_socket: args.grok_socket,
         sidecars: Arc::new(Mutex::new(sidecars)),
     });
 
@@ -296,6 +305,7 @@ async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: Heade
     }
     let mut identity = state.identity;
     identity.runnable_agents = state.agent_routes.then(|| state.runnable.borrow().clone());
+    identity.grok_socket = state.grok_socket.get().cloned();
     Json(identity).into_response()
 }
 

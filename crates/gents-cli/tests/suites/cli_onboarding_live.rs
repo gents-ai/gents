@@ -775,6 +775,35 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_listener_on_the_grok_socket_that_is_not_this_runtime_is_refused() -> Result<()> {
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home_arg = home.home.to_string_lossy();
+        live.gents_ok(&["config", "client", "set", "grok", "--home", &home_arg])?;
+        let (interface, recorded) = recording_interface(&live)?;
+        // Under /tmp because a Unix socket path has a short length limit.
+        let runtime_dir = tempfile::Builder::new()
+            .prefix("gents-")
+            .tempdir_in("/tmp")?;
+        let socket = runtime_dir.path().join("gents/grok.sock");
+        fs::create_dir_all(socket.parent().context("the socket has a parent")?)?;
+        let _stock_leader = std::os::unix::net::UnixListener::bind(&socket)?;
+        let mut command = live.bare_gents_grok(&interface.to_string_lossy(), &home.home);
+        command.env("XDG_RUNTIME_DIR", runtime_dir.path());
+
+        let mut terminal = Terminal::spawn(&command, &live.log("stock-leader"))?;
+
+        terminal
+            .expect(&socket.to_string_lossy(), RUNTIME_UP)
+            .await?;
+        terminal.expect_exit(1).await?;
+        ensure!(!recorded.exists(), "nothing may open");
+        ensure!(!live.plist().exists(), "nothing may be installed");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn the_first_open_after_a_start_waits_for_the_publish() -> Result<()> {
         let backend = answering_backend()?;
         let live = LiveBox::new()?;

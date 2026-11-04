@@ -2,7 +2,7 @@ use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::CommandFactory as _;
 
 use crate::cli::args::{CodexArgs, StoreKeyCustodyArg};
@@ -10,6 +10,7 @@ use crate::cli::Cli;
 use crate::client_settings::{ensure_client_supported, ClientSettings, InterfaceClient};
 use crate::commands::codex::{
     endpoint_answers, ensure_endpoint_is_this_homes, interface_bin, launch_interface, open_codex,
+    runtime_identity_at,
 };
 use crate::graphql_access::graphql_endpoint_available;
 use crate::home_state::{read_init_config, read_runtime_state, resolve_home_dir};
@@ -21,8 +22,15 @@ const GROK_BIN_ENV: &str = "GENTS_GROK_BIN";
 const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
 
 enum InterfaceEndpoint {
-    Codex { remote: String },
-    Grok { socket: PathBuf },
+    Codex {
+        remote: String,
+    },
+    /// Grok's socket has no way to say whose it is, so `runtime` is this home's
+    /// Codex endpoint, where its runtime identifies itself.
+    Grok {
+        socket: PathBuf,
+        runtime: String,
+    },
 }
 
 impl InterfaceEndpoint {
@@ -35,6 +43,7 @@ impl InterfaceEndpoint {
             #[cfg(unix)]
             InterfaceClient::Grok => Self::Grok {
                 socket: crate::commands::serve::resolve_grok_shim_socket_path(None),
+                runtime: crate::DEFAULT_CODEX_REMOTE.to_string(),
             },
             #[cfg(not(unix))]
             InterfaceClient::Grok => unreachable!("refused off Unix above"),
@@ -45,25 +54,39 @@ impl InterfaceEndpoint {
         match self {
             Self::Codex { remote } => endpoint_answers(remote).await,
             #[cfg(unix)]
-            Self::Grok { socket } => tokio::net::UnixStream::connect(socket).await.is_ok(),
+            Self::Grok { socket, .. } => tokio::net::UnixStream::connect(socket).await.is_ok(),
             #[cfg(not(unix))]
             Self::Grok { .. } => false,
         }
     }
 
-    /// Grok's socket is per machine and its limit is the shim's own lock, so only
-    /// Codex's fixed port needs identifying.
-    async fn ensure_is_this_homes(&self, expected_did: &str) -> Result<()> {
+    /// An endpoint answering proves nothing about whose it is: Codex's port is fixed
+    /// per machine, and a stock Grok leader or another home's runtime can hold the
+    /// per-machine Grok socket. This home's runtime has to say the endpoint is its own,
+    /// and one with its Codex endpoint off cannot say, so it is refused the same way.
+    async fn ensure_is_this_homes(&self, home: &Path, expected_did: &str) -> Result<()> {
         match self {
             Self::Codex { remote } => ensure_endpoint_is_this_homes(remote, expected_did).await,
-            Self::Grok { .. } => Ok(()),
+            Self::Grok { socket, runtime } => {
+                let holds_socket = runtime_identity_at(runtime).await.is_some_and(|identity| {
+                    identity.node_did == expected_did
+                        && identity.grok_socket.as_deref() == Some(socket.as_path())
+                });
+                ensure!(
+                    holds_socket,
+                    "the Grok socket {socket} is not held by this Gents home's runtime, so Grok did not open. Stop whatever holds it (`lsof {socket}` names it), restart this home's runtime with `gents service restart --home {home}` or whatever is running it, with its Codex endpoint on, then run `gents` again.",
+                    socket = socket.display(),
+                    home = home.display()
+                );
+                Ok(())
+            }
         }
     }
 
     fn describe(&self) -> String {
         match self {
             Self::Codex { remote } => format!("Codex endpoint {remote}"),
-            Self::Grok { socket } => format!("Grok socket {}", socket.display()),
+            Self::Grok { socket, .. } => format!("Grok socket {}", socket.display()),
         }
     }
 
@@ -79,7 +102,7 @@ impl InterfaceEndpoint {
                 })
                 .await
             }
-            Self::Grok { socket } => {
+            Self::Grok { socket, .. } => {
                 launch_interface(
                     "Grok",
                     &interface_bin(GROK_BIN_ENV, "grok"),
@@ -126,7 +149,7 @@ async fn ensure_runtime(
     endpoint: &InterfaceEndpoint,
 ) -> Result<()> {
     if endpoint.answers().await {
-        return endpoint.ensure_is_this_homes(expected_did).await;
+        return endpoint.ensure_is_this_homes(home, expected_did).await;
     }
     if let Some(state) = read_runtime_state(home)? {
         if graphql_endpoint_available(&state.graphql).await {
@@ -153,7 +176,7 @@ async fn ensure_runtime(
     .await?
     .map_err(|error| anyhow!("{error:#}\n{hint}"))?;
     wait_for_endpoint(endpoint, ENDPOINT_WAIT).await?;
-    endpoint.ensure_is_this_homes(expected_did).await
+    endpoint.ensure_is_this_homes(home, expected_did).await
 }
 
 /// launchd and systemd report supervision, not readiness, and no cross-process notification of
@@ -211,6 +234,7 @@ pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::codex::tests::{identity, runtime_answering};
 
     #[tokio::test]
     async fn wait_for_endpoint_gives_up_naming_gents_service_status() {
@@ -228,6 +252,62 @@ mod tests {
         assert!(
             error.to_string().contains("gents service status"),
             "{error:#}"
+        );
+    }
+
+    fn grok_endpoint(runtime: &str) -> InterfaceEndpoint {
+        InterfaceEndpoint::Grok {
+            socket: PathBuf::from("/tmp/held.sock"),
+            runtime: format!("ws://{runtime}/"),
+        }
+    }
+
+    fn runtime_holding(node_did: &str, socket: Option<&str>) -> serde_json::Value {
+        let mut identity = identity(Some(&["a"]));
+        identity.node_did = node_did.to_string();
+        identity.grok_socket = socket.map(PathBuf::from);
+        serde_json::to_value(identity).unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_this_homes_runtime_holding_the_socket_opens_grok() {
+        let runtime = runtime_answering(vec![runtime_holding("mine", Some("/tmp/held.sock"))]);
+
+        grok_endpoint(&runtime.await)
+            .ensure_is_this_homes(Path::new("/srv/home"), "mine")
+            .await
+            .expect("this home's runtime holds the socket");
+    }
+
+    #[tokio::test]
+    async fn anything_else_on_the_grok_socket_gets_one_refusal() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let nothing_answers = closed.local_addr().unwrap().to_string();
+        drop(closed);
+        let mut refusals = Vec::new();
+        for runtime in [
+            nothing_answers,
+            runtime_answering(vec![runtime_holding("other", Some("/tmp/held.sock"))]).await,
+            runtime_answering(vec![runtime_holding("mine", None)]).await,
+            runtime_answering(vec![runtime_holding("mine", Some("/tmp/another.sock"))]).await,
+        ] {
+            let refusal = grok_endpoint(&runtime)
+                .ensure_is_this_homes(Path::new("/srv/home"), "mine")
+                .await
+                .expect_err(&runtime)
+                .to_string();
+            refusals.push(refusal);
+        }
+
+        assert!(refusals[0].contains("/tmp/held.sock"), "{}", refusals[0]);
+        assert!(
+            refusals[0].contains("gents service restart --home /srv/home"),
+            "{}",
+            refusals[0]
+        );
+        assert!(
+            refusals.iter().all(|refusal| refusal == &refusals[0]),
+            "{refusals:?}"
         );
     }
 

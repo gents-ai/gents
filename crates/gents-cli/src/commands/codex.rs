@@ -120,15 +120,20 @@ pub(crate) async fn read_runtime_identity(
         .ok()
 }
 
-/// The endpoint is a fixed port, so answering it proves nothing about whose
-/// runtime this is. Only a matching DID passes.
-pub(crate) async fn ensure_endpoint_is_this_homes(remote: &str, expected_did: &str) -> Result<()> {
-    let identity = match resolve_endpoint(remote)? {
+/// `None` for anything that cannot say, as `read_runtime_identity` does.
+pub(crate) async fn runtime_identity_at(remote: &str) -> Option<RuntimeIdentity> {
+    match resolve_endpoint(remote).ok()? {
         RemoteEndpoint::WebSocket { authority, .. } => {
             read_runtime_identity(&authority, None).await
         }
         RemoteEndpoint::UnixSocket => None,
-    };
+    }
+}
+
+/// The endpoint is a fixed port, so answering it proves nothing about whose
+/// runtime this is. Only a matching DID passes.
+pub(crate) async fn ensure_endpoint_is_this_homes(remote: &str, expected_did: &str) -> Result<()> {
+    let identity = runtime_identity_at(remote).await;
     if identity
         .as_ref()
         .is_some_and(|identity| identity.node_did == expected_did)
@@ -349,7 +354,7 @@ async fn probe_shim(endpoint: &RemoteEndpoint) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::cli::{Cli, Command as GentsCommand};
     use clap::Parser;
@@ -365,7 +370,7 @@ mod tests {
         }
     }
 
-    fn identity(runnable_agents: Option<&[&str]>) -> RuntimeIdentity {
+    pub(crate) fn identity(runnable_agents: Option<&[&str]>) -> RuntimeIdentity {
         RuntimeIdentity {
             node_did: "did:key:z".to_string(),
             home: PathBuf::from("/srv/home"),
@@ -373,6 +378,7 @@ mod tests {
                 .map(|agents| agents.iter().map(|agent| agent.to_string()).collect()),
             tool_root: Some(PathBuf::from("/srv/root")),
             default_thread_cwd: PathBuf::from("/srv/root/from-the-runtime"),
+            grok_socket: None,
         }
     }
 
@@ -566,7 +572,7 @@ mod tests {
     }
 
     /// Answers each `/runtime` request with the next body, then keeps repeating the last.
-    async fn runtime_answering(bodies: Vec<serde_json::Value>) -> String {
+    pub(crate) async fn runtime_answering(bodies: Vec<serde_json::Value>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let authority = listener.local_addr().unwrap().to_string();
         tokio::spawn(async move {
