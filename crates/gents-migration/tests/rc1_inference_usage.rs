@@ -18,7 +18,7 @@ async fn rc1_inference_usage_upgrade_preserves_rows_and_field_ids() {
     let directory = tempfile::tempdir().unwrap();
     let owner = common::node_identity();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(directory.path())
             .with_node_identity_did(owner.clone())
             .build()
@@ -136,9 +136,9 @@ async fn rc1_inference_usage_upgrade_preserves_rows_and_field_ids() {
         }}"#)).await;
         assert!(changed.has_errors(), "{field} became mutable");
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
     drop(node);
-    let reopened = defra_node::EmbeddedNode::builder()
+    let reopened = defra_node::Node::builder()
         .data_path(directory.path())
         .with_node_identity_did(owner)
         .build()
@@ -172,7 +172,7 @@ async fn rc1_inference_usage_upgrade_preserves_rows_and_field_ids() {
     let current = rows.iter().find(|row| row["call_id"] == "current").unwrap();
     assert_eq!(current["session_id"], "current-session");
     assert_eq!(current["provider_total_tokens"], 130);
-    reopened.shutdown().await;
+    reopened.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -198,7 +198,7 @@ async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {
             1
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -216,5 +216,5 @@ async fn incompatible_inference_usage_stays_refused_without_schema_changes() {
     let versions = node.get_all_collection_versions().await.unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].version_id, before.version_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }

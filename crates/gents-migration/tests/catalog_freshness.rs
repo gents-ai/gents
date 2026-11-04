@@ -47,7 +47,7 @@ async fn catalog_freshness_preserves_existing_backend_lineage_and_fields() {
     assert_eq!(retained["InferenceBackend"][0]["_docID"], document);
     assert_eq!(retained["InferenceBackend"][0]["name"], "retained backend");
     assert!(retained["InferenceBackend"][0]["catalog_freshness"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
     // A fresh store reaches the canonical version, which is not this store's lineage (the
     // original RC1 catalog-freshness one): each keeps its own.
     let fresh = common::fresh_node().await;
@@ -57,5 +57,5 @@ async fn catalog_freshness_preserves_existing_backend_lineage_and_fields() {
         version.version_id,
         gents_migration::canonical_versions().unwrap()["InferenceBackend"]
     );
-    fresh.shutdown().await;
+    fresh.shutdown().await.expect("shutdown node");
 }

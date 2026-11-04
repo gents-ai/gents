@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crypto::Key;
 use defra_core::signing::{SigningConfig, SigningKeyType};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use identity::{Identity as _, RawIdentity};
 
 pub fn node_identity() -> String {
@@ -25,17 +25,18 @@ pub fn node_identity() -> String {
 }
 
 /// DefraDB can leave background sweep tasks alive after shutdown, so the temp store must outlive the node.
-pub async fn fresh_node() -> Arc<EmbeddedNode> {
+pub async fn fresh_node() -> Arc<Node> {
     let dir = tempfile::tempdir().expect("tempdir");
-    let node = EmbeddedNode::builder()
+    let node = Node::builder()
         .data_path(dir.path())
         .with_node_identity_did(node_identity())
         .build()
         .await
         .expect("build node");
     let policy = node
-        .add_dac_policy_with_counter(
-            node.node_identity_did().unwrap(),
+        .add_dac_policy_with_counter_as(
+            &defra_core::RequestContext::default()
+                .with_identity(node.node_identity_did().map(str::to_owned)),
             gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
             0,
         )

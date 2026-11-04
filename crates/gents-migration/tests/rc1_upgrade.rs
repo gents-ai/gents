@@ -84,7 +84,7 @@ async fn applied_pairing_generation_upgrade_preserves_routes_without_granting_au
             .steps_applied,
         0
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -169,7 +169,7 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
         rerun.steps_already_current,
         3 + common::fresh_canonical_steps()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -210,7 +210,7 @@ async fn current_tool_schema_adds_background_control_without_moving_fields() {
             .steps_applied,
         0
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -280,5 +280,5 @@ async fn apply_collections_declare_updated_at_without_moving_fields() {
     }
     let rerun = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(rerun.steps_applied, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
