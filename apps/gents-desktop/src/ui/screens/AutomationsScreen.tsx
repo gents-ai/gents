@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Hand,
+  Lightbulb,
   ListFilter,
   Play,
   Plus,
@@ -173,6 +174,19 @@ export function AutomationsScreen({ item }: { item?: string }) {
                     >
                       <Search />
                     </Button>
+                    {node && templatesHidden && (
+                      <Hint label="Show ideas">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Show ideas"
+                          className="text-muted-foreground"
+                          onClick={() => hideTemplates(false)}
+                        >
+                          <Lightbulb />
+                        </Button>
+                      </Hint>
+                    )}
                     {node && (
                       <Button
                         variant="brand"
@@ -243,15 +257,6 @@ export function AutomationsScreen({ item }: { item?: string }) {
                   </section>
                 )}
               </>
-            )}
-            {node && all.length > 0 && templatesHidden && (
-              <button
-                type="button"
-                onClick={() => hideTemplates(false)}
-                className="w-fit cursor-pointer text-xs text-muted-foreground hover:text-foreground"
-              >
-                Show ideas
-              </button>
             )}
           </>
         )}
