@@ -122,6 +122,7 @@ fn pinned_upstream_wire() -> serde_json::Value {
                 busy_ppm: 0,
                 in_flight: 2,
                 in_flight_bytes: 32_768,
+                estimates: Default::default(),
             },
             PeerFetchStats {
                 peer: "peer-fetch-b".into(),
@@ -135,6 +136,7 @@ fn pinned_upstream_wire() -> serde_json::Value {
                 busy_ppm: 1_000_000,
                 in_flight: 1,
                 in_flight_bytes: 4096,
+                estimates: Default::default(),
             },
         ],
         non_authoritative_broadcast_tasks: 7,
@@ -173,6 +175,13 @@ fn pinned_upstream_wire() -> serde_json::Value {
             last_block_received_at: Some("2026-10-22T14:00:03Z".parse().unwrap()),
             last_head_acked_at: None,
         }],
+        // A pin that carries the arbitration estimates, with none recorded
+        // yet: the adapter reads them as absent.
+        pending_dag_attempt_ewma_median_ms: None,
+        pending_dag_attempt_ewma_max_ms: None,
+        pending_dag_no_progress_median_ppm: None,
+        pending_dag_tie_reorders: 0,
+        pending_dag_peer_occupancy: Vec::new(),
     };
 
     let mut wire = serde_json::to_value(upstream).expect("serialize pinned DefraDB SyncStatus");
