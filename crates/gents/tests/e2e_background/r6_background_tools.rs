@@ -1,4 +1,4 @@
-use gents::defra_node::{EmbeddedNode, EventName};
+use gents::defra_node::{Node as EmbeddedNode, EventName};
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolResultContent, UserContent,
 };

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::defra_node::{EmbeddedNode, HttpConfig, StorageBackend};
+use gents::defra_node::{Node as EmbeddedNode, HttpConfig, StorageBackend};
 use gents::runtime::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use gents::store::config_client::ConfigAccess;
 use gents::{KeyIdentity, NodeIdentity};

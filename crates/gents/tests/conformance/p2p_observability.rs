@@ -11,6 +11,7 @@ use storage::stores::PushRetryMarkerStats;
 
 fn pinned_upstream_wire() -> serde_json::Value {
     let upstream = SyncStatus {
+        gossip_unfollowed_dropped_total: 0,
         push_backlog: PushBacklogSnapshot {
             queue_item_capacity: 128,
             queue_byte_capacity: 1_048_576,

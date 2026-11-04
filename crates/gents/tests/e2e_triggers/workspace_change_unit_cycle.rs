@@ -642,7 +642,7 @@ fn ensure_native_fs_runner_for_test() {
 
 async fn select_default_agent(
     access: &ConfigAccess,
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
     owner: &str,
 ) {
     let mut principal = gents::ensure_node(node, owner).await.unwrap();

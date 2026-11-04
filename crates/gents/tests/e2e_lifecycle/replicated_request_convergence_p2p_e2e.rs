@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::agent::p2p_reconcile::{
     equality_filter, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };

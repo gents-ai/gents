@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Semaphore};

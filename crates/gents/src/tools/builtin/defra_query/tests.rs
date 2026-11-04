@@ -607,7 +607,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             .await
             .unwrap(),
     );
-    let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
+    let policy = node.add_dac_policy_as(&defra_core::RequestContext::ambient().with_identity(Some((alice_did).to_string())), "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_collection(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         crate::store::graphql::escape_graphql_string(&policy)

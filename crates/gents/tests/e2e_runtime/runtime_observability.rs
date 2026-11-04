@@ -82,7 +82,7 @@ async fn wait_for_observed<T>(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot

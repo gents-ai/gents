@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
 use gents_protocol::request_lifecycle::RequestLifecycleState;

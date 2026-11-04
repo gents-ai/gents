@@ -671,7 +671,7 @@ async fn fetch_inference_recovery_row(
 }
 
 async fn own_child_fixture(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     doc_id: &str,
     request_id: &str,

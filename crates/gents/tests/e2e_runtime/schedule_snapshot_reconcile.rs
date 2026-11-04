@@ -18,7 +18,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 async fn apply_documents(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
     use gents::store::config_client::{
@@ -46,7 +46,7 @@ async fn apply_documents(
 }
 
 async fn create_task(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     task_id: &str,
     agent_id: &str,
@@ -56,7 +56,7 @@ async fn create_task(
 }
 
 async fn create_schedule(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     schedule_id: &str,
     task_id: &str,
@@ -83,7 +83,7 @@ async fn create_schedule(
 }
 
 async fn set_trigger_enabled_and_cursor(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     trigger_id: &str,
     enabled: bool,
@@ -122,7 +122,7 @@ async fn set_trigger_enabled_and_cursor(
 }
 
 async fn create_event_trigger(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     trigger_id: &str,
     task_id: &str,
@@ -136,7 +136,7 @@ async fn create_event_trigger(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -158,7 +158,7 @@ where
 }
 
 async fn fetch_schedule_agent_requests(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     owner: &str,
     trigger_id: &str,
 ) -> Vec<serde_json::Value> {
@@ -173,7 +173,7 @@ async fn fetch_schedule_agent_requests(
 }
 
 async fn fetch_trigger_observation(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     owner: &str,
     trigger_id: &str,
 ) -> serde_json::Value {

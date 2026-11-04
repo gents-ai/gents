@@ -5,7 +5,7 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{
     Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, Tools,
 };

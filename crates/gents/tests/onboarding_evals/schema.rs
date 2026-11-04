@@ -90,7 +90,7 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     .unwrap();
     let registry = CheckRegistry::builtin();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .build()
             .await
             .unwrap(),

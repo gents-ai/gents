@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{Agent, InferenceBackend, InferenceProfile, InferenceSampling, Node};
 use gents::store::config_client::DesiredStateApplyPlan;
 use gents::store::graphql::escape_graphql_string;

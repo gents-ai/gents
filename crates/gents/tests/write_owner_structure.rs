@@ -404,7 +404,10 @@ fn mentions_embedded_node(ty: &syn::Type) -> bool {
     struct Finder(bool);
     impl<'ast> Visit<'ast> for Finder {
         fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
-            self.0 |= segment.ident == "EmbeddedNode";
+            self.0 |= matches!(
+                segment.ident.to_string().as_str(),
+                "EmbeddedNode" | "Node" | "DefraNode"
+            );
             visit::visit_path_segment(self, segment);
         }
     }
@@ -577,7 +580,7 @@ impl<'ast> Visit<'ast> for ReadVisitor<'_> {
         if let Some(name) = path_name(call) {
             let mut segments = name.rsplit("::");
             let method = segments.next().unwrap_or_default();
-            if segments.next() == Some("EmbeddedNode")
+            if matches!(segments.next(), Some("EmbeddedNode" | "Node" | "DefraNode"))
                 && (method == "execute" || NODE_ONLY_METHODS.contains(&method))
             {
                 self.sites += 1;
@@ -681,6 +684,9 @@ fn snippet_sites(source: &str) -> usize {
 fn read_fence_counts_direct_node_execution() {
     for source in [
         "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
+        "fn f(db: &defra_node::Node, q: &str) { db.execute(q); }",
+        "fn f(db: &DefraNode, q: &str) { db.execute(q); }",
+        "fn f(db: &defra_node::Node, q: &str) { defra_node::Node::execute(db, q); }",
         "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
         "fn f(db: Arc<defra_node::EmbeddedNode>, q: &str) { db.as_ref().execute(q); }",
         "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",

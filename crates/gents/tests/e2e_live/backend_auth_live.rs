@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::BackendAuth;
 use gents::{ensure_runtime_schemas, BackendProviderKind};
 

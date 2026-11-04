@@ -110,7 +110,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
     use std::sync::Arc;
 
     use anyhow::Context;
-    use gents::defra_node::EmbeddedNode;
+    use gents::defra_node::Node as EmbeddedNode;
     use gents::session::load_tool_call_presentation;
     use gents::store::config_client::ConfigAccess;
     use gents::{KeyIdentity, NodeIdentity};
@@ -188,7 +188,7 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
     use std::sync::Arc;
 
     use anyhow::Context;
-    use gents::defra_node::EmbeddedNode;
+    use gents::defra_node::Node as EmbeddedNode;
     use gents::session::load_tool_call_presentation;
     use gents::store::config_client::ConfigAccess;
     use gents::store::graphql::escape_graphql_string;

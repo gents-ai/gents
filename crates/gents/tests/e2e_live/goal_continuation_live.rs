@@ -20,7 +20,7 @@ struct GoalChildRow {
 }
 
 async fn wait_for_goal_child(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     goal_id: &str,
     timeout: Duration,
 ) -> GoalChildRow {

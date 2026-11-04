@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};

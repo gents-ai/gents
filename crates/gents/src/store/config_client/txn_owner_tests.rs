@@ -1856,7 +1856,13 @@ resources:
 "#;
 
     let node = Arc::new(Node::builder().build().await.unwrap());
-    let policy_id = node.add_dac_policy(OWNER, POLICY).await.unwrap();
+    let policy_id = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::ambient().with_identity(Some((OWNER).to_string())),
+            POLICY,
+        )
+        .await
+        .unwrap();
     node.add_collection(&format!(
         "type IdentityFact @policy(id: \"{policy_id}\", resource: \"facts\") {{ value: String }}"
     ))
@@ -1973,8 +1979,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
             .unwrap(),
     );
     let policy = node
-        .add_dac_policy(
-            owner,
+        .add_dac_policy_as(&defra_core::RequestContext::ambient().with_identity(Some((owner).to_string())),
             "name: Independent reader\nresources:\n  - name: facts\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
         )
         .await

@@ -41,7 +41,7 @@ fn run_on_production_runtime(future: impl std::future::Future<Output = ()>) {
 }
 
 async fn fetch_terminal_request(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
 ) -> AgentRequestRow {
     let request_doc_id = escape_graphql_string(request_doc_id);
@@ -460,7 +460,7 @@ async fn boot_streaming_agent(
 }
 
 async fn bind_streaming_backend(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -500,7 +500,7 @@ async fn bind_streaming_backend(
 }
 
 async fn insert_inference_call(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_id: &str,
     call_seq: i64,
     call_state: &str,

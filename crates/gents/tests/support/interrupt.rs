@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents::defra_node::{EmbeddedNode, QueryResponse};
+use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
 use gents::session::canonical_rows::{
     decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
 };

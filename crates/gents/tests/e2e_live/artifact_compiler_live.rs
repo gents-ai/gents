@@ -34,7 +34,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
-async fn execute(node: &gents::defra_node::EmbeddedNode, query: &str) -> Value {
+async fn execute(node: &gents::defra_node::Node, query: &str) -> Value {
     let out = node.execute(query).await;
     assert!(!out.has_errors(), "{query}: {:?}", out.errors);
     out.data.unwrap()

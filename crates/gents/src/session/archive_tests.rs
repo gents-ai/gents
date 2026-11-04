@@ -244,8 +244,8 @@ async fn archive_authority_is_native_acp_and_never_requester_scope() {
     let denied = key(home.path(), "denied").await;
     let node = Arc::new(Node::builder().build().await.unwrap());
     let policy = node
-        .add_dac_policy(
-            owner.did(),
+        .add_dac_policy_as(
+            &defra_core::RequestContext::ambient().with_identity(Some((owner.did()).to_string())),
             r#"
 name: Archive authority
 resources:

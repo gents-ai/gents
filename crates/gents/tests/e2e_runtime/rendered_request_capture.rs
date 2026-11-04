@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::Message;
 use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::inference::rendered_request::RenderedCompletionRequest;

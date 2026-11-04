@@ -234,7 +234,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
     let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
-    let policy = node.add_dac_policy(OWNER, "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
+    let policy = node.add_dac_policy_as(&defra_core::RequestContext::ambient().with_identity(Some((OWNER).to_string())), "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_collection(&format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::store::graphql::escape_graphql_string(&policy))).await.unwrap();
     let owner = WriteTool::new(
         ConfigAccess::local(node.clone()),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::{
     ensure_node, AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, ResolvedAgent,
     RuntimeNode,

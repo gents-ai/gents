@@ -638,8 +638,9 @@ mod tests {
         async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::Node> {
             let node =
                 std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-            node.add_dac_policy_with_counter(
-                node.node_identity_did().unwrap(),
+            node.add_dac_policy_with_counter_as(
+                &defra_core::RequestContext::ambient()
+                    .with_identity(Some((node.node_identity_did().unwrap()).to_string())),
                 gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
                 0,
             )
