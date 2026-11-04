@@ -172,7 +172,7 @@ async fn ensure_runtime(
     })
     .await?
     .map_err(|error| anyhow!("{error:#}\n{hint}"))?;
-    wait_for_endpoint(endpoint, ENDPOINT_WAIT).await?;
+    wait_for_endpoint(home, endpoint, ENDPOINT_WAIT).await?;
     endpoint.ensure_is_this_homes(home, expected_did).await
 }
 
@@ -185,7 +185,7 @@ async fn ensure_up_runtime_opens(
     endpoint: &InterfaceEndpoint,
     timeout: Duration,
 ) -> Result<()> {
-    if wait_for_endpoint(endpoint, timeout).await.is_err() {
+    if wait_for_endpoint(home, endpoint, timeout).await.is_err() {
         bail!(
             "this home's runtime is up with its {} off. Restart it with `gents service restart --home {}`, or restart whatever is running it, then run `gents` again.",
             endpoint.describe(),
@@ -198,14 +198,19 @@ async fn ensure_up_runtime_opens(
 /// launchd and systemd report supervision, not readiness, and no cross-process notification of
 /// readiness exists, so the endpoint answering is the only observation. A bounded, single-task
 /// async retry blocks no runtime thread, the same shape as `service_update/execute.rs:330`.
-async fn wait_for_endpoint(endpoint: &InterfaceEndpoint, timeout: Duration) -> Result<()> {
+async fn wait_for_endpoint(
+    home: &Path,
+    endpoint: &InterfaceEndpoint,
+    timeout: Duration,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     while !endpoint.answers().await {
         if Instant::now() >= deadline {
             bail!(
-                "the runtime did not open its {} within {} s; it was left running, check `gents service status`",
+                "the runtime did not open its {} within {} s; it was left running, check `gents service status --home {}`",
                 endpoint.describe(),
-                timeout.as_secs_f32()
+                timeout.as_secs_f32(),
+                home.display()
             );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -261,12 +266,18 @@ mod tests {
             remote: format!("ws://127.0.0.1:{port}/"),
         };
 
-        let error = wait_for_endpoint(&endpoint, Duration::from_millis(200))
-            .await
-            .expect_err("a closed port never answers");
+        let error = wait_for_endpoint(
+            Path::new("/srv/home"),
+            &endpoint,
+            Duration::from_millis(200),
+        )
+        .await
+        .expect_err("a closed port never answers");
 
         assert!(
-            error.to_string().contains("gents service status"),
+            error
+                .to_string()
+                .contains("gents service status --home /srv/home"),
             "{error:#}"
         );
     }

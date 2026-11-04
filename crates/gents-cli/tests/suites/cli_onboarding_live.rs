@@ -493,11 +493,15 @@ impl Terminal {
         self.send(&format!("{answer}\r"))
     }
 
-    /// The questions after the folder: a custom backend, and the default tools.
-    async fn answer_inference_and_tools(&mut self, endpoint: &str, model: &str) -> Result<()> {
+    async fn answer_inference(&mut self, endpoint: &str, model: &str) -> Result<()> {
         self.answer(INFERENCE_QUESTION, "3").await?;
         self.answer("Backend base URL", endpoint).await?;
-        self.answer("Model name:", model).await?;
+        self.answer("Model name:", model).await
+    }
+
+    /// The questions after the folder: a custom backend, and the default tools.
+    async fn answer_inference_and_tools(&mut self, endpoint: &str, model: &str) -> Result<()> {
+        self.answer_inference(endpoint, model).await?;
         self.answer(TOOLS_QUESTION, "").await
     }
 
@@ -1120,19 +1124,160 @@ mod no_model {
 
         let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("failed"))?;
         terminal
-            .answer(FOLDER_QUESTION, &file.to_string_lossy())
+            .answer(FOLDER_QUESTION, &file.join("sub").to_string_lossy())
+            .await?;
+        terminal
+            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
         let code = terminal.wait_exit(PROMPT).await?;
 
         ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(
+            terminal.transcript().contains("creating data directory"),
+            "this must fail inside init_home: {}",
+            terminal.transcript()
+        );
         ensure!(!live.remembered_home().exists(), "nothing is remembered");
         ensure!(!live.plist().exists(), "nothing is installed");
         assert_eq!(fs::read_to_string(&file)?, "not a folder");
 
         let mut rerun = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("rerun"))?;
-        rerun.expect(FOLDER_QUESTION, PROMPT).await?;
-        rerun.send("\x03")?;
-        rerun.wait_exit(EXIT).await?;
+        rerun
+            .answer(FOLDER_QUESTION, &file.to_string_lossy())
+            .await?;
+        rerun.expect("is not a folder", PROMPT).await?;
+        rerun.expect_exit(1).await?;
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        Ok(())
+    }
+
+    /// Bare `gents --home <folder>`, which stops at the refusal once setup finishes.
+    fn setup_of(live: &LiveBox, folder: &Path, log: &str) -> Result<Terminal> {
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(folder);
+        Terminal::spawn(&command, &live.log(log))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_grants_write_and_unrestricted_tools_when_asked() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let write_root = live.root.join("write root");
+        fs::create_dir(&write_root)?;
+
+        let folder = live.folder("write");
+        let mut terminal = setup_of(&live, &folder, "write")?;
+        terminal
+            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.answer(TOOLS_QUESTION, "2").await?;
+        terminal
+            .answer("Folder agents may write in", &write_root.to_string_lossy())
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        let init = read_json_file(&folder.join("init.json"))?;
+        assert_eq!(init["tool_package"], json!("Write"));
+        assert_eq!(init["tool_ceiling"], json!("Readwrite"));
+        assert_eq!(init["tool_root"], json!(write_root.to_string_lossy()));
+
+        let folder = live.folder("unrestricted");
+        let mut terminal = setup_of(&live, &folder, "unrestricted")?;
+        terminal
+            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.answer(TOOLS_QUESTION, "3").await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        let init = read_json_file(&folder.join("init.json"))?;
+        assert_eq!(init["tool_package"], json!("Yolo"));
+        assert_eq!(init["tool_ceiling"], json!("Readwrite"));
+
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_refuses_a_write_folder_that_is_not_an_existing_folder() -> Result<()> {
+        let live = LiveBox::new()?;
+        let file = live.root.join("a-file");
+        fs::write(&file, "not a folder")?;
+
+        for (name, answer) in [("missing", live.root.join("missing")), ("file", file)] {
+            let folder = live.folder(name);
+            let mut terminal = setup_of(&live, &folder, name)?;
+            terminal
+                .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+                .await?;
+            terminal.answer(TOOLS_QUESTION, "2").await?;
+            terminal
+                .answer("Folder agents may write in", &answer.to_string_lossy())
+                .await?;
+
+            terminal.expect("is not an existing folder", PROMPT).await?;
+            terminal.expect_exit(1).await?;
+            ensure!(
+                !folder.join("init.json").exists(),
+                "{name}: nothing is set up"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_asks_again_after_a_garbage_tools_answer_without_repeating_it() -> Result<()> {
+        const PASTED: &str = "sk-pasted-at-the-wrong-prompt";
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "garbage")?;
+        terminal
+            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.answer(TOOLS_QUESTION, PASTED).await?;
+        terminal.answer("Answer 1, 2 or 3", "1").await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        // The terminal itself echoes typing once; anything more came from `gents`.
+        ensure!(
+            terminal.transcript().matches(PASTED).count() <= 1,
+            "{}",
+            terminal.transcript()
+        );
+        assert_eq!(
+            read_json_file(&folder.join("init.json"))?["tool_ceiling"],
+            json!("Readonly")
+        );
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_prints_the_next_step_after_a_declined_sign_in() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "declined")?;
+        terminal.answer(INFERENCE_QUESTION, "4").await?;
+        terminal.answer(TOOLS_QUESTION, "").await?;
+        terminal.answer("Log in to ChatGPT now", "n").await?;
+
+        terminal
+            .expect(
+                &format!("gents auth login codex --home {}", folder.display()),
+                PROMPT,
+            )
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        held.release().await;
         Ok(())
     }
 

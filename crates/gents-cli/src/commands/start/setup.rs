@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::Parser as _;
 use gents::store::local::home::remember_home;
 
@@ -33,12 +33,14 @@ pub(super) fn logo() -> String {
         .join("\n")
 }
 
-pub(super) fn parse_tool_access(answer: &str) -> Result<ToolAccess> {
+/// `None` carries nothing to repeat back: a key pasted at this prompt must not reach
+/// scrollback a second time.
+pub(super) fn parse_tool_access(answer: &str) -> Option<ToolAccess> {
     match answer.trim() {
-        "" | "1" => Ok(ToolAccess::ReadOnly),
-        "2" => Ok(ToolAccess::Write),
-        "3" => Ok(ToolAccess::Unrestricted),
-        other => bail!("unrecognized choice: {other}"),
+        "" | "1" => Some(ToolAccess::ReadOnly),
+        "2" => Some(ToolAccess::Write),
+        "3" => Some(ToolAccess::Unrestricted),
+        _ => None,
     }
 }
 
@@ -145,11 +147,22 @@ pub(super) async fn setup(
     eprintln!("  1) read files and run read-only tools (default)");
     eprintln!("  2) write inside one folder");
     eprintln!("  3) anything your user can do, with no sandbox");
-    let access = parse_tool_access(&prompt_line("> ").await?)?;
+    let access = loop {
+        match parse_tool_access(&prompt_line("> ").await?) {
+            Some(access) => break access,
+            None => eprintln!("Answer 1, 2 or 3."),
+        }
+    };
     let tool_root = if access == ToolAccess::Write {
         let answer =
             prompt_line_default("Folder agents may write in", &cwd.to_string_lossy()).await?;
-        Some(resolve_folder_answer(&answer, &cwd, &user_home, &cwd))
+        let root = resolve_folder_answer(&answer, &cwd, &user_home, &cwd);
+        ensure!(
+            root.is_dir(),
+            "{} is not an existing folder; choose a folder agents may write in",
+            root.display()
+        );
+        Some(root)
     } else {
         None
     };
@@ -158,11 +171,25 @@ pub(super) async fn setup(
     args.yolo = chosen.yolo;
     args.tool_root = chosen.tool_root;
 
-    init_home(args).await?;
+    let initialized = init_home(args).await?;
+    for step in sign_in_steps(&initialized) {
+        eprintln!("Sign in later with `{step} --home {}`.", home.display());
+    }
     if folder_asked {
         remember_home(&home)?;
     }
     Ok(home)
+}
+
+/// A sign-in declined during setup leaves its step only in what `init_home` returns.
+fn sign_in_steps(initialized: &serde_json::Value) -> Vec<&str> {
+    initialized["next_steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|step| step.starts_with("gents auth login"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -182,18 +209,27 @@ mod tests {
 
     #[test]
     fn empty_answer_is_read_only() {
-        assert_eq!(parse_tool_access("").unwrap(), ToolAccess::ReadOnly);
-        assert_eq!(parse_tool_access("  \n").unwrap(), ToolAccess::ReadOnly);
+        assert_eq!(parse_tool_access(""), Some(ToolAccess::ReadOnly));
+        assert_eq!(parse_tool_access("  \n"), Some(ToolAccess::ReadOnly));
     }
 
     #[test]
     fn only_exact_choices_grant_more() {
-        assert_eq!(parse_tool_access("1").unwrap(), ToolAccess::ReadOnly);
-        assert_eq!(parse_tool_access("2\n").unwrap(), ToolAccess::Write);
-        assert_eq!(parse_tool_access("3").unwrap(), ToolAccess::Unrestricted);
+        assert_eq!(parse_tool_access("1"), Some(ToolAccess::ReadOnly));
+        assert_eq!(parse_tool_access("2\n"), Some(ToolAccess::Write));
+        assert_eq!(parse_tool_access("3"), Some(ToolAccess::Unrestricted));
         for garbage in ["4", "yolo", "2 3", "22", "write"] {
-            assert!(parse_tool_access(garbage).is_err(), "{garbage:?}");
+            assert_eq!(parse_tool_access(garbage), None, "{garbage:?}");
         }
+    }
+
+    #[test]
+    fn only_sign_in_steps_are_printed() {
+        let initialized = serde_json::json!({
+            "next_steps": ["gents auth login codex", "gents server", "gents codex"],
+        });
+        assert_eq!(sign_in_steps(&initialized), ["gents auth login codex"]);
+        assert!(sign_in_steps(&serde_json::json!({})).is_empty());
     }
 
     #[test]
