@@ -82,12 +82,29 @@ export function inferenceState(backends: Backends) {
   return unready ? `${unready} not ready` : "Ready";
 }
 
-/** A node's inference: its providers' logos and whether they are ready. */
-export function InferenceSummary({ backends }: { backends: Backends }) {
+/** A node's inference: its providers' logos and whether they are ready;
+    `limit` says so in place of Ready when an account is near or at its limit. */
+export function InferenceSummary({
+  backends,
+  limit,
+}: {
+  backends: Backends;
+  limit?: { text: string; tone: "warning" | "destructive"; title: string } | null;
+}) {
+  const state = inferenceState(backends);
+  const shown = state === "Ready" && limit ? limit : null;
   return (
     <span className="inline-flex min-w-0 items-center gap-2 align-middle">
       {backends.length > 0 && <InferenceLogos backends={backends} />}
-      <span className="truncate">{inferenceState(backends)}</span>
+      <span
+        title={shown?.title}
+        className={cn(
+          "truncate",
+          shown && (shown.tone === "warning" ? "text-warning" : "text-destructive"),
+        )}
+      >
+        {shown ? shown.text : state}
+      </span>
     </span>
   );
 }
