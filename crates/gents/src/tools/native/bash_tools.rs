@@ -245,7 +245,8 @@ impl Tool for UnrestrictedBashTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let policy_description = match self.policy.mode {
+        let policy = crate::tools::native::effective_command_policy(&self.policy);
+        let policy_description = match policy.mode {
             CommandExecutionMode::ReadOnly => "read-only policy",
             CommandExecutionMode::ArtifactWrite => {
                 "artifact_write policy; source stays read-only, with compiler output and temporary files confined to the request's private artifact directory. CARGO_TARGET_DIR and TMPDIR are supplied automatically"
@@ -257,10 +258,20 @@ impl Tool for UnrestrictedBashTool {
                 "unrestricted policy; commands run without the macOS seatbelt sandbox"
             }
         };
+        let network_description = match policy.effective_network_mode() {
+            super::shared::CommandNetworkMode::Disabled => "network access is disabled",
+            super::shared::CommandNetworkMode::Enabled => "network access is enabled by policy",
+            super::shared::CommandNetworkMode::Inherit => "network access follows the host policy",
+        };
+        let credential_description = if policy.mode.protects_credentials() {
+            "; saved credentials are protected from this command"
+        } else {
+            ""
+        };
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Run a command under the configured execution policy. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Current command policy: {policy_description}. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Shell pipelines normally report only their final command's exit status, so avoid pipelines that mask an upstream failure or invoke a shell with pipefail explicitly. Returns compact text with first-line gents_exec metadata. Set raw_json=true for structured JSON."
+                "Run a command under the configured execution policy. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Current command policy: {policy_description}; {network_description}{credential_description}. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Shell pipelines normally report only their final command's exit status, so avoid pipelines that mask an upstream failure or invoke a shell with pipefail explicitly. Returns compact text with first-line gents_exec metadata. Set raw_json=true for structured JSON."
             ),
             parameters: serde_json::json!({
                 "type": "object",
