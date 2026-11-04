@@ -1473,6 +1473,9 @@ mod with_model {
         let (request, _, _) = wait_for_request(&graphql, &node_did_of(folder)?, &prompt).await?;
         wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
 
+        // The request completes before the shim's next stream poll tells Codex, and until
+        // then Ctrl-C interrupts the turn Codex still counts as running instead of exiting.
+        terminal.settle().await;
         terminal.send("\x03")?;
         terminal.wait_exit(PROMPT).await.with_context(|| {
             let events = folder.join("codex-ui/log/codex-shim-events.jsonl");
