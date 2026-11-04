@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation, PayloadRef,
@@ -162,7 +162,7 @@ fn auxiliary_publication_candidate(
 }
 
 async fn create_signed_fixture_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &dyn NodeIdentity,
     spec: crate::request::lifecycle::RequestSpec,
 ) -> Result<crate::request::watcher::AgentRequest> {
@@ -184,7 +184,7 @@ async fn create_signed_fixture_request(
 }
 
 async fn claim_fixture_request(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     request: crate::request::watcher::AgentRequest,
     duration: u64,
@@ -224,7 +224,7 @@ async fn claim_fixture_request(
 pub(crate) struct NativeCanonicalExecutionAdapter;
 
 pub(crate) struct NativeCanonicalExecution {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     _identity_guard: tempfile::TempDir,
     fixture_epoch_seconds: i64,
     request_doc_id: String,
@@ -1389,7 +1389,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             )?);
             let node_did = identity.did().to_owned();
             let node = Arc::new(
-                EmbeddedNode::builder()
+                Node::builder()
                     .with_node_identity_did(identity.did())
                     .build()
                     .await?,

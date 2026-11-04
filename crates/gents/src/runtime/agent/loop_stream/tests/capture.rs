@@ -536,7 +536,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
 
     async fn rendered_rows(
-        node: &Arc<defra_node::EmbeddedNode>,
+        node: &Arc<defra_node::Node>,
         capture_key: &str,
     ) -> Vec<serde_json::Value> {
         let query = format!(

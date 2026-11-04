@@ -1,7 +1,7 @@
 use super::*;
 
 pub async fn update_goal_fields_if_status(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     goal: &GoalDocument,
     expected_status: GoalStatus,
     fields: &str,
@@ -65,7 +65,7 @@ pub async fn update_goal_fields_if_status(
 }
 
 pub async fn claim_continuation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     goal: &GoalDocument,
     parent_request_id: &str,
 ) -> Result<bool> {
@@ -109,7 +109,7 @@ pub async fn claim_continuation(
 }
 
 pub async fn claim_retry_continuation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     goal: &GoalDocument,
     parent_request_id: &str,
     retry_count: i64,

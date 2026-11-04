@@ -43,7 +43,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
         let node_did = identity.did().to_owned();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(&path)
                 .with_node_identity_did(&node_did)
                 .build()

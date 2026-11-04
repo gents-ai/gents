@@ -6,7 +6,7 @@ use super::*;
 /// filesystem distribution, registry endpoint, or control-plane endpoint.
 pub(super) struct PackInstaller {
     pub(super) core: SelfConfigCore,
-    pub(super) node: Arc<EmbeddedNode>,
+    pub(super) node: Arc<Node>,
     /// `None` resolves from the registry in memory and installs no plugins.
     pub(super) home: Option<std::path::PathBuf>,
 }

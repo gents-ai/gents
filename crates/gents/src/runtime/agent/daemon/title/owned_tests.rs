@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::{stream, StreamExt};
 use gents_protocol::message::ReasoningContent;
 use gents_protocol::output::extent::inspect_open_source;
@@ -1060,7 +1060,7 @@ struct TitleProvider {
     entered: Arc<tokio::sync::Notify>,
     before_second: Option<Arc<tokio::sync::Notify>>,
     third_poll: Option<Arc<tokio::sync::Notify>>,
-    fence_generation: Option<(Arc<EmbeddedNode>, String, String)>,
+    fence_generation: Option<(Arc<Node>, String, String)>,
     error: Option<String>,
     panic_on_stream: bool,
 }
@@ -1174,7 +1174,7 @@ impl CompletionModel for TitleProvider {
 
 struct TitleFixture {
     _directory: tempfile::TempDir,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent_config: Arc<ResolvedAgent>,
     identity: Arc<dyn NodeIdentity>,
     parent: AgentRequest,
@@ -1217,7 +1217,7 @@ impl TitleFixture {
             KeyIdentity::load_or_create(directory.path().join("principal.key"), None).unwrap(),
         );
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(identity.did())
                 .data_path(directory.path())
                 .build()
@@ -2680,7 +2680,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         registry,
         format!("{backend}:connection"),
     );
-    let parent_state = |node: Arc<EmbeddedNode>, doc: String| async move {
+    let parent_state = |node: Arc<Node>, doc: String| async move {
         let doc = crate::store::graphql::escape_graphql_string(&doc);
         ConfigAccess::local(node)
             .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state }} }}"))

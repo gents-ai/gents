@@ -1,9 +1,9 @@
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 
 use super::{RemoteP2pAdminError, RemoteP2pAdminResult};
 
 pub fn resolve_embedded_collection_id(
-    node: &EmbeddedNode,
+    node: &Node,
     name: &str,
 ) -> RemoteP2pAdminResult<Option<String>> {
     match node.get_collection(name) {
@@ -16,7 +16,7 @@ pub fn resolve_embedded_collection_id(
 }
 
 pub fn resolve_embedded_collection_name(
-    node: &EmbeddedNode,
+    node: &Node,
     token: &str,
 ) -> RemoteP2pAdminResult<Option<String>> {
     match node.get_collection(token) {

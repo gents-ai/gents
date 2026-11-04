@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio_util::sync::CancellationToken;
 
 use crate::UpdateSubscriptionSource;
@@ -37,7 +37,7 @@ pub(crate) const LIFECYCLE_FAILED: &str = "failed";
 pub(crate) const LIFECYCLE_DENIED: &str = "denied";
 
 pub(crate) struct CallbackEngine {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -56,7 +56,7 @@ pub(crate) struct CallbackEngine {
 }
 
 pub async fn run_callback_engine(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,

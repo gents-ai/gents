@@ -2,7 +2,7 @@ use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use super::{
@@ -12,7 +12,7 @@ use super::{
 use crate::store::graphql::escape_graphql_string;
 
 pub async fn load_session_history_snapshot(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {

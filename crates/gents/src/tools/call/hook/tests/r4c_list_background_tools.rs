@@ -1,4 +1,4 @@
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node;
 use gents::inference::llm::tool::BoxFuture;
 use gents::inference::llm::tool::ToolDefinition;
 use gents::inference::llm::tool::{ToolDyn, ToolError};
@@ -359,7 +359,7 @@ fn skip_reason_json(action: ToolCallHookAction) -> Value {
     serde_json::from_str(&reason).expect("skip reason should be JSON")
 }
 
-async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
+async fn count_tool_calls_by_name(node: &Node, session_id: &str, tool_name: &str) -> usize {
     let session_id = escape_graphql_string(session_id);
     let tool_name = escape_graphql_string(tool_name);
     let query = format!(

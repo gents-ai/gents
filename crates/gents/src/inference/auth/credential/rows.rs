@@ -1,11 +1,11 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::{json, Value};
 
 use super::*;
 
 pub async fn lookup_oauth_credential_by_id(
-    node: &EmbeddedNode,
+    node: &Node,
     credential_id: &str,
 ) -> Result<Option<OAuthCredential>> {
     let response = crate::store::graphql::graphql_with_transaction_retry(
@@ -22,7 +22,7 @@ pub async fn lookup_oauth_credential_by_id(
 }
 
 pub async fn list_oauth_credentials(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Vec<OAuthCredential>> {
     let response = crate::store::graphql::graphql_with_transaction_retry(
@@ -52,7 +52,7 @@ pub async fn list_oauth_credentials_on(
 }
 
 pub async fn lookup_oauth_credential_by_doc_id(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
 ) -> Result<Option<OAuthCredential>> {
     let response = crate::store::graphql::graphql_with_transaction_retry(
@@ -69,7 +69,7 @@ pub async fn lookup_oauth_credential_by_doc_id(
 }
 
 pub async fn upsert_oauth_credential(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     credential: &OAuthCredential,
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);

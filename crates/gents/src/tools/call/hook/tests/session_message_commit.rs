@@ -2,7 +2,7 @@ use super::*;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 
-async fn write_config<T>(node: &Arc<EmbeddedNode>, collection: crate::Collection, document: &T)
+async fn write_config<T>(node: &Arc<Node>, collection: crate::Collection, document: &T)
 where
     T: serde::Serialize,
 {
@@ -30,7 +30,7 @@ where
     .unwrap();
 }
 
-async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
+async fn enable_agents_tools(node: &Arc<Node>, did: &str) {
     crate::test_support::install_test_agent(node, did, "general").await;
     write_config(
         node,
@@ -70,7 +70,7 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
     .await;
 }
 
-async fn rows(node: &EmbeddedNode, query: &str, collection: &str) -> Vec<serde_json::Value> {
+async fn rows(node: &Node, query: &str, collection: &str) -> Vec<serde_json::Value> {
     let response = node.execute(query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.unwrap()[collection]
@@ -155,7 +155,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let did = identity.did().to_owned();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&did)
             .data_path(dir.path())
             .build()
@@ -226,7 +226,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let identity =
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()

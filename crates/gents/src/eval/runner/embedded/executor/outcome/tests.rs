@@ -237,7 +237,7 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
 
 #[tokio::test]
 async fn an_unreadable_seed_trigger_status_is_infrastructure() {
-    let node = EmbeddedNode::builder().build().await.unwrap();
+    let node = Node::builder().build().await.unwrap();
     let failure = trigger_failure(
         &node,
         "did:key:trial",

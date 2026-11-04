@@ -1441,7 +1441,7 @@ async fn query_tool_is_advertised_and_registered() {
     );
     let node_did = crate::store::identity::NodeIdentity::did(&*identity).to_owned();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&node_did)
             .build()
             .await

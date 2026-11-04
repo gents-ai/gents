@@ -9,7 +9,7 @@ pub(crate) struct AgentToolCallDateTimeRow {
 }
 
 pub(super) async fn agent_tool_call_datetime_update_fragment(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
     omit: &[&str],
 ) -> Result<String> {

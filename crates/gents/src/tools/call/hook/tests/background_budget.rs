@@ -32,7 +32,7 @@ async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> se
     serde_json::from_str(&reason).unwrap()
 }
 
-async fn assert_background_rows(node: &EmbeddedNode, request: &str, count: usize, state: &str) {
+async fn assert_background_rows(node: &Node, request: &str, count: usize, state: &str) {
     let response = node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}} }}) {{ _docID lifecycle_state tool_name }} }}"#,
         crate::store::graphql::escape_graphql_string(request),
@@ -58,7 +58,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -239,7 +239,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -389,7 +389,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()

@@ -13,7 +13,7 @@ use super::outcome::{provider_reason, stage_failure_kind, trigger_failure};
 use super::settle::{extend_with_later_requests, remaining_of, settle_home};
 use super::submit::{seed_and_await_fire, submit_stage, StageSubmission};
 use super::{Reconciled, POLL};
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::eval::runner::embedded::home::{EmbeddedHome, RunningRuntime};
 use crate::eval::runner::embedded::observe::{
     await_terminal, collect_request_evidence, poll_request, RequestEvidence, TerminalObservation,
@@ -154,7 +154,7 @@ impl ObservedStage {
 }
 
 async fn observe_stage_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     cancel: &CancellationToken,
     runtime: &RunningRuntime,
     request_id: &str,
@@ -451,7 +451,7 @@ async fn runtime_exited(runtime: &RunningRuntime) {
 }
 
 async fn interrupt_and_settle(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_id: &str,
 ) -> Result<TerminalObservation> {
     crate::request::interrupt::interrupt_request(node, request_id)

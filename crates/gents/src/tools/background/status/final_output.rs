@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::{
     MessagePublication, MessageRole, ReconstructionError, TerminalOutput,
 };
@@ -15,7 +15,7 @@ use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::call::lifecycle::CausedRequestTerminal;
 
 pub async fn load_caused_request_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     caused_request_doc_id: &str,
 ) -> Result<Option<CausedRequestTerminal>> {
     ConfigAccess::transact_local_readonly(node, None, "background.caused_request_terminal", |txn| {
@@ -42,7 +42,7 @@ pub(crate) fn select_folded_outcome(
 }
 
 pub(crate) async fn load_session_message_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     caused_doc_id: &str,
 ) -> Result<Option<CausedRequestTerminal>> {
     ConfigAccess::transact_local_readonly(node, None, "background.session_message_terminal", |txn| {

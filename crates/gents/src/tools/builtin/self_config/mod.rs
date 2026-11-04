@@ -55,7 +55,7 @@ use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
 use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
 use agent::derive_agent_id;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
@@ -178,7 +178,7 @@ pub struct ConfigureAgentParams {
 
 pub fn build_self_config_tools(
     usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     identity: Option<Arc<dyn NodeIdentity>>,
     config: &SelfConfigToolConfig,

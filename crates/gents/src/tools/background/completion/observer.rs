@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) async fn run_background_completion_observer(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     local_did: String,
     background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
@@ -18,7 +18,7 @@ pub(crate) async fn run_background_completion_observer(
 }
 
 struct BackgroundCompletionObserver {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     local_did: String,
     background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
@@ -29,7 +29,7 @@ struct BackgroundCompletionObserver {
 
 impl BackgroundCompletionObserver {
     fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         local_did: String,
         background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
         job_driver: Arc<crate::tools::background::job::driver::JobDriver>,

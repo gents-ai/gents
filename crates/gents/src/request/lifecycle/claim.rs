@@ -47,7 +47,7 @@ impl BackgroundCompletionClaimSnapshot {
 }
 
 async fn claim_request_with_projection<F>(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     capture_background_snapshot: bool,
     request: &AgentRequest,
@@ -232,7 +232,7 @@ fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 async fn fetch_interrupt_and_ttl(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
 ) -> Result<(Option<String>, Option<String>)> {
     let escaped_doc_id = escape_graphql_string(doc_id);
@@ -352,7 +352,7 @@ impl RequestLifecycle {
     }
 
     pub(crate) async fn begin_owned_execution_durable_with_clock<F>(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         request_doc_id: &str,
         generation: &str,
         now: F,
@@ -896,7 +896,7 @@ mod tests {
     const TEST_AGENT_ID: &str = "general";
     const TEST_BACKEND_ID: &str = "backend-order";
 
-    async fn test_node() -> Arc<EmbeddedNode> {
+    async fn test_node() -> Arc<Node> {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node
@@ -993,7 +993,7 @@ mod tests {
     }
 
     async fn insert_pending_request(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         request_id: &str,
         session_id: &str,
         created_at: &str,
@@ -1013,7 +1013,7 @@ mod tests {
     }
 
     async fn insert_pending_request_for_owner(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         owner: &str,
         request_id: &str,
         session_id: &str,
@@ -1071,7 +1071,7 @@ mod tests {
     }
 
     async fn durable_request_row(
-        node: &EmbeddedNode,
+        node: &Node,
         doc_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
         let doc_id = escape_graphql_string(doc_id);
@@ -1718,7 +1718,7 @@ mod tests {
     }
 
     async fn signed_background_claim_fixture(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         identity: &crate::store::identity::KeyIdentity,
         session: &str,
     ) -> (AgentRequest, String) {

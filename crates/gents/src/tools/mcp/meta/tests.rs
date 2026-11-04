@@ -58,7 +58,7 @@ use std::sync::{
     Arc,
 };
 
-async fn remote_node() -> Arc<defra_node::EmbeddedNode> {
+async fn remote_node() -> Arc<defra_node::Node> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for (owner, port) in [("did:test:owner", 8080), ("did:test:foreign", 9090)] {
@@ -76,7 +76,7 @@ fn catalog() -> rmcp::model::ListToolsResult {
 }
 
 fn remote_context(
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     pool: crate::tools::mcp::pool::McpPool,
 ) -> MetaToolContext {
     MetaToolContext {

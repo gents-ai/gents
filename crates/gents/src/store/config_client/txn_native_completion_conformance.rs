@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crypto::keys::PrivateKey;
 use defra_core::signing::{RemoteSigner, SigningAuthorization, SigningConfig, SigningKeyType};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use identity::{Identity as _, RawIdentity};
 use serde::Deserialize;
 use tokio::sync::Notify;
@@ -91,7 +91,7 @@ struct Case {
     observations: Vec<Observation>,
 }
 
-async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSignerOnDrop) {
+async fn signed_node() -> (Arc<Node>, Arc<BlockingSigner>, ReleaseSignerOnDrop) {
     let identity = RawIdentity::from_secp256k1(crypto::generate_secp256k1().unwrap()).unwrap();
     let did = identity.did().unwrap().to_string();
     let signer = Arc::new(BlockingSigner {
@@ -114,7 +114,7 @@ async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSigner
     );
     let release = ReleaseSignerOnDrop(signer.clone());
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(did)
             .build()
             .await

@@ -54,7 +54,7 @@ async fn request(
 }
 
 pub(super) async fn bind_signed_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     hook: &DefraSessionHook,
     identity: &KeyIdentity,
     request_id: &str,
@@ -113,7 +113,7 @@ pub(super) async fn bind_signed_request(
 }
 
 async fn claim_signed_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     hook: &DefraSessionHook,
     request_id: &str,
     session: &str,
@@ -122,7 +122,7 @@ async fn claim_signed_request(
 }
 
 async fn claim_request_fixture(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     hook: &DefraSessionHook,
     request_id: &str,
     session: &str,
@@ -201,7 +201,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let identity =
                 KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap();
             let node = Arc::new(
-                EmbeddedNode::builder()
+                Node::builder()
                     .with_node_identity_did(identity.did())
                     .build()
                     .await

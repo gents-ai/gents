@@ -61,7 +61,7 @@ async fn collection_block_notifications_never_enter_the_command_retry_queue() {
             .unwrap(),
     );
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

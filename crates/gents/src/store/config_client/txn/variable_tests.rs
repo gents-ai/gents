@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::json;
 
 use super::*;
 
 #[tokio::test]
 async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type MutationVariableProbe { key: String label: String enabled: Boolean count: Int tags: [String] payload: JSON }").await.unwrap();
     let payload = json!({"a-b": [], "nested": [{"": {}, "雪": [null, []]}]});
     for (query, input) in [
@@ -68,7 +68,7 @@ async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
 
 #[tokio::test]
 async fn embedded_transaction_preserves_json_variables_and_rollback() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type TransactionJsonProbe { key: String payload: JSON }")
         .await
         .unwrap();

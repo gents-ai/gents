@@ -852,7 +852,7 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
 
 fn access_node(
     access: &crate::store::config_client::ConfigAccess,
-) -> &std::sync::Arc<defra_node::EmbeddedNode> {
+) -> &std::sync::Arc<defra_node::Node> {
     access.local_node().expect("test helpers use local access")
 }
 

@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::job::DataWrite;
 use serde_json::{Map, Value};
 
@@ -167,13 +167,13 @@ fn take_writes(output: &mut Value) -> Result<Vec<DataWrite>, String> {
 }
 
 pub(super) async fn execute(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &mut CallbackInvocationDoc,
     handler: PluginHandler<'_>,
     source: &Value,
     plugins: &PluginExecutor,
     journal: Vec<ActionJournalEntry>,
-    data_node: Option<&Arc<EmbeddedNode>>,
+    data_node: Option<&Arc<Node>>,
 ) -> Result<()> {
     if let Some(journal) = crate::tools::workspace::recover_running(&journal) {
         return persist_journal(
@@ -269,7 +269,7 @@ pub(super) async fn execute(
 }
 
 async fn commit_success(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     documents: Vec<(String, Value)>,
@@ -440,7 +440,7 @@ mod tests {
         assert!(validate_handler("team/lint", &digest, Some("run_id"), &twice).is_err());
     }
 
-    async fn run_echo_binding(digest: &str) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    async fn run_echo_binding(digest: &str) -> (std::sync::Arc<Node>, tempfile::TempDir) {
         run_binding(digest, None, false, "").await
     }
 
@@ -449,7 +449,7 @@ mod tests {
         allowed: Option<&std::path::Path>,
         bind: bool,
         job_path: &str,
-    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    ) -> (std::sync::Arc<Node>, tempfile::TempDir) {
         let binding = bind.then(|| crate::pack::PluginDirBinding {
             input_field: "path".into(),
             original_field: Some("origin".into()),
@@ -473,7 +473,7 @@ mod tests {
         binding: Option<crate::pack::PluginDirBinding>,
         allowed: Option<(&std::path::Path, crate::pack::BindAccess)>,
         job_path: &str,
-    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    ) -> (std::sync::Arc<Node>, tempfile::TempDir) {
         if binding.is_some() {
             record.declaration.input_schema = serde_json::json!({
                 "type": "object",
@@ -534,7 +534,7 @@ mod tests {
         (node, home)
     }
 
-    async fn rows(node: &EmbeddedNode, query: &str, collection: &str) -> Vec<Value> {
+    async fn rows(node: &Node, query: &str, collection: &str) -> Vec<Value> {
         crate::store::graphql::rows::<Value>(&node.execute(query).await, collection).unwrap()
     }
 
@@ -594,7 +594,7 @@ mod tests {
         );
     }
 
-    async fn only_invocation(node: &EmbeddedNode) -> Value {
+    async fn only_invocation(node: &Node) -> Value {
         let mut invocations = rows(
             node,
             "{ CallbackInvocation { lifecycle_state error } }",
@@ -663,7 +663,7 @@ mod tests {
     async fn run_data_plugin(
         service: &str,
         canned: Value,
-    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    ) -> (std::sync::Arc<Node>, tempfile::TempDir) {
         let installed = data_plugin(service, &canned);
         let digest = installed.1.digest.clone();
         run_plugin_binding(installed, &digest, None, None, "").await

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, SourceClose,
 };
@@ -26,7 +26,7 @@ use super::{
 /// request supplied by the caller is never a lookup root.
 #[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates(
-    node: &EmbeddedNode,
+    node: &Node,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
@@ -34,7 +34,7 @@ pub(crate) async fn load_canonical_assistant_candidates(
 }
 
 pub(crate) async fn load_canonical_assistant_candidates_with(
-    node: &EmbeddedNode,
+    node: &Node,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,

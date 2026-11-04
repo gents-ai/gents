@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use super::inference::{
@@ -15,7 +15,7 @@ use super::{
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub async fn load_session_investigation(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
 ) -> Result<SessionInvestigationSnapshot> {

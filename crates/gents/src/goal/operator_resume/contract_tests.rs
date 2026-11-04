@@ -279,7 +279,7 @@ async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_childr
 #[tokio::test]
 async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
     async fn native(
-        node: &EmbeddedNode,
+        node: &Node,
         handle: &query::TransactionHandle,
         query: &str,
     ) -> serde_json::Value {

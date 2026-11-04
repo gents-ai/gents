@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use std::sync::Arc;
 
 use super::{MessageBody, RenderedBody};
 
 pub(crate) async fn render_body(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     caller_node_did: &str,
     target_agent_id: &str,
     target_session_id: &str,
@@ -38,7 +38,7 @@ pub(crate) async fn render_body(
 }
 
 pub(crate) async fn load_configured_task(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     caller_node_did: &str,
     task_id: &str,
 ) -> Result<Option<crate::documents::Task>> {

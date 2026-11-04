@@ -258,7 +258,7 @@ pub(crate) fn latest_assignment_goals(
 }
 
 pub(crate) async fn load_request_assignment(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
     crate::store::config_client::ConfigAccess::transact_local_readonly(

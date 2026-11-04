@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -259,7 +259,7 @@ impl ServiceHealthMap {
 
 #[derive(Clone, Copy)]
 pub struct HealthPersistenceContext<'a> {
-    pub node: &'a Arc<EmbeddedNode>,
+    pub node: &'a Arc<Node>,
     pub node_did: &'a str,
 }
 
@@ -306,7 +306,7 @@ pub struct McpHealthCheckService {
     reason = "public signature called from other crates"
 )]
 pub fn spawn_health_checker(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     mcp_pool: McpPool,
     health_map: ServiceHealthMap,
     local_hostname: String,
@@ -370,7 +370,7 @@ pub fn spawn_health_checker(
 
 #[cfg(test)]
 async fn run_health_check(
-    node: &EmbeddedNode,
+    node: &Node,
     mcp_pool: &McpPool,
     health_map: &ServiceHealthMap,
     local_hostname: &str,
@@ -396,7 +396,7 @@ async fn run_health_check(
     reason = "registry health inputs and explicit shutdown scope"
 )]
 async fn run_health_check_with_cancel(
-    node: &EmbeddedNode,
+    node: &Node,
     mcp_pool: &McpPool,
     health_map: &ServiceHealthMap,
     local_hostname: &str,
@@ -1121,7 +1121,7 @@ mod registry_parsing_tests {
 #[cfg(test)]
 mod tests {
     use chrono::Duration as ChronoDuration;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node;
     use rmcp::model::ListToolsResult;
     use serde_json::Value;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1137,7 +1137,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_persistence_skips_unchanged_rows_and_only_commits_changed_fields() {
-        async fn field_commits(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
+        async fn field_commits(node: &Node) -> std::collections::BTreeMap<String, usize> {
             let rows = node.execute("{ ToolServiceHealthState { _docID } }").await;
             assert!(!rows.has_errors(), "{:?}", rows.errors);
             let doc_id = rows.data.as_ref().unwrap()["ToolServiceHealthState"][0]["_docID"]
@@ -1212,7 +1212,7 @@ mod tests {
             );
         }
 
-        let unavailable = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let unavailable = Arc::new(Node::builder().build().await.unwrap());
         let failed_context = HealthPersistenceContext {
             node: &unavailable,
             node_did: context.node_did,
@@ -1546,7 +1546,7 @@ mod tests {
                 Ok(ListToolsResult::default())
             }
         });
-        async fn rows(node: &EmbeddedNode) -> Vec<Value> {
+        async fn rows(node: &Node) -> Vec<Value> {
             let response = node
                 .execute(
                     r#"{ ToolServiceHealthState {
@@ -1677,7 +1677,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("add returned no _docID: {data}"));
             created.entry(service).or_default().push(doc_id.to_owned());
         }
-        let reader_order = |node: Arc<EmbeddedNode>| async move {
+        let reader_order = |node: Arc<Node>| async move {
             let response = node
                 .execute(
                     r#"{ ToolServiceHealthState(order: [{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]) { _docID service_id status } }"#,

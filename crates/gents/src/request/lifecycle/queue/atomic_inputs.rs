@@ -21,7 +21,7 @@ struct BackgroundCompletionGateKey {
 }
 
 pub(super) fn background_completion_gate(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     queue_key: &str,
@@ -31,7 +31,7 @@ pub(super) fn background_completion_gate(
     > = OnceLock::new();
 
     let key = BackgroundCompletionGateKey {
-        node: node as *const EmbeddedNode as usize,
+        node: node as *const Node as usize,
         session_id: session_id.to_string(),
         node_did: node_did.to_string(),
         queue_key: queue_key.to_string(),
@@ -56,7 +56,7 @@ pub(super) fn background_completion_gate(
     reason = "called from background_completion::notification_delivery and queue tests with this shape"
 )]
 pub(crate) async fn persist_background_completion_with_message_canonical(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent: &AgentRequest,
     notification_content: &str,
     message_key: &str,
@@ -140,7 +140,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
 
 #[cfg(test)]
 pub(crate) async fn persist_background_completion_with_message(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent: &AgentRequest,
     notification_content: &str,
     message_key: &str,
@@ -164,7 +164,7 @@ pub(crate) async fn persist_background_completion_with_message(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_background_completion_with_message_waking(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent: &AgentRequest,
     notification_content: &str,
     message_key: &str,

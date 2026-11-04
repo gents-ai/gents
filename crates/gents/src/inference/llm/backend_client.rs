@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::ResolvedAgent;
@@ -151,7 +151,7 @@ fn messages_replay_issuer(
 
 fn api_key_http(
     cache: &Arc<crate::inference::usage_observation::UsageCache>,
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     agent: &ResolvedAgent,
 ) -> crate::inference::clients::provider_http::ProviderHttpClient {
     match crate::inference::usage_observation::UsageAccount::for_agent(agent) {
@@ -171,7 +171,7 @@ fn api_key_http(
 /// and is bounded by `build_timeout` so a wedged lookup cannot hang startup.
 pub(crate) async fn build_backend_client(
     cache: Arc<crate::inference::usage_observation::UsageCache>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent: &ResolvedAgent,
     api_key: &str,
     build_timeout: Duration,
@@ -505,7 +505,7 @@ mod tests {
     use crate::runtime::agent::PendingAgent;
     use crate::store::identity::KeyIdentity;
 
-    async fn test_node() -> Arc<EmbeddedNode> {
+    async fn test_node() -> Arc<Node> {
         Arc::new(crate::test_support::node_builder().build().await.unwrap())
     }
 
@@ -680,7 +680,7 @@ mod tests {
     }
 
     async fn seed_oauth_credential(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         agent: &ResolvedAgent,
         provider: &str,
     ) {
@@ -688,7 +688,7 @@ mod tests {
     }
 
     async fn seed_oauth_account(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         agent: &ResolvedAgent,
         provider: &str,
         account_ref: Option<&str>,

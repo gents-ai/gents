@@ -236,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn additive_series_preserves_exact_install_and_requires_declared_fields() {
         let node = std::sync::Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),
@@ -301,7 +301,7 @@ mod tests {
     #[tokio::test]
     async fn additive_schema_contract_preview_digest_and_reinstall() {
         let node = std::sync::Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),

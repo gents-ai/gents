@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -24,7 +24,7 @@ use crate::lean_vocab_test::{
 use crate::request::watcher::AgentRequest;
 use crate::store::schema::ensure_runtime_schemas;
 
-async fn test_node() -> Arc<EmbeddedNode> {
+async fn test_node() -> Arc<Node> {
     lean_inference_slot_accounting_cases();
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -238,7 +238,7 @@ fn assert_inference_call_rows_use_lean_vocabulary(rows: &[Value]) {
     }
 }
 
-async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
+async fn call_rows(node: &Node) -> Vec<Value> {
     let response = node
         .execute(
             r#"{
@@ -372,7 +372,7 @@ fn sorted_call_states_for_backend(rows: &[Value], backend_id: &str) -> Vec<Strin
     states
 }
 
-async fn wait_for_call_row_count(node: &EmbeddedNode, expected: usize) -> Vec<Value> {
+async fn wait_for_call_row_count(node: &Node, expected: usize) -> Vec<Value> {
     let mut last = Vec::new();
     for _ in 0..100 {
         let rows = call_rows(node).await;
@@ -386,7 +386,7 @@ async fn wait_for_call_row_count(node: &EmbeddedNode, expected: usize) -> Vec<Va
 }
 
 async fn wait_for_request_call_state(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
     expected_state: &str,
 ) -> Value {
@@ -1251,7 +1251,7 @@ fn call_state_for_request(rows: &[Value], request_id: &str) -> Option<String> {
 #[tokio::test]
 async fn queued_persist_failure_releases_queue_capacity() {
     let node = test_node().await;
-    let schemaless = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let schemaless = Arc::new(Node::builder().build().await.unwrap());
     let controller = super::controller::BackendAdmissionController::new(
         1,
         config("backend-queue-leak", 1, 1),
@@ -1788,7 +1788,7 @@ fn ping() -> rig::completion::CompletionRequest {
     }
 }
 
-async fn attribution_of(node: &EmbeddedNode, request_id: &str) -> Option<String> {
+async fn attribution_of(node: &Node, request_id: &str) -> Option<String> {
     let response = node
         .execute(&format!(
             r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{}"}}}}) {{ backend_config_fingerprint }} }}"#,
@@ -1885,7 +1885,7 @@ type ParkedCall = std::pin::Pin<
 >;
 
 async fn park_with_assigned_permit(
-    node: &EmbeddedNode,
+    node: &Node,
     registry: &AdmissionRegistry,
     backend: &'static str,
     request_id: &'static str,

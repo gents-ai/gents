@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{ensure, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::file_inventory::{
     FileInventoryPageDemand, FileInventoryPageGrant, FileInventoryPageReceipt, FileInventoryReply,
     FileInventoryResponse, FILE_INVENTORY_PAGE_GRANT_VERSION,
@@ -78,7 +78,7 @@ pub(crate) async fn load_prepared_in_txn(
 }
 
 pub(crate) async fn load_prepared_page(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
     verifier: &dyn NodeIdentity,
 ) -> Result<Option<PreparedInventoryPage>> {
@@ -95,7 +95,7 @@ pub(crate) async fn load_prepared_page(
 /// Preparation is immutable but not terminal. Lost acknowledgments retry this
 /// exact document; no reader or automatic replication route is installed here.
 pub(crate) async fn prepare_page(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
     candidate: &FileInventoryPageReceipt,
     verifier: &dyn NodeIdentity,
@@ -211,7 +211,7 @@ impl VerifiedInventoryResponse {
     /// File-image access still requires its separate explicit image demand.
     pub async fn read_page(
         &self,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         verifier: &dyn NodeIdentity,
     ) -> Result<Option<FileInventoryPageReceipt>> {
         let FileInventoryResponse::Page(grant) = &self.0 else {

@@ -19,7 +19,7 @@ impl RequestLifecycle {
 }
 
 pub(super) async fn request_view(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
     let doc_id = escape_graphql_string(request_doc_id);

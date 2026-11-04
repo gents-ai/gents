@@ -41,7 +41,7 @@ impl GoalEdit {
 }
 
 pub(crate) async fn edit_active_goal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     observed: &GoalDocument,
     fields: &GoalEdit,
 ) -> Result<Option<GoalDocument>> {

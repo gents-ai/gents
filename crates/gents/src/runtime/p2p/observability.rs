@@ -213,7 +213,7 @@ impl P2pSyncStatusAdapter for JsonP2pSyncStatusAdapter {
 }
 
 pub async fn observe_embedded_sync_status(
-    node: &crate::defra_node::EmbeddedNode,
+    node: &crate::defra_node::Node,
 ) -> anyhow::Result<P2pSyncStatusSnapshot> {
     use anyhow::Context;
     let p2p =

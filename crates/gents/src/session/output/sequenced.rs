@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::{MessagePublication, MessageRole, OutputOutcome, OutputSource};
 use std::collections::BTreeSet;
 
@@ -40,7 +40,7 @@ pub(super) fn is_current_admission_input(
     reason = "independent transcript range filters"
 )]
 pub(in crate::session) async fn load_sequenced_messages(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

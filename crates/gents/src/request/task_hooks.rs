@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -338,7 +338,7 @@ pub(crate) struct ManagedTaskHookExec {
     cancellation: TaskHookCancellation,
     record: Option<TaskHookRecordHandle>,
     execution: Option<(
-        std::sync::Arc<EmbeddedNode>,
+        std::sync::Arc<Node>,
         String,
         crate::request::lifecycle::RequestExecutionLease,
     )>,
@@ -356,7 +356,7 @@ impl ManagedTaskHookExec {
 
     pub(crate) fn with_execution_lease(
         mut self,
-        node: std::sync::Arc<EmbeddedNode>,
+        node: std::sync::Arc<Node>,
         request_doc_id: String,
         lease: crate::request::lifecycle::RequestExecutionLease,
     ) -> Self {
@@ -505,7 +505,7 @@ impl TaskHookExec for ManagedTaskHookExec {
 }
 
 pub(crate) async fn resolve_request_task_hooks(
-    node: &EmbeddedNode,
+    node: &Node,
     request: &AgentRequest,
 ) -> Result<(Vec<TaskHook>, bool)> {
     let task_id = match load_fire_task_id(node, &request.node_did, &request.request_id).await? {
@@ -548,7 +548,7 @@ struct TaskIdRow {
 }
 
 async fn load_fire_task_id(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     request_id: &str,
 ) -> Result<Option<String>> {
@@ -573,7 +573,7 @@ async fn load_fire_task_id(
 }
 
 async fn load_trigger_task_id(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     trigger_id: &str,
 ) -> Result<Option<String>> {
@@ -597,7 +597,7 @@ async fn load_trigger_task_id(
     ))
 }
 
-async fn load_task(node: &EmbeddedNode, node_did: &str, task_id: &str) -> Result<Option<Task>> {
+async fn load_task(node: &Node, node_did: &str, task_id: &str) -> Result<Option<Task>> {
     let (fields, _) = config_projection(Collection::Task, None)?;
     let response = graphql_with_transaction_retry(
         node,

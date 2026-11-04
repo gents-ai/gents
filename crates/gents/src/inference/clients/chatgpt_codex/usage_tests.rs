@@ -6,7 +6,7 @@ const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
 ];
 
 async fn seed_codex_account(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     key: Option<&str>,
 ) -> crate::inference::auth::credential::OAuthCredential {

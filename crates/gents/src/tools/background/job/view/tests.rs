@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::job::{
     JobChildRow, JobChildState, JobControlKind, JobFailure, JobOutcome, JobPin, JobPinSummary,
     JobPolicy, JobReadError, JobScope, JobState, JobSuspend, JobSuspendKind, JobUsage, JobView,
@@ -724,7 +724,7 @@ async fn job_view_reads_over_a_served_graphql_endpoint() {
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(node_did())
             .data_path(dir.path().join("db"))
             .with_http(defra_node::HttpConfig::with_addr(address))

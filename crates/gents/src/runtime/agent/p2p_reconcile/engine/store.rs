@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::NodeIdentity;
@@ -34,7 +34,7 @@ use super::{
 
 #[derive(Clone)]
 pub struct GraphqlPairingStateStore {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: Option<EnrollmentAuthorityHandle>,
     exact_enrollment: Option<EnrollmentEndpointEntry>,
@@ -45,7 +45,7 @@ impl GraphqlPairingStateStore {
     /// runtime data-plane materialization must use
     /// [`Self::with_enrollment_authority`] so it cannot bypass the durable
     /// enrollment projection.
-    pub fn for_explicit_desired(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
+    pub fn for_explicit_desired(node: Arc<Node>, identity: Arc<dyn NodeIdentity>) -> Self {
         Self {
             node,
             identity,
@@ -55,7 +55,7 @@ impl GraphqlPairingStateStore {
     }
 
     pub fn with_enrollment_authority(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         identity: Arc<dyn NodeIdentity>,
         enrollment: EnrollmentAuthorityHandle,
     ) -> Self {
@@ -70,7 +70,7 @@ impl GraphqlPairingStateStore {
     /// Fenced by one already-verified exact enrollment generation; the desired
     /// document is evidence only.
     pub fn for_enrollment_materialization(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         identity: Arc<dyn NodeIdentity>,
         entry: EnrollmentEndpointEntry,
     ) -> Self {

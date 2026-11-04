@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) async fn load_goal_creation_claim_fingerprint(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
@@ -315,7 +315,7 @@ pub(super) async fn stage_goal_and_claim(
 /// Ownership is deliberately not accepted as model input: both values come
 /// from the authenticated session hook.
 pub async fn create_goal_for_session(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -325,7 +325,7 @@ pub async fn create_goal_for_session(
 }
 
 pub(crate) async fn create_goal_for_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     caller: &gents_protocol::row::AgentRequestRow,
     objective: &str,
     token_budget: Option<i64>,
@@ -340,7 +340,7 @@ pub(crate) async fn create_goal_for_request(
 }
 
 async fn create_goal_for_session_inner(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
     objective: &str,

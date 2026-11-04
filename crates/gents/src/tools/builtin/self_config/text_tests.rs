@@ -27,7 +27,7 @@ async fn refused(tools: &Tools, args: Value) -> String {
     }
 }
 
-async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, Tools) {
+async fn setup(label: &str, categories: &[&str]) -> (Arc<Node>, String, Tools) {
     let node = build_agent_node().await;
     let identity = node_identity(label);
     let owner = identity.did().to_string();

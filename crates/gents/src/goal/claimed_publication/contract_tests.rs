@@ -177,7 +177,7 @@ async fn run_generated_running_wait() {
     fixture.node.shutdown().await;
 }
 
-async fn discharge_completion_obligation(node: &crate::defra_node::EmbeddedNode, doc_id: &str) {
+async fn discharge_completion_obligation(node: &crate::defra_node::Node, doc_id: &str) {
     let response = node
         .execute(&format!(
             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "completed" }}) {{ _docID }} }}"#,

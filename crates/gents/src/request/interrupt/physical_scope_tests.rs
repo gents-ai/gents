@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::{json, Value};
 
-async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> String {
+async fn insert(node: &Arc<Node>, collection: &str, value: Value) -> String {
     crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.physical_cancel_fixture", |txn| {
         let value = &value;
         Box::pin(async move {

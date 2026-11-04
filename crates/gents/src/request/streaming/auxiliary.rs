@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::provider_audit::{
     AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
     AuxiliaryOutputSink,
@@ -44,7 +44,7 @@ struct State {
 /// tail prevents nested compaction from replacing the main inference attempt's
 /// uncommitted prefix.
 pub(crate) fn sink(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     request: crate::request::watcher::AgentRequest,
     generation: String,
     profile: gents_loop::provider_input::ProviderInputProfile,

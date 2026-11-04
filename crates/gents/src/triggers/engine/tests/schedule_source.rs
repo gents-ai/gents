@@ -3,7 +3,7 @@ use chrono::Timelike;
 use super::*;
 
 async fn read_trigger_cursor(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     trigger_id: &str,
 ) -> anyhow::Result<Option<String>> {
@@ -24,7 +24,7 @@ fn schedule_test_behavior() -> Arc<ResolvedAgent> {
 }
 
 async fn create_schedule_cadence_doc(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner_did: &str,
     schedule_id: &str,
     cadence: serde_json::Value,
@@ -64,7 +64,7 @@ struct ScheduleFixture<'a> {
 }
 
 async fn create_schedule_with_next_run_at(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner_did: &str,
     fixture: ScheduleFixture<'_>,
 ) -> String {
@@ -128,7 +128,7 @@ async fn create_schedule_with_next_run_at(
 }
 
 async fn observed_trigger(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     trigger_id: &str,
 ) -> serde_json::Value {
@@ -149,7 +149,7 @@ async fn observed_trigger(
 }
 
 async fn observed_schedule_cadence(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     schedule_id: &str,
 ) -> ScheduleCadence {

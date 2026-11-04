@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::store::graphql::graphql_with_transaction_retry;
 
@@ -11,7 +11,7 @@ pub(crate) struct ScopedInterruptObservation {
 }
 
 pub async fn fetch_interrupt_requested_at_scoped(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -24,7 +24,7 @@ pub async fn fetch_interrupt_requested_at_scoped(
 }
 
 pub(crate) async fn observe_interrupt_requested_at_scoped(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

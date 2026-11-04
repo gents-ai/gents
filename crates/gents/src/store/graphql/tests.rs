@@ -265,7 +265,7 @@ fn native_data_envelope_payload_size_benchmark() {
 async fn concurrent_mutations_share_the_node_write_path() {
     const WRITES: usize = 32;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type GateWrite { write_id: String }")
         .await
         .unwrap();
@@ -304,7 +304,7 @@ async fn concurrent_mutations_share_the_node_write_path() {
 
 #[tokio::test]
 async fn public_graphql_read_helpers_reject_mutations_before_execution() {
-    let node = EmbeddedNode::builder().build().await.unwrap();
+    let node = Node::builder().build().await.unwrap();
     node.add_collection("type ReadBoundaryFact { value: String }")
         .await
         .unwrap();

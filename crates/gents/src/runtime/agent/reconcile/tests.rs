@@ -19,7 +19,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
@@ -46,7 +46,7 @@ fn stub_runtime_node() -> Arc<RuntimeNode> {
 }
 
 async fn snapshot_for_agents(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     default_agent_id: &str,
     agents: Vec<Arc<ResolvedAgent>>,
 ) -> ResolvedRuntimeSnapshot {
@@ -54,7 +54,7 @@ async fn snapshot_for_agents(
 }
 
 async fn snapshot_for_agents_with_node(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     default_agent_id: &str,
     agents: Vec<Arc<ResolvedAgent>>,
     runtime_node: Arc<RuntimeNode>,
@@ -78,7 +78,7 @@ async fn snapshot_for_agents_with_node(
 }
 
 async fn snapshot_for_agents_with_admission(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     default_agent_id: &str,
     agents: Vec<Arc<ResolvedAgent>>,
     backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
@@ -251,7 +251,7 @@ async fn pairing_desired_read_failure_applies_no_operations() {
     assert!(read_failure_is_noop_self_loop(test_node().await).await);
 }
 
-async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> bool {
+async fn read_failure_is_noop_self_loop(node: Arc<defra_node::Node>) -> bool {
     use crate::runtime::agent::p2p_reconcile::{
         reconcile_peer_tick, EmbeddedRemoteP2pAdmin, LoadedPairingApplied, PairingDesired,
         PairingStateStore,
@@ -1036,7 +1036,7 @@ struct RuntimeStatusRow {
 }
 
 async fn fetch_runtime_status(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
 ) -> RuntimeStatusRow {
     let node_did = escape_graphql_string(node_did);
@@ -1067,7 +1067,7 @@ async fn fetch_runtime_status(
 }
 
 async fn await_settled_runtime_status(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
 ) -> RuntimeStatusRow {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -2198,7 +2198,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 }
 
 async fn plugin_resolution_surfaces(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
 ) -> (Arc<ResolvedAgent>, Arc<ToolSurface>, Arc<ToolSurface>) {
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));

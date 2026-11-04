@@ -12,7 +12,7 @@ async fn file_image_read_grant_matches_signed_receipt_contract() {
     let mut nodes = Vec::new();
     for (name, identity) in [("client", &client), ("other", &other)] {
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .data_path(directory.path().join(name))
                 .with_node_identity_did(identity.did())
                 .build()

@@ -8,7 +8,7 @@ use gents_protocol::node_readiness::{
     NODE_READINESS_FORMAT_VERSION,
 };
 
-use crate::defra_node::{EmbeddedNode, P2PConfig};
+use crate::defra_node::{Node, P2PConfig};
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::store::graphql::{
     decode_composite_commits, escape_graphql_string, graphql_with_transaction_retry,
@@ -42,7 +42,7 @@ async fn fresh_peer() -> Result<EmbeddedHome> {
     EmbeddedHome::in_tempdir(tempfile::tempdir()?, Some(Arc::new(loopback_config))).await
 }
 
-async fn loopback_address(node: &EmbeddedNode) -> Result<String> {
+async fn loopback_address(node: &Node) -> Result<String> {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let addresses = node
@@ -63,7 +63,7 @@ async fn loopback_address(node: &EmbeddedNode) -> Result<String> {
     .context("loopback P2P listener")?
 }
 
-async fn readiness_row(node: &EmbeddedNode, did: &str) -> Result<Option<serde_json::Value>> {
+async fn readiness_row(node: &Node, did: &str) -> Result<Option<serde_json::Value>> {
     let did = escape_graphql_string(did);
     let response = graphql_with_transaction_retry(
         node,
@@ -85,7 +85,7 @@ async fn readiness_row(node: &EmbeddedNode, did: &str) -> Result<Option<serde_js
 }
 
 async fn await_snapshot(
-    node: &EmbeddedNode,
+    node: &Node,
     did: &str,
     doc_id: &str,
     expected: &NodeReadinessSnapshot,
@@ -110,7 +110,7 @@ async fn await_snapshot(
     .context("fresh peer did not converge on the complete readiness snapshot")?
 }
 
-async fn readiness_history(node: &EmbeddedNode, doc_id: &str) -> Result<Vec<CompositeCommit>> {
+async fn readiness_history(node: &Node, doc_id: &str) -> Result<Vec<CompositeCommit>> {
     let doc_id = escape_graphql_string(doc_id);
     let response = graphql_with_transaction_retry(
         node,

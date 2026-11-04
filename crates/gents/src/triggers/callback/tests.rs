@@ -635,7 +635,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     ));
 }
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node
@@ -1266,7 +1266,7 @@ fn every_invocation_origin_names_its_binding() {
 struct Backlog {
     _identity: crate::store::identity::KeyIdentity,
     _home: TempDir,
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     access: crate::store::config_client::ConfigAccess,
     history: String,
 }

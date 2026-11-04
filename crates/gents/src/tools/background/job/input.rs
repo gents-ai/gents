@@ -742,7 +742,7 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node;
     use gents_protocol::job::JobChildState;
     use serde_json::{json, Value};
 
@@ -750,9 +750,9 @@ pub(crate) mod tests {
     use crate::store::config_client::ConfigAccess;
     use crate::tools::background::job::keys::{job_message_key, job_session_id, job_spawn_key};
 
-    pub(crate) async fn open() -> Arc<EmbeddedNode> {
+    pub(crate) async fn open() -> Arc<Node> {
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(node_did())
                 .build()
                 .await
@@ -763,7 +763,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn insert(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         collection: &str,
         value: Value,
     ) -> String {
@@ -785,7 +785,7 @@ pub(crate) mod tests {
 
     /// Overwrites the stored `lifecycle_state` of the job row `row_doc_id`.
     pub(crate) async fn set_lifecycle(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         row_doc_id: &str,
         state: &str,
     ) {
@@ -809,7 +809,7 @@ pub(crate) mod tests {
         reason = "test seed helper takes the seeded row's fields"
     )]
     pub(crate) async fn request(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         chain: &str,
         request_id: &str,
         session_id: &str,
@@ -845,7 +845,7 @@ pub(crate) mod tests {
     }
 
     async fn usage(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         call_id: &str,
         request_id: &str,
         prompt: i64,
@@ -1152,7 +1152,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn completed_request(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         chain: &str,
         request_id: &str,
         session_id: &str,
@@ -1523,7 +1523,7 @@ pub(crate) mod tests {
     /// `settings` as the live job block of `acme/engine`), a claimed caller
     /// request, and an installed `acme/engine` under a temp home.
     pub(crate) struct Job {
-        pub(crate) node: Arc<EmbeddedNode>,
+        pub(crate) node: Arc<Node>,
         pub(crate) access: ConfigAccess,
         pub(crate) runtime: JobRuntime,
         _home: tempfile::TempDir,

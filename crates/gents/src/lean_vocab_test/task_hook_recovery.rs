@@ -17,7 +17,7 @@ use crate::tools::call::hook::BackgroundExecutionRegistry;
 const AGENT_ID: &str = "general";
 
 pub(super) struct Fixture {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     identity: Arc<dyn NodeIdentity>,
     _data: tempfile::TempDir,
 }
@@ -29,7 +29,7 @@ impl Fixture {
             KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
         );
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .data_path(data.path())
                 .build()

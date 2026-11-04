@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -69,7 +69,7 @@ fn native_input(case: &LeanTitleRequestAdmissionCase) -> RequestInput {
     .expect("generated title input has native representation")
 }
 
-async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -> String {
+async fn insert_request(node: &Arc<Node>, create: &AgentRequestCreate) -> String {
     let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "test.title_admission.create_request",
@@ -85,7 +85,7 @@ async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -
         .to_owned()
 }
 
-async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &str, value: &str) {
+async fn update_request_field(node: &Arc<Node>, doc_id: &str, field: &str, value: &str) {
     assert!(matches!(field, "lifecycle_state" | "deadline"));
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let value = crate::store::graphql::escape_graphql_string(value);
@@ -115,7 +115,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None)
         .expect("foreign identity");
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

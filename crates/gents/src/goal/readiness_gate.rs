@@ -265,7 +265,7 @@ impl ObservedGoalAgent {
 }
 
 pub async fn observe_goal_agent(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     agent_id: Option<&str>,
     terminalized_at: Option<&str>,

@@ -4,7 +4,7 @@ use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::required_rows;
 
 pub(super) async fn load_hydration_selection(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &HydrationRequest,
 ) -> Result<HydrationSelection> {
     ConfigAccess::transact_local_readonly(node, None, "session_hydration.selection", |txn| {

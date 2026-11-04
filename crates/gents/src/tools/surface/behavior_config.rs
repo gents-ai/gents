@@ -1,7 +1,7 @@
 use rapidhash::RapidHashSet;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::tools::native::ToolSet;
 
@@ -441,7 +441,7 @@ impl AgentToolSurfaceConfig {
 
     pub async fn resolve(
         &self,
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
         plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
@@ -451,7 +451,7 @@ impl AgentToolSurfaceConfig {
 
     async fn resolve_with_agent_tools(
         &self,
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
         plugins: &crate::plugin::executor::PluginExecutor,
         agent_tools: AgentToolConfig,
@@ -607,7 +607,7 @@ impl AgentToolSurfaceConfig {
 
     pub(crate) async fn resolve_with_available_agent_targets(
         &self,
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         own_node_did: &str,
         active_agent_ids: &RapidHashSet<String>,
         plugins: &crate::plugin::executor::PluginExecutor,

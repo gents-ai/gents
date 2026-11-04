@@ -2,14 +2,14 @@
 //! cannot become half-bound writes.
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::request::watcher::AgentRequest;
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 pub(crate) async fn resolve_request_doc_id(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
 ) -> Result<Option<String>> {
     let escaped_request_id = escape_graphql_string(request_id);
@@ -39,7 +39,7 @@ pub(crate) async fn resolve_request_doc_id(
 }
 
 pub(crate) async fn require_request_doc_id(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
 ) -> Result<String> {
     resolve_request_doc_id(node, request_id)
@@ -48,7 +48,7 @@ pub(crate) async fn require_request_doc_id(
 }
 
 pub(crate) async fn load_agent_request(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
 ) -> Result<Option<AgentRequest>> {
     let Some(request_doc_id) = resolve_request_doc_id(node, request_id).await? else {
@@ -65,7 +65,7 @@ pub(crate) async fn load_agent_request(
 }
 
 pub(crate) async fn load_agent_request_by_doc_id(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
 ) -> Result<Option<AgentRequest>> {
     let query = format!(

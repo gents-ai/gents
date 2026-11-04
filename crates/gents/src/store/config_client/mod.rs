@@ -110,7 +110,7 @@ mod tools;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::future::BoxFuture;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::Value;
@@ -266,18 +266,18 @@ impl ConfigAccess {
         Self::Graphql(GraphqlEndpoint::as_principal(url, principal_did))
     }
 
-    pub fn local(node: Arc<EmbeddedNode>) -> Self {
+    pub fn local(node: Arc<Node>) -> Self {
         Self::Local(LocalConfigAccess::new(node))
     }
 
     pub fn claimed_local(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         claim: crate::store::local::home::StoreLock,
     ) -> Result<Self> {
         Ok(Self::Local(LocalConfigAccess::claimed(node, claim)?))
     }
 
-    pub fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
+    pub fn local_node(&self) -> Option<&Arc<Node>> {
         match self {
             Self::Local(local) => Some(local.node()),
             Self::Graphql(_) => None,
@@ -288,7 +288,7 @@ impl ConfigAccess {
     where
         T: Send + 'static,
         E: From<ConfigClientError> + Send + 'static,
-        F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
+        F: FnOnce(Arc<Node>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
     {
         match self {

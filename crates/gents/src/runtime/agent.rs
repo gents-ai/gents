@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::{watch, OnceCell};
 
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
@@ -53,7 +53,7 @@ pub use builder::{AgentBuilder, GentsBuilder};
 #[cfg(test)]
 #[cfg(test)]
 pub(crate) async fn process_owned_request_with_model_for_test<M>(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent_config: Arc<ResolvedAgent>,
     tool_surface: Arc<crate::tools::surface::ToolSurface>,
     tool_runtime: &crate::tools::surface::ToolRuntimeContext,
@@ -206,7 +206,7 @@ impl DocumentResolveContext {
 #[derive(Clone)]
 pub struct Gents {
     usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<Arc<ResolvedAgent>>,
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
@@ -249,13 +249,13 @@ impl Gents {
     }
 
     pub async fn from_default_agent_documents(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         identity: Arc<dyn NodeIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
         if node.node_identity_did().is_none() {
             anyhow::bail!(
-                "Gents runtime requires an EmbeddedNode configured with a node signing DID"
+                "Gents runtime requires a Node configured with a node signing DID"
             );
         }
         migration::ensure_all_runtime_migrations(node.clone()).await?;
@@ -329,7 +329,7 @@ impl Gents {
         })
     }
 
-    pub(crate) fn observation_node(&self) -> &Arc<EmbeddedNode> {
+    pub(crate) fn observation_node(&self) -> &Arc<Node> {
         &self.node
     }
 
@@ -525,7 +525,7 @@ impl Gents {
 }
 
 pub(crate) async fn resolve_document_runtime_snapshot(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     context: &DocumentResolveContext,
 ) -> anyhow::Result<ResolvedRuntimeSnapshot> {
     let view = document_view::load_document_runtime_view(node, context.identity.did()).await?;

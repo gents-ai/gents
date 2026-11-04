@@ -179,7 +179,7 @@ fn selection_from_choice(
 }
 
 pub(super) async fn recover_expired_generation(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
@@ -202,7 +202,7 @@ pub(super) async fn recover_expired_generation(
     reason = "called from the lean_vocab_test native adapter with this shape"
 )]
 pub(crate) async fn recover_expired_generation_with_facts(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,

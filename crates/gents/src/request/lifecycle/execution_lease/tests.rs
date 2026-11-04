@@ -66,7 +66,7 @@ impl crate::store::identity::NodeIdentity for LeaseTestIdentity {
     }
 }
 
-async fn test_node() -> (Arc<EmbeddedNode>, tempfile::TempDir) {
+async fn test_node() -> (Arc<Node>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
         crate::test_support::node_builder()
@@ -80,7 +80,7 @@ async fn test_node() -> (Arc<EmbeddedNode>, tempfile::TempDir) {
     (node, dir)
 }
 
-async fn claimed_owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
+async fn claimed_owner(node: &Arc<Node>) -> RequestLifecycle {
     RequestLifecycle::materialize_claimed_with_execution_binding(
         node.clone(),
         "general",
@@ -95,7 +95,7 @@ async fn claimed_owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
     .unwrap()
 }
 
-async fn claimed_owner_with_short_lease(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
+async fn claimed_owner_with_short_lease(node: &Arc<Node>) -> RequestLifecycle {
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
         "general",
@@ -116,7 +116,7 @@ async fn claimed_owner_with_short_lease(node: &Arc<EmbeddedNode>) -> RequestLife
     lifecycle
 }
 
-async fn owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
+async fn owner(node: &Arc<Node>) -> RequestLifecycle {
     let mut lifecycle = claimed_owner(node).await;
     let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
@@ -127,7 +127,7 @@ async fn owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
     lifecycle
 }
 
-async fn request_row(node: &EmbeddedNode, doc_id: &str) -> AgentRequestRow {
+async fn request_row(node: &Node, doc_id: &str) -> AgentRequestRow {
     let result = node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id node_did lifecycle_state execution_generation execution_lease_expires_at terminal_output terminalized_at failure_reason }} }}"#,
         escape_graphql_string(doc_id),
@@ -138,7 +138,7 @@ async fn request_row(node: &EmbeddedNode, doc_id: &str) -> AgentRequestRow {
         .unwrap()
 }
 
-async fn request_composite_version(node: &EmbeddedNode, doc_id: &str) -> String {
+async fn request_composite_version(node: &Node, doc_id: &str) -> String {
     let result = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _version {{ cid height fieldName }} }} }}"#,
@@ -160,7 +160,7 @@ fn lease_tuple(row: &AgentRequestRow) -> (Option<String>, Option<String>) {
     )
 }
 
-async fn await_expired(node: &EmbeddedNode, doc_id: &str) {
+async fn await_expired(node: &Node, doc_id: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let row = request_row(node, doc_id).await;
@@ -526,7 +526,7 @@ async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() 
     drop(lifecycle);
 }
 
-async fn output_segment_count(node: &EmbeddedNode, request_doc_id: &str) -> usize {
+async fn output_segment_count(node: &Node, request_doc_id: &str) -> usize {
     let result = node
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -625,13 +625,13 @@ async fn racing_owned_begins_commit_one_processing_transition_without_renewal() 
     );
 }
 
-async fn observed_execution(node: &EmbeddedNode, doc_id: &str) -> AgentRequestRow {
+async fn observed_execution(node: &Node, doc_id: &str) -> AgentRequestRow {
     let mut row = request_row(node, doc_id).await;
     row.doc_id = Some(doc_id.to_owned());
     row
 }
 
-async fn expire_observed_execution(node: &EmbeddedNode, doc_id: &str) -> AgentRequestRow {
+async fn expire_observed_execution(node: &Node, doc_id: &str) -> AgentRequestRow {
     let expiry = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
     let response = node.execute(&format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
@@ -642,7 +642,7 @@ async fn expire_observed_execution(node: &EmbeddedNode, doc_id: &str) -> AgentRe
 }
 
 async fn recover_observed_execution(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     row: &AgentRequestRow,
 ) -> Result<TerminalizeResult> {
     let agent = row
@@ -671,7 +671,7 @@ async fn recover_observed_execution(
     )
 }
 
-async fn output_segment_snapshot(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
+async fn output_segment_snapshot(node: &Node, doc_id: &str) -> serde_json::Value {
     let result = node.execute(&format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID ordinal payload close }} }}"#,
         escape_graphql_string(doc_id),
@@ -1401,7 +1401,7 @@ async fn native_doc_id_targeting_preserves_request_update_filters() {
 }
 
 async fn observed_case_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     case: &crate::lean_vocab_test::LeanRequestExecutionObservedCase,
     epoch: DateTime<Utc>,
 ) -> RequestLifecycle {

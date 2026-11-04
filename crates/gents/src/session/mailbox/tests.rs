@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use super::*;
 use crate::store::identity::NodeIdentity;
@@ -10,7 +10,7 @@ const FIXTURE_CLOSE: &[MailboxCloseCollection] = &[MailboxCloseCollection {
     correlation_field: "mailbox_item_key",
 }];
 
-pub(super) async fn test_node() -> Arc<EmbeddedNode> {
+pub(super) async fn test_node() -> Arc<Node> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
@@ -160,7 +160,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         std::env::temp_dir().join(format!("mailbox-event-stage-{}.key", uuid::Uuid::new_v4()));
     let identity = crate::store::identity::KeyIdentity::load_or_create(key_path, None).unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

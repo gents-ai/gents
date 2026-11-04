@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use events::{DocumentChangeSubscription, EventName, Subscription};
 
 pub trait UpdateSubscriptionSource: Send + Sync {
@@ -12,7 +12,7 @@ pub trait UpdateSubscriptionSource: Send + Sync {
     ) -> DocumentChangeSubscription;
 }
 
-impl UpdateSubscriptionSource for EmbeddedNode {
+impl UpdateSubscriptionSource for Node {
     fn subscribe_updates(&self) -> Subscription {
         self.subscribe(&[EventName::Update])
     }
@@ -21,11 +21,11 @@ impl UpdateSubscriptionSource for EmbeddedNode {
         &self,
         collection_ids: Vec<String>,
     ) -> DocumentChangeSubscription {
-        EmbeddedNode::subscribe_collection_changes(self, collection_ids)
+        Node::subscribe_collection_changes(self, collection_ids)
     }
 }
 
-impl UpdateSubscriptionSource for Arc<EmbeddedNode> {
+impl UpdateSubscriptionSource for Arc<Node> {
     fn subscribe_updates(&self) -> Subscription {
         self.as_ref().subscribe(&[EventName::Update])
     }
@@ -42,7 +42,7 @@ impl UpdateSubscriptionSource for Arc<EmbeddedNode> {
 /// change subscriptions match. DefraDB keeps a collection's id stable across
 /// schema patches, so a resolved scope never needs refreshing.
 pub fn collection_ids<'a>(
-    node: &EmbeddedNode,
+    node: &Node,
     names: impl IntoIterator<Item = &'a str>,
 ) -> Result<Vec<String>> {
     names
@@ -58,7 +58,7 @@ pub fn collection_ids<'a>(
 /// Subscribe to coalesced changes in the named collections only. Subscribe
 /// before the initial read so a change committed in between stays pending.
 pub fn subscribe_collections<'a>(
-    node: &EmbeddedNode,
+    node: &Node,
     names: impl IntoIterator<Item = &'a str>,
 ) -> Result<DocumentChangeSubscription> {
     Ok(node.subscribe_collection_changes(collection_ids(node, names)?))
@@ -72,7 +72,7 @@ mod tests {
 
     #[tokio::test]
     async fn scoped_changes_survive_a_schema_patch_and_ignore_other_collections() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Node::builder().build().await.unwrap();
         node.add_collection("type Watched { value: String } type Unwatched { value: String }")
             .await
             .unwrap();

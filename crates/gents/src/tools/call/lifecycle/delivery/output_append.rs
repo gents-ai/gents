@@ -13,7 +13,7 @@ use gents_protocol::output::{
 
 #[derive(Clone)]
 pub(crate) struct ToolOutputBinding {
-    pub(crate) node: std::sync::Arc<defra_node::EmbeddedNode>,
+    pub(crate) node: std::sync::Arc<defra_node::Node>,
     pub(crate) tool_call_doc_id: String,
     pub(crate) request_doc_id: String,
     pub(crate) session_id: String,

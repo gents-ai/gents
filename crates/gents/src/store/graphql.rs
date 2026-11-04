@@ -1,6 +1,6 @@
 //! Raw GraphQL fragments require validation; string escaping and identifier validation do not cover them.
 
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::{Node, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -116,7 +116,7 @@ pub async fn fence_arrivals(
 }
 
 pub async fn graphql_response_with_transaction_retry(
-    node: &EmbeddedNode,
+    node: &Node,
     graphql: &str,
     operation: &str,
 ) -> Result<QueryResponse, ConfigClientError> {
@@ -124,7 +124,7 @@ pub async fn graphql_response_with_transaction_retry(
 }
 
 pub async fn graphql_with_transaction_retry(
-    node: &EmbeddedNode,
+    node: &Node,
     graphql: &str,
     operation: &str,
 ) -> Result<QueryResponse, ConfigClientError> {
@@ -526,7 +526,7 @@ fn unique_newest_composite_commit(
 }
 
 pub async fn newest_document_composite_commit(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
     operation: &str,
 ) -> Result<Option<CompositeCommit>> {
@@ -570,7 +570,7 @@ fn newest_composite_query(doc_id: &str) -> String {
 /// stored commit evidence and must not be confused with application DID
 /// columns on the document.
 pub async fn composite_commits(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
     operation: &str,
 ) -> Result<Vec<CompositeCommit>> {

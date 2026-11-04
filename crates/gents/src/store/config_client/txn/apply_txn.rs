@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use identity::Did;
 use query::TransactionHandle;
 
@@ -20,7 +20,7 @@ pub(super) enum TxnBackend<'a> {
         client: reqwest::Client,
     },
     Embedded {
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         handle: TransactionHandle,
         identity: Option<Did>,
         native_operations: Arc<NativeOperationTracker>,
@@ -53,7 +53,7 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     pub(super) async fn begin_local_owned<'txn>(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         identity: Option<Did>,
         operation: WriteOperation,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
@@ -101,7 +101,7 @@ impl<'a> ConfigApplyTxn<'a> {
 
     #[cfg(test)]
     pub(crate) async fn begin_execution_renewal_for_test(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
     ) -> Result<ConfigApplyTxn<'static>> {
         Self::begin_local_owned(
             node,
@@ -117,7 +117,7 @@ impl<'a> ConfigApplyTxn<'a> {
 
     #[cfg(test)]
     pub(crate) async fn begin_local(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         identity: Option<Did>,
     ) -> Result<ConfigApplyTxn<'static>> {
         Self::begin_local_owned(

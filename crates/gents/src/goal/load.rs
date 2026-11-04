@@ -1,7 +1,7 @@
 use super::*;
 
 pub async fn load_goals_for_session(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<GoalDocument>> {
@@ -24,7 +24,7 @@ pub async fn load_goals_for_session(
 }
 
 pub async fn load_canonical_goal(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
@@ -35,7 +35,7 @@ pub async fn load_canonical_goal(
 }
 
 pub async fn load_goal_by_id(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     goal_id: &str,
 ) -> Result<Option<GoalDocument>> {
@@ -64,7 +64,7 @@ pub(crate) fn sort_goals_canonical(goals: &mut [GoalDocument]) {
     });
 }
 
-async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDocument>> {
+async fn decode_goal_rows(node: &Node, query: &str) -> Result<Vec<GoalDocument>> {
     let response = graphql_with_transaction_retry(node, query, "Goal query").await?;
     rows(&response, "Goal").context("decoding Goal rows")
 }

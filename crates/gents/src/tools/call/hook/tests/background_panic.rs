@@ -31,7 +31,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()

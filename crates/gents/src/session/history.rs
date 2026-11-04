@@ -16,7 +16,7 @@ pub fn sequence_message_key(
 }
 
 pub async fn load_history(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -25,7 +25,7 @@ pub async fn load_history(
 }
 
 pub(crate) async fn load_history_through_sequence(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -47,7 +47,7 @@ pub(crate) async fn load_history_through_sequence(
 }
 
 pub(crate) async fn load_sequenced_history_for_request(
-    node: &EmbeddedNode,
+    node: &Node,
     request: &crate::request::watcher::AgentRequest,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
@@ -67,7 +67,7 @@ pub(crate) async fn load_sequenced_history_for_request(
 }
 
 pub(crate) async fn retry_has_published_input(
-    node: &EmbeddedNode,
+    node: &Node,
     request: &crate::request::watcher::AgentRequest,
 ) -> Result<bool> {
     let Some(mut parent_id) = request.retry_parent_request_doc_id.clone() else {
@@ -154,7 +154,7 @@ pub(crate) async fn retry_has_published_input(
 
 #[cfg(test)]
 pub(super) async fn load_history_projection(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -177,7 +177,7 @@ pub(super) async fn load_history_projection(
 }
 
 pub(crate) async fn load_sequenced_history_projection(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

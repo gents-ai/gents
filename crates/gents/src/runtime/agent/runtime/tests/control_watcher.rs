@@ -100,7 +100,7 @@ async fn run_test_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
 }
 
 fn test_tool_runtime(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     resolve_context: &crate::runtime::agent::DocumentResolveContext,
 ) -> crate::tools::surface::ToolRuntimeContext {
@@ -116,7 +116,7 @@ fn test_tool_runtime(
     .with_plugins(resolve_context.plugins.clone())
 }
 
-async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, enabled: bool) {
+async fn update_node_enabled(node: &defra_node::Node, node_did: &str, enabled: bool) {
     let escaped_node_did = escape_graphql_string(node_did);
     let mutation = format!(
         r#"mutation {{
@@ -135,7 +135,7 @@ async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, en
 }
 
 async fn write_documents(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     operation: &'static str,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
@@ -837,7 +837,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
 }
 
 async fn record_plugin_install(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     plugin_home: &std::path::Path,
 ) {
@@ -864,7 +864,7 @@ async fn record_plugin_install(
 }
 
 async fn write_tools_naming_plugin(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     tools_id: &str,
 ) {

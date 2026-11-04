@@ -4,7 +4,7 @@ use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 
 async fn signed_reply(
-    node: &EmbeddedNode,
+    node: &Node,
     identity: &KeyIdentity,
     item: &MailboxItem,
     id: &str,
@@ -13,7 +13,7 @@ async fn signed_reply(
 }
 
 async fn persisted_reply(
-    node: &EmbeddedNode,
+    node: &Node,
     identity: &KeyIdentity,
     item: &MailboxItem,
     id: &str,
@@ -32,7 +32,7 @@ async fn persisted_reply(
 }
 
 async fn persisted_request(
-    node: &EmbeddedNode,
+    node: &Node,
     identity: &KeyIdentity,
     source_doc_id: Option<&str>,
     id: &str,
@@ -78,7 +78,7 @@ async fn persisted_request(
     AgentRequest::try_from(record).unwrap()
 }
 
-async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) -> Result<()> {
+async fn claim(node: &Arc<Node>, request: &AgentRequest, abort: bool) -> Result<()> {
     ConfigAccess::transact_local_write(node, None, "test.mailbox_reply", |txn| Box::pin(async move {
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
             escape_graphql_string(&request.doc_id));
@@ -89,7 +89,7 @@ async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) ->
     })).await
 }
 
-async fn stored_lifecycle(node: &EmbeddedNode, request: &AgentRequest) -> String {
+async fn stored_lifecycle(node: &Node, request: &AgentRequest) -> String {
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
         escape_graphql_string(&request.doc_id)

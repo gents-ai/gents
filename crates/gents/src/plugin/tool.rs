@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::job::DataWrite;
 
 use super::data::DataCaller;
@@ -35,7 +35,7 @@ pub struct PluginTool {
     tool_calls: bool,
     /// The node a data-declaring plugin's `data_calls` read and whose
     /// terminal commits its writes; absent, the plugin gets no data session.
-    data_node: Option<Arc<EmbeddedNode>>,
+    data_node: Option<Arc<Node>>,
 }
 
 impl PluginTool {
@@ -74,7 +74,7 @@ impl PluginTool {
     }
 
     /// Offers `node` as the data store of a plugin that declares `data`.
-    pub fn with_data_node(mut self, node: Arc<EmbeddedNode>) -> Self {
+    pub fn with_data_node(mut self, node: Arc<Node>) -> Self {
         self.data_node = Some(node);
         self
     }

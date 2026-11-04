@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -291,7 +291,7 @@ pub fn strip_secret_fields(value: Value) -> Value {
 }
 
 async fn load_config<T>(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     collection: crate::Collection,
     owner: &str,
     id: &str,
@@ -318,7 +318,7 @@ where
 }
 
 pub async fn list_enabled_bindings(
-    node: &EmbeddedNode,
+    node: &Node,
     owner: &str,
 ) -> Result<Vec<CallbackBindingDoc>> {
     let (fields, _) =
@@ -347,35 +347,35 @@ pub async fn list_enabled_bindings(
 }
 
 pub async fn load_callback_module(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     module_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackModuleDoc>> {
     load_config(node, crate::Collection::CallbackModule, owner, module_id).await
 }
 pub async fn load_callback(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     callback_id: &str,
     owner: &str,
 ) -> Result<Option<crate::documents::Callback>> {
     load_config(node, crate::Collection::Callback, owner, callback_id).await
 }
 pub async fn load_binding(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     binding_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackBindingDoc>> {
     load_config(node, crate::Collection::CallbackBinding, owner, binding_id).await
 }
 pub async fn load_event_source(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     source_id: &str,
     owner: &str,
 ) -> Result<Option<crate::documents::EventSource>> {
     load_config(node, crate::Collection::EventSource, owner, source_id).await
 }
 
-pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeSet<String>> {
+pub async fn load_trusted_callback_signers(node: &Node) -> Result<BTreeSet<String>> {
     let query = r#"{
         Node(filter: { enabled: { _eq: true } }) {
             node_did
@@ -397,7 +397,7 @@ pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeS
 }
 
 pub async fn load_invocation(
-    node: &EmbeddedNode,
+    node: &Node,
     invocation_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackInvocationDoc>> {
@@ -422,7 +422,7 @@ pub async fn load_invocation(
 }
 
 pub async fn load_invocation_by_key(
-    node: &EmbeddedNode,
+    node: &Node,
     key: &str,
     owner: &str,
 ) -> Result<Option<CallbackInvocationDoc>> {
@@ -447,7 +447,7 @@ pub async fn load_invocation_by_key(
 }
 
 pub async fn list_recoverable_invocations(
-    node: &EmbeddedNode,
+    node: &Node,
     owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let mut invocations =
@@ -458,7 +458,7 @@ pub async fn list_recoverable_invocations(
 }
 
 async fn list_recent_succeeded_missing_result(
-    node: &EmbeddedNode,
+    node: &Node,
     owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
@@ -495,7 +495,7 @@ async fn list_recent_succeeded_missing_result(
 }
 
 pub async fn list_recent_failed(
-    node: &EmbeddedNode,
+    node: &Node,
     owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
@@ -540,7 +540,7 @@ pub(crate) fn succeeded_missing_result(
 }
 
 async fn load_callback_results_for_invocations(
-    node: &EmbeddedNode,
+    node: &Node,
     invocation_ids: impl IntoIterator<Item = &str>,
     owner: &str,
 ) -> Result<RapidHashSet<String>> {
@@ -573,7 +573,7 @@ async fn load_callback_results_for_invocations(
 }
 
 async fn query_owner_invocations(
-    node: &EmbeddedNode,
+    node: &Node,
     owner_node_did: &str,
     states: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
@@ -597,7 +597,7 @@ async fn query_owner_invocations(
 }
 
 pub async fn load_callback_result(
-    node: &EmbeddedNode,
+    node: &Node,
     invocation_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackResultDoc>> {
@@ -622,7 +622,7 @@ pub async fn load_callback_result(
 }
 
 pub async fn create_pending_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &CallbackInvocationDoc,
 ) -> Result<CallbackInvocationDoc> {
     if let Some(existing) = load_invocation_by_key(
@@ -732,7 +732,7 @@ fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
 }
 
 pub async fn update_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
 ) -> Result<bool> {
@@ -783,7 +783,7 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
 }
 
 pub async fn create_callback_result(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     result: &CallbackResultDoc,
 ) -> Result<CallbackResultDoc> {
     if let Some(existing) =
@@ -814,7 +814,7 @@ pub async fn create_callback_result(
 }
 
 pub async fn load_repository_placement(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     repository_id: &str,
     owner: &str,
 ) -> Result<Option<RepositoryPlacementRef>> {
@@ -834,7 +834,7 @@ pub async fn load_repository_placement(
 }
 
 pub async fn load_memory_workspace_docs(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     owner: &str,
 ) -> Result<MemoryWorkspaceDocuments> {
@@ -849,7 +849,7 @@ pub async fn load_memory_workspace_docs(
 }
 
 pub async fn flush_workspace_docs(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     docs: &MemoryWorkspaceDocuments,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -877,7 +877,7 @@ pub async fn flush_workspace_docs(
 }
 
 pub(crate) async fn load_isolated_workspace(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     owner: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
@@ -902,7 +902,7 @@ pub(crate) async fn load_isolated_workspace(
 }
 
 pub(crate) async fn load_workspace_placement(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     owner: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {

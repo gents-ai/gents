@@ -1,7 +1,7 @@
 use super::*;
 
 pub async fn set_goal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
     objective: Option<&str>,
@@ -265,7 +265,7 @@ pub(super) async fn set_goal_in_txn(
     Ok(created)
 }
 
-pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocument) -> Result<bool> {
+pub async fn delete_goal(node: &std::sync::Arc<Node>, goal: &GoalDocument) -> Result<bool> {
     let doc_id = escape_graphql_string(&goal.doc_id);
     let node_did = escape_graphql_string(&goal.node_did);
     let mutation = format!(
@@ -287,7 +287,7 @@ pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocumen
 }
 
 pub async fn delete_goals_for_session(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {

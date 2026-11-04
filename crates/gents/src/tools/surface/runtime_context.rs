@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::tools::mcp::health::ServiceHealthMap;
 use crate::tools::mcp::pool::McpPool;
@@ -10,7 +10,7 @@ use crate::NodeIdentity;
 #[derive(Clone)]
 pub struct ToolRuntimeContext {
     pub(crate) usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
-    pub(super) node: Arc<EmbeddedNode>,
+    pub(super) node: Arc<Node>,
     pub(super) mcp_pool: McpPool,
     pub(crate) lsp_pool: LspPool,
     pub(super) health_map: ServiceHealthMap,
@@ -23,7 +23,7 @@ pub struct ToolRuntimeContext {
 
 impl ToolRuntimeContext {
     pub fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         mcp_pool: McpPool,
         health_map: ServiceHealthMap,
         local_hostname: impl Into<String>,
@@ -41,7 +41,7 @@ impl ToolRuntimeContext {
     }
 
     pub fn new_with_node_did(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         mcp_pool: McpPool,
         health_map: ServiceHealthMap,
         local_hostname: impl Into<String>,
@@ -63,11 +63,11 @@ impl ToolRuntimeContext {
         }
     }
 
-    pub fn oneshot(node: Arc<EmbeddedNode>) -> Self {
+    pub fn oneshot(node: Arc<Node>) -> Self {
         Self::oneshot_with_node_did(node, "")
     }
 
-    pub fn oneshot_with_node_did(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
+    pub fn oneshot_with_node_did(node: Arc<Node>, node_did: impl Into<String>) -> Self {
         Self {
             usage_cache: Arc::default(),
             node,
@@ -99,7 +99,7 @@ impl ToolRuntimeContext {
         self.plugins.home()
     }
 
-    pub fn node(&self) -> &Arc<EmbeddedNode> {
+    pub fn node(&self) -> &Arc<Node> {
         &self.node
     }
 

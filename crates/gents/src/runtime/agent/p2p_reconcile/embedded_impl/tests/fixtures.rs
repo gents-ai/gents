@@ -7,7 +7,7 @@ const TEST_SCHEMA: &str = r#"
 "#;
 
 pub(in crate::runtime::agent::p2p_reconcile) struct TestNode {
-    pub(in crate::runtime::agent::p2p_reconcile) node: Arc<EmbeddedNode>,
+    pub(in crate::runtime::agent::p2p_reconcile) node: Arc<Node>,
     _tempdir: tempfile::TempDir,
 }
 
@@ -20,7 +20,7 @@ async fn p2p_node_with_options(
     http_address: Option<std::net::SocketAddr>,
 ) -> TestNode {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let mut builder = EmbeddedNode::builder()
+    let mut builder = Node::builder()
         .data_path(tempdir.path())
         .with_p2p(P2PConfig {
             port: 0,
@@ -133,7 +133,7 @@ fn bs58_sig(signature: &[u8]) -> String {
 }
 
 pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     admin_identity: Arc<dyn NodeIdentity>,
     member_identity: Arc<dyn NodeIdentity>,
     member_peer: &str,
@@ -326,7 +326,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn wait_for_peer_info(
     }
 }
 
-pub(super) fn collection_id(node: &EmbeddedNode, name: &str) -> String {
+pub(super) fn collection_id(node: &Node, name: &str) -> String {
     node.get_collection(name)
         .expect("collection lookup")
         .expect("collection")
@@ -349,7 +349,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn wait_for_active_peer(
     }
 }
 
-pub(super) async fn exec(node: &EmbeddedNode, statement: &str, context: &str) {
+pub(super) async fn exec(node: &Node, statement: &str, context: &str) {
     let response = node.execute(statement).await;
     assert!(
         !response.has_errors(),
@@ -359,7 +359,7 @@ pub(super) async fn exec(node: &EmbeddedNode, statement: &str, context: &str) {
 }
 
 pub(super) async fn collection_values(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     field: &str,
 ) -> BTreeSet<String> {
@@ -383,7 +383,7 @@ pub(super) async fn collection_values(
 }
 
 pub(super) async fn wait_for_value(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     field: &str,
     expected: &str,

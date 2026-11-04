@@ -444,7 +444,7 @@ mod tests {
     async fn committed_run(
         name: &str,
     ) -> (
-        std::sync::Arc<defra_node::EmbeddedNode>,
+        std::sync::Arc<defra_node::Node>,
         crate::tools::call::lifecycle::ToolCallLifecycle,
         gents_loop::live_output::LiveToolOutputRegistry,
         gents_loop::live_output::LiveToolOutputWriter,
@@ -465,7 +465,7 @@ mod tests {
     }
 
     async fn presented(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
         crate::tools::call::lifecycle::load_tool_call_presentation(
@@ -482,7 +482,7 @@ mod tests {
     }
 
     async fn committed_output(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
         crate::tools::background::status::canonical_tool_output(

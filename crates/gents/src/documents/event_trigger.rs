@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::escape_graphql_string;
@@ -33,7 +33,7 @@ fn render_trigger_runtime_mutation(
 }
 
 pub(crate) async fn load_trigger_next_run_at_batch(
-    node: &EmbeddedNode,
+    node: &Node,
     scopes: &[(String, String)],
 ) -> Vec<Result<Option<String>>> {
     let mut results = std::iter::repeat_with(|| None)
@@ -172,7 +172,7 @@ where
 }
 
 pub(crate) async fn update_trigger_runtime_fields(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     trigger_id: &str,
     updates: TriggerRuntimeUpdate,

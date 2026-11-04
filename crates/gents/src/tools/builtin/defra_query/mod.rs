@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::json;
 
 /// Bounds an individual field value included in model-facing query results.
@@ -97,13 +97,13 @@ impl From<anyhow::Error> for DefraQueryError {
 
 #[derive(Clone)]
 pub struct DefraQueryTool {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     scope: CollectionScope,
     actor: Option<::identity::Did>,
 }
 
 impl DefraQueryTool {
-    pub fn new(node: Arc<EmbeddedNode>, scope: CollectionScope) -> Self {
+    pub fn new(node: Arc<Node>, scope: CollectionScope) -> Self {
         Self {
             node,
             scope,
@@ -150,7 +150,7 @@ impl Tool for DefraQueryTool {
 }
 
 pub fn build_defra_query_tool(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     scope: CollectionScope,
     actor: ::identity::Did,
 ) -> Box<dyn ToolDyn> {

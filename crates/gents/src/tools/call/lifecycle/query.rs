@@ -13,7 +13,7 @@ pub(crate) use result::{
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -79,7 +79,7 @@ struct ToolCallRow {
 
 impl ToolCallLifecycle {
     pub async fn load(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         session_id: &str,
         tool_call_id: &str,
     ) -> Result<Option<Self>> {
@@ -89,7 +89,7 @@ impl ToolCallLifecycle {
     }
 
     pub async fn load_by_doc_id(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -107,7 +107,7 @@ impl ToolCallLifecycle {
 
     pub(crate) async fn load_by_doc_id_in_txn(
         txn: &ConfigApplyTxn<'_>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -119,7 +119,7 @@ impl ToolCallLifecycle {
             .await
     }
 
-    async fn load_filtered(node: Arc<EmbeddedNode>, filter: String) -> Result<Option<Self>> {
+    async fn load_filtered(node: Arc<Node>, filter: String) -> Result<Option<Self>> {
         ConfigAccess::transact_local_readonly(&node, None, "tool_call.load", |txn| {
             let node = node.clone();
             let filter = &filter;
@@ -130,7 +130,7 @@ impl ToolCallLifecycle {
 
     async fn load_filtered_in_txn(
         txn: &ConfigApplyTxn<'_>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         filter: &str,
     ) -> Result<Option<Self>> {
         let query = format!(
@@ -407,7 +407,7 @@ mod tests {
     use std::time::Duration;
 
     async fn claimed_request(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         request_id: &str,
         session_id: &str,
         node_did: &str,

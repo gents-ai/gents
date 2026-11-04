@@ -97,7 +97,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
             .unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
@@ -239,7 +239,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
 #[derive(Clone)]
 struct OutputObligationProvider {
     calls: Arc<AtomicUsize>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
 }
 
 #[allow(refining_impl_trait)]
@@ -322,7 +322,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         )
         .unwrap();
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
                 .data_path(dir.path())
                 .build()
@@ -515,7 +515,7 @@ async fn oneshot_bash_uses_owned_request_context() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
             .unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path().join("db"))
             .build()

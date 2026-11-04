@@ -1,6 +1,6 @@
 use crate::inference::llm::message::Message;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::escape_graphql_string;

@@ -10,13 +10,13 @@ use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 
-async fn execute(node: &EmbeddedNode, query: &str) -> Value {
+async fn execute(node: &Node, query: &str) -> Value {
     let response = node.execute(query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.unwrap()
 }
 
-async fn persist_request(node: &EmbeddedNode, create: &AgentRequestCreate) -> AgentRequestRow {
+async fn persist_request(node: &Node, create: &AgentRequestCreate) -> AgentRequestRow {
     execute(node, &create.graphql_mutation().unwrap()).await;
     let data = execute(
         node,
@@ -31,7 +31,7 @@ async fn persist_request(node: &EmbeddedNode, create: &AgentRequestCreate) -> Ag
 }
 
 async fn claimed(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &AgentRequestRow,
     previous: Option<(RequestLifecycle, Option<String>)>,
 ) -> RequestLifecycle {
@@ -64,7 +64,7 @@ async fn claimed(
 
 async fn begin_writer(
     lifecycle: &mut RequestLifecycle,
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
 ) -> DefraStreamWriter {
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
     lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -119,7 +119,7 @@ async fn publish_accepted_turn(
 }
 
 async fn terminalize_accepted_tool(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     lifecycle: &mut RequestLifecycle,
     accepted: crate::tools::call::lifecycle::AcceptedToolCall,
     completed: bool,

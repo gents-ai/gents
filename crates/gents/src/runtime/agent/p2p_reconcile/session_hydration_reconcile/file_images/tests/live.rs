@@ -108,7 +108,7 @@ struct ObservedDelivery {
     inner: EmbeddedHydrationDelivery,
     gate: Arc<Gate>,
     calls: AtomicUsize,
-    recipient: Arc<EmbeddedNode>,
+    recipient: Arc<Node>,
     source_did: String,
     expected_changes: Value,
 }
@@ -191,7 +191,7 @@ impl ObservedDelivery {
     }
 }
 
-async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> Result<String> {
+async fn admit_on_client(node: &Arc<Node>, demand: &FileImageDemand) -> Result<String> {
     let mut input: serde_json::Map<String, Value> = demand
         .reference_fields()
         .into_iter()
@@ -221,7 +221,7 @@ async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> 
 }
 
 async fn receipt_row(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileImageDemand,
     status: &str,
 ) -> Result<Value> {

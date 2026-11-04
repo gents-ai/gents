@@ -7,7 +7,7 @@ pub(super) struct SideEffects {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn append_background_tool_completion(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent_session_id: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -85,7 +85,7 @@ pub(crate) async fn append_background_tool_completion(
 }
 
 async fn stored_notification_text(
-    node: &EmbeddedNode,
+    node: &Node,
     parent: &crate::AgentRequest,
     notification_doc_id: &str,
 ) -> Option<String> {
@@ -127,7 +127,7 @@ fn published_notification_budget(
         .find(|budget| render(*budget).0 == stored)
 }
 
-async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Result<String> {
+async fn load_tool_call_id(node: &Node, tool_call_doc_id: &str) -> Result<String> {
     let doc_id = escape_graphql_string(tool_call_doc_id);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 2) {{ _docID tool_call_id }} }}"#
@@ -149,7 +149,7 @@ async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Resul
 }
 
 pub(super) async fn ensure_notification_delivery(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent: &crate::AgentRequest,
     existing: Option<side_effects::ExistingNotification>,
     content: &str,
@@ -187,7 +187,7 @@ pub(super) async fn ensure_notification_delivery(
 }
 
 async fn mark_background_tool_notification_delivered(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -221,7 +221,7 @@ async fn mark_background_tool_notification_delivered(
 }
 
 async fn mark_background_tool_completion_side_effects_done(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     tool_call_doc_id: &str,
 ) -> Result<()> {
     let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);

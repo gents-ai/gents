@@ -1,7 +1,7 @@
 use crate::inference::llm::message::{AssistantContent, Message};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::transcript::{present_message, PersistedMessagePresentation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -189,7 +189,7 @@ pub fn raw_message_json(message: &Message) -> Result<Value> {
 /// which is owned by the request itself.
 #[allow(clippy::too_many_arguments)]
 pub async fn load_trace_transcript(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

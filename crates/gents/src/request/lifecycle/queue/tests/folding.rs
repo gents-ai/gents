@@ -7,7 +7,7 @@ use serde_json::json;
 const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
 const OTHER_CWD: &str = "/tmp/gents-fold-other-context";
 
-async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> String {
+async fn insert_row(node: &Arc<Node>, input: serde_json::Value) -> String {
     crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.fold.insert", |txn| {
         let input = input.clone();
         Box::pin(async move {
@@ -150,7 +150,7 @@ struct FoldRow {
     failure_reason: Option<String>,
 }
 
-async fn fold_rows(node: &EmbeddedNode, session_id: &str) -> Vec<FoldRow> {
+async fn fold_rows(node: &Node, session_id: &str) -> Vec<FoldRow> {
     let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
@@ -440,7 +440,7 @@ async fn generated_handover_fold_claims_bind_to_native_claims() {
     }
 }
 
-async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String> {
+async fn authored_keys(node: &Node, request_doc_id: &str) -> Vec<String> {
     let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
@@ -459,7 +459,7 @@ async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String>
         .collect()
 }
 
-async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+async fn durable_facts(node: &Node, session_id: &str) -> serde_json::Value {
     let session = escape_graphql_string(session_id);
     let response = crate::store::graphql::graphql_with_transaction_retry(
         node,

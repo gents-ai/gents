@@ -278,7 +278,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
 }
 
 pub async fn submit_goal_backed_request_local(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     actor: ::identity::Did,
     node_did: &str,
     session_id: &str,

@@ -89,7 +89,7 @@ fn inference_rounds_deduplicate_retries_by_physical_owner_not_logical_alias() {
     assert_eq!(inference_turns(&[]).unwrap(), Some(0));
 }
 
-async fn seeded_node() -> Arc<EmbeddedNode> {
+async fn seeded_node() -> Arc<Node> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identities = tempfile::tempdir().unwrap();

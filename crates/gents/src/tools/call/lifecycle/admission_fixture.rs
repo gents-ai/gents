@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
@@ -66,7 +66,7 @@ pub(crate) fn fixture_job_pin() -> gents_protocol::job::JobPin {
 
 /// Write [`fixture_job_pin`] onto the tool-call row `tool_doc_id`.
 pub(crate) async fn write_fixture_job_pin(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     tool_doc_id: &str,
 ) -> anyhow::Result<()> {
     let mutation = format!(
@@ -92,7 +92,7 @@ pub(crate) async fn write_fixture_job_pin(
     reason = "shared fixture with call sites across many test modules"
 )]
 pub(crate) async fn publish_accepted_on_claimed_request(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     request: &mut RequestLifecycle,
     node_did: &str,
     turn: usize,
@@ -159,14 +159,14 @@ pub(crate) async fn publish_accepted_on_claimed_request(
 }
 
 pub struct PublishedAdmission {
-    pub node: Arc<EmbeddedNode>,
+    pub node: Arc<Node>,
     pub path: PathBuf,
     pub tool: ToolCallLifecycle,
     pub node_did: String,
 }
 
 pub(crate) async fn complete_child(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     child_id: &str,
     node_did: &str,
     text: &str,
@@ -225,7 +225,7 @@ pub(crate) async fn complete_child(
 }
 
 pub(crate) async fn ensure_fixture_session(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -259,7 +259,7 @@ pub(crate) async fn ensure_fixture_session(
 }
 
 pub async fn claimed_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -294,7 +294,7 @@ pub async fn claimed_request(
 }
 
 pub(crate) async fn claimed_signed_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_id: &str,
     session_id: &str,
     identity: &dyn NodeIdentity,
@@ -305,7 +305,7 @@ pub(crate) async fn claimed_signed_request(
 }
 
 pub(crate) async fn claimed_signed_request_with_trigger(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_id: &str,
     session_id: &str,
     identity: &dyn NodeIdentity,
@@ -319,7 +319,7 @@ pub(crate) async fn claimed_signed_request_with_trigger(
 }
 
 pub(crate) async fn claimed_signed_request_with_trigger_correlation(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_id: &str,
     session_id: &str,
     identity: &dyn NodeIdentity,
@@ -351,7 +351,7 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
 }
 
 pub(crate) async fn claimed_signed_request_create(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &dyn NodeIdentity,
     mut create: gents_protocol::request_admission::AgentRequestCreate,
 ) -> RequestLifecycle {
@@ -391,7 +391,7 @@ pub(crate) async fn claimed_signed_request_create(
 }
 
 async fn claimed_paired_client_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_id: &str,
     session_id: &str,
     agent: &dyn NodeIdentity,
@@ -461,7 +461,7 @@ pub async fn published_admission_with_owner(
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
     let physical_identity = crate::KeyIdentity::load_or_create(path.join("test-agent.key"), None)?;
-    let mut builder = EmbeddedNode::builder()
+    let mut builder = Node::builder()
         .data_path(&path)
         .with_node_identity_did(physical_identity.did());
     if options.p2p {
@@ -604,7 +604,7 @@ pub(crate) fn test_p2p_config() -> defra_node::P2PConfig {
     }
 }
 
-pub async fn published_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
+pub async fn published_spawn_parent(name: &str) -> (Arc<Node>, PathBuf, ToolCallLifecycle) {
     let PublishedAdmission {
         node, path, tool, ..
     } = published_admission(PublishedAdmissionOptions {
@@ -618,7 +618,7 @@ pub async fn published_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, 
 
 pub async fn published_background_bridge(
     name: &str,
-) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
+) -> (Arc<Node>, PathBuf, ToolCallLifecycle) {
     let PublishedAdmission {
         node, path, tool, ..
     } = published_admission(PublishedAdmissionOptions {
@@ -634,7 +634,7 @@ pub async fn published_background_bridge(
 }
 
 pub(crate) async fn materialize_session_message(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &RequestLifecycle,
     tool: &mut ToolCallLifecycle,
     target_node_did: &str,
@@ -724,7 +724,7 @@ pub async fn published_session_message_with_owner(
     ))
 }
 
-pub async fn pending_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
+pub async fn pending_spawn_parent(name: &str) -> (Arc<Node>, PathBuf, ToolCallLifecycle) {
     let PublishedAdmission {
         node, path, tool, ..
     } = published_admission(PublishedAdmissionOptions {
@@ -742,7 +742,7 @@ mod lifecycle_tests {
     use super::*;
     use crate::tools::call::lifecycle::{CancelCause, FailureClass};
 
-    async fn row(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+    async fn row(node: &Node, session_id: &str) -> serde_json::Value {
         let session = crate::store::graphql::escape_graphql_string(session_id);
         let response = node
             .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode }} }}"#))
@@ -754,7 +754,7 @@ mod lifecycle_tests {
         rows.first().cloned().expect("one admitted tool call")
     }
 
-    async fn teardown(node: Arc<EmbeddedNode>, path: PathBuf) {
+    async fn teardown(node: Arc<Node>, path: PathBuf) {
         node.shutdown().await;
         std::fs::remove_dir_all(path).unwrap();
     }

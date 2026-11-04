@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::future::BoxFuture;
 use gents_loop::rig_compat::CachedInputTokensObservation;
 use tokio_util::sync::CancellationToken;
@@ -12,7 +12,7 @@ use super::stream_guard::StreamGuardLifecycle;
 use crate::runtime::drop_cleanup::DropCleanup;
 
 pub(crate) struct AdmissionPermit {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     permit: Option<PoolPermit>,
     call: InferenceCallRecord,
     doc_id: String,
@@ -34,7 +34,7 @@ struct PermitTerminal {
 
 impl AdmissionPermit {
     pub(super) fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         permit: PoolPermit,
         call: InferenceCallRecord,
         doc_id: String,

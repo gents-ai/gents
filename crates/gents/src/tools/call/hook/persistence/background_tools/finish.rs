@@ -28,7 +28,7 @@ const BACKGROUND_TIMEOUT_NOTIFICATION: (&str, &str) = ("failed", "deadline_excee
 
 pub(in crate::tools::call::hook::persistence) async fn finish_background_execution(
     mut lifecycle: ToolCallLifecycle,
-    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    node: std::sync::Arc<defra_node::Node>,
     live_outputs: crate::tools::call::hook::BackgroundLiveOutputState,
     executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     execution_reservation: crate::tools::call::hook::BackgroundExecutionReservation,

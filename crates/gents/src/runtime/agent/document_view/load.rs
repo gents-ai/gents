@@ -4,12 +4,12 @@ use crate::store::collection::Collection;
 use crate::store::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::de::DeserializeOwned;
 
 pub(crate) async fn load_document_runtime_view(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
 ) -> Result<DocumentRuntimeView> {
     anyhow::ensure!(

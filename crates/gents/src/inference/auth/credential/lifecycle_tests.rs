@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -189,7 +189,7 @@ async fn labeled(access: &ConfigAccess, credential: OAuthCredential, label: &str
         .unwrap()
 }
 
-fn node(access: &ConfigAccess) -> &Arc<EmbeddedNode> {
+fn node(access: &ConfigAccess) -> &Arc<Node> {
     access.local_node().expect("tests run on a local node")
 }
 

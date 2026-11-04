@@ -146,7 +146,7 @@ fn folds_into(
 }
 
 pub(crate) async fn fold_candidates(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     head: &AgentRequest,
 ) -> Result<Vec<AgentRequest>> {
     if !heads_user_turn(head) {
@@ -373,7 +373,7 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
 }
 
 pub(crate) async fn load_consumed_folded_inputs(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     head: &AgentRequest,
 ) -> Result<Vec<FoldedInput>> {
     if !heads_user_turn(head) {

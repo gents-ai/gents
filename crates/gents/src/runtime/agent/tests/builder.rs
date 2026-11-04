@@ -7,7 +7,7 @@ use crate::tools::surface::ToolCeiling;
 
 #[tokio::test]
 async fn builder_rejects_node_without_signing_did() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let identity = Arc::new(test_identity("builder-unsigned-node"));
 
     let error = match Gents::builder()
@@ -24,7 +24,7 @@ async fn builder_rejects_node_without_signing_did() {
 
     assert!(error
         .to_string()
-        .contains("EmbeddedNode configured with a node signing DID"));
+        .contains("Node configured with a node signing DID"));
 }
 
 #[tokio::test]

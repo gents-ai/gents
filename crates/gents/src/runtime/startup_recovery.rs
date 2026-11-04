@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
 use crate::request::lifecycle::{RecoveryReport, RequestLifecycle};
@@ -13,7 +13,7 @@ pub struct StartupRecoveryOutcome {
 }
 
 pub async fn run_startup_recovery(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
 ) -> StartupRecoveryOutcome {
     run_startup_recovery_with_executions(
@@ -25,7 +25,7 @@ pub async fn run_startup_recovery(
 }
 
 pub async fn run_startup_recovery_with_executions(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> StartupRecoveryOutcome {

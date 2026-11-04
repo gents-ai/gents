@@ -27,7 +27,7 @@ use std::time::Duration;
 use tracing::instrument::WithSubscriber;
 
 async fn receive_page(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
     identity: &dyn NodeIdentity,
 ) -> Result<gents_protocol::file_inventory::FileInventoryPageReceipt> {
@@ -483,7 +483,7 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
 
 struct RecoveryContext<'a> {
     store: &'a GraphqlHydrationStore,
-    client_node: &'a Arc<EmbeddedNode>,
+    client_node: &'a Arc<Node>,
     client: &'a Arc<dyn NodeIdentity>,
     request: &'a mut RequestLifecycle,
     workspace: &'a std::path::Path,
@@ -784,7 +784,7 @@ fn completion_case(
 }
 
 async fn wait_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
 ) -> Result<InventoryRequestRow> {
     let mut changes = crate::subscribe_collections(node, ["FileInventoryRequest"])?;
@@ -814,7 +814,7 @@ async fn wait_request(
     .context("inventory request did not arrive")?
 }
 
-async fn reset_request(node: &Arc<EmbeddedNode>, demand: &FileInventoryPageDemand) -> Result<()> {
+async fn reset_request(node: &Arc<Node>, demand: &FileInventoryPageDemand) -> Result<()> {
     let row = wait_request(node, demand).await?;
     ConfigAccess::write_local(node, "test.inventory.lose_response", &format!(
         r#"mutation {{ update_FileInventoryRequest(docID: "{}", input: {{ status: "pending", response: null }}) {{ _docID }} }}"#,
@@ -861,7 +861,7 @@ async fn pending_inventory_fixture() -> Result<(
         None,
     )?);
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(directory.path().join("store"))
             .with_node_identity_did(identity.did())
             .build()

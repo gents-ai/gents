@@ -17,7 +17,7 @@ use crate::turn::prompt::LayeredPromptBuilder;
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
     pub(super) hook_failure_policy: crate::tools::call::hook::FailurePolicy,

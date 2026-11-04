@@ -138,7 +138,7 @@ async fn wake(
 }
 
 async fn append_through(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &KeyIdentity,
     session: &str,
     notifications: &[Value],
@@ -169,7 +169,7 @@ async fn append_through(
 }
 
 async fn claim(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &KeyIdentity,
     request: crate::AgentRequest,
 ) -> RequestLifecycle {
@@ -206,7 +206,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         let dir = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(dir.path().join("owner.key"), None).unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await

@@ -5,7 +5,7 @@ const CORRELATION_FIELD: &str = "mailbox_item_key";
 // This validates correlation, not response authority or approval. DefraDB ACP
 // owns document writes; the domain workflow interprets the response contents.
 pub(super) fn response_field(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     entries: &[MailboxCloseCollection],
 ) -> Result<&'static str> {

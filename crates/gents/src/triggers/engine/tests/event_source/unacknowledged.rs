@@ -3,7 +3,7 @@ use super::*;
 const RESCAN: Duration = Duration::from_millis(50);
 
 struct Delivery {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     snapshot_tx: watch::Sender<Arc<ActiveRuntimeSnapshot>>,
     source: EventSource,
     engine: TriggerEngine,

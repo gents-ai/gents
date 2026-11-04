@@ -6,7 +6,7 @@ use super::lookup_backend_observation;
 use crate::inference::llm::tool::Tool;
 use crate::store::identity::NodeIdentity;
 use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
-use crate::{defra_node::EmbeddedNode, store::config_client::ConfigAccess};
+use crate::{defra_node::Node, store::config_client::ConfigAccess};
 
 #[tokio::test]
 async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
@@ -17,7 +17,7 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
             .unwrap();
     let owner = identity.did().to_owned();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(owner.clone())
             .build()
             .await

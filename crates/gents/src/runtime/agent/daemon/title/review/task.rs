@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::documents::Task;
 use crate::request::watcher::AgentRequest;
@@ -12,7 +12,7 @@ pub(super) struct Policy {
 }
 
 pub(super) async fn load(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     parent: &AgentRequest,
     selection: &crate::plugin::approval::workspace::ReviewTaskSelection,
 ) -> Result<Policy> {
@@ -42,7 +42,7 @@ pub(super) async fn load(
 impl Policy {
     pub(super) async fn is_current(
         &self,
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         parent: &AgentRequest,
     ) -> Result<bool> {
         Ok(crate::session::message::load_configured_task(

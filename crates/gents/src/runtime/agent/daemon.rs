@@ -68,7 +68,7 @@ fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
 /// queued snapshot never reaches provider execution.
 pub(crate) async fn verify_request_at_claim_boundary(
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     agent_id: &str,
     request: AgentRequest,
 ) -> Option<AgentRequest> {
@@ -113,7 +113,7 @@ pub(super) struct AgentDaemon<M>
 where
     M: ProviderModel,
 {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
@@ -186,7 +186,7 @@ pub(super) struct AgentDaemonInit<M>
 where
     M: ProviderModel,
 {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     pub(super) agent_config: Arc<ResolvedAgent>,
     pub(super) provider_family: Option<String>,
     pub(super) model: Arc<M>,

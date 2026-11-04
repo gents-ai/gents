@@ -948,7 +948,7 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
     let directory = tempfile::tempdir()?;
     let identity = crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
     let open = || {
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .data_path(directory.path())
             .with_node_identity_did(identity.did())
             .build()

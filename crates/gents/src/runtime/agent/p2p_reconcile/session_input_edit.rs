@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::session_input_edit::{
     SessionInputEdit, SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
 };
@@ -150,7 +150,7 @@ async fn signed_receipt(
 /// Applies or answers one command. Returns its `issued_at` when the command is
 /// not yet valid on this clock, so the caller can retry it then.
 pub(crate) async fn process_command(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
 ) -> Result<Option<DateTime<Utc>>> {

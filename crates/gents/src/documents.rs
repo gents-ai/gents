@@ -115,14 +115,14 @@ pub use task::{Task, TaskHook, TaskHookPhase};
 pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 pub fn default_agent_id_for_node(node_did: &str) -> String {
     format!("{node_did}:default")
 }
 
 /// Ensure the runtime's node exists without inventing executable configuration.
-pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
+pub async fn ensure_node(node: &std::sync::Arc<Node>, node_did: &str) -> Result<Node> {
     use crate::store::collection::Collection;
     use crate::store::config_client::{
         ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,

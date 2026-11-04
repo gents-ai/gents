@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
@@ -17,7 +17,7 @@ use super::{
 };
 
 pub(crate) async fn append_provider_segment(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     generation: &str,
     prepared: &OutputSegment,
 ) -> Result<String> {
@@ -33,7 +33,7 @@ pub(crate) async fn append_provider_segment(
 
 #[cfg(test)]
 pub(crate) async fn append_provider_segment_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     generation: &str,
     prepared: &OutputSegment,
     now: DateTime<Utc>,

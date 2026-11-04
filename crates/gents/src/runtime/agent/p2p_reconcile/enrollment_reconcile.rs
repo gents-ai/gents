@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -387,7 +387,7 @@ const ENROLLMENT_SWEEP_COLLECTIONS: [&str; 6] = [
 /// Run the sole durable enrollment projection/effect loop. This loop publishes
 /// its immutable projection and owns `source="enrollment"` data-plane rows.
 pub async fn run_enrollment_reconciler(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     mut owner: EnrollmentAuthorityOwner,
     cancel: CancellationToken,
@@ -627,7 +627,7 @@ fn exact_peer_authorization_fence(
 }
 
 async fn sweep_enrollment(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     store: &GraphqlEnrollmentStore,
     pairing_admin: &EmbeddedRemoteP2pAdmin,
@@ -661,7 +661,7 @@ async fn sweep_enrollment(
 }
 
 async fn record_applied_route_receipts(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     store: &GraphqlEnrollmentStore,
     pairing_admin: &EmbeddedRemoteP2pAdmin,
@@ -828,7 +828,7 @@ fn desired_routes_at(
 }
 
 async fn reconcile_data_plane(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     local_did: &str,
     store: &GraphqlEnrollmentStore,
     projection: &EnrollmentProjection,
@@ -976,7 +976,7 @@ fn enrollment_route_matches_fence(
         && route.authorization_expires_at == fence.authorization_expires_at
 }
 
-async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &str) -> Result<()> {
+async fn delete_enrollment_route(node: &std::sync::Arc<Node>, peer_id: &str) -> Result<()> {
     let mutation = delete_enrollment_route_mutation(peer_id);
     Ok(
         crate::store::config_client::ConfigAccess::write_local_response(
@@ -1663,7 +1663,7 @@ mod tests {
     }
 
     async fn create_enrollment_request(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         target: &dyn NodeIdentity,
         member: &dyn NodeIdentity,
         active: &ActiveEnrollment,

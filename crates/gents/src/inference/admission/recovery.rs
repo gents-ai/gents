@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -30,7 +30,7 @@ enum InferenceRecoveryOutcome {
 
 impl InferenceCall {
     pub async fn recover_all(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<InferenceCallRecoveryReport> {
         let rows = load_stale_inference_calls(node, node_did).await?;
@@ -72,7 +72,7 @@ impl InferenceCall {
 }
 
 async fn load_stale_inference_calls(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Vec<StaleInferenceCallRow>> {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -105,7 +105,7 @@ async fn load_stale_inference_calls(
 }
 
 async fn lookup_parent_request(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     request_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
@@ -159,7 +159,7 @@ fn recovery_outcome(
 }
 
 async fn recover_inference_call_row(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     row: &StaleInferenceCallRow,
     outcome: InferenceRecoveryOutcome,
 ) -> Result<bool> {

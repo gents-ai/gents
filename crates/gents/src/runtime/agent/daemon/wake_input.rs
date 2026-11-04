@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
@@ -56,7 +56,7 @@ fn receipt_keys(row: &Value) -> Result<Vec<String>> {
 }
 
 pub(super) async fn load(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &crate::AgentRequest,
     cutoff: Option<u32>,
 ) -> Result<Vec<TaggedMessage>> {

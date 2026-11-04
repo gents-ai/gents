@@ -32,7 +32,7 @@ pub enum RuntimeNoticeError {
 }
 
 pub(crate) async fn publish(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     notice: RuntimeNotice,
 ) -> std::result::Result<MailboxItem, RuntimeNoticeError> {

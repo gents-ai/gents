@@ -60,7 +60,7 @@ fn audit_item(
 async fn fixture(
     name: &str,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     PathBuf,
     DefraSessionHook,
     RequestLifecycle,
@@ -111,7 +111,7 @@ async fn fixture(
 }
 
 async fn persisted(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_doc_id: &str,
     source: &OutputSource,
     writer: &OutputWriter,

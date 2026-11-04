@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use std::sync::Arc;
 
 use super::test_support::{
@@ -79,7 +79,7 @@ async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token
     assert_eq!(first.to_string(), second.to_string());
 }
 
-fn grok_bearer(node: Arc<EmbeddedNode>, did: &str) -> DbCredentialBearer {
+fn grok_bearer(node: Arc<Node>, did: &str) -> DbCredentialBearer {
     let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     DbCredentialBearer::new(
         node,
@@ -92,7 +92,7 @@ fn grok_bearer(node: Arc<EmbeddedNode>, did: &str) -> DbCredentialBearer {
     )
 }
 
-async fn set_label(node: &std::sync::Arc<EmbeddedNode>, did: &str, label: Option<&str>) {
+async fn set_label(node: &std::sync::Arc<Node>, did: &str, label: Option<&str>) {
     let credential_id =
         oauth_credential_id(did, crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER);
     let mutation = format!(

@@ -588,14 +588,14 @@ pub async fn load_verdicts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defra_node::EmbeddedNode;
+    use crate::defra_node::Node;
     use crate::eval::TAXONOMY_VERSION;
     use std::sync::Arc;
 
     const OWNER: &str = "did:key:eval-owner";
 
     async fn access() -> ConfigAccess {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(Node::builder().build().await.unwrap());
         for sdl in [
             gents_protocol::schemas::EVAL_RUN,
             gents_protocol::schemas::EVAL_TRIAL,

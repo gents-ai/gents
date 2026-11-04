@@ -92,7 +92,7 @@ pub(crate) trait NodeReadinessWriter: Send + Sync {
 }
 
 struct DefraNodeReadinessWriter {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
 }
 
 #[async_trait::async_trait]
@@ -187,7 +187,7 @@ enum Command {
 
 impl NodeReadinessPublisherHandle {
     pub(crate) fn start(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
     ) -> (NodeReadinessPublisherOwner, Self) {
         Self::start_with_writer_and_timeout(
@@ -217,7 +217,7 @@ impl NodeReadinessPublisherHandle {
 
     #[cfg(test)]
     pub(crate) fn start_with_unbounded_test_clock(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
     ) -> (NodeReadinessPublisherOwner, Self) {
         Self::start_with_writer_and_timeout(
@@ -845,7 +845,7 @@ fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) async fn upsert_node_readiness(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     snapshot: &NodeReadinessSnapshot,
     updated_at: &str,

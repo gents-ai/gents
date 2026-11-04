@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::Mutex;
 
 use super::*;
@@ -102,7 +102,7 @@ const REFRESH_REQUEST_TIMEOUT: std::time::Duration = if cfg!(test) {
 };
 
 pub struct DbCredentialBearer {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     provider: String,
     credential_id: String,
@@ -117,7 +117,7 @@ pub struct DbCredentialBearer {
 
 impl DbCredentialBearer {
     pub fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: impl Into<String>,
         provider: impl Into<String>,
         credential_id: impl Into<String>,
@@ -139,7 +139,7 @@ impl DbCredentialBearer {
 
     #[allow(clippy::too_many_arguments)]
     pub fn with_cache(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: impl Into<String>,
         provider: impl Into<String>,
         credential_id: impl Into<String>,

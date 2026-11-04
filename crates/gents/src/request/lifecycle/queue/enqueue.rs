@@ -1,7 +1,7 @@
 use super::*;
 
 pub async fn enqueue_local_steering_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent_request_id: &str,
     parent_request_doc_id: &str,
     content: &str,
@@ -18,7 +18,7 @@ pub async fn enqueue_local_steering_request(
 }
 
 pub(crate) async fn enqueue_steering_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent: &AgentRequest,
     content: &str,
     input: RequestInput,

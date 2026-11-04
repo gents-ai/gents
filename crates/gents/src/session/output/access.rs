@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::OutputSource;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
@@ -10,7 +10,7 @@ use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[derive(Clone, Copy)]
 pub(super) enum ReadAccess<'a, 'txn> {
-    Node(&'a EmbeddedNode),
+    Node(&'a Node),
     Txn(&'a ConfigApplyTxn<'txn>),
     Config(&'a ConfigAccess),
 }

@@ -1542,7 +1542,7 @@ async fn generated_client_progress_survives_reload_and_rollback() {
         fixture.node.shutdown().await;
         drop(fixture);
         let reopened = std::sync::Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(&path)
                 .with_node_identity_did(names.source.did())
                 .build()

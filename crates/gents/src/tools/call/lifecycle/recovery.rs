@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -116,7 +116,7 @@ enum RecoveryOutcome {
 
 impl super::ToolCallLifecycle {
     pub async fn recover_all(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<ToolCallRecoveryReport> {
         Self::recover_all_with_executions(
@@ -128,7 +128,7 @@ impl super::ToolCallLifecycle {
     }
 
     pub async fn recover_all_with_executions(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Result<ToolCallRecoveryReport> {
@@ -149,7 +149,7 @@ impl super::ToolCallLifecycle {
     }
 
     pub async fn reconcile_terminal_parent_owned_tools(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<TerminalParentToolReport> {
         Self::reconcile_terminal_parent_owned_tools_with_executions(
@@ -161,7 +161,7 @@ impl super::ToolCallLifecycle {
     }
 
     pub(crate) async fn reconcile_terminal_parent_owned_tools_with_executions(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Result<TerminalParentToolReport> {
@@ -248,7 +248,7 @@ impl super::ToolCallLifecycle {
     }
 
     pub async fn reconcile_orphaned_background_tools(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Result<OrphanedBackgroundToolReport> {
@@ -503,7 +503,7 @@ impl super::ToolCallLifecycle {
     /// The host process owner stops the process only if a durable record
     /// proves ownership.
     pub(crate) async fn cancel_unowned_background_tool(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         lifecycle: &mut ToolCallLifecycle,
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
         cause: CancelCause,
@@ -579,7 +579,7 @@ impl super::ToolCallLifecycle {
     /// `completed` only after both side effects converge, so transient
     /// failures remain discoverable.
     pub async fn reconcile_background_completion_side_effects(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<BackgroundCompletionSideEffectReport> {
         let rows = load_pending_background_completion_rows(node, node_did).await?;
@@ -913,7 +913,7 @@ mod tests {
 }
 
 async fn recover_stuck_running_tool_calls(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> Result<usize> {
@@ -982,7 +982,7 @@ async fn recover_stuck_running_tool_calls(
 }
 
 async fn append_recovered_background_tool_completion(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     row: &RunningToolCallRow,
     outcome: RecoveryOutcome,
 ) {
@@ -1024,7 +1024,7 @@ async fn append_recovered_background_tool_completion(
 }
 
 async fn load_running_tool_call_rows_for_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
 ) -> Result<Vec<RunningToolCallRow>> {
     let escaped = escape_graphql_string(node_did);
@@ -1033,7 +1033,7 @@ async fn load_running_tool_call_rows_for_agent(
 }
 
 async fn load_running_tool_call_rows_with_filter(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     extra_filter: &str,
 ) -> Result<Vec<RunningToolCallRow>> {
     let query = format!(
@@ -1092,7 +1092,7 @@ async fn load_running_tool_call_rows_with_filter(
 }
 
 async fn load_pending_background_completion_rows(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
 ) -> Result<Vec<TerminalBackgroundToolRow>> {
     let node_did = escape_graphql_string(node_did);
@@ -1187,7 +1187,7 @@ fn background_completion_projection(
 /// `exact` narrows the lookup to one physical request (`_docID`) within an
 /// exact session scope filter.
 async fn lookup_parent_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     request_id: &str,
     exact: Option<(&str, &str)>,
@@ -1233,7 +1233,7 @@ async fn lookup_parent_request(
 }
 
 async fn load_recovery_lifecycle(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     row: &RunningToolCallRow,
 ) -> Result<ToolCallLifecycle> {
     let node_did = row
@@ -1252,7 +1252,7 @@ async fn load_recovery_lifecycle(
 }
 
 async fn recover_tool_call_row(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
@@ -1384,7 +1384,7 @@ fn classify_registered_session_stop(
 
 /// A missing document may not have replicated here, so it does not imply deletion.
 async fn owner_task_deleted(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     parent: &AgentRequestRow,
 ) -> Result<bool> {

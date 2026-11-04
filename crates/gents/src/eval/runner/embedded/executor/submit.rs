@@ -8,7 +8,7 @@ use super::install::{bind_fixture_owner, create_document};
 use super::outcome::trigger_failure;
 use super::settle::remaining_of;
 use super::{Reconciled, POLL};
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::eval::runner::embedded::home::{EmbeddedHome, RUNTIME_READY_TIMEOUT};
 use crate::eval::runner::executor::{FixtureDocument, StageSpec, TrialLocator};
 use crate::eval::OutcomeKind;
@@ -34,7 +34,7 @@ pub(super) enum StageSubmission {
 }
 
 pub(super) async fn submit_stage(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     locator: &TrialLocator,
     agent_id: &str,
     stage: &StageSpec,
@@ -127,7 +127,7 @@ pub(super) async fn seed_and_await_fire(
 }
 
 async fn resolve_seed_failure(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
     kind: OutcomeKind,
     deadline: Option<Duration>,
@@ -142,7 +142,7 @@ async fn resolve_seed_failure(
     })
 }
 
-async fn fired_request(node: &EmbeddedNode, doc_id: &str) -> Result<Option<String>> {
+async fn fired_request(node: &Node, doc_id: &str) -> Result<Option<String>> {
     let query =
         r#"{ AgentRequest(order: { created_at: ASC }) { request_id caused_by_source_doc_id } }"#;
     let response = graphql_with_transaction_retry(node, query, "eval trial fired request").await?;

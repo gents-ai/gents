@@ -3,7 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::StreamExt;
 use reqwest::StatusCode;
 use rig::client::CompletionClient;
@@ -160,7 +160,7 @@ where
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
     pub async fn build(
         cache: Arc<UsageCache>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: &str,
         account_ref: Option<&str>,
     ) -> Result<Self> {
@@ -175,7 +175,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
     /// A client that rotates over every enabled Claude account of the node.
     pub async fn build_pool(
         cache: Arc<UsageCache>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: &str,
         allow_overage: bool,
     ) -> Result<Self> {
@@ -232,7 +232,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
 
     async fn bootstrap_account(
         cache: &Arc<UsageCache>,
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         node_did: &str,
         account_ref: Option<&str>,
     ) -> Result<ClaudeAccount<DbCredentialBearer>> {

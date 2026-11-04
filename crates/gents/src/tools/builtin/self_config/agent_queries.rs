@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn node_default_agent(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Option<String>> {
     let query = format!(
@@ -29,7 +29,7 @@ pub(super) async fn node_default_agent(
 }
 
 async fn agent_snapshot(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     agent_id: &str,
     process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
@@ -49,7 +49,7 @@ async fn agent_snapshot(
 }
 
 pub(super) async fn agent_list(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     limit: usize,
@@ -141,7 +141,7 @@ pub(super) async fn agent_list(
 }
 
 pub(super) async fn agent_inspect(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     agent_id: &str,
     process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,

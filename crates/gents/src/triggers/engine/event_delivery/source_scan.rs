@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::Value;
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 const SOURCE_SCAN_PAGE_SIZE: usize = 1_000;
 
-pub(crate) async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Result<Vec<String>> {
+pub(crate) async fn load_doc_ids(node: &Node, collection: &str) -> Result<Vec<String>> {
     load_source_rows(node, collection, None, None)
         .await?
         .into_iter()
@@ -22,7 +22,7 @@ fn document_id(row: &Value) -> Result<&str> {
 }
 
 pub(crate) async fn load_source_rows(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     field: Option<&str>,
     filter: Option<&str>,
@@ -80,7 +80,7 @@ pub(crate) mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    pub(crate) async fn create_source_documents(node: &Arc<EmbeddedNode>) -> BTreeSet<String> {
+    pub(crate) async fn create_source_documents(node: &Arc<Node>) -> BTreeSet<String> {
         let access = ConfigAccess::local(node.clone());
         access
             .add_collection("type RescanSource { correlation: String }")

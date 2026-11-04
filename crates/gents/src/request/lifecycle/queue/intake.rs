@@ -171,7 +171,7 @@ pub(crate) fn steer_reachable(
 }
 
 pub(crate) async fn steering_snapshot(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     head: &AgentRequest,
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
 ) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
@@ -213,7 +213,7 @@ pub(crate) async fn steering_snapshot(
 }
 
 pub(crate) async fn steering_inputs(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     head: &AgentRequest,
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
 ) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::StreamExt as _;
 use gents_loop::provider_patches::patch_store_false;
 use rig::http_client::{
@@ -282,7 +282,7 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
 }
 
 async fn build_authenticated_http(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     account_ref: Option<&str>,
 ) -> Result<CapturingXaiGrokOAuthHttpClient> {
@@ -312,7 +312,7 @@ pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
 >;
 
 pub async fn build_responses_client(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
@@ -330,7 +330,7 @@ pub async fn build_responses_client(
 }
 
 pub async fn build_chat_completions_client(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,

@@ -78,7 +78,7 @@ enum Lineage {
 }
 
 struct Harness {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     calls: Arc<AtomicUsize>,
     marks: tempfile::TempDir,

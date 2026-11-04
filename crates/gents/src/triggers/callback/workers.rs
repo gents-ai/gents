@@ -109,7 +109,7 @@ impl CallbackWorkers {
 
     pub(super) fn dispatch(
         &self,
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         invocation: &CallbackInvocationDoc,
         callback: &crate::documents::Callback,
         ceiling: Option<std::path::PathBuf>,

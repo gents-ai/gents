@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use super::documents::{update_invocation, CallbackInvocationDoc};
 use super::{
@@ -25,7 +25,7 @@ pub fn invocation_is_terminal(state: &str) -> bool {
 /// A claim is scoped to its owner DID and invocation ID; another principal
 /// cannot claim the row. Single-instance enforcement is deferred.
 pub async fn claim_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     invocation: &CallbackInvocationDoc,
 ) -> Result<Option<CallbackInvocationDoc>> {

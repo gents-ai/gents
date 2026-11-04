@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use super::selection::CommandOutputLimits;
 
@@ -12,7 +12,7 @@ pub(crate) fn budget_for_tool(limits: &CommandOutputLimits, tool_name: &str) -> 
 }
 
 pub(crate) async fn configured_output_budget(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     agent_id: &str,
     tool_name: &str,
@@ -33,7 +33,7 @@ pub(crate) async fn configured_output_budget(
 }
 
 async fn load_command_output_limits(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     agent_id: &str,
 ) -> anyhow::Result<CommandOutputLimits> {

@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::documents::TriggerObservation;
 use crate::eval::runner::embedded::observe::{
     classify_request_outcome, RequestEvidence, TerminalObservation,
@@ -93,7 +93,7 @@ pub(super) fn provider_reason(
 }
 
 pub(super) async fn trigger_failure(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     since: &str,
     source_doc_id: Option<&str>,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
@@ -15,7 +15,7 @@ struct EndpointBinding {
 }
 
 pub async fn run_endpoint_heartbeat(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -23,7 +23,7 @@ pub async fn run_endpoint_heartbeat(
 }
 
 async fn endpoint_heartbeat(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -69,7 +69,7 @@ async fn endpoint_heartbeat(
 }
 
 async fn tick_endpoint(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     identity: &dyn NodeIdentity,
     published: &mut Option<EndpointBinding>,

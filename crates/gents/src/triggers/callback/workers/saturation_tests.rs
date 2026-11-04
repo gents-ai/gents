@@ -131,7 +131,7 @@ async fn create_inputs(access: &ConfigAccess, items: impl Iterator<Item = usize>
         .unwrap();
 }
 
-async fn snapshot(node: &defra_node::EmbeddedNode, row: &Value) -> CallbackInvocationDoc {
+async fn snapshot(node: &defra_node::Node, row: &Value) -> CallbackInvocationDoc {
     load_invocation(node, row["invocation_id"].as_str().unwrap(), OWNER)
         .await
         .unwrap()

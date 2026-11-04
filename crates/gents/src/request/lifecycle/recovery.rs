@@ -21,7 +21,7 @@ struct ActiveRequestRecoveryReport {
 
 impl RequestLifecycle {
     pub async fn recover_all(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<RecoveryReport> {
         let active = recover_active_requests(node, node_did).await?;
@@ -69,7 +69,7 @@ impl RequestLifecycle {
     /// would fork the CRDT, not converge it). Only the attempts counter is
     /// written.
     pub async fn redrive_terminal_convergence(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<TerminalRedriveReport> {
         let escaped_node_did = escape_graphql_string(node_did);
@@ -222,7 +222,7 @@ impl RequestLifecycle {
     }
 
     pub async fn repair_terminal_requests(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<TerminalRepairReport> {
         Ok(recover_active_requests(node, node_did).await?.requests)
@@ -230,7 +230,7 @@ impl RequestLifecycle {
 }
 
 async fn recover_active_requests(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
 ) -> Result<ActiveRequestRecoveryReport> {
     let active_states = RequestLifecycleState::graphql_list([

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::Value;
 
 use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
@@ -9,7 +9,7 @@ use crate::request::lifecycle::{
 };
 
 pub async fn write_manual_agent_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     actor: ::identity::Did,
     node_did: &str,
     agent_id: &str,
@@ -39,7 +39,7 @@ pub struct ManualRequestTarget<'a> {
 }
 
 pub async fn write_manual_agent_request_with_conversation_title(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     actor: ::identity::Did,
     target: ManualRequestTarget<'_>,
     prompt_template: &str,
@@ -110,7 +110,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
 mod tests {
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node;
     use serde_json::Value;
 
     use super::{
@@ -120,12 +120,12 @@ mod tests {
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use crate::store::schema::ensure_runtime_schemas;
 
-    async fn test_node() -> (Arc<EmbeddedNode>, String) {
+    async fn test_node() -> (Arc<Node>, String) {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
         let did = identity.did().to_string();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await

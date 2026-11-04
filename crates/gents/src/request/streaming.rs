@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::Mutex;
 
 pub(crate) mod auxiliary;
@@ -45,7 +45,7 @@ use gents_loop::stream_writer::PendingOutput;
 pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     batch_interval: Duration,
     buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
     published: Mutex<RapidHashMap<String, String>>,
@@ -496,7 +496,7 @@ impl DefraStreamWriter {
             .map(tokio::time::Instant::from_std)
     }
 
-    pub fn new(node: Arc<EmbeddedNode>, _node_did: &str, batch_interval: Duration) -> Self {
+    pub fn new(node: Arc<Node>, _node_did: &str, batch_interval: Duration) -> Self {
         Self {
             node,
             batch_interval,

@@ -768,7 +768,7 @@ async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-async fn session_rewrite_rows(node: &defra_node::EmbeddedNode) -> Vec<Vec<String>> {
+async fn session_rewrite_rows(node: &defra_node::Node) -> Vec<Vec<String>> {
     let response = node
         .execute(
             "{ AgentSession { _docID session_id agent_id } \
@@ -862,7 +862,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     let identity =
         crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let builder = || {
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .data_path(directory.path().join("data"))
     };
@@ -1107,7 +1107,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     reason = "shared test helper with call sites in modules outside session"
 )]
 pub(crate) async fn import_history_observation(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1401,7 +1401,7 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
 }
 
 async fn claimed_authored_request(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     request_id: &str,
     node_did: &str,
     session_id: &str,
@@ -1624,7 +1624,7 @@ async fn retry_frontier_matches_lean_admission() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     async fn write_doc(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         mutation: &str,
         field: &str,
     ) -> String {

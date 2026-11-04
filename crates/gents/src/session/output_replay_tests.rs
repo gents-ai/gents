@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::message::Message;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -42,7 +42,7 @@ const SESSION_ID: &str = "replay-session";
 const REQUEST_ID: &str = "replay-request";
 
 struct ReplayFixture {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     request_doc_id: String,
     request_commit_cid: String,
     header_doc_id: String,
@@ -1219,13 +1219,13 @@ enum RequestFault {
 }
 
 struct FaultingRequests<'a> {
-    node: &'a EmbeddedNode,
+    node: &'a Node,
     request_doc_id: &'a str,
     fault: Option<RequestFault>,
 }
 
 struct CountingRequests<'a> {
-    node: &'a EmbeddedNode,
+    node: &'a Node,
     rows: std::sync::atomic::AtomicUsize,
     commits: std::sync::atomic::AtomicUsize,
 }

@@ -1,7 +1,7 @@
 pub mod migration;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 #[cfg(feature = "agent-memory")]
 pub use gents_protocol::schemas::NODE_MEMORY as NODE_MEMORY_SCHEMA;
@@ -25,7 +25,7 @@ pub use gents_protocol::schemas::{
     TOOL_SERVICE_REGISTRY as TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 
-pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
+pub async fn ensure_runtime_schemas(node: &Node) -> Result<()> {
     if let Some(access) = crate::store::config_client::ConfigAccess::claimed_for_node(node) {
         return Ok(access
             .run_local_owned(|node| async move {

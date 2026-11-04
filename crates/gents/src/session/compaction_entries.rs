@@ -195,7 +195,7 @@ where
 }
 
 pub(crate) async fn load_prompt_compaction_state(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -269,7 +269,7 @@ pub(crate) async fn load_prompt_compaction_state(
 }
 
 pub async fn load_compaction_entries(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -370,7 +370,7 @@ pub(crate) struct NewExactSessionCompaction<'a> {
 /// and compacted count are derived from the artifact, so callers cannot pair a
 /// cursor with a different split or checkpoint.
 pub(crate) async fn save_exact_compaction_entry(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     input: NewExactSessionCompaction<'_>,
     reduction: crate::inference::compaction::ExactReduction<'_>,
 ) -> Result<CompactionEntry> {
@@ -396,7 +396,7 @@ pub(crate) async fn save_exact_compaction_entry(
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) async fn save_compaction_entry(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     request_id: &str,
@@ -431,7 +431,7 @@ pub(crate) async fn save_compaction_entry(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn save_compaction_entry_with_requester_did(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

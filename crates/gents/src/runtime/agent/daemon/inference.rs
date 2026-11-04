@@ -124,7 +124,7 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 }
 
 pub(super) fn render_request_context_message(
-    _node: &defra_node::EmbeddedNode,
+    _node: &defra_node::Node,
     agent_config: &ResolvedAgent,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
@@ -1102,7 +1102,7 @@ pub(super) mod tests {
         provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
         title_calls: Arc<AtomicUsize>,
         title_shape_mismatches: Arc<AtomicUsize>,
-        successor: Option<(Arc<defra_node::EmbeddedNode>, String, String)>,
+        successor: Option<(Arc<defra_node::Node>, String, String)>,
     }
 
     #[allow(refining_impl_trait)]
@@ -1201,7 +1201,7 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_by_doc_id(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         doc_id: &str,
     ) -> serde_json::Value {
         let response = node
@@ -1223,7 +1223,7 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_state(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         doc_id: &str,
     ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
         let row = persisted_request_by_doc_id(node, doc_id).await;
@@ -1328,7 +1328,7 @@ pub(super) mod tests {
     }
 
     async fn create_routed_request(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         agent_config: &ResolvedAgent,
         requester_did: &str,
     ) -> AgentRequest {
@@ -1383,7 +1383,7 @@ pub(super) mod tests {
     }
 
     async fn create_enrollment_daemon_request(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,
         fence: &crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,

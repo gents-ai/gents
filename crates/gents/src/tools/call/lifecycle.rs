@@ -133,7 +133,7 @@ impl CancelCause {
 
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 pub(crate) mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
@@ -239,7 +239,7 @@ impl ToolRowKind {
 
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     request_id: String,
     request_doc_id: Option<String>,
     session_id: String,
@@ -326,7 +326,7 @@ pub(crate) struct SpawnedBackgroundToolAdmission {
 impl ToolCallLifecycle {
     /// Adopt a pending row atomically published with an accepted provider header.
     pub(crate) fn from_accepted(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: String,
         requester_did: Option<String>,
         accepted: AcceptedToolCall,
@@ -408,7 +408,7 @@ impl ToolCallLifecycle {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         request_id: String,
         session_id: String,
         node_did: String,
@@ -477,7 +477,7 @@ impl ToolCallLifecycle {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new_background_tool(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         request_id: String,
         session_id: String,
         node_did: String,
@@ -554,7 +554,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn node(&self) -> &std::sync::Arc<defra_node::EmbeddedNode> {
+    pub(crate) fn node(&self) -> &std::sync::Arc<defra_node::Node> {
         &self.node
     }
 
@@ -696,7 +696,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
         let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(

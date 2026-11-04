@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -59,14 +59,14 @@ impl Agent {
     }
 }
 
-pub async fn load_agent(node: &EmbeddedNode, agent_id: &str) -> Result<Option<Agent>> {
+pub async fn load_agent(node: &Node, agent_id: &str) -> Result<Option<Agent>> {
     Ok(load_agent_record(node, agent_id)
         .await?
         .map(|(_, behavior)| behavior))
 }
 
 pub(crate) async fn load_agent_record(
-    node: &EmbeddedNode,
+    node: &Node,
     agent_id: &str,
 ) -> Result<Option<(String, Agent)>> {
     let escaped_agent_id = escape_graphql_string(agent_id);
@@ -95,7 +95,7 @@ pub(crate) async fn load_agent_record(
     Ok(first_row_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn list_agents(node: &EmbeddedNode, node_did: &str) -> Result<Vec<Agent>> {
+pub async fn list_agents(node: &Node, node_did: &str) -> Result<Vec<Agent>> {
     Ok(list_agent_records(node, node_did)
         .await?
         .into_iter()
@@ -104,7 +104,7 @@ pub async fn list_agents(node: &EmbeddedNode, node_did: &str) -> Result<Vec<Agen
 }
 
 pub(crate) async fn list_agent_records(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Vec<(String, Agent)>> {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -133,7 +133,7 @@ pub(crate) async fn list_agent_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn upsert_agent(node: &std::sync::Arc<EmbeddedNode>, behavior: &Agent) -> Result<()> {
+pub async fn upsert_agent(node: &std::sync::Arc<Node>, behavior: &Agent) -> Result<()> {
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,

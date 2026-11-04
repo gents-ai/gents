@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
@@ -77,7 +77,7 @@ fn created_tool_call_doc_ids(
 }
 
 pub(crate) async fn publish_provider_turn(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     generation: &str,
     plan: ProviderPublicationPlan,
 ) -> Result<PublishedProviderTurn> {
@@ -86,7 +86,7 @@ pub(crate) async fn publish_provider_turn(
 
 #[cfg(test)]
 pub(crate) async fn publish_provider_turn_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     generation: &str,
     plan: ProviderPublicationPlan,
     now: DateTime<Utc>,
@@ -95,7 +95,7 @@ pub(crate) async fn publish_provider_turn_at(
 }
 
 pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     generation: &str,
     plan: ProviderPublicationPlan,
     fixture_now: Option<DateTime<Utc>>,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::store::config_client::ConfigClientError;
 
@@ -23,7 +23,7 @@ pub enum RuntimeMigrationError {
 }
 
 pub async fn ensure_all_runtime_migrations(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
 ) -> Result<(), RuntimeMigrationError> {
     crate::store::config_client::ConfigAccess::local(node)
         .run_local_owned(|node| async move { ensure_migrations_borrowed(node.as_ref()).await })
@@ -31,7 +31,7 @@ pub async fn ensure_all_runtime_migrations(
 }
 
 pub(crate) async fn ensure_migrations_borrowed(
-    node: &EmbeddedNode,
+    node: &Node,
 ) -> Result<(), RuntimeMigrationError> {
     ensure_migrations(node)
         .await

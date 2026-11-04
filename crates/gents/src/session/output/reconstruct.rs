@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::OutputSource;
 use rapidhash::{HashSetExt, RapidHashSet};
@@ -77,7 +77,7 @@ pub(super) async fn source_rows(
 /// owns freshness: if reconstruction detects an incomplete reused scan, its
 /// existing retry evicts and rereads that request alone.
 pub(super) async fn preload_request_output_segments(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_ids: &[String],
     node_did: &str,
     requester_did: Option<&str>,

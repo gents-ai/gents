@@ -1,7 +1,7 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use super::client::{current_context, AdmissionError};
 #[cfg(test)]
@@ -24,7 +24,7 @@ pub(crate) struct AdmissionRegistry {
 }
 
 struct AdmissionRegistryInner {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     runtime_instance_id: String,
     backends: Mutex<RapidHashMap<String, BackendAdmission>>,
 }
@@ -35,7 +35,7 @@ struct BackendAdmission {
 }
 
 impl AdmissionRegistry {
-    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub(crate) fn new(node: Arc<Node>) -> Self {
         Self {
             inner: Arc::new(AdmissionRegistryInner {
                 node,

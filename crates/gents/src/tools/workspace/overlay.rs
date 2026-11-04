@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -125,7 +125,7 @@ pub(crate) fn require_workspace_principal(
 
 #[inline(never)]
 pub(crate) async fn resolve_request_workspace_overlay(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &AgentRequest,
     execution_generation: &str,
     artifact_requested: bool,
@@ -143,7 +143,7 @@ pub(crate) async fn resolve_request_workspace_overlay(
 }
 
 async fn resolve_request_workspace_overlay_on_host(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &AgentRequest,
     execution_generation: &str,
     artifact_requested: bool,
@@ -189,7 +189,7 @@ async fn resolve_request_workspace_overlay_on_host(
 }
 
 pub(crate) async fn validate_request_workspace_input(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &AgentRequest,
     artifact_requested: bool,
 ) -> Result<()> {
@@ -220,7 +220,7 @@ pub(crate) async fn validate_request_workspace_input(
 }
 
 async fn load_request_workspace_overlay(
-    node: &EmbeddedNode,
+    node: &Node,
     request: &AgentRequest,
     artifact_requested: bool,
     operator_tool_root: Option<&Path>,
@@ -450,7 +450,7 @@ pub(crate) fn request_workspace_cwd(request: &AgentRequest) -> Option<PathBuf> {
 }
 
 async fn ensure_request_binding(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &AgentRequest,
     workspace: &IsolatedWorkspaceRecord,
     node_did: &str,
@@ -498,7 +498,7 @@ async fn ensure_request_binding(
 }
 
 pub(super) async fn previous_exclusive_is_stale(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     existing: &[WorkspaceBindingDoc],
     request_id: &str,
@@ -542,7 +542,7 @@ fn request_lifecycle_is_live(lifecycle_state: Option<RequestLifecycleState>) -> 
 }
 
 async fn request_is_live(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
     request_id: &str,
     workspace_id: &str,
@@ -582,7 +582,7 @@ async fn request_is_live(
 }
 
 pub(super) async fn load_workspace_bindings_for(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Vec<WorkspaceBindingDoc>> {
@@ -618,14 +618,14 @@ pub(super) async fn load_workspace_bindings_for(
 }
 
 pub(super) async fn persist_workspace_binding_doc(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     doc: &WorkspaceBindingDoc,
 ) -> Result<()> {
     persist_workspace_binding_docs(node, std::slice::from_ref(doc)).await
 }
 
 pub(super) async fn persist_workspace_binding_docs(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     docs: &[WorkspaceBindingDoc],
 ) -> Result<()> {
     if docs.is_empty() {
@@ -730,7 +730,7 @@ fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<Isolate
 }
 
 pub(crate) async fn load_isolated_workspace_record(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Option<IsolatedWorkspaceRecord>> {
@@ -745,7 +745,7 @@ pub(crate) async fn load_isolated_workspace_record(
 }
 
 async fn load_workspace_placement(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Option<WorkspacePlacementRecord>> {

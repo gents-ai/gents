@@ -1,6 +1,6 @@
 use crate::inference::llm::ToolChoice;
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
@@ -230,7 +230,7 @@ pub(crate) fn parse_aggregate_token_limit(
 /// rehydrated from its signed physical scope and authenticated auxiliary
 /// children so crash redrive cannot mint another allowance.
 pub(crate) async fn aggregate_token_budget_for_request(
-    node: &EmbeddedNode,
+    node: &Node,
     request: &AgentRequest,
 ) -> anyhow::Result<Option<AggregateTokenBudget>> {
     use gents_protocol::request_admission::RequestPurpose;
@@ -269,7 +269,7 @@ struct PriorUsageRow {
 }
 
 async fn load_prior_charged_tokens(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
 ) -> anyhow::Result<u64> {
     anyhow::ensure!(
@@ -339,7 +339,7 @@ const CALIBRATION_CALL_SCAN: usize =
 /// Calibration only raises estimates, so an unreadable history keeps the
 /// prior rather than failing the request.
 pub(crate) async fn context_calibration_for_session(
-    node: &EmbeddedNode,
+    node: &Node,
     agent_config: &ResolvedAgent,
     node_did: &str,
     session_id: &str,
@@ -389,7 +389,7 @@ pub(crate) async fn context_calibration_for_session(
 /// another agent's calls describe another preamble and tool set, so they
 /// neither observe nor anchor this one.
 async fn load_session_calibration_rows(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     agent_id: &str,
     session_id: &str,
@@ -711,7 +711,7 @@ mod tests;
 /// The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
     cache: std::sync::Arc<crate::inference::usage_observation::UsageCache>,
-    node: std::sync::Arc<EmbeddedNode>,
+    node: std::sync::Arc<Node>,
     agent_config: &ResolvedAgent,
     admission: AdmissionRegistry,
     build_timeout: std::time::Duration,

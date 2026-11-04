@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use defra_p2p_adapter::{P2PError, P2PResult, P2pDocumentRequest};
 use tokio::time::timeout;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 
 use super::templates::{live_filter_string_eq, to_replication_filters, PairingFilters};
 use super::{
@@ -19,19 +19,19 @@ const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct EmbeddedRemoteP2pAdmin {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     timeout: Duration,
 }
 
 impl EmbeddedRemoteP2pAdmin {
-    pub fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub fn new(node: Arc<Node>) -> Self {
         Self {
             node,
             timeout: DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
         }
     }
 
-    pub fn with_timeout(node: Arc<EmbeddedNode>, timeout: Duration) -> Self {
+    pub fn with_timeout(node: Arc<Node>, timeout: Duration) -> Self {
         Self { node, timeout }
     }
 
@@ -344,7 +344,7 @@ fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
 }
 
 pub(super) async fn push_documents_to_peer(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     peer_id: &str,
     documents: Vec<P2pDocumentRequest>,
 ) -> anyhow::Result<()> {

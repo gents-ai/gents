@@ -43,7 +43,7 @@ impl Drop for RequestLifecycle {
 }
 
 async fn relinquish_execution_lease(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_doc_id: &str,
     generation: &str,
     now: DateTime<Utc>,
@@ -147,7 +147,7 @@ enum TerminalAuthority<'a> {
 impl RequestExecutionLease {
     async fn decide_lease(
         &self,
-        node: &EmbeddedNode,
+        node: &Node,
         request_doc_id: &str,
         decide: fn(super::execution_policy::LeaseObservation<'_>, &str, i64) -> bool,
     ) -> Result<Option<bool>> {
@@ -175,7 +175,7 @@ impl RequestExecutionLease {
 
     pub(crate) async fn owns_execution(
         &self,
-        node: &EmbeddedNode,
+        node: &Node,
         request_doc_id: &str,
     ) -> Result<bool> {
         Ok(self
@@ -299,7 +299,7 @@ impl RequestLifecycle {
 
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
@@ -329,7 +329,7 @@ pub(crate) async fn revoke_execution_generation(
 /// the same write gate as the generation CAS and uses immutable header metadata,
 /// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
 pub(crate) async fn revoke_execution_preserving_output(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -356,7 +356,7 @@ pub(crate) async fn revoke_execution_preserving_output(
 
 #[cfg(test)]
 pub(crate) async fn revoke_execution_preserving_output_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -387,7 +387,7 @@ pub(crate) async fn revoke_execution_preserving_output_at(
 }
 
 async fn terminalize_execution(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_doc_id: &str,
     authority: TerminalAuthority<'_>,
     outcome: RequestTerminalOutcome,
@@ -412,7 +412,7 @@ async fn terminalize_execution(
 
 #[cfg(test)]
 pub(crate) async fn terminalize_owned_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_doc_id: &str,
     generation: &str,
     outcome: RequestTerminalOutcome,
@@ -447,7 +447,7 @@ struct TerminalizeSpec<'a> {
 }
 
 async fn terminalize_execution_with_time(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     spec: TerminalizeSpec<'_>,
 ) -> Result<TerminalizeResult> {
     let fresh_generation = spec

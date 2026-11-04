@@ -12,7 +12,7 @@ use crate::tools::call::lifecycle::admission_fixture::{
 use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSource, SourceClose,
@@ -84,7 +84,7 @@ fn admission(deadline_at: DateTime<Utc>) -> SpawnedBackgroundToolAdmission {
 }
 
 async fn tool_delivery_rows(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
 ) -> Vec<crate::session::canonical_rows::TranscriptMessageRow> {
     let session = crate::store::graphql::escape_graphql_string(session_id);
@@ -482,7 +482,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
 }
 
 async fn configure_bash_output_budget(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     owner: &str,
     budget: i64,
 ) {
@@ -506,7 +506,7 @@ async fn configure_bash_output_budget(
 }
 
 async fn interrupted_presentation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     tool: &ToolCallLifecycle,
 ) -> String {
     crate::tools::call::lifecycle::load_tool_call_presentation(

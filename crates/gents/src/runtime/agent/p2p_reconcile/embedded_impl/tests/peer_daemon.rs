@@ -77,7 +77,7 @@ pub(super) fn test_agent(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> 
 }
 
 pub(super) fn behavior_daemon(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     behavior: Arc<ResolvedAgent>,
     authority: crate::runtime::agent::p2p_reconcile::EnrollmentAuthorityHandle,
     calls: Arc<AtomicUsize>,
@@ -118,7 +118,7 @@ pub(super) fn behavior_daemon(
 }
 
 pub(super) async fn seed_peer_session_message(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     lifecycle: &crate::request::lifecycle::RequestLifecycle,
     writer: &crate::request::streaming::DefraStreamWriter,
     host_did: &str,
@@ -203,7 +203,7 @@ pub(super) async fn seed_peer_session_message(
 }
 
 pub(super) async fn load_admission_request_by_id(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
 ) -> crate::request::watcher::AgentRequest {
     let response = node

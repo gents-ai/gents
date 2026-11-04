@@ -6,7 +6,7 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::runtime::agent::p2p_reconcile::{
     templates::admit_app_collections, ActiveEnrollment, EmbeddedRemoteP2pAdmin,
@@ -26,7 +26,7 @@ const OVERLAY_SOURCE: &str = "engineer";
 
 #[derive(Clone)]
 pub struct P2pTool {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Option<Arc<dyn NodeIdentity>>,
     mutate: bool,
     collections: EndpointScope<String, ()>,
@@ -165,7 +165,7 @@ struct Reply {
 
 impl P2pTool {
     pub fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         identity: Option<Arc<dyn NodeIdentity>>,
         mutate: bool,
         collections: EndpointScope<String, ()>,

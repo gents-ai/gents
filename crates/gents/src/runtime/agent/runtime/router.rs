@@ -102,7 +102,7 @@ impl RuntimeAdmissionGate {
 }
 
 pub(super) async fn run_router(
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     node_did: String,
     active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     mut shutdown: watch::Receiver<bool>,
@@ -137,7 +137,7 @@ pub(super) async fn run_router(
 }
 
 pub(in crate::runtime::agent) struct RouterInputs<W> {
-    pub(in crate::runtime::agent) node: Arc<defra_node::EmbeddedNode>,
+    pub(in crate::runtime::agent) node: Arc<defra_node::Node>,
     pub(in crate::runtime::agent) node_did: String,
     pub(in crate::runtime::agent) watcher: W,
     pub(in crate::runtime::agent) active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -445,7 +445,7 @@ where
 }
 
 pub(super) async fn resolve_agent_for_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request: &AgentRequest,
 ) -> Result<AgentResolution> {
     let agent_id = request.agent_id.clone();
@@ -476,7 +476,7 @@ pub(super) async fn resolve_agent_for_request(
 }
 
 pub(super) async fn fail_routed_request(
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     node_did: &str,
     request: AgentRequest,
     agent_id: &str,

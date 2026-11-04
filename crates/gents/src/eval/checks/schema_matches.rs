@@ -228,7 +228,7 @@ impl Check for SchemaMatches {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defra_node::EmbeddedNode;
+    use crate::defra_node::Node;
     use crate::eval::runner::ScriptedExecutor;
     use crate::eval::OutcomeKind;
     use crate::store::config_client::ConfigAccess;
@@ -265,7 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_schema_evidence_grades_indexes_relations_and_wrong_contracts() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(Node::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         let sdl = r#"
           type Author { name: String books: [Book] }

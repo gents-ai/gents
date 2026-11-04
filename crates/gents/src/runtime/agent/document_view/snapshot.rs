@@ -3,7 +3,7 @@ use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use crate::documents::Agent as AgentDocument;
@@ -79,7 +79,7 @@ impl AgentResolutionError {
 }
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     context: &DocumentResolveContext,
     view: &DocumentRuntimeView,
 ) -> Result<ResolvedRuntimeSnapshot> {

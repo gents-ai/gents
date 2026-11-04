@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -112,7 +112,7 @@ pub struct EventSource {
     durable_after_trigger: Option<String>,
     runtime_observer: Option<Arc<dyn crate::runtime::agent::RuntimeSnapshotObserver>>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
     desired_collections: RapidHashSet<String>,
@@ -157,7 +157,7 @@ pub(crate) struct SourceSchemaCache {
 }
 
 async fn enrich_native_outcome_provenance(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     source: &mut serde_json::Value,
     owner: &str,
@@ -278,7 +278,7 @@ impl SourceSchemaCache {
     pub(crate) async fn fields_for(
         &self,
         collection: &str,
-        node: &EmbeddedNode,
+        node: &Node,
     ) -> anyhow::Result<Vec<String>> {
         crate::store::graphql::validate_collection_identifier(collection)?;
         let mut guard = self.by_collection.lock().await;
@@ -346,7 +346,7 @@ fn event_source_rescan_tick(interval: Duration) -> tokio::time::Interval {
 impl EventSource {
     pub fn new(
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         cancel: CancellationToken,
     ) -> Self {
         Self::with_subscription_source(node.clone(), snapshot_rx, node, cancel)
@@ -355,7 +355,7 @@ impl EventSource {
     pub fn with_subscription_source(
         subs: Arc<dyn UpdateSubscriptionSource>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         cancel: CancellationToken,
     ) -> Self {
         Self {
@@ -1557,7 +1557,7 @@ impl EventSource {
     }
 
     pub(super) fn spawn_runtime_field_write(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: String,
         trigger_id: String,
         source_doc_id: String,
@@ -1616,7 +1616,7 @@ impl EventSource {
     /// durable reason and a seed wait would spend its whole deadline on it.
     fn spawn_unacknowledged_field_write(
         runtime: &crate::runtime::drop_cleanup::DropCleanup,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: String,
         trigger_id: String,
         source_doc_id: String,
@@ -1969,7 +1969,7 @@ impl EventSource {
 /// the one loss mode no live owner can report; Drop records it on the Trigger
 /// so a seed wait can tell a lost fire from a configuration error.
 pub(super) struct UnacknowledgedGuard {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     trigger_id: String,
     source_doc_id: String,
@@ -1979,7 +1979,7 @@ pub(super) struct UnacknowledgedGuard {
 
 impl UnacknowledgedGuard {
     pub(super) fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: String,
         trigger_id: String,
         source_doc_id: String,

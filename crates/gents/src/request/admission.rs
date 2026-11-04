@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_admission::{
     project_agent_request_admission_disposition, validate_signing_fields,
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
@@ -136,7 +136,7 @@ fn deny_if(condition: bool, message: &'static str) -> AdmissionResult<()> {
 }
 
 pub(crate) async fn verify_fresh_local_self_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &dyn NodeIdentity,
     request: &AgentRequest,
     target_agent_id: &str,
@@ -199,7 +199,7 @@ pub async fn sign_agent_request_create(
 }
 
 pub(crate) async fn terminalize_pending_request_rejection(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     doc_id: &str,
     node_did: &str,
     reason: &str,
@@ -305,7 +305,7 @@ pub async fn sign_agent_request_create_as_registered_target(
 
 #[derive(Clone)]
 pub(crate) struct AgentRequestAdmissionVerifier {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
     peer_admission: Arc<dyn PeerAdmissionAuthority>,
@@ -313,7 +313,7 @@ pub(crate) struct AgentRequestAdmissionVerifier {
 
 impl AgentRequestAdmissionVerifier {
     pub(crate) fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         identity: Arc<dyn NodeIdentity>,
         enrollment: EnrollmentAuthorityHandle,
     ) -> Self {
@@ -597,7 +597,7 @@ fn verify_auxiliary_request_shape(
 }
 
 async fn verify_request_input(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
 ) -> AdmissionResult<()> {
@@ -715,7 +715,7 @@ pub(crate) fn validate_authored_skills(
     )
 }
 
-async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> AdmissionResult<bool> {
+async fn request_hop_admitted(node: &Node, row: &AgentRequestRow) -> AdmissionResult<bool> {
     let hop = row.request_hop.unwrap_or(0);
     let Ok(hop) = u32::try_from(hop) else {
         return Ok(false);
@@ -734,7 +734,7 @@ async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> Adm
 }
 
 pub(crate) async fn max_request_hop(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> anyhow::Result<Option<u32>> {
     Ok(crate::documents::load_node(node, node_did)
@@ -752,7 +752,7 @@ fn request_workspace(row: &AgentRequestRow) -> crate::request::lifecycle::Worksp
 }
 
 async fn verify_runtime_source_binding(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     row: &AgentRequestRow,
     purpose: RequestPurpose,
     source: &str,
@@ -823,7 +823,7 @@ async fn verify_runtime_source_binding(
 }
 
 async fn load_exact_parent_request(
-    node: &EmbeddedNode,
+    node: &Node,
     source_doc_id: &str,
 ) -> AdmissionResult<AgentRequestRow> {
     let row = load_signed_request(node, source_doc_id).await?;
@@ -835,7 +835,7 @@ async fn load_exact_parent_request(
 }
 
 pub(crate) async fn load_request_context(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     agent_id: &str,
 ) -> AdmissionResult<(
@@ -922,7 +922,7 @@ pub(crate) async fn load_request_context_in_txn(
 }
 
 async fn verify_automated_trigger_source(
-    node: &EmbeddedNode,
+    node: &Node,
     kind: &str,
     trigger_id: &str,
     trigger_doc_id: Option<&str>,
@@ -1187,7 +1187,7 @@ pub const SIGNED_REQUEST_FIELDS: &str =
     concat!("lifecycle_state ", signed_request_receipt_fields!());
 
 async fn load_signed_request(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
 ) -> AdmissionResult<AgentRequestRow> {
     let doc_id = escape_graphql_string(doc_id);
@@ -1213,7 +1213,7 @@ async fn load_signed_request(
 
 #[cfg(test)]
 pub(crate) async fn load_request_for_admission_test(
-    node: &EmbeddedNode,
+    node: &Node,
     doc_id: &str,
 ) -> Result<AgentRequest> {
     let row = load_signed_request(node, doc_id)
@@ -1247,7 +1247,7 @@ mod tests {
         let identity =
             KeyIdentity::load_or_create(temp.path().join("rejection.key"), None).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -1317,7 +1317,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("input.key"), None).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -1399,7 +1399,7 @@ mod tests {
             KeyIdentity::load_or_create(temp.path().join("projection.key"), None).unwrap();
         let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -1522,7 +1522,7 @@ mod tests {
     }
 
     async fn refused_pending_request_under_session(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         identity: &crate::store::identity::KeyIdentity,
         request_id: &str,
         session_id: &str,
@@ -1563,7 +1563,7 @@ mod tests {
         let foreign =
             KeyIdentity::load_or_create(temp.path().join("corrupt-foreign.key"), None).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -1650,7 +1650,7 @@ mod tests {
         let identity =
             KeyIdentity::load_or_create(temp.path().join("corrupt-facts.key"), None).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -1786,7 +1786,7 @@ mod tests {
                 let temp = tempfile::tempdir().unwrap();
                 let identity = KeyIdentity::load_or_create(temp.path().join("skew.key"), None)
                     .unwrap();
-                let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did()).build().await.unwrap());
+                let node = std::sync::Arc::new(defra_node::Node::builder().with_node_identity_did(identity.did()).build().await.unwrap());
                 ensure_runtime_schemas(&node).await.unwrap();
                 let node_did = crate::store::graphql::escape_graphql_string(identity.did());
                 let created = node
@@ -1847,7 +1847,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -1939,7 +1939,7 @@ mod tests {
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await

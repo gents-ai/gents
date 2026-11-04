@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::Value;
 use tracing::{instrument::WithSubscriber, Instrument};
 
@@ -47,7 +47,7 @@ where
 }
 
 impl ConfigAccess {
-    pub(crate) fn claimed_for_node(node: &EmbeddedNode) -> Option<Self> {
+    pub(crate) fn claimed_for_node(node: &Node) -> Option<Self> {
         let gate = existing_mutation_write_gate(node)?;
         let claim = gate.store_claim()?;
         Some(Self::Local(LocalConfigAccess {
@@ -80,7 +80,7 @@ impl ConfigAccess {
     }
 
     pub(crate) async fn read_local_response(
-        node: &EmbeddedNode,
+        node: &Node,
         document: &str,
         operation: &str,
     ) -> Result<defra_node::QueryResponse> {
@@ -107,7 +107,7 @@ impl ConfigAccess {
     }
 
     async fn execute_local_read(
-        node: &EmbeddedNode,
+        node: &Node,
         document: &str,
         operation: &str,
     ) -> Result<defra_node::QueryResponse> {
@@ -274,7 +274,7 @@ impl ConfigAccess {
     }
 
     pub async fn write_local(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         operation: &'static str,
         mutation: &str,
     ) -> Result<Value> {
@@ -286,7 +286,7 @@ impl ConfigAccess {
     }
 
     pub(crate) async fn write_local_response(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         operation: &'static str,
         mutation: &str,
     ) -> Result<defra_node::QueryResponse> {
@@ -297,7 +297,7 @@ impl ConfigAccess {
     }
 
     async fn execute_local_mutation(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         operation: WriteOperation,
         mutation: &str,
         telemetry: Arc<AttemptTelemetry>,

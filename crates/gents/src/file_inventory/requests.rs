@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::file_inventory::{FileInventoryPageDemand, FileInventoryResponse};
 use serde::Deserialize;
 
@@ -52,7 +52,7 @@ impl InventoryRequestRow {
 /// Local admission commits the immutable attempt before its filtered control
 /// route can publish it. Reload retries the exact key, never a new attempt.
 pub async fn admit_demand(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
 ) -> Result<String> {
     demand.validate_reference()?;
@@ -140,7 +140,7 @@ pub(crate) async fn publish_response_in_txn(
 }
 
 pub async fn verified_client_response(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
     verifier: &dyn crate::NodeIdentity,
 ) -> Result<Option<super::VerifiedInventoryResponse>> {

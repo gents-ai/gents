@@ -11,7 +11,7 @@ use super::*;
 use crate::store::config_client::ConfigAccess;
 use crate::tools::builtin::defra_query::SchemaField;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -47,12 +47,12 @@ fn document(value: Value) -> DesiredStateApplyDocument {
     }
 }
 
-async fn register_config_schemas(node: &EmbeddedNode) -> Result<()> {
+async fn register_config_schemas(node: &Node) -> Result<()> {
     register_config_schemas_dropping_unique_indexes(node, &[]).await
 }
 
 async fn register_config_schemas_dropping_unique_indexes(
-    node: &EmbeddedNode,
+    node: &Node,
     duplicate_collections: &[Collection],
 ) -> Result<()> {
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
@@ -106,7 +106,7 @@ async fn apply_with_counts(
 #[tokio::test]
 async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_owner() -> Result<()>
 {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let capture = IgnoredWireWarningCapture::default();
@@ -135,7 +135,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 
 #[tokio::test]
 async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:desired-state-replay";
@@ -224,7 +224,7 @@ fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
 
 #[tokio::test]
 async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let mut initial = backend("did:key:owner", "local");
@@ -272,7 +272,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 
 #[tokio::test]
 async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = ConfigAccess::local(node.clone());
     apply(
@@ -312,7 +312,7 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
 
 #[tokio::test]
 async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -346,7 +346,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 
 #[tokio::test]
 async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -396,7 +396,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
 
 #[tokio::test]
 async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -470,7 +470,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         .as_array()
         .expect("Lean default replacement cases");
     assert_eq!(cases.len(), 6);
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     for (index, case) in cases.iter().enumerate() {
@@ -554,7 +554,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
 
 #[tokio::test]
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -668,7 +668,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
 
 #[tokio::test]
 async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -701,7 +701,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
 
 #[tokio::test]
 async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -750,7 +750,7 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
 }
 
 async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     Ok((ConfigAccess::local(node), "did:key:owner"))
 }
@@ -1043,7 +1043,7 @@ fn rule_documents(
 
 #[tokio::test]
 async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -1131,8 +1131,8 @@ fn obligation_surface(
     }
 }
 
-async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+async fn obligation_node() -> Result<Arc<Node>> {
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_collection(
         "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
@@ -1452,8 +1452,8 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
     Ok(())
 }
 
-async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+async fn event_source_node() -> Result<Arc<Node>> {
+    let node = Arc::new(Node::builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_collection(
         "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
@@ -1505,7 +1505,7 @@ fn correlated_event_source(
     event_source_document(owner, id, collection, Some(correlation_field), None)
 }
 
-async fn published_event_sources(node: &EmbeddedNode) -> Result<Vec<Value>> {
+async fn published_event_sources(node: &Node) -> Result<Vec<Value>> {
     let rows = node
         .execute("{ EventSource { event_source_id correlation_field group } }")
         .await;
@@ -1731,7 +1731,7 @@ fn event_source_payloads(
     }
 }
 
-async fn published_count_field_of(node: &EmbeddedNode, event_source_id: &str) -> Result<String> {
+async fn published_count_field_of(node: &Node, event_source_id: &str) -> Result<String> {
     let source = published_event_sources(node)
         .await?
         .into_iter()

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::OutputSource;
 
 use super::replay_candidates::load_canonical_assistant_candidates_with;
@@ -10,7 +10,7 @@ use super::{replay_violation, CanonicalReplayScope};
 /// multiple matches) for the replay owner to reject, without a cross-boundary
 /// cache or a coordinate-to-single-winner map.
 pub(crate) async fn resolve_canonical_replay_tags(
-    node: &EmbeddedNode,
+    node: &Node,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
@@ -83,7 +83,7 @@ pub(crate) async fn resolve_canonical_replay_tags(
 
 #[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tag(
-    node: &EmbeddedNode,
+    node: &Node,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tag: &gents_loop::claude_messages_body::ReplayTag,

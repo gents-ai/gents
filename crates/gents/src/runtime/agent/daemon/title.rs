@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
@@ -37,7 +37,7 @@ pub(super) struct AuxiliaryTask<M>
 where
     M: crate::inference::llm::rig_compat::ProviderModel,
 {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
     provider_family: Option<String>,
     model: Arc<M>,
@@ -575,7 +575,7 @@ where
 }
 
 async fn load_auxiliary_parent(
-    node: &EmbeddedNode,
+    node: &Node,
     request: &AgentRequest,
 ) -> Result<AgentRequest> {
     let parent_doc_id = request

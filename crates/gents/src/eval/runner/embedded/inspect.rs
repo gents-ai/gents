@@ -168,7 +168,7 @@ mod tests {
         let identity = KeyIdentity::load_or_create(path.join("node.key"), None).unwrap();
         let did = identity.did().to_owned();
         let node = std::sync::Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(&path)
                 .with_regolith_options(crate::store::local::storage_backend::regolith_options())
                 .with_node_identity_did(&did)
@@ -333,7 +333,7 @@ resources:
             "{missing:#}"
         );
         assert!(!path.join("MANIFEST").exists());
-        let node = crate::defra_node::EmbeddedNode::builder()
+        let node = crate::defra_node::Node::builder()
             .data_path(&path)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(identity.did())

@@ -1,13 +1,13 @@
 use super::fixtures::exec;
 use super::*;
 
-pub(super) async fn seed_agent_request(node: &EmbeddedNode, request_id: &str, requester_did: &str) {
+pub(super) async fn seed_agent_request(node: &Node, request_id: &str, requester_did: &str) {
     let session_id = format!("{request_id}-session");
     seed_agent_request_for_session(node, request_id, &session_id, Some(requester_did)).await;
 }
 
 async fn seed_agent_request_for_session(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -46,7 +46,7 @@ async fn seed_agent_request_for_session(
 }
 
 pub(super) async fn seed_agent_tool_call(
-    node: &EmbeddedNode,
+    node: &Node,
     tool_call_id: &str,
     requester_did: &str,
 ) {
@@ -74,7 +74,7 @@ pub(super) async fn seed_agent_tool_call(
 }
 
 pub(super) async fn seed_agent_target_return_artifacts(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     suffix: &str,
     requester_did: Option<&str>,
 ) -> (String, String, String, u32) {

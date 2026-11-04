@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
@@ -46,7 +46,7 @@ impl crate::store::config_client::TransactionFailure for CommitError {
 }
 
 pub(crate) async fn commit(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     cause: &SessionMessageCause,
     lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
     plan: Plan,
@@ -87,7 +87,7 @@ pub(crate) async fn commit(
 }
 
 async fn commit_once(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     cause: &SessionMessageCause,
     lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
     plan: Plan,
@@ -274,7 +274,7 @@ async fn start_dispatch(
 }
 
 pub(crate) async fn load_receipt(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     tool_call_doc_id: &str,
     node_did: &str,
     session_id: &str,

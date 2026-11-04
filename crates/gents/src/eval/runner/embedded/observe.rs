@@ -8,7 +8,7 @@ use gents_protocol::transcript::present_message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
@@ -85,7 +85,7 @@ pub struct RequestEvidence {
 /// Terminal evidence requires a durable terminal state; interrupt intent and
 /// an expired grace leave `terminal_state` absent.
 pub async fn await_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_id: &str,
     deadline: Option<Duration>,
     grace: Duration,
@@ -94,7 +94,7 @@ pub async fn await_terminal(
 }
 
 pub async fn await_terminal_with(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_id: &str,
     deadline: Option<Duration>,
     grace: Duration,
@@ -176,7 +176,7 @@ fn observed_terminal_state(state: Option<&str>) -> Option<RequestLifecycleState>
 }
 
 pub async fn collect_request_evidence(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_id: &str,
 ) -> Result<RequestEvidence> {
     let query = evidence_query(request_id);
@@ -362,7 +362,7 @@ pub(crate) struct RequestPollRow {
 }
 
 pub(crate) async fn poll_request(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
 ) -> Result<Option<RequestPollRow>> {
     let response =

@@ -8,7 +8,7 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::GoalAssignmentInput;
 use serde_json::Value;
 
-async fn write(node: &Arc<EmbeddedNode>, mutation: &str) -> Value {
+async fn write(node: &Arc<Node>, mutation: &str) -> Value {
     ConfigAccess::write_local(node, "test.session_message_goal_input", mutation)
         .await
         .unwrap()
@@ -28,7 +28,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
     ];
     let caller = &identities[0];
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(caller.did())
             .build()
             .await

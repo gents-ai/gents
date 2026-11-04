@@ -549,11 +549,11 @@ mod tests {
     use super::*;
     use crate::documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use crate::inference::llm::tool::Tool;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node;
 
     #[tokio::test]
     async fn native_scalar_filters_match_lean_admission() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(Node::builder().build().await.unwrap());
         node.add_collection(
             "type ScalarRecord { text: String count: Int measure: Float64 enabled: Boolean }",
         )
@@ -620,8 +620,8 @@ mod tests {
         }
     }
 
-    async fn node_with_findings() -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    async fn node_with_findings() -> Arc<Node> {
+        let node = Arc::new(Node::builder().build().await.unwrap());
         node.add_collection(
             r#"
             type CandidateFinding {
@@ -865,8 +865,8 @@ mod tests {
         assert!(err.to_string().contains("String"), "{err}");
     }
 
-    async fn node_with_many_findings(rows: usize) -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    async fn node_with_many_findings(rows: usize) -> Arc<Node> {
+        let node = Arc::new(Node::builder().build().await.unwrap());
         node.add_collection(
             "type CandidateFinding { run_id: String finding_id: String title: String }",
         )

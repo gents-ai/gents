@@ -709,7 +709,7 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
 
 #[tokio::test]
 async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
         r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
         "",
@@ -745,7 +745,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     );
 }
 
-async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
+async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::documents::ensure_node(&node, OWNER).await.unwrap();
@@ -2092,7 +2092,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
             .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())

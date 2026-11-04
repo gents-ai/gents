@@ -1,4 +1,4 @@
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::ConfigAccess;
 use anyhow::{bail, ensure, Context, Result};
@@ -95,11 +95,11 @@ struct SchemaSdlFailure;
 
 #[derive(Clone)]
 pub struct SchemaTool {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
 }
 
 impl SchemaTool {
-    pub fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub fn new(node: Arc<Node>) -> Self {
         Self { node }
     }
 

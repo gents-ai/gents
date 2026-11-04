@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -78,12 +78,12 @@ impl From<anyhow::Error> for MemoryToolError {
 
 #[derive(Clone)]
 pub struct MemoryTool {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
 }
 
 impl MemoryTool {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<Node>, node_did: impl Into<String>) -> Self {
         Self {
             node,
             node_did: node_did.into(),
@@ -148,7 +148,7 @@ impl Tool for MemoryTool {
     }
 }
 
-pub fn build_memory_tool(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Box<dyn ToolDyn> {
+pub fn build_memory_tool(node: Arc<Node>, node_did: impl Into<String>) -> Box<dyn ToolDyn> {
     Box::new(MemoryTool::new(node, node_did))
 }
 
@@ -185,7 +185,7 @@ fn memory_id(node_did: &str, key: &str) -> String {
     format!("{}:{}{}", node_did.len(), node_did, key)
 }
 
-async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<MemoryOutput> {
+async fn read_memory(node: &Node, node_did: &str, key: &str) -> Result<MemoryOutput> {
     let memory_id = escape_graphql_string(&memory_id(node_did, key));
     let query = format!(
         r#"{{
@@ -228,7 +228,7 @@ async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<M
 }
 
 async fn write_memory(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     key: &str,
     value: &str,
@@ -291,15 +291,15 @@ mod tests {
 
     use super::*;
 
-    async fn seeded_node() -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    async fn seeded_node() -> Arc<Node> {
+        let node = Arc::new(Node::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node
     }
 
     #[tokio::test]
     async fn legacy_memory_survives_schema_upgrade_and_empty_text_write() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(Node::builder().build().await.unwrap());
         let old_sdl = gents_protocol::schemas::NODE_MEMORY
             .lines()
             .filter(|line| !line.trim_start().starts_with("value_text:"))

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::store::graphql::escape_graphql_string;
 
@@ -12,7 +12,7 @@ pub(crate) enum CausedObservation {
 }
 
 pub(crate) async fn observe_caused_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     lifecycle: &crate::tools::call::lifecycle::ToolCallLifecycle,
 ) -> Result<CausedObservation> {
     let tool_call_doc_id = lifecycle
@@ -86,7 +86,7 @@ pub(crate) enum KillOutcome {
 /// terminal request this step did not settle, or a live remote request
 /// (interrupted; a failed peer interrupt is only logged).
 pub(crate) async fn kill_caused_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
     caused: &gents_protocol::row::AgentRequestRow,
 ) -> Result<Option<KillOutcome>> {
@@ -134,7 +134,7 @@ pub(crate) async fn kill_caused_request(
 }
 
 pub(crate) async fn kill(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
 ) -> Result<KillOutcome> {
     let caused = match observe_caused_request(node, lifecycle).await? {
