@@ -62,7 +62,7 @@ setTimingForTests({
   clientRestartBackoffMs: 1,
   clientRestartMaxAttempts: 2,
   p2pAutoRestartCooldownMs: 10,
-  ...(window.__GENTS_MOBILE_PERFORMANCE__ ? { activeSessionPollMs: null } : {}),
+  ...(window.__GENTS_MOBILE_PERFORMANCE__ ? { sessionReadGapMs: null } : {}),
 });
 
 const app = (
