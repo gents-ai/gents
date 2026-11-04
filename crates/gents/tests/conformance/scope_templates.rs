@@ -76,10 +76,7 @@ async fn route_selects_request(
         .is_some_and(|rows| !rows.is_empty())
 }
 
-async fn store_request_row(
-    node: &gents::defra_node::Node,
-    fields: &[(&str, &str)],
-) -> String {
+async fn store_request_row(node: &gents::defra_node::Node, fields: &[(&str, &str)]) -> String {
     let input = fields
         .iter()
         .map(|(field, value)| {
@@ -623,7 +620,7 @@ async fn sixteen_peer_request_wave_is_reduced_to_one_target() {
         }
     }
     assert_eq!(returned_to, [caller]);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]

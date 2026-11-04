@@ -683,7 +683,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
             }
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     for exception in exceptions {
         if !used_exceptions.contains(&exception.read) {
             failures.push(format!(

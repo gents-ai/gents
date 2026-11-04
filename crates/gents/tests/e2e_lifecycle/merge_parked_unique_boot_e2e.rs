@@ -153,7 +153,7 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         "unique index must resolve to the deterministic winner"
     );
 
-    client.node.shutdown().await;
+    client.node.shutdown().await.expect("close test node");
 
     let reopen_deadline = Instant::now() + Duration::from_secs(90);
     loop {

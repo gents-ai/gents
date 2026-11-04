@@ -198,7 +198,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             .status,
         resume_case["goal_status"].as_str().unwrap()
     );
-    db.node.shutdown().await;
+    db.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -320,5 +320,5 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         1,
         "resume stages exactly one signed continuation"
     );
-    db.node.shutdown().await;
+    db.node.shutdown().await.expect("close test node");
 }
