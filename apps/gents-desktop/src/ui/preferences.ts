@@ -31,6 +31,12 @@ export type Preferences = {
   flags: Record<string, FlagSetting>;
   /** the side nav's own items as arranged on this device */
   navLayout: NavLayout;
+  /** the node the app opens on, or null for the one used last */
+  openOn: string | null;
+  /** nodes left out of the menus that offer nodes, by node DID */
+  hiddenNodes: string[];
+  /** agents left out of the menus that offer agents, by `agentKey` */
+  hiddenAgents: string[];
 };
 
 /** The side nav's items and sections in the order chosen, and which are
@@ -66,6 +72,9 @@ const initial = (): Preferences => ({
   pinnedSessions: [],
   flags: {},
   navLayout: DEFAULT_NAV_LAYOUT,
+  openOn: null,
+  hiddenNodes: [],
+  hiddenAgents: [],
 });
 
 /* only flags this build knows survive, so an unknown id is dropped on the
@@ -137,6 +146,13 @@ export function restorePreferences(
       : defaults.pinnedSessions,
     flags: knownFlags(saved.flags ?? defaults.flags),
     navLayout: restoreNavLayout(saved.navLayout, defaults.navLayout),
+    openOn: typeof saved.openOn === "string" ? saved.openOn : defaults.openOn,
+    hiddenNodes: Array.isArray(saved.hiddenNodes)
+      ? storedStrings(saved.hiddenNodes)
+      : defaults.hiddenNodes,
+    hiddenAgents: Array.isArray(saved.hiddenAgents)
+      ? storedStrings(saved.hiddenAgents)
+      : defaults.hiddenAgents,
   };
 }
 
@@ -190,7 +206,30 @@ export const preferences = {
   resetNavLayout() {
     store.setState({ navLayout: DEFAULT_NAV_LAYOUT });
   },
+  setOpenOn(nodeDid: string | null) {
+    store.setState({ openOn: nodeDid });
+  },
+  setNodeHidden(nodeDid: string, hidden: boolean) {
+    store.setState({
+      hiddenNodes: toggled(store.getState().hiddenNodes, nodeDid, hidden),
+    });
+  },
+  setAgentHidden(nodeDid: string, agentId: string, hidden: boolean) {
+    store.setState({
+      hiddenAgents: toggled(
+        store.getState().hiddenAgents,
+        agentKey(nodeDid, agentId),
+        hidden,
+      ),
+    });
+  },
 };
+
+const toggled = (list: string[], key: string, on: boolean) =>
+  on ? (list.includes(key) ? list : [...list, key]) : list.filter((k) => k !== key);
+
+/** An agent's key among the hidden ones; an agent's id is its node's own. */
+export const agentKey = (nodeDid: string, agentId: string) => `${nodeDid} ${agentId}`;
 
 export function followZoom(apply: (zoom: number) => void) {
   apply(store.getState().zoom);
@@ -237,6 +276,10 @@ export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
 export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);
 export const useNavLayout = () => usePreferences((p) => p.navLayout);
+export const useOpenOn = () => usePreferences((p) => p.openOn);
+export const openOnNode = () => store.getState().openOn;
+export const useHiddenNodes = () => usePreferences((p) => p.hiddenNodes);
+export const useHiddenAgents = () => usePreferences((p) => p.hiddenAgents);
 
 const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
   const setting = flags[id];

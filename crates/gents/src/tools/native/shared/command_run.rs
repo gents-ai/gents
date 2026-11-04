@@ -48,6 +48,7 @@ pub(crate) async fn run_command(
     )
     .await
     .map_err(|error| {
+        crate::tools::native::command_observability::policy_denied();
         ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
     })?;
     launch.revalidate().await.map_err(command_guard_error)?;

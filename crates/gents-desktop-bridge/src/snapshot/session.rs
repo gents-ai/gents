@@ -1143,6 +1143,7 @@ fn build_hydration_only_session_snapshot(
         hydration: Some(hydration),
         timeline_page: None,
         projection_revision: None,
+        read_through_operator: None,
         messages: Vec::new(),
         tool_calls: Vec::new(),
     }
