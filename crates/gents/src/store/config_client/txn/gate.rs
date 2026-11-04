@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tracing::{instrument::WithSubscriber, Instrument};
 
 #[cfg(test)]
@@ -25,25 +25,25 @@ pub(super) struct MutationWriteGate {
 pub(super) const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
 
 pub(super) struct StoreClaim {
-    pub(super) node: Arc<EmbeddedNode>,
+    pub(super) node: Arc<Node>,
     _lock: crate::store::local::home::StoreLock,
 }
 
 /// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
 #[derive(Clone)]
 pub struct LocalConfigAccess {
-    pub(super) node: Arc<EmbeddedNode>,
+    pub(super) node: Arc<Node>,
     pub(super) gate: Arc<MutationWriteGate>,
 }
 
 impl LocalConfigAccess {
-    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub(crate) fn new(node: Arc<Node>) -> Self {
         let gate = mutation_write_gate(&node);
         Self { node, gate }
     }
 
     pub(crate) fn claimed(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         lock: crate::store::local::home::StoreLock,
     ) -> Result<Self> {
         let gate = mutation_write_gate(&node);
@@ -51,7 +51,7 @@ impl LocalConfigAccess {
         Ok(Self { node, gate })
     }
 
-    pub(crate) fn node(&self) -> &Arc<EmbeddedNode> {
+    pub(crate) fn node(&self) -> &Arc<Node> {
         &self.node
     }
 
@@ -59,7 +59,7 @@ impl LocalConfigAccess {
     where
         T: Send + 'static,
         E: From<ConfigClientError> + Send + 'static,
-        F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
+        F: FnOnce(Arc<Node>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
         let node = Arc::clone(&self.node);
@@ -194,7 +194,7 @@ impl MutationWriteGate {
 
     fn attach_store_claim(
         &self,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         lock: crate::store::local::home::StoreLock,
     ) -> Result<()> {
         let mut claim = self
@@ -397,8 +397,8 @@ fn mutation_write_gates() -> &'static StdMutex<RapidHashMap<usize, Weak<Mutation
     GATES.get_or_init(|| StdMutex::new(RapidHashMap::new()))
 }
 
-pub(super) fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
-    let node_key = node as *const EmbeddedNode as usize;
+pub(super) fn mutation_write_gate(node: &Node) -> Arc<MutationWriteGate> {
+    let node_key = node as *const Node as usize;
     let mut gates = mutation_write_gates()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -412,8 +412,8 @@ pub(super) fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate>
     gate
 }
 
-pub(super) fn existing_mutation_write_gate(node: &EmbeddedNode) -> Option<Arc<MutationWriteGate>> {
-    let node_key = node as *const EmbeddedNode as usize;
+pub(super) fn existing_mutation_write_gate(node: &Node) -> Option<Arc<MutationWriteGate>> {
+    let node_key = node as *const Node as usize;
     mutation_write_gates()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

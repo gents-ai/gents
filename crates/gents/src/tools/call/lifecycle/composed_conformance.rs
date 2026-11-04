@@ -3,9 +3,9 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
-async fn lifecycle_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
+async fn lifecycle_row(node: &Node, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state cancel_cause tool_failure_class request_doc_id deadline_at }} }}"#,
@@ -21,7 +21,7 @@ async fn lifecycle_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     rows.into_iter().next().unwrap()
 }
 
-async fn request_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
+async fn request_row(node: &Node, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID lifecycle_state deadline execution_generation }} }}"#,

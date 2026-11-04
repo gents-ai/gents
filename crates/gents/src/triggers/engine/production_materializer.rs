@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::watch;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -18,13 +18,13 @@ use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retr
 use crate::triggers::engine::{MaterializerHandle, TriggerKind};
 
 pub(crate) struct ProductionMaterializer {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
 }
 
 impl ProductionMaterializer {
     pub(crate) fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     ) -> Self {
         Self { node, snapshot_rx }
@@ -69,7 +69,7 @@ impl ProductionMaterializer {
 }
 
 pub(crate) async fn recover_workspace_binding_pending_requests(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
 ) -> Result<usize> {
     let query = format!(

@@ -24,7 +24,7 @@ const TEST_NODE_DID: &str = "did:test:queue-test";
 const TEST_AGENT_ID: &str = "general";
 
 struct TestDb {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<crate::store::identity::KeyIdentity>,
     _tempdir: TempDir,
 }
@@ -138,7 +138,7 @@ async fn test_db(name: &str) -> TestDb {
             .expect("test identity"),
     );
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(tempdir.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -156,7 +156,7 @@ async fn test_db(name: &str) -> TestDb {
     }
 }
 
-async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
+async fn queue_rows(node: &Node, session_id: &str) -> Vec<QueueRow> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -197,7 +197,7 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
 }
 
 async fn insert_raw_queue_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     request_id: &str,
     session_id: &str,
@@ -283,7 +283,7 @@ async fn insert_signed_queue_request(
 }
 
 struct CanonicalBackgroundFixture {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     parent: AgentRequest,
     lifecycle: RequestLifecycle,
     writer: DefraStreamWriter,

@@ -211,7 +211,7 @@ pub(crate) fn selection_filter(
 }
 
 pub(crate) async fn probe_document(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     collection: &str,
     id: &str,
     filter: Option<&str>,
@@ -278,7 +278,7 @@ fn group_query(delivery: Delivery<'_>, correlation: &str) -> String {
 }
 
 pub(crate) async fn load_or_create_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     delivery: Delivery<'_>,
     correlation: &str,
 ) -> Result<GroupRecord> {
@@ -297,7 +297,7 @@ pub(crate) async fn load_or_create_group(
 }
 
 pub(crate) async fn quiesce_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     record: &GroupRecord,
     reason: &str,
 ) -> Result<()> {
@@ -323,7 +323,7 @@ pub(crate) enum GroupOutcome {
 }
 
 pub(crate) async fn evaluate_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     cache: &SourceSchemaCache,
     delivery: Delivery<'_>,
     correlation: &str,
@@ -438,7 +438,7 @@ pub(crate) fn expected_group_count(
 }
 
 pub(crate) async fn group_correlation_page(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     delivery: Delivery<'_>,
     cursor: Option<&str>,
 ) -> Result<(Vec<String>, Option<String>, bool)> {
@@ -618,7 +618,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
         node.add_collection(gents_protocol::schemas::EVENT_GROUP_STATE)
             .await
             .unwrap();

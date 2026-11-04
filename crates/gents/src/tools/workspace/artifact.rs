@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::Value;
 
 use crate::request::watcher::AgentRequest;
@@ -13,7 +13,7 @@ use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retr
 pub struct ArtifactGrant(Arc<ArtifactOwner>);
 
 struct ArtifactOwner {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     source_root: PathBuf,
     git_dir: PathBuf,
     root: PathBuf,
@@ -171,7 +171,7 @@ impl ArtifactGrant {
     }
 
     pub(super) async fn create(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         request: &AgentRequest,
         execution_generation: &str,
         source_root: &Path,

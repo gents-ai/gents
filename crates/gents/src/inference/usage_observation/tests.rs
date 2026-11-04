@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
@@ -15,11 +15,11 @@ const A: &str = "did:key:z6MkUsageA";
 const B: &str = "did:key:z6MkUsageB";
 const CODEX: &str = "chatgpt-codex";
 
-async fn node() -> Arc<EmbeddedNode> {
+async fn node() -> Arc<Node> {
     test_support::test_node().await
 }
 
-fn local(node: &Arc<EmbeddedNode>) -> ConfigAccess {
+fn local(node: &Arc<Node>) -> ConfigAccess {
     ConfigAccess::local(node.clone())
 }
 
@@ -48,7 +48,7 @@ fn credential(node_did: &str, account_ref: Option<&str>, key: Option<&str>) -> O
     }
 }
 
-async fn seed(node: &Arc<EmbeddedNode>, row: &OAuthCredential) -> String {
+async fn seed(node: &Arc<Node>, row: &OAuthCredential) -> String {
     upsert_oauth_credential(node, row)
         .await
         .expect("seed credential")
@@ -98,7 +98,7 @@ const OPENROUTER_KEY_BODY: &str =
     r#"{"data":{"limit":20,"limit_remaining":15,"limit_reset":"daily"}}"#;
 
 async fn sign_in(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,
@@ -136,7 +136,7 @@ fn api_key_backend(endpoint: String, backend_id: &str, auth: Value) -> Inference
 
 async fn read(
     cache: &UsageCache,
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     backend: &InferenceBackend,
     trigger: UsageTrigger,
@@ -836,7 +836,7 @@ const CLAUDE: &str = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#;
 
 async fn sign_in_ref(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     provider: &str,
     account_ref: &str,
@@ -870,7 +870,7 @@ fn oauth_backend(
     backend
 }
 
-async fn store_backends(node: &Arc<EmbeddedNode>, backends: &[InferenceBackend]) {
+async fn store_backends(node: &Arc<Node>, backends: &[InferenceBackend]) {
     for backend in backends {
         crate::store::config_client::write_inference_backend_document(&local(node), backend)
             .await
@@ -887,7 +887,7 @@ fn grok_endpoints(url: &str) -> UsageEndpoints {
 
 async fn node_read(
     cache: &UsageCache,
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     trigger: UsageTrigger,
     provider: Option<&str>,

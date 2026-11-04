@@ -169,7 +169,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -292,7 +292,7 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
     let foreign_did = foreign_identity.did();
     assert_ne!(owner_did, foreign_did);
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(owner_did)
             .build()
@@ -528,7 +528,7 @@ mod job_control {
 
     struct JobHook {
         _dir: tempfile::TempDir,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         executions: BackgroundExecutionRegistry,
         owner: DefraSessionHook,
         session_id: String,
@@ -544,7 +544,7 @@ mod job_control {
             )
             .unwrap();
             let node = Arc::new(
-                EmbeddedNode::builder()
+                Node::builder()
                     .data_path(dir.path())
                     .with_node_identity_did(identity.did())
                     .build()

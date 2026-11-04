@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use rig::http_client::{
     self, HeaderMap, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
     StreamingResponse,
@@ -274,7 +274,7 @@ where
 }
 
 pub async fn bootstrap_oauth_client(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     provider: &str,
     refresh_kind: OAuthRefreshKind,
@@ -287,7 +287,7 @@ pub async fn bootstrap_oauth_client(
 }
 
 pub(crate) async fn bootstrap_oauth_client_typed(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     provider: &str,
     refresh_kind: OAuthRefreshKind,

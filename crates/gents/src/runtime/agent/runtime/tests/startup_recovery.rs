@@ -100,7 +100,7 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ExhaustRe
 }
 
 async fn wait_for_request_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     doc_id: &str,
     expected_lifecycle_state: &str,
 ) {
@@ -147,7 +147,7 @@ async fn wait_for_request_state(
 }
 
 async fn fetch_backend_probe_row(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     backend_id: &str,
 ) -> (String, Option<String>) {
     let escaped_backend_id = escape_graphql_string(backend_id);
@@ -186,7 +186,7 @@ async fn fetch_backend_probe_row(
 }
 
 async fn wait_for_backend_probe_status(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     backend_id: &str,
     expected_status: &str,
 ) -> (String, Option<String>) {
@@ -1112,7 +1112,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
 }
 
 async fn write_runtime_documents(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     documents: Vec<(crate::Collection, Value)>,
 ) {
     use crate::store::config_client::{
@@ -1144,7 +1144,7 @@ async fn write_runtime_documents(
 async fn missing_plugin_node(
     label: &str,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     Arc<KeyIdentity>,
     String,
     MockModelEndpoint,
@@ -1167,7 +1167,7 @@ async fn missing_plugin_node(
 /// An agent loaded from the node's documents with a meta-only tool ceiling
 /// and an empty plugin home, which the caller keeps alive.
 async fn documents_agent(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     identity: &Arc<KeyIdentity>,
 ) -> (crate::Gents, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().unwrap();

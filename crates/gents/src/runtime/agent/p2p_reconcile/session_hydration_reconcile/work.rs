@@ -730,7 +730,7 @@ mod tests {
 
     struct SchedulerFixture {
         _directory: tempfile::TempDir,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         store: Arc<GraphqlHydrationStore>,
         peer: String,
         requester: String,
@@ -914,7 +914,7 @@ mod tests {
         let requester = requester_identity.did().to_owned();
         let peer = "peer-1".to_owned();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .data_path(directory.path().join("store"))
                 .with_node_identity_did(identity.did())
                 .build()

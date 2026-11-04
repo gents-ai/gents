@@ -17,7 +17,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 const SESSION: &str = "edit-session";
 
 struct Fixture {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     _dir: tempfile::TempDir,
     original: String,
@@ -29,7 +29,7 @@ impl Fixture {
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap());
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .data_path(dir.path())
                 .with_node_identity_did(identity.did())
                 .build()

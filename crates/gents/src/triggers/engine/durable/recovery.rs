@@ -3,11 +3,11 @@ use super::{
     OutcomeStage, FIRE_FIELDS,
 };
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::trigger_delivery::TriggerFire;
 
 pub(crate) async fn recover_outcomes(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     owner: &str,
 ) -> Result<usize> {
     crate::store::config_client::ConfigAccess::transact_local_write(
@@ -179,7 +179,7 @@ mod tests {
             node.shutdown().await;
             drop(node);
             let node = std::sync::Arc::new(
-                EmbeddedNode::builder()
+                Node::builder()
                     .data_path(directory.path())
                     .build()
                     .await

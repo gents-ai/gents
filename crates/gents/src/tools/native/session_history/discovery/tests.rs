@@ -5,7 +5,7 @@ use crate::store::identity::{KeyIdentity, NodeIdentity};
 use std::sync::Arc;
 
 async fn seed(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     agent: &str,
     requester: Option<&str>,
     id: &str,
@@ -30,7 +30,7 @@ async fn sessions_reads_cross_agent_documents_only_when_acp_allows_the_caller() 
     let owner = pin_fixed_signing_identity(identities.path());
     let reader = KeyIdentity::load_or_create(identities.path().join("reader.key"), None).unwrap();
     let denied = KeyIdentity::load_or_create(identities.path().join("denied.key"), None).unwrap();
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let policy = node
         .add_dac_policy(
             owner.did(),

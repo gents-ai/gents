@@ -8,11 +8,11 @@ use crate::lean_vocab_test::{
 };
 use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
 
-async fn rows(node: &EmbeddedNode, query: &str, field: &str) -> Vec<Value> {
+async fn rows(node: &Node, query: &str, field: &str) -> Vec<Value> {
     let response = node.execute(query).await;
     assert!(!response.has_errors(), "{field}: {:?}", response.errors);
     response.data.expect("query data")[field]
@@ -21,7 +21,7 @@ async fn rows(node: &EmbeddedNode, query: &str, field: &str) -> Vec<Value> {
         .clone()
 }
 
-async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
+async fn update(node: &Node, collection: &str, doc_id: &str, fields: &str) {
     let response = node.execute(&format!(
         r#"mutation {{ update_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#,
         escape_graphql_string(doc_id),
@@ -244,7 +244,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
-async fn seed_session_head(node: &EmbeddedNode, session: &str, request: &Value) {
+async fn seed_session_head(node: &Node, session: &str, request: &Value) {
     let observation = gents_protocol::session::SessionObservation {
         reply_preview: None,
         last_activity_at: request["created_at"].as_str().unwrap().to_owned(),

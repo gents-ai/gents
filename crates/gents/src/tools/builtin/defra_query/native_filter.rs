@@ -167,7 +167,7 @@ mod tests {
     #[tokio::test]
     async fn native_input_shapes_preserve_compounds_relationships_literals_and_aliases() {
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),
@@ -217,7 +217,7 @@ mod tests {
             .with_env_filter("gents::tools::builtin::defra_query::native_filter=info")
             .try_init();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),

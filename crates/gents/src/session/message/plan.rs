@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use std::sync::Arc;
 
@@ -74,7 +74,7 @@ impl Plan {
 }
 
 async fn target_goal_assignment(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
 ) -> Result<Option<gents_protocol::request_input::GoalAssignmentInput>> {
@@ -149,7 +149,7 @@ async fn target_goal_assignment(
 
 #[cfg(test)]
 pub(crate) async fn plan(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     rendered: RenderedBody,
@@ -172,7 +172,7 @@ pub(crate) async fn plan(
 }
 
 pub(crate) async fn plan_with_delivery(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     rendered: RenderedBody,

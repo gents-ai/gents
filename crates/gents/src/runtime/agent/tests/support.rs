@@ -8,10 +8,10 @@ use serde_json::json;
 use super::super::*;
 use crate::store::identity::KeyIdentity;
 
-pub(super) async fn test_node() -> Arc<EmbeddedNode> {
+pub(super) async fn test_node() -> Arc<Node> {
     let identity = test_identity("agent-test-node");
     Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
@@ -66,7 +66,7 @@ impl Tool for EchoTool {
 }
 
 pub(super) async fn insert_backend(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,

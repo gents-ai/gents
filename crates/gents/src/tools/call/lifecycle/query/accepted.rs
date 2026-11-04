@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
 use crate::request::streaming::AcceptedToolCall;
@@ -15,7 +15,7 @@ use super::ToolCallLifecycle;
 impl ToolCallLifecycle {
     #[cfg(test)]
     pub(crate) async fn load_accepted_for_dispatch(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -27,7 +27,7 @@ impl ToolCallLifecycle {
 
     #[cfg(test)]
     pub(super) async fn load_direct_binding(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,

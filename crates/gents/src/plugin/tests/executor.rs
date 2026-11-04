@@ -1401,9 +1401,9 @@ mod data_calls {
 
     const NODE: &str = "did:key:z6Mknode";
 
-    async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::EmbeddedNode> {
+    async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::Node> {
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),
@@ -1444,7 +1444,7 @@ mod data_calls {
     /// Runs a plugin that asks for `requests` once and echoes the answers.
     async fn ask(
         data: Option<PluginDataDeclaration>,
-        node: &Arc<crate::defra_node::EmbeddedNode>,
+        node: &Arc<crate::defra_node::Node>,
         requests: Value,
     ) -> crate::plugin::executor::PluginCall {
         let canned = json!({"data_calls": {"requests": requests, "state": {"page": 1}}});
@@ -1719,7 +1719,7 @@ mod tool_writes {
     }
 
     struct Finished {
-        node: Arc<crate::defra_node::EmbeddedNode>,
+        node: Arc<crate::defra_node::Node>,
         path: std::path::PathBuf,
         tool_row: Value,
         result: Result<String, String>,
@@ -2048,7 +2048,7 @@ mod job_calls {
         json!({"id": id, "result": {"row_doc_id": row_doc_id, "offset": offset, "limit": limit}})
     }
 
-    async fn child_node(text: &str) -> Arc<crate::defra_node::EmbeddedNode> {
+    async fn child_node(text: &str) -> Arc<crate::defra_node::Node> {
         let node = open().await;
         completed_request(
             &node,

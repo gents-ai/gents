@@ -7,7 +7,7 @@ use crate::inference::llm::message::Message;
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -751,7 +751,7 @@ impl BackgroundExecutionRegistry {
 
     pub async fn read_process_output_snapshot(
         &self,
-        node: &EmbeddedNode,
+        node: &Node,
         session_id: &str,
         node_did: &str,
         requester_did: Option<&str>,
@@ -1258,7 +1258,7 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 
 #[derive(Clone)]
 pub struct DefraSessionHook {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     truncation_limits: TruncationLimits,
     failure_policy: FailurePolicy,
@@ -1425,7 +1425,7 @@ impl DefraSessionHook {
 
     #[cfg(test)]
     pub fn with_identity(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: &str,
         failure_policy: FailurePolicy,
     ) -> Self {
@@ -1471,7 +1471,7 @@ impl DefraSessionHook {
     }
 
     pub async fn resume_with_identity_policy(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         session_id: &str,
         node_did: &str,
         requester_did: Option<&str>,

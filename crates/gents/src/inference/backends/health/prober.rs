@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -14,7 +14,7 @@ use super::probe::{probe_selected_backends, ProbeCycleOutcome, ProbeEnv, ProbeSc
 use super::{BackendHealthMap, BackendProberOptions};
 
 pub async fn run_backend_probe_cycle(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     client: &reqwest::Client,
     health_map: &BackendHealthMap,
     options: &BackendProberOptions,
@@ -24,7 +24,7 @@ pub async fn run_backend_probe_cycle(
 }
 
 pub(super) async fn run_scheduled_backend_probe_cycle(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     client: &reqwest::Client,
     health_map: &BackendHealthMap,
     options: &BackendProberOptions,
@@ -99,7 +99,7 @@ pub(super) async fn run_scheduled_backend_probe_cycle(
 }
 
 pub fn spawn_backend_prober(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     health_map: BackendHealthMap,
     options: BackendProberOptions,
     health_events_tx: mpsc::Sender<()>,

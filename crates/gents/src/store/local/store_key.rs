@@ -395,7 +395,7 @@ pub async fn open_home_store_key_with_custody(
 pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node::NodeBuilder> {
     crate::store::local::storage_backend::reject_legacy_store(data_path)?;
     Ok(key.encrypt(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(data_path)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options()),

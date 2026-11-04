@@ -638,7 +638,7 @@ where
 }
 
 pub(super) async fn owned_test_hook() -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -649,7 +649,7 @@ pub(super) async fn owned_test_hook() -> (
 pub(super) async fn owned_test_hook_with_policy(
     policy: FailurePolicy,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -662,7 +662,7 @@ pub(super) async fn owned_test_hook_with_policy(
 pub(super) async fn owned_test_hook_with_identity(
     identity: Arc<dyn crate::NodeIdentity>,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -675,7 +675,7 @@ pub(super) async fn owned_test_hook_with_identity(
 pub(super) async fn owned_test_hook_with_folded_case(
     case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -697,7 +697,7 @@ async fn owned_test_hook_with_identity_policy(
     policy: FailurePolicy,
     folded_case: Option<&crate::lean_vocab_test::LeanFoldTurnInputCase>,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -710,7 +710,7 @@ async fn owned_test_hook_with_identity_policy(
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let builder = match identity.as_ref() {
         Some(identity) => {
-            defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+            defra_node::Node::builder().with_node_identity_did(identity.did())
         }
         None => crate::test_support::node_builder(),
     };

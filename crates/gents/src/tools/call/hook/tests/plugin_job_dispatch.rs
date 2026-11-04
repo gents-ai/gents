@@ -75,7 +75,7 @@ struct Step0 {
     _dir: tempfile::TempDir,
     home: tempfile::TempDir,
     cwd: Option<tempfile::TempDir>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     hook: DefraSessionHook,
     request_id: String,
     session_id: String,
@@ -195,7 +195,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -280,7 +280,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
 }
 
 async fn bind_request_at_hop(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     hook: &DefraSessionHook,
     request_id: &str,
     session_id: &str,
@@ -334,7 +334,7 @@ async fn bind_request_at_hop(
 
 /// The (request, tool call) documents the calling request is caused by: a
 /// job `depth` sessions up, through `depth - 1` plain tool calls.
-async fn job_ancestry(node: &Arc<EmbeddedNode>, depth: u32) -> (String, String) {
+async fn job_ancestry(node: &Arc<Node>, depth: u32) -> (String, String) {
     let request = |id: &str, session: &str, parent: Option<(&str, &str)>| {
         let mut value = json!({
             "request_id": id,

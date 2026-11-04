@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
 use crate::store::config_client::ConfigAccess;
@@ -32,7 +32,7 @@ pub fn operator_process_authorized(
 /// The transport authenticates `actor` through DefraDB. The process owner then
 /// revalidates the displayed invocation before signalling its existing guard.
 pub async fn operator_process_control(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     executions: &BackgroundExecutionRegistry,
     actor: Option<&str>,
     request: &gents_protocol::process_control::OperatorProcessControlRequest,
@@ -95,7 +95,7 @@ pub async fn operator_process_control(
 }
 
 pub async fn cancel_session_background_process(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     executions: &BackgroundExecutionRegistry,
     node_did: &str,
     requester_did: Option<&str>,
@@ -124,7 +124,7 @@ pub async fn cancel_session_background_process(
 }
 
 pub async fn cancel_background_tool_call(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     background_executions: &BackgroundExecutionRegistry,
     session_id: &str,
     tool_call_id: &str,
@@ -139,7 +139,7 @@ pub async fn cancel_background_tool_call(
 }
 
 pub(crate) async fn cancel_loaded_background_tool_call(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     background_executions: &BackgroundExecutionRegistry,
     mut lifecycle: ToolCallLifecycle,
     reason: &str,
@@ -450,7 +450,7 @@ mod tests {
         (fixture, owner, child)
     }
 
-    async fn reload(child: &ToolCallLifecycle, node: &Arc<EmbeddedNode>) -> ToolCallLifecycle {
+    async fn reload(child: &ToolCallLifecycle, node: &Arc<Node>) -> ToolCallLifecycle {
         ToolCallLifecycle::load_by_doc_id(
             node.clone(),
             child.doc_id().unwrap(),
@@ -628,7 +628,7 @@ mod tests {
     }
 
     async fn claimed_request(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         request_id: &str,
         session_id: &str,
         node_did: &str,
@@ -936,7 +936,7 @@ mod tests {
                 .unwrap(),
         );
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .data_path(&data_path)
                 .with_node_identity_did(identity.did())
                 .build()

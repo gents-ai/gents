@@ -197,7 +197,7 @@ impl Harness {
     }
 }
 
-async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
+async fn run_case(node: Arc<Node>, case: &Case) -> Result<()> {
     ensure!(
         case.actions.len() == case.expected.len(),
         "missing step expectations"

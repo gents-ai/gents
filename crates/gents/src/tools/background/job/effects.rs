@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::job::{JobEffects, JobScratch, JobSpawn};
 use gents_protocol::request_admission::AgentRequestCreate;
 use sha2::{Digest, Sha256};
@@ -109,7 +109,7 @@ fn stays_under(cwd: &Path, path: &str) -> bool {
 }
 
 pub async fn interrupt_slots(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     caller: &SessionScope,
     slots: &[SessionScope],
 ) -> Result<()> {
@@ -194,7 +194,7 @@ pub(crate) async fn stage_recorded_effects_in_txn(
 /// landed only if every staged retry key holds its staged fingerprint; a step
 /// that staged nothing has no witness and keeps the commit error.
 pub(crate) async fn recover_step_commit(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     identity: Option<identity::Did>,
     commit_error: anyhow::Error,
     staged: &[AgentRequestCreate],
@@ -445,7 +445,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node;
     use serde_json::json;
 
     use super::{admit_scratch, interrupt_slots, write_scratch};
@@ -563,7 +563,7 @@ mod tests {
     }
 
     async fn insert(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         collection: &str,
         value: serde_json::Value,
     ) -> String {
@@ -583,7 +583,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn stamp(node: &std::sync::Arc<EmbeddedNode>, doc_id: &str) -> Option<String> {
+    async fn stamp(node: &std::sync::Arc<Node>, doc_id: &str) -> Option<String> {
         let escaped = crate::store::graphql::escape_graphql_string(doc_id);
         let response = node
             .execute(&format!(
@@ -671,7 +671,7 @@ mod tests {
     };
 
     struct Harness {
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         path: std::path::PathBuf,
         cause: SessionMessageCause,
         ctx: StepContext,
@@ -882,7 +882,7 @@ mod tests {
         .await
     }
 
-    async fn by_key(node: &std::sync::Arc<EmbeddedNode>, key: &str) -> Vec<serde_json::Value> {
+    async fn by_key(node: &std::sync::Arc<Node>, key: &str) -> Vec<serde_json::Value> {
         let query = format!(
             r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
                 _docID content request_hop created_at

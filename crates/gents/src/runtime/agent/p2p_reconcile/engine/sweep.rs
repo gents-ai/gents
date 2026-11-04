@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::{stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 
@@ -20,7 +20,7 @@ const PAIRING_STATE_COLLECTIONS: [&str; 3] = [
 ];
 
 pub async fn run_pairing_reconciler(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
     cancel: CancellationToken,

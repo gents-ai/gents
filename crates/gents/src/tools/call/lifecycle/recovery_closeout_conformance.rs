@@ -79,7 +79,7 @@ fn assert_notification_reason(
 /// goal controller tests use, producing an unreadable assignment observation
 /// (`parsed_status` resolves the document but cannot parse the status).
 async fn seed_goal_status(
-    node: &crate::defra_node::EmbeddedNode,
+    node: &crate::defra_node::Node,
     goal: &crate::goal::GoalDocument,
     fields: &str,
 ) {

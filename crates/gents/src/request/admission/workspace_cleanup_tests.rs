@@ -18,7 +18,7 @@ enum RejectionOwner {
 }
 
 pub(crate) struct Fixture {
-    pub(crate) node: Arc<defra_node::EmbeddedNode>,
+    pub(crate) node: Arc<defra_node::Node>,
     pub(crate) request: crate::request::watcher::AgentRequest,
     pub(crate) binding: WorkspaceBindingDoc,
     _home: tempfile::TempDir,
@@ -29,7 +29,7 @@ impl Fixture {
         let home = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(home.path().join("identity.key"), None).unwrap();
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await

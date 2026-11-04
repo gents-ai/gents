@@ -2,7 +2,7 @@ use super::*;
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use std::{sync::Arc, time::Duration};
 
-async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -> RequestLifecycle {
+async fn claimed(node: &Arc<Node>, request_id: &str, session_id: &str) -> RequestLifecycle {
     let now = chrono::Utc::now().to_rfc3339();
     let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
@@ -214,7 +214,7 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
 async fn fixture(
     name: &str,
 ) -> (
-    Arc<EmbeddedNode>,
+    Arc<Node>,
     std::path::PathBuf,
     RequestLifecycle,
     DefraStreamWriter,
@@ -444,7 +444,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
 }
 
 async fn publish_tool_turn_for_rollback_test(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     lifecycle: &RequestLifecycle,
     message: &gents_protocol::message::Message,
 ) -> anyhow::Result<super::canonical::PublishedProviderTurn> {
@@ -587,7 +587,7 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
 async fn recovery_receipt_fixture(
     name: &str,
 ) -> (
-    Arc<EmbeddedNode>,
+    Arc<Node>,
     std::path::PathBuf,
     RequestLifecycle,
     DefraStreamWriter,

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
@@ -108,7 +108,7 @@ fn fork_error(error: anyhow::Error) -> ForkError {
 }
 
 pub async fn fork(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
     fork_on(&ConfigAccess::local(node.clone()), params).await

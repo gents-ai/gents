@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::future::BoxFuture;
 use query::TransactionHandle;
 use tracing::{instrument::WithSubscriber, Instrument};
@@ -42,7 +42,7 @@ pub(super) enum RollbackOnDrop {
     },
     Embedded {
         runtime: DropCleanup,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         native_gate: Arc<MutationWriteGate>,
         native_owner: StdMutex<Option<BoxFuture<'static, Result<()>>>>,
         write_guard: Option<MutationWriteGuard>,
@@ -172,7 +172,7 @@ impl Drop for RollbackOnDrop {
     reason = "ownership handles moved into the transaction owner task"
 )]
 pub(super) async fn begin_embedded_owned<F, Fut>(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     native_gate: Arc<MutationWriteGate>,
     read_only: bool,
     operation: WriteOperation,

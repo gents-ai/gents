@@ -63,7 +63,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             Arc::new(KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap());
         let foreign = KeyIdentity::load_or_create(temp.path().join("other.key"), None).unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await

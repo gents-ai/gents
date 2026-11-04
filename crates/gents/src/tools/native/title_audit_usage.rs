@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -297,7 +297,7 @@ pub(crate) async fn load_session_goal_usage(
 /// An auxiliary call enters the parent-inclusive total only through its
 /// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(
-    node: &EmbeddedNode,
+    node: &Node,
     exact_parent: &AgentRequestRow,
 ) -> Result<ParentAuditUsage> {
     let catalog = load_parent_catalog(node, exact_parent).await?;
@@ -310,7 +310,7 @@ pub async fn load_parent_inclusive_audit_usage(
 }
 
 pub(crate) async fn load_parent_inclusive_budget_usage(
-    node: &EmbeddedNode,
+    node: &Node,
     request: &crate::request::watcher::AgentRequest,
 ) -> Result<u64> {
     let scope = AgentRequestRow {
@@ -331,7 +331,7 @@ pub(crate) async fn load_parent_inclusive_budget_usage(
 }
 
 async fn load_parent_catalog(
-    node: &EmbeddedNode,
+    node: &Node,
     exact_parent: &AgentRequestRow,
 ) -> Result<ParentUsageCatalog> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;

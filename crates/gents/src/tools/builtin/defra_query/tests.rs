@@ -7,7 +7,7 @@ use super::*;
 
 #[tokio::test]
 async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type Reports { duty: String @fulltext rank: String }")
         .await
         .unwrap();
@@ -115,7 +115,7 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
     node.shutdown().await;
 }
 
-async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
+async fn seeded_node() -> Arc<defra_node::Node> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -564,7 +564,7 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
 
 #[tokio::test]
 async fn count_is_filtered_total_and_find_is_a_stable_page() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type Ticket { name: String priority: Int status: String }")
         .await
         .unwrap();
@@ -601,7 +601,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let alice_did = crate::store::identity::NodeIdentity::did(&alice);
     let bob_did = crate::store::identity::NodeIdentity::did(&bob);
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .with_node_identity_did(alice_did.to_owned())
             .build()
             .await
@@ -713,7 +713,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
 #[tokio::test]
 async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .build()
             .await
             .unwrap(),

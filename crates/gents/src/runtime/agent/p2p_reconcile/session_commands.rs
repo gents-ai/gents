@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::{Stream, StreamExt};
 use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
@@ -54,7 +54,7 @@ pub(super) enum Sweep {
 
 pub(super) async fn unanswered_commands(
     kind: CommandKind,
-    node: &EmbeddedNode,
+    node: &Node,
     identity: &dyn NodeIdentity,
     sweep: Sweep,
 ) -> Result<Vec<String>> {
@@ -128,7 +128,7 @@ pub(super) async fn unanswered_commands(
 }
 
 pub async fn run_session_command_reconciler(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -151,7 +151,7 @@ pub async fn run_session_command_reconciler(
 }
 
 pub(crate) async fn run_session_command_reconciler_observing<S, T>(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
     mut changes: S,
@@ -312,7 +312,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await

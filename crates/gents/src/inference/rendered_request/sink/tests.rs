@@ -59,7 +59,7 @@ fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRe
     }
 }
 
-async fn block_rows(node: &EmbeddedNode) -> Vec<Value> {
+async fn block_rows(node: &Node) -> Vec<Value> {
     let response = node
         .execute(r#"{ RenderedRequestBlock { _docID content_key } }"#)
         .await;
@@ -70,7 +70,7 @@ async fn block_rows(node: &EmbeddedNode) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-async fn stored_capture(node: &EmbeddedNode, capture_key: &str) -> Value {
+async fn stored_capture(node: &Node, capture_key: &str) -> Value {
     let response = node
         .execute(&format!(
             r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}, limit: 2) {{ capture_version request_json }} }}"#,
@@ -415,7 +415,7 @@ async fn a_reused_block_pins_the_existing_row_field_commit() {
 }
 
 async fn manifest_entries(
-    node: &EmbeddedNode,
+    node: &Node,
     stored: &str,
     payload: &str,
 ) -> Vec<(String, String, String)> {
@@ -678,7 +678,7 @@ async fn concurrent_identical_captures_store_each_block_once() {
     node.shutdown().await;
 }
 
-async fn block_payload_bytes(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
+async fn block_payload_bytes(node: &Node) -> std::collections::BTreeMap<String, usize> {
     let response = node
         .execute(r#"{ RenderedRequestBlock { content_key payload } }"#)
         .await;

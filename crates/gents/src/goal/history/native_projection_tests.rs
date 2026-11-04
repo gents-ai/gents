@@ -97,7 +97,7 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
         .unwrap();
     let owner = key.did();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(owner)
             .build()
             .await

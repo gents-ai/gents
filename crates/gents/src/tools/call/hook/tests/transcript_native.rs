@@ -5,7 +5,7 @@ const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 async fn fixture(
     name: &str,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     String,
     String,
@@ -105,7 +105,7 @@ async fn complete(hook: &DefraSessionHook, call_id: usize, provider_id: &str, pa
     ));
 }
 
-async fn history(node: &defra_node::EmbeddedNode, session: &str) -> Vec<Message> {
+async fn history(node: &defra_node::Node, session: &str) -> Vec<Message> {
     crate::session::load_history(node, session, "did:test:general", None)
         .await
         .unwrap()
@@ -124,7 +124,7 @@ fn results(messages: &[Message]) -> Vec<&str> {
         .collect()
 }
 
-async fn completed(name: &str) -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook, String) {
+async fn completed(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String) {
     let case = crate::lean_vocab_test::lean_transcript_case(name);
     let (node, hook, session, request) = fixture(name).await;
     publish_claimed_authored_input(

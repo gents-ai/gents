@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::access::{rows_value, ReadAccess};
@@ -36,7 +36,7 @@ pub(super) fn replay_capture_key(
 /// never an error. Rows are queried by the exact key only: a contradictory row
 /// under a key must be detected, not filtered away.
 pub(super) async fn load_replay_capture_rows(
-    node: &EmbeddedNode,
+    node: &Node,
     selected: &[SelectedReplayCandidate],
 ) -> Result<BTreeMap<String, Vec<serde_json::Value>>> {
     let mut keys = Vec::new();
@@ -81,7 +81,7 @@ pub(super) async fn load_replay_capture_rows(
 /// read would; the shared block read isolates a verification failure per
 /// manifest the same way.
 pub(super) async fn preload_replay_capture_blocks(
-    node: &EmbeddedNode,
+    node: &Node,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
     cache: &mut crate::inference::rendered_request::CaptureReadCache,
 ) -> Result<()> {
@@ -126,7 +126,7 @@ pub(super) async fn preload_replay_capture_blocks(
 /// both leave the turn without evidence, never an error.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn replay_capture_from_row(
-    node: &EmbeddedNode,
+    node: &Node,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
     capture_key: &str,
     node_did: &str,
@@ -208,7 +208,7 @@ const REPLAY_CAPTURE_VERSIONS: &[u32] = &[2, 3, 4];
 
 #[allow(clippy::too_many_arguments)]
 async fn verify_replay_capture(
-    node: &EmbeddedNode,
+    node: &Node,
     capture: &serde_json::Value,
     capture_key: &str,
     node_did: &str,

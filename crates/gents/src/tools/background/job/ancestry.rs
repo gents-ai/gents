@@ -101,20 +101,20 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node;
     use serde_json::{json, Value};
 
     use super::{started_by_job, ANCESTRY_QUERIES};
     use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::write_fixture_job_pin;
 
-    async fn open() -> Arc<EmbeddedNode> {
+    async fn open() -> Arc<Node> {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         node
     }
 
-    async fn insert(node: &std::sync::Arc<EmbeddedNode>, collection: &str, value: Value) -> String {
+    async fn insert(node: &std::sync::Arc<Node>, collection: &str, value: Value) -> String {
         ConfigAccess::transact_local_write(node, None, "test.plugin_job_ancestry", |txn| {
             let value = &value;
             Box::pin(async move {
@@ -132,7 +132,7 @@ mod tests {
     }
 
     async fn request(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         request_id: &str,
         session_id: &str,
         parent_request: Option<&str>,
@@ -159,7 +159,7 @@ mod tests {
     }
 
     async fn tool(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         tool_call_id: &str,
         session_id: &str,
         request_doc_id: &str,
@@ -200,7 +200,7 @@ mod tests {
     }
 
     struct Chain {
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         child: String,
         grand: String,
         plain_child: String,

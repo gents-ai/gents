@@ -4,7 +4,7 @@ use std::time::Instant;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::eval::runner::embedded::executor::capture::documents_capture_query;
 use crate::eval::runner::embedded::executor::evidence::usage_of;
 use crate::eval::runner::embedded::observe::request_evidence_from_query_data;
@@ -29,7 +29,7 @@ const CONFIGURATION: [Collection; 11] = [
 ];
 
 pub(super) struct LiveObserver<'a> {
-    node: &'a std::sync::Arc<EmbeddedNode>,
+    node: &'a std::sync::Arc<Node>,
     trial_did: &'a str,
     installed: BTreeSet<String>,
     started: Instant,
@@ -38,7 +38,7 @@ pub(super) struct LiveObserver<'a> {
 
 impl<'a> LiveObserver<'a> {
     pub(super) async fn new(
-        node: &'a std::sync::Arc<EmbeddedNode>,
+        node: &'a std::sync::Arc<Node>,
         trial_did: &'a str,
         stages: &'a [StageSpec],
     ) -> Self {
@@ -102,11 +102,11 @@ impl<'a> LiveObserver<'a> {
     }
 }
 
-async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSet<String>> {
+async fn collection_names(node: &std::sync::Arc<Node>) -> Result<BTreeSet<String>> {
     Ok(ConfigAccess::local(node.clone()).collection_names().await?)
 }
 
-async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
+async fn activity(node: &std::sync::Arc<Node>) -> Result<LiveSnapshot> {
     let requests = crate::session::public_request_filter("");
     let query = format!(
         r#"{{
@@ -164,7 +164,7 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
     })
 }
 
-async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolCall> {
+async fn last_tool_call(node: &std::sync::Arc<Node>) -> Option<LastToolCall> {
     let query = r#"{ AgentToolCall(order: { started_at: DESC }, limit: 1) { _docID node_did session_id requester_did tool_name lifecycle_state } }"#;
     let response = graphql_with_transaction_retry(node, query, "eval trial last tool call")
         .await
@@ -208,7 +208,7 @@ fn one_line(text: &str, max: usize) -> String {
     }
 }
 
-async fn count(node: &EmbeddedNode, query: &str, collection: &str) -> Option<u64> {
+async fn count(node: &Node, query: &str, collection: &str) -> Option<u64> {
     match graphql_with_transaction_retry(node, query, "eval trial live count").await {
         Ok(response) => Some(
             response

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::inference::llm::tool::Tool;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::json;
 
 use super::BoundedWriteTool;
@@ -42,8 +42,8 @@ fn native_input_admission_matches_lean() {
     }
 }
 
-async fn node_with_actionrequest() -> Arc<EmbeddedNode> {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+async fn node_with_actionrequest() -> Arc<Node> {
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection(
         r#"
         type ActionRequest {
@@ -89,7 +89,7 @@ fn decl() -> WriteToolDecl {
 
 #[tokio::test]
 async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let tool = BoundedWriteTool::new(
         ConfigAccess::local(node),
         crate::session::mailbox::canonical_mailbox_write_decl(),
@@ -99,7 +99,7 @@ async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
 
 #[tokio::test]
 async fn rejects_a_persisted_protected_collection_at_execution() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let mut protected = decl();
     protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
     let tool = BoundedWriteTool::new(ConfigAccess::local(node), protected);
@@ -146,7 +146,7 @@ async fn writes_one_bounded_doc() {
 
 #[tokio::test]
 async fn writes_native_measurements_without_string_coercion() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type HostMeasurement { disk: Int healthy: Boolean }")
         .await
         .unwrap();
@@ -443,7 +443,7 @@ async fn uncaptured_optional_source_fill_is_omitted_from_the_write() {
 
 #[tokio::test]
 async fn native_schema_and_receipts_preserve_lists_json_and_null() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection(
         "type TypedRecord { count: Int flag: Boolean score: Float64 labels: [String] data: JSON }",
     )
@@ -500,7 +500,7 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
 async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection(
         r#"
         type CountOwner {
@@ -588,7 +588,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             "parser: {case}"
         );
     }
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     for (index, case) in fields.iter().enumerate() {
         let schema = case["schema"].as_str().unwrap();
         let admitted = case["accepted"].as_bool().unwrap();

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::session::{AgentSession, SessionArchiveOutcome, SessionArchiveReceipt};
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ fn apply_transition(
 /// observations in the same native store; cross-node convergence remains owned
 /// by DefraDB's branchable document merge rather than a global session lease.
 pub async fn set_session_archived(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     session_id: &str,
     actor: &dyn NodeIdentity,

@@ -135,7 +135,7 @@ async fn persist_request(
 async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     let identity = &identities[0];
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

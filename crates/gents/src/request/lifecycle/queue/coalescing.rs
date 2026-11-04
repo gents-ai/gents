@@ -26,7 +26,7 @@ pub(super) fn row_matches_coalesced_source_and_key(
 }
 
 pub async fn reconcile_coalesced_pending_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
@@ -36,7 +36,7 @@ pub async fn reconcile_coalesced_pending_request(
 }
 
 pub(super) async fn reconcile_coalesced_pending_request_for(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
@@ -153,7 +153,7 @@ pub(crate) fn supersede_pending_mutation(
 }
 
 async fn matching_coalesced_pending_requests(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     source: QueueSource,

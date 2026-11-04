@@ -1,11 +1,11 @@
 //! Reads and writes use the node identity installed on
-//! `EmbeddedNode`; the `node_did` column is application data, not proof of
+//! `Node`; the `node_did` column is application data, not proof of
 //! authorship.
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::Value;
 
 use super::{
@@ -16,7 +16,7 @@ use crate::store::graphql::escape_graphql_string;
 
 #[derive(Clone)]
 pub struct DefraRenderedRequestSink {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
 }
 
 impl std::fmt::Debug for DefraRenderedRequestSink {
@@ -26,7 +26,7 @@ impl std::fmt::Debug for DefraRenderedRequestSink {
 }
 
 impl DefraRenderedRequestSink {
-    pub fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub fn new(node: Arc<Node>) -> Self {
         Self { node }
     }
 
@@ -724,7 +724,7 @@ fn single_mutation_result(data: &Value) -> Option<&Value> {
 }
 
 pub(crate) fn defra_rendered_request_capture_factory(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
 ) -> RenderedRequestCaptureFactory {
     Arc::new(move |_context: RenderedRequestContext| {
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));

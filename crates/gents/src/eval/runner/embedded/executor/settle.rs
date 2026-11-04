@@ -6,7 +6,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use super::evidence::session_requests;
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::eval::runner::embedded::observe::{collect_request_evidence, RequestEvidence};
 use crate::store::graphql::graphql_with_transaction_retry;
 
@@ -23,7 +23,7 @@ pub(super) fn remaining_of(deadline: Option<Duration>, started: Instant) -> Opti
 }
 
 /// Absent `budget` waits until the home is quiet.
-pub(super) async fn settle_home(node: &EmbeddedNode, budget: Option<Duration>) -> Result<bool> {
+pub(super) async fn settle_home(node: &Node, budget: Option<Duration>) -> Result<bool> {
     let started = Instant::now();
     let mut quiet: Option<(Instant, usize)> = None;
     loop {
@@ -44,7 +44,7 @@ pub(super) async fn settle_home(node: &EmbeddedNode, budget: Option<Duration>) -
         tokio::time::sleep(left.map_or(SETTLE_POLL, |left| SETTLE_POLL.min(left))).await;
     }
 }
-async fn request_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
+async fn request_counts(node: &Node) -> Result<(usize, usize)> {
     let response = graphql_with_transaction_retry(
         node,
         "{ AgentRequest { lifecycle_state } }",
@@ -71,7 +71,7 @@ async fn request_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
 }
 
 pub(super) async fn extend_with_later_requests(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     session_id: &str,
     request_id: &str,
     evidence: &mut RequestEvidence,

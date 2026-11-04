@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -26,7 +26,7 @@ use super::{
 };
 
 pub(crate) async fn close_provider_attempt(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -37,7 +37,7 @@ pub(crate) async fn close_provider_attempt(
 /// Fenced to the writer generation, except a changed generation may acknowledge
 /// an already committed, exact auxiliary closure without authorizing another write.
 pub(crate) async fn close_provider_attempt_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,

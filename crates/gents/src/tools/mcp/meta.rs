@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::tools::mcp::health::ServiceHealthMap;
 use crate::tools::mcp::pool::McpPool;
@@ -27,7 +27,7 @@ pub const META_TOOL_NAMES: [&str; 3] = ["discover_tools", "describe_tool", "call
     reason = "each meta tool context input comes from a separate runtime owner"
 )]
 pub async fn build_meta_tools(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     mcp_pool: McpPool,
     health: ServiceHealthMap,
     local_hostname: String,

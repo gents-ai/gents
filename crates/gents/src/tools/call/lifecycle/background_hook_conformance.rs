@@ -33,7 +33,7 @@ impl crate::inference::llm::tool::ToolDyn for PendingTool {
     }
 }
 
-async fn tool_state(node: &crate::defra_node::EmbeddedNode, tool_id: &str) -> Option<String> {
+async fn tool_state(node: &crate::defra_node::Node, tool_id: &str) -> Option<String> {
     let tool_id = escape_graphql_string(tool_id);
     let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -125,7 +125,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
     let did = identity.did().to_owned();
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .data_path(&path)
             .with_node_identity_did(&did)
             .build()

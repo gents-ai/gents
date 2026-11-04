@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::inference::auth::credential::OAuthRefreshKind;
 use crate::inference::backends::provider::BackendProviderOauthExt;
 use crate::inference::backends::registry::InferenceBackend;
 
 pub struct OAuthProbeContext<'a> {
-    pub node: Arc<EmbeddedNode>,
+    pub node: Arc<Node>,
     pub node_did: &'a str,
 }
 

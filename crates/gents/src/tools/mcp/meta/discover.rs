@@ -222,7 +222,7 @@ mod tests {
     use crate::tools::mcp::health::{HealthStatus, ServiceHealth};
 
     async fn seed_registry_service(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         service_id: &str,
         hostname: &str,
         port: u16,
@@ -266,7 +266,7 @@ mod tests {
     }
 
     fn test_context(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         mcp_pool: McpPool,
         health: ServiceHealthMap,
     ) -> MetaToolContext {

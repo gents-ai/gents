@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -93,7 +93,7 @@ pub fn default_inference_profile_id_for_node(node_did: &str) -> String {
 }
 
 pub async fn load_inference_profile(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     profile_id: &str,
 ) -> Result<Option<InferenceProfile>> {
@@ -103,7 +103,7 @@ pub async fn load_inference_profile(
 }
 
 pub(crate) async fn load_inference_profile_record(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     profile_id: &str,
 ) -> Result<Option<(String, InferenceProfile)>> {
@@ -129,7 +129,7 @@ pub(crate) async fn load_inference_profile_record(
 }
 
 pub async fn list_inference_profile_records(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Vec<(String, InferenceProfile)>> {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -183,7 +183,7 @@ pub async fn list_inference_profile_records(
 }
 
 pub async fn upsert_inference_profile(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     profile: &InferenceProfile,
 ) -> Result<()> {
     profile.validate()?;

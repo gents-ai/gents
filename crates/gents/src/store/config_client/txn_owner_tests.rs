@@ -11,7 +11,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Notify};
@@ -105,7 +105,7 @@ async fn http_transaction_cursors_keep_all_pages() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
             .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
@@ -153,7 +153,7 @@ async fn http_transaction_cursors_keep_all_pages() {
 
 #[tokio::test]
 async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))
         .add_collection("type ReadGateProbe { value: String }")
         .await
@@ -258,7 +258,7 @@ where
 
 #[tokio::test]
 async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type WriteTelemetryLevelProbe { value: String }")
         .await
         .unwrap();
@@ -303,7 +303,7 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
 
 #[tokio::test(start_paused = true)]
 async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let gate = super::mutation_write_gate(&node);
     let held = fill_write_gate(&gate, "test.hold_auto_commit_gate").await;
     let telemetry = EventCapture::default();
@@ -342,7 +342,7 @@ async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
 
 #[tokio::test]
 async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type MutationPauseProbe { value: String }")
         .await
         .unwrap();
@@ -487,7 +487,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
 
 #[tokio::test]
 async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type ArmedMutationPauseProbe { value: String }")
         .await
         .unwrap();
@@ -560,7 +560,7 @@ async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
 
 #[tokio::test]
 async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let node_ref = Arc::clone(&node);
     let gate = Arc::new(super::MutationWriteGate::new());
     let gate_for_assert = Arc::clone(&gate);
@@ -673,7 +673,7 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
             .expect("signing identity");
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -811,7 +811,7 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
             .expect("signing identity");
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -904,7 +904,7 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
 
 #[tokio::test(start_paused = true)]
 async fn cancellation_before_begin_reports_no_scheduled_rollback() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let gate = super::mutation_write_gate(&node);
     let held = fill_write_gate(&gate, "test.cancel_before_begin").await;
     let telemetry = EventCapture::default();
@@ -939,7 +939,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
 
 #[tokio::test]
 async fn stalled_callback_releases_the_embedded_write_gate() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type WriteAfterStall { value: String }")
         .await
         .unwrap();
@@ -993,7 +993,7 @@ async fn stalled_callback_releases_the_embedded_write_gate() {
 
 #[tokio::test]
 async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection("type NestedWriteProbe { value: String }")
         .await
         .unwrap();
@@ -1047,7 +1047,7 @@ async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate(
 
 #[tokio::test]
 async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let outer_attempts = Arc::new(AtomicUsize::new(0));
     let inner_attempts = Arc::new(AtomicUsize::new(0));
     let outer_attempts_for_callback = Arc::clone(&outer_attempts);
@@ -1285,7 +1285,7 @@ async fn stream_owned_gate_waiter_is_copolled_with_flush() {
 
 #[tokio::test]
 async fn failed_rollback_abandons_before_transaction_retry_backoff() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let node_for_begin = &node;
     let registered = Arc::new(Mutex::new(None));
     let registered_for_callback = Arc::clone(&registered);
@@ -1464,7 +1464,7 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
     assert!(scenario.rollback_owner_scheduled && scenario.cleanup_times_out);
     assert!(!scenario.expected_gate_held);
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let mut txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
@@ -1567,7 +1567,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
         let data = home.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .data_path(&data)
                 .build()
                 .await
@@ -1688,7 +1688,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
 
 #[tokio::test]
 async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type OwnedWriteFact { value: String }")
         .await
         .unwrap();
@@ -1761,7 +1761,7 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
 async fn thirty_two_hot_document_writers_converge_without_event_loss() {
     const WORKERS: usize = 32;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection(
         "type HotMutationState { key: String @index(unique: true) @immutable value: Int }",
     )
@@ -1861,7 +1861,7 @@ resources:
       - name: delete
 "#;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let policy_id = node.add_dac_policy(OWNER, POLICY).await.unwrap();
     node.add_collection(&format!(
         "type IdentityFact @policy(id: \"{policy_id}\", resource: \"facts\") {{ value: String }}"
@@ -1972,7 +1972,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
     let owner = key.did();
     const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(owner)
             .build()
             .await
@@ -2109,7 +2109,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
 
 #[tokio::test]
 async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))
         .add_collection("type ReadSnapshotProbe { value: String }")
         .await
@@ -2549,7 +2549,7 @@ fn transaction_handle(txn: &ConfigApplyTxn<'_>) -> query::TransactionHandle {
 }
 
 async fn assert_native_transaction_abandoned(
-    node: &EmbeddedNode,
+    node: &Node,
     handle: &query::TransactionHandle,
 ) {
     let error = node
@@ -2564,7 +2564,7 @@ async fn assert_native_transaction_abandoned(
 
 #[tokio::test]
 async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))
         .add_collection("type AbortedTransactionProbe { value: String }")
         .await
@@ -2636,7 +2636,7 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
 fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let node = runtime.block_on(async {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(Node::builder().build().await.unwrap());
         node.add_collection("type RuntimeShutdownProbe { value: String }")
             .await
             .unwrap();
@@ -2686,7 +2686,7 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
     use super::EmbeddedFinalizationBoundary::{AfterCommit, BeforeCommit, BeforeRollback};
 
     for boundary in [BeforeCommit, BeforeRollback, AfterCommit] {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(Node::builder().build().await.unwrap());
         ConfigAccess::local(Arc::clone(&node))
             .add_collection("type FinalizationCancellationProbe { value: String }")
             .await

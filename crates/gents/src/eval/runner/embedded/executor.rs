@@ -364,7 +364,7 @@ impl TrialExecutor for EmbeddedExecutor {
     }
 }
 
-/// Open a trial home from a `Send` future: `EmbeddedNode::build` is not `Send`,
+/// Open a trial home from a `Send` future: `Node::build` is not `Send`,
 /// so the open is polled on a blocking thread of `runtime`.
 async fn opened<Open, Opening>(runtime: &tokio::runtime::Handle, open: Open) -> Result<EmbeddedHome>
 where

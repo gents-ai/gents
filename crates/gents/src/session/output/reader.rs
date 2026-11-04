@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{OutputSource, PayloadRef};
 use std::collections::BTreeMap;
@@ -238,7 +238,7 @@ pub async fn load_canonical_message(
 }
 
 pub async fn load_canonical_message_from_node(
-    node: &EmbeddedNode,
+    node: &Node,
     header_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -261,7 +261,7 @@ pub async fn load_canonical_message_from_node(
 
 #[cfg(test)]
 pub(crate) async fn load_canonical_payload_from_node(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

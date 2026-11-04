@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::tools::call::lifecycle::IllegalToolCallTransition;
 use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
@@ -198,20 +198,20 @@ pub trait Watcher: Send + Sync {
 }
 
 pub struct DefraWatcher {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     subscription: events::DocumentChangeSubscription,
     processed_request_ids: cooldown::ProcessedRequests,
 }
 
 impl DefraWatcher {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: &str) -> Result<Self> {
+    pub fn new(node: Arc<Node>, node_did: &str) -> Result<Self> {
         Self::with_subscription_source(node.clone(), node, node_did)
     }
 
     pub fn with_subscription_source(
         subs: Arc<dyn UpdateSubscriptionSource>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: &str,
     ) -> Result<Self> {
         let subscription =

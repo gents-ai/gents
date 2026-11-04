@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::provider_patches::patch_instructions_body;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
@@ -364,7 +364,7 @@ fn sse_events(sse_body: &str) -> Vec<Value> {
 
 pub async fn build_responses_client(
     cache: Arc<crate::inference::usage_observation::UsageCache>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,

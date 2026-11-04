@@ -30,7 +30,7 @@ struct NodeReadinessRow {
     updated_at: String,
 }
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
@@ -100,7 +100,7 @@ fn unavailable_general() -> RapidHashMap<String, crate::runtime::snapshot::Unava
     )])
 }
 
-async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> NodeRuntimeRow {
+async fn fetch_runtime_row(node: &defra_node::Node, node_did: &str) -> NodeRuntimeRow {
     let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
@@ -132,7 +132,7 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> N
 }
 
 async fn fetch_node_readiness_row(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> NodeReadinessRow {
     let escaped_node_did = escape_graphql_string(node_did);

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use crate::request::lifecycle::WorkspaceLineage;
 use crate::request::watcher::AgentRequest;
@@ -63,7 +63,7 @@ const PLACEMENT_FIELDS: &str = r#"
 "#;
 
 pub async fn stamp_workspace_lineage(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     lineage: &mut WorkspaceLineage,
 ) -> Result<()> {
@@ -152,7 +152,7 @@ pub(crate) fn apply_workspace_lineage_stamp(
 }
 
 pub async fn seal_on_writer_success(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -212,7 +212,7 @@ pub async fn seal_on_writer_success(
 }
 
 pub async fn integrate_on_integrator_success(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -283,7 +283,7 @@ fn ctx_repository_path(repository: &RepositoryPlacementRef) -> PathBuf {
 
 /// Explicit operator/ack cleanup. Never invoked from request terminal.
 pub async fn cleanup_workspace(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     workspace_id: &str,
     operator_tool_root: Option<&Path>,
@@ -324,7 +324,7 @@ pub async fn cleanup_workspace(
 }
 
 pub async fn writer_request_already_sealed(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request: &AgentRequest,
 ) -> Result<bool> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
@@ -383,7 +383,7 @@ fn writer_already_sealed(
 }
 
 pub async fn materialize_workspace_binding(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_id: &str,
     request_doc_id: &str,
     principal_did: &str,
@@ -468,7 +468,7 @@ pub async fn materialize_workspace_binding(
 }
 
 pub async fn release_writer_binding(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request: &AgentRequest,
 ) -> Result<()> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
@@ -544,7 +544,7 @@ async fn release_writer_binding_in_txn(
 }
 
 async fn load_docs(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<MemoryWorkspaceDocuments> {
@@ -566,7 +566,7 @@ async fn load_docs(
 }
 
 async fn load_receipts(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
 ) -> Result<Vec<WorkspaceReceiptDoc>> {
     let query = format!(
@@ -597,7 +597,7 @@ async fn load_receipts(
 }
 
 async fn load_isolated_workspace_doc(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
@@ -622,7 +622,7 @@ async fn load_isolated_workspace_doc(
 }
 
 async fn load_placement_doc(
-    node: &EmbeddedNode,
+    node: &Node,
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
@@ -647,7 +647,7 @@ async fn load_placement_doc(
 }
 
 async fn load_repository(
-    node: &EmbeddedNode,
+    node: &Node,
     repository_id: &str,
     node_did: &str,
 ) -> Result<RepositoryPlacementRef> {
@@ -673,7 +673,7 @@ async fn load_repository(
 }
 
 async fn flush_seal_outcome(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &SealWorkspaceOutcome,
 ) -> Result<()> {
@@ -707,7 +707,7 @@ async fn flush_seal_outcome(
 }
 
 async fn flush_integrate_outcome(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
@@ -727,7 +727,7 @@ async fn flush_integrate_outcome(
 }
 
 async fn release_integrate_binding(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
@@ -762,7 +762,7 @@ async fn release_integrate_binding(
 }
 
 async fn flush_cleanup_outcome(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &CleanupWorkspaceOutcome,
 ) -> Result<()> {

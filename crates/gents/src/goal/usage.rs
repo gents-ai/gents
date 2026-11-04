@@ -11,7 +11,7 @@ pub struct SessionTokenUsage {
 }
 
 pub async fn session_token_usage(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
@@ -44,7 +44,7 @@ pub(crate) async fn session_token_usage_breakdown_in_txn(
 }
 
 pub async fn refresh_goal_usage(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     goal: &GoalDocument,
 ) -> Result<i64> {
     let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)

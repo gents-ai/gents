@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{MessagePublication, PayloadRef};
 
@@ -106,7 +106,7 @@ fn header(
 }
 
 async fn create_doc(
-    node: &EmbeddedNode,
+    node: &Node,
     mutation: &str,
     variables: serde_json::Value,
     field: &str,
@@ -192,7 +192,7 @@ fn session_coordinate_lookup_size_benchmark() {
 async fn cached_output_reconstruction_request_size_benchmark() {
     use gents_protocol::output::{MessageBlock, PayloadPresentation, PresentedPayload};
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-    let node = EmbeddedNode::builder().build().await.unwrap();
+    let node = Node::builder().build().await.unwrap();
     let request = "request-size-benchmark";
     let payload = "x".repeat(64 * 1024);
     for sources in [1, 32, 128] {
@@ -314,7 +314,7 @@ fn authored_segments(
 }
 
 async fn create_authored_header(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
     key: &str,
     sequence: u32,

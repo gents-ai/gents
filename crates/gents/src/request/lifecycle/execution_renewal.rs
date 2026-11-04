@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::row::AgentRequestRow;
 
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
@@ -22,7 +22,7 @@ impl Drop for RenewalTask {
 
 impl RenewalTask {
     pub(super) fn start(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         request_doc_id: String,
         generation: String,
         duration_ms: u64,
@@ -88,7 +88,7 @@ pub(crate) enum RenewalAttemptOutcome {
 }
 
 async fn renew_once(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_doc_id: &str,
     generation: &str,
 ) -> Result<bool> {
@@ -100,7 +100,7 @@ async fn renew_once(
 
 #[cfg(test)]
 pub(crate) async fn renew_once_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -123,7 +123,7 @@ tokio::task_local! {
 
 #[cfg(test)]
 pub(crate) async fn renew_with_recheck_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -153,7 +153,7 @@ fn renewal_recheck_time(fixture_now: Option<DateTime<Utc>>) -> DateTime<Utc> {
 }
 
 async fn renew_once_with_time(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: Option<DateTime<Utc>>,

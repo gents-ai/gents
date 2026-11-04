@@ -920,7 +920,7 @@ fn handoff_binding() -> gents_protocol::event_delivery::EventConsumer {
 }
 
 async fn admit_callback_arrival(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     doc_id: &str,
     version: &str,
 ) {

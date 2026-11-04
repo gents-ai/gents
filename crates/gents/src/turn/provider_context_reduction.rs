@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -251,7 +251,7 @@ impl StagedProviderContextReduction {
     /// measured in memory and the row is written only by the loop's commit.
     pub(crate) fn into_turn_outcome(
         self,
-        node: std::sync::Arc<EmbeddedNode>,
+        node: std::sync::Arc<Node>,
     ) -> Result<gents_loop::loop_stream::TurnCompactionOutcome> {
         let messages = self.checkpoint_tagged_messages()?;
         let reduction_key = self.reduction_key().to_string();
@@ -268,7 +268,7 @@ impl StagedProviderContextReduction {
 
     pub(crate) async fn commit(
         self,
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
     ) -> Result<ProviderContextReduction> {
         let intended = self.intended;
         let reduction_key = intended.reduction_key.clone();
@@ -404,7 +404,7 @@ pub fn reduction_key(
 }
 
 pub async fn capture_source_boundary(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -473,7 +473,7 @@ pub async fn capture_source_boundary(
 
 #[cfg(test)]
 pub(crate) async fn persist(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     input: NewProviderContextReduction<'_>,
 ) -> Result<ProviderContextReduction> {
     stage(input)?.commit(node).await
@@ -560,7 +560,7 @@ pub(crate) fn stage_exact(
 }
 
 pub async fn load_for_request(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
 ) -> Result<Vec<ProviderContextReduction>> {
     let query = format!(
@@ -597,7 +597,7 @@ pub async fn load_for_request(
 /// call, a restarted request deliberately derives from canonical history
 /// instead of pretending the call outcome is known.
 pub async fn load_unconsumed_for_request(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
 ) -> Result<Option<(ProviderContextReduction, Vec<String>)>> {
     let reductions = load_for_request(node, request_doc_id).await?;
@@ -705,7 +705,7 @@ pub fn rendered_capture_cites_reduction(
 const REDUCTION_FIELDS: &str = "_docID reduction_key node_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
 
 async fn load_by_key(
-    node: &EmbeddedNode,
+    node: &Node,
     reduction_key: &str,
 ) -> Result<Vec<ProviderContextReduction>> {
     let query = format!(
@@ -730,7 +730,7 @@ async fn load_by_key(
     Ok(rows)
 }
 
-async fn hydrate_rows(node: &EmbeddedNode, rows: &mut Vec<ProviderContextReduction>) -> Result<()> {
+async fn hydrate_rows(node: &Node, rows: &mut Vec<ProviderContextReduction>) -> Result<()> {
     let mut cache = crate::inference::rendered_request::CaptureReadCache::default();
     for row in rows {
         row.compacted_prefix_json = crate::inference::rendered_request::load_shared_json(

@@ -131,7 +131,7 @@ mod tests {
 
     #[tokio::test]
     async fn effective_slot_batch_uses_only_found_physical_requests() {
-        use crate::defra_node::EmbeddedNode;
+        use crate::defra_node::Node;
         use crate::store::config_client::ConfigAccess;
 
         let dir = tempfile::tempdir().unwrap();
@@ -145,7 +145,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         async fn create_request(
-            node: &std::sync::Arc<EmbeddedNode>,
+            node: &std::sync::Arc<Node>,
             request_id: &str,
             node_did: &str,
             session_id: &str,

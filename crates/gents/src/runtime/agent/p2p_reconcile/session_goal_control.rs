@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::goal_control::{
     GoalControlOutcome, SessionGoalControl, SessionGoalControlReceipt, SESSION_GOAL_CONTROL_VERSION,
 };
@@ -76,7 +76,7 @@ async fn intrinsic_rejection(
 }
 
 pub(crate) async fn process_command(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
 ) -> Result<Option<DateTime<Utc>>> {
@@ -85,7 +85,7 @@ pub(crate) async fn process_command(
 
 #[cfg(test)]
 pub(crate) async fn process_command_at(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
     now: DateTime<Utc>,
@@ -94,7 +94,7 @@ pub(crate) async fn process_command_at(
 }
 
 async fn process_command_with_clock(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
     clock: impl Fn() -> DateTime<Utc> + Send + Sync,

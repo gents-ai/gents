@@ -39,7 +39,7 @@ async fn wait_http_ready(access: &ConfigAccess) {
     .expect("real embedded HTTP GraphQL endpoint must become ready");
 }
 
-async fn insert_request(node: &Arc<EmbeddedNode>, input: Value) -> String {
+async fn insert_request(node: &Arc<Node>, input: Value) -> String {
     ConfigAccess::transact_local_write(node, None, "test.interrupt_queue.insert", |txn| {
         let input = input.clone();
         Box::pin(async move {
@@ -56,7 +56,7 @@ async fn insert_request(node: &Arc<EmbeddedNode>, input: Value) -> String {
     .unwrap()
 }
 
-async fn rows(node: &EmbeddedNode, session: &str) -> Vec<Value> {
+async fn rows(node: &Node, session: &str) -> Vec<Value> {
     let session = escape_graphql_string(session);
     let result = graphql_with_transaction_retry(
         node,
@@ -73,14 +73,14 @@ async fn rows(node: &EmbeddedNode, session: &str) -> Vec<Value> {
 
 async fn fixture(
     case: &LeanInterruptQueueCase,
-) -> (Arc<EmbeddedNode>, tempfile::TempDir, AgentRequest) {
+) -> (Arc<Node>, tempfile::TempDir, AgentRequest) {
     fixture_with_http(case, None).await
 }
 
 async fn fixture_with_http(
     case: &LeanInterruptQueueCase,
     http_address: Option<std::net::SocketAddr>,
-) -> (Arc<EmbeddedNode>, tempfile::TempDir, AgentRequest) {
+) -> (Arc<Node>, tempfile::TempDir, AgentRequest) {
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     assert_eq!(
         case.requester_id,
@@ -90,7 +90,7 @@ async fn fixture_with_http(
     let dir = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
     let did = identity.did().to_owned();
-    let builder = EmbeddedNode::builder()
+    let builder = Node::builder()
         .data_path(dir.path().join("db"))
         .with_node_identity_did(&did);
     let builder = match http_address {
@@ -182,7 +182,7 @@ async fn fixture_with_http(
 }
 
 async fn enqueue_generated_wake(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     parent: &AgentRequest,
     case: &LeanInterruptQueueCase,
     entry: &LeanInterruptQueueEntry,
@@ -225,7 +225,7 @@ async fn enqueue_generated_wake(
 }
 
 async fn insert_generated_pending(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     parent: &AgentRequest,
     entry: &LeanInterruptQueueEntry,
     source: QueueSource,

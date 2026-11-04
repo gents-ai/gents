@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::access::{rows_value, ReadAccess, ReadCache};
@@ -7,7 +7,7 @@ use super::headers::load_header;
 use super::{replay_violation, CanonicalOutputReadError, CanonicalReplayScope};
 
 async fn load_replay_request_facts_batch(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_ids: &[String],
 ) -> Result<BTreeMap<String, ReplayRequestFacts>> {
     let distinct = request_doc_ids
@@ -99,7 +99,7 @@ pub(crate) struct ReplayRequestFacts {
 }
 
 #[async_trait::async_trait]
-impl ReplayRequestReader for EmbeddedNode {
+impl ReplayRequestReader for Node {
     async fn request_facts(
         &self,
         request_doc_ids: &[String],
@@ -111,7 +111,7 @@ impl ReplayRequestReader for EmbeddedNode {
 /// Validate a restored replay's physical request and bounded transcript view
 /// even when no current assistant needs provider evidence.
 pub(crate) async fn validate_canonical_replay_boundary(
-    node: &EmbeddedNode,
+    node: &Node,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<()> {
@@ -121,7 +121,7 @@ pub(crate) async fn validate_canonical_replay_boundary(
 }
 
 pub(super) async fn validated_canonical_replay_boundary(
-    node: &EmbeddedNode,
+    node: &Node,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,

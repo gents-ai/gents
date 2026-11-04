@@ -1,6 +1,6 @@
 use super::*;
 
-async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionMaterializer) {
+async fn materializer_with_node() -> (Arc<defra_node::Node>, ProductionMaterializer) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
@@ -16,7 +16,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&owner)
             .build()
             .await
@@ -601,7 +601,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&owner)
             .build()
             .await
@@ -899,7 +899,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
 }
 
 async fn create_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_id: &str,
     node_did: &str,
     lifecycle_state: &str,
@@ -1173,7 +1173,7 @@ fn writer_context(workspace_id: &str, owner: &str) -> String {
 }
 
 async fn insert_ready_workspace(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     workspace_id: &str,
     owner: &str,
     writer_principal: &str,
@@ -1208,7 +1208,7 @@ async fn insert_ready_workspace(
 }
 
 async fn workspace_requests(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     workspace_id: &str,
 ) -> Vec<serde_json::Value> {
     let query = format!(
@@ -1508,7 +1508,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
 }
 
 async fn claimed_trigger_request(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_id: &str,
     node_did: &str,
 ) -> crate::request::lifecycle::RequestLifecycle {
@@ -1549,7 +1549,7 @@ async fn claimed_trigger_request(
 }
 
 async fn canonical_partial_streams(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     row: &gents_protocol::row::AgentRequestRow,
 ) -> (String, String) {
     use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};

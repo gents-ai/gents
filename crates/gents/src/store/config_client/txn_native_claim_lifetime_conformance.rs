@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crypto::keys::PrivateKey;
 use defra_core::signing::{RemoteSigner, SigningAuthorization, SigningConfig, SigningKeyType};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use identity::{Identity as _, RawIdentity};
 use serde::Deserialize;
 use tokio::sync::Notify;
@@ -99,7 +99,7 @@ fn assert_observation(
     expected: &Observation,
     home: &std::path::Path,
     data: &std::path::Path,
-    node: &EmbeddedNode,
+    node: &Node,
 ) {
     let claim_held = crate::store::local::home::lock_store(home, data).is_err();
     let gate = mutation_write_gate(node);
@@ -120,7 +120,7 @@ async fn signed_claimed_access(
     home: &std::path::Path,
     data: &std::path::Path,
 ) -> (
-    Arc<EmbeddedNode>,
+    Arc<Node>,
     ConfigAccess,
     Arc<BlockingSigner>,
     ReleaseSignerOnDrop,
@@ -148,7 +148,7 @@ async fn signed_claimed_access(
         },
     );
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(data)
             .with_node_identity_did(did)
             .build()
@@ -165,7 +165,7 @@ async fn signed_claimed_access(
 }
 
 async fn shutdown_then_reacquire_store_lock(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     home: &std::path::Path,
     data: &std::path::Path,
 ) -> crate::store::local::home::StoreLock {

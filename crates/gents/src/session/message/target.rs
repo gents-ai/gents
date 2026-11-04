@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::surface::AgentToolConfig;
 
 pub(crate) async fn load_caller_session_tools(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     agent_id: &str,
 ) -> Result<AgentToolConfig> {
@@ -22,7 +22,7 @@ pub(crate) async fn load_caller_session_tools(
 }
 
 pub(crate) async fn resolve_send_target(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     caller_node_did: &str,
     tools: &AgentToolConfig,
     session_id: &str,
@@ -68,7 +68,7 @@ pub(crate) fn target_scope(caller_node_did: &str, target: &SessionMessageTarget)
 }
 
 pub(crate) async fn agent_list(
-    _node: &Arc<EmbeddedNode>,
+    _node: &Arc<Node>,
     _caller: &crate::AgentRequest,
     tools: &AgentToolConfig,
 ) -> Result<serde_json::Value> {

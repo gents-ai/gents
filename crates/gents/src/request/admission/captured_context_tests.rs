@@ -12,7 +12,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("capture.key"), None).unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

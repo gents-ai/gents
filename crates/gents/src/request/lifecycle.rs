@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::request::watcher::AgentRequest;
@@ -519,7 +519,7 @@ impl TriggerExecutionContext {
 }
 
 pub struct RequestLifecycle {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent_id: String,
     execution_origin: ExecutionOrigin,
     backend_id: String,

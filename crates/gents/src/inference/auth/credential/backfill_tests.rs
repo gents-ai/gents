@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ fn token_response(access_claims: Value) -> &'static str {
     Box::leak(body.to_string().into_boxed_str())
 }
 
-async fn seed_expired_grok(node: &Arc<EmbeddedNode>, did: &str, key: Option<&str>) {
+async fn seed_expired_grok(node: &Arc<Node>, did: &str, key: Option<&str>) {
     let credential = OAuthCredential {
         doc_id: None,
         credential_id: oauth_credential_id(did, XAI_OAUTH_PROVIDER),
@@ -44,7 +44,7 @@ async fn seed_expired_grok(node: &Arc<EmbeddedNode>, did: &str, key: Option<&str
 }
 
 async fn refresh_once(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     did: &str,
     provider: &str,
     kind: OAuthRefreshKind,
@@ -116,7 +116,7 @@ async fn refresh_leaves_the_key_empty_without_the_claim() {
     assert_eq!(stored.provider_account_key, None);
 }
 
-async fn refresh_racing<F>(node: &Arc<EmbeddedNode>, did: &str, change: F) -> DbCredentialBearer
+async fn refresh_racing<F>(node: &Arc<Node>, did: &str, change: F) -> DbCredentialBearer
 where
     F: std::future::Future<Output = ()>,
 {
@@ -332,7 +332,7 @@ async fn a_refresh_adopts_a_replaced_document() {
     assert!(request.contains("refresh-TEST"), "{request}");
 }
 
-async fn seed_upgraded_row(node: &Arc<EmbeddedNode>, did: &str, provider: &str, account_id: &str) {
+async fn seed_upgraded_row(node: &Arc<Node>, did: &str, provider: &str, account_id: &str) {
     let credential_id = oauth_credential_id(did, provider);
     let mutation = format!(
         r#"mutation {{ create_OAuthCredential(input: {{

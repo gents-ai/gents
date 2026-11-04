@@ -35,9 +35,9 @@ fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {
         options,
     }
 }
-async fn fixture() -> (Arc<crate::defra_node::EmbeddedNode>, WriteTool) {
+async fn fixture() -> (Arc<crate::defra_node::Node>, WriteTool) {
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .build()
             .await
             .unwrap(),
@@ -207,7 +207,7 @@ async fn managed_credentials_scope_and_injection_are_refused() {
 #[tokio::test]
 async fn native_relationship_input_uses_the_target_document_id() {
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .build()
             .await
             .unwrap(),
@@ -244,7 +244,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .build()
             .await
             .unwrap(),
@@ -307,9 +307,9 @@ mod plugin {
 
     const NODE: &str = "did:key:z6Mknode";
 
-    async fn node() -> Arc<crate::defra_node::EmbeddedNode> {
+    async fn node() -> Arc<crate::defra_node::Node> {
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),
@@ -363,7 +363,7 @@ mod plugin {
         }
     }
 
-    async fn rows(node: &Arc<crate::defra_node::EmbeddedNode>, collection: &str) -> Value {
+    async fn rows(node: &Arc<crate::defra_node::Node>, collection: &str) -> Value {
         ConfigAccess::local(node.clone())
             .execute(&format!("{{{collection}{{_docID body created_at}}}}"))
             .await
@@ -388,7 +388,7 @@ mod plugin {
     }
 
     async fn apply_all(
-        node: &Arc<crate::defra_node::EmbeddedNode>,
+        node: &Arc<crate::defra_node::Node>,
         grant: &PluginData,
         writes: Vec<DataWrite>,
     ) -> Result<Vec<Value>> {
@@ -399,7 +399,7 @@ mod plugin {
         .await
     }
 
-    async fn notes(node: &Arc<crate::defra_node::EmbeddedNode>) -> Value {
+    async fn notes(node: &Arc<crate::defra_node::Node>) -> Value {
         ConfigAccess::local(node.clone())
             .execute("{Note{_docID owner body tags}}")
             .await

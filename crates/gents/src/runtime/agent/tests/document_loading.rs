@@ -10,14 +10,14 @@ use crate::ensure_runtime_schemas;
 use crate::tools::native::ToolSet;
 use crate::tools::surface::ToolCeiling;
 
-async fn install_default_behavior_chain(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) {
+async fn install_default_behavior_chain(node: &Arc<Node>, did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, did, agent_id).await;
     crate::documents::ensure_node(node, did).await.unwrap();
 }
 
 #[tokio::test]
 async fn document_constructor_rejects_node_without_signing_did_before_migrations() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let identity = Arc::new(test_identity("document-constructor-unsigned-node"));
 
     let error = match Gents::from_default_agent_documents(
@@ -33,7 +33,7 @@ async fn document_constructor_rejects_node_without_signing_did_before_migrations
 
     assert!(error
         .to_string()
-        .contains("EmbeddedNode configured with a node signing DID"));
+        .contains("Node configured with a node signing DID"));
 }
 
 #[tokio::test]
@@ -194,7 +194,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
 }
 
 async fn read_document<T>(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     owner: &str,
     collection: crate::Collection,
     id: &str,
@@ -229,7 +229,7 @@ where
 }
 
 async fn write_document<T>(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     collection: crate::Collection,
     document: &T,
 ) -> anyhow::Result<()>
@@ -260,7 +260,7 @@ where
 }
 
 async fn load_installed_context(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     did: &str,
     agent_id: &str,
 ) -> crate::documents::AgentContext {
@@ -274,7 +274,7 @@ async fn load_installed_context(
     .await
 }
 
-async fn upsert_context(node: &Arc<EmbeddedNode>, context: &crate::documents::AgentContext) {
+async fn upsert_context(node: &Arc<Node>, context: &crate::documents::AgentContext) {
     write_document(node, crate::Collection::AgentContext, context)
         .await
         .unwrap();
@@ -357,7 +357,7 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
     assert!(tool_names.contains(&"agent_message".to_string()));
 }
 
-async fn load_installed_tools(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) -> Tools {
+async fn load_installed_tools(node: &Arc<Node>, did: &str, agent_id: &str) -> Tools {
     let context = load_installed_context(node, did, agent_id).await;
     read_document(
         node,
@@ -368,13 +368,13 @@ async fn load_installed_tools(node: &Arc<EmbeddedNode>, did: &str, agent_id: &st
     .await
 }
 
-async fn upsert_tools(node: &Arc<EmbeddedNode>, tools: &Tools) {
+async fn upsert_tools(node: &Arc<Node>, tools: &Tools) {
     write_document(node, crate::Collection::Tools, tools)
         .await
         .unwrap();
 }
 
-async fn upsert_agent(node: &Arc<EmbeddedNode>, agent: &Agent) -> anyhow::Result<()> {
+async fn upsert_agent(node: &Arc<Node>, agent: &Agent) -> anyhow::Result<()> {
     write_document(node, crate::Collection::Agent, agent).await
 }
 
@@ -576,7 +576,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
     );
 }
 
-async fn set_probe_status(node: &Arc<EmbeddedNode>, did: &str, backend_id: &str, status: &str) {
+async fn set_probe_status(node: &Arc<Node>, did: &str, backend_id: &str, status: &str) {
     crate::inference::backends::registry::set_backend_probe_status(node, did, backend_id, status)
         .await
         .unwrap();

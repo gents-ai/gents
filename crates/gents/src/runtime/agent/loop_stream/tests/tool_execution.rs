@@ -127,7 +127,7 @@ impl PolicyDeniedOwner {
 
     fn denied_call(
         &self,
-        node: &Arc<defra_node::EmbeddedNode>,
+        node: &Arc<defra_node::Node>,
         root: &std::path::Path,
     ) -> PolicyDeniedCall {
         match self {
@@ -1209,7 +1209,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         created_at: "2026-10-02T00:00:00Z".into(),
     };
     async fn create(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         segment: &gents_protocol::output::OutputSegment,
     ) {
         let response = node

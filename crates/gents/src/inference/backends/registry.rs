@@ -11,7 +11,7 @@ use crate::store::graphql::escape_graphql_string;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
@@ -257,7 +257,7 @@ fn scope_filter(node_did: &str, backend_id: &str) -> Result<String> {
 }
 
 pub async fn lookup_backend(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackend>> {
@@ -267,7 +267,7 @@ pub async fn lookup_backend(
 }
 
 pub(crate) async fn lookup_backend_record(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     backend_id: &str,
 ) -> Result<Option<(String, InferenceBackend)>> {
@@ -291,7 +291,7 @@ pub(crate) fn unknown_provider_kind(row: &serde_json::Value) -> Option<&str> {
 }
 
 async fn query_backend_records(
-    node: &EmbeddedNode,
+    node: &Node,
     arguments: &str,
     skip_unknown_kind: bool,
 ) -> Result<Vec<(String, InferenceBackend)>> {
@@ -333,12 +333,12 @@ async fn query_backend_records(
 }
 
 pub(crate) async fn list_backend_records(
-    node: &EmbeddedNode,
+    node: &Node,
 ) -> Result<Vec<(String, InferenceBackend)>> {
     query_backend_records(node, "order: { backend_id: ASC }", true).await
 }
 
-pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
+pub async fn list_all_backends(node: &Node) -> Result<Vec<InferenceBackend>> {
     Ok(list_backend_records(node)
         .await?
         .into_iter()
@@ -346,7 +346,7 @@ pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBacke
         .collect())
 }
 
-pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
+pub async fn list_enabled_backends(node: &Node) -> Result<Vec<InferenceBackend>> {
     Ok(
         query_backend_records(node, "filter: { enabled: { _eq: true } }", true)
             .await?
@@ -357,7 +357,7 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
 }
 
 pub async fn list_enabled_backends_for_agent(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Vec<InferenceBackend>> {
     anyhow::ensure!(
@@ -383,7 +383,7 @@ pub async fn list_enabled_backends_for_agent(
 }
 
 pub async fn lookup_backend_observation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackendObservation>> {
@@ -421,7 +421,7 @@ pub async fn lookup_backend_observation_in_txn(
 }
 
 pub async fn set_backend_probe_status(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     backend_id: &str,
     probe_status: &str,
@@ -436,7 +436,7 @@ pub async fn set_backend_probe_status(
 }
 
 pub async fn set_backend_probe_status_with_last_probe(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     backend_id: &str,
     probe_status: &str,
@@ -452,7 +452,7 @@ pub async fn set_backend_probe_status_with_last_probe(
 }
 
 async fn write_probe_observation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     backend_id: &str,
     input: serde_json::Value,
@@ -479,7 +479,7 @@ async fn write_probe_observation(
 // The connection is re-checked in the transaction so an in-flight probe
 // cannot publish a catalog for a replaced provider/authentication selection.
 pub(crate) async fn record_model_catalog(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     backend: &InferenceBackend,
     catalog: BackendModelCatalog,
 ) -> Result<()> {
@@ -686,7 +686,7 @@ pub fn scoped_observation_view(
     }))
 }
 
-pub async fn probe_and_promote_enabled_backends(node: &Arc<EmbeddedNode>) {
+pub async fn probe_and_promote_enabled_backends(node: &Arc<Node>) {
     let backends = match list_enabled_backends(node).await {
         Ok(backends) => backends,
         Err(error) => {
@@ -709,7 +709,7 @@ pub async fn probe_and_promote_enabled_backends(node: &Arc<EmbeddedNode>) {
 // The caller must resolve and authorize the backend document first; this
 // function never accepts a free-standing URL.
 pub(crate) async fn discover_shared_backend(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     backend: &InferenceBackend,
 ) -> Result<InferenceBackendObservation> {
     backend.validate()?;

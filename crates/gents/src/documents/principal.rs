@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as DefraNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -50,14 +50,14 @@ pub struct Node {
     pub tags: Vec<String>,
 }
 
-pub async fn load_node(node: &EmbeddedNode, node_did: &str) -> Result<Option<Node>> {
+pub async fn load_node(node: &DefraNode, node_did: &str) -> Result<Option<Node>> {
     Ok(load_node_record(node, node_did)
         .await?
         .map(|(_, principal)| principal))
 }
 
 pub(crate) async fn load_node_record(
-    node: &EmbeddedNode,
+    node: &DefraNode,
     node_did: &str,
 ) -> Result<Option<(String, Node)>> {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -90,7 +90,7 @@ pub(crate) async fn load_node_record(
 /// validates the default behavior with the documents it names.
 #[cfg(test)]
 pub(crate) async fn upsert_node(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<DefraNode>,
     node_did: &str,
     display_name: Option<&str>,
     default_agent_id: Option<&str>,

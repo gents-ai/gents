@@ -4,10 +4,10 @@ use crate::tools::call::lifecycle::admission_fixture::{
     claimed_signed_request, complete_child, materialize_session_message,
     publish_accepted_on_claimed_request,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use std::sync::Arc;
 
-async fn exec(node: &EmbeddedNode, statement: &str) {
+async fn exec(node: &Node, statement: &str) {
     let response = node.execute(statement).await;
     assert!(
         !response.has_errors(),
@@ -16,7 +16,7 @@ async fn exec(node: &EmbeddedNode, statement: &str) {
     );
 }
 
-async fn scope_row(node: &EmbeddedNode, collection: &str, doc_id: &str) -> serde_json::Value {
+async fn scope_row(node: &Node, collection: &str, doc_id: &str) -> serde_json::Value {
     let fields = match collection {
         "AgentRequest" => "_docID request_id node_did lifecycle_state failure_reason deadline execution_generation execution_lease_expires_at",
         "AgentToolCall" => "_docID request_doc_id node_did tool_call_id lifecycle_state cancel_cause tool_failure_class",
@@ -31,7 +31,7 @@ async fn scope_row(node: &EmbeddedNode, collection: &str, doc_id: &str) -> serde
 }
 
 async fn queue_snapshot(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     queue_key: Option<&str>,
 ) -> (Vec<String>, usize) {
@@ -73,7 +73,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     let identity = crate::KeyIdentity::load_or_create(path.join("queue-agent.key"), None).unwrap();
     let node_did = identity.did();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(&path)
             .with_node_identity_did(node_did)
             .build()

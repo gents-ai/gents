@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use defra_p2p_adapter::{P2POperations, P2pDocumentRequest, ReplicationFilter, TransportPeerId};
 use gents_protocol::enrollment::{
     decode_offer, derive_enrollment_id, enrollment_schema_fingerprint, EnrollmentOfferRecord,
@@ -34,7 +34,7 @@ const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest 
 /// Author (or reuse) this node's request for `offer_token` and deliver it to
 /// the offering server, whose operator then decides it.
 pub async fn request_enrollment(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &dyn NodeIdentity,
     offer_token: &str,
 ) -> Result<EnrollmentRequestRecord> {
@@ -235,7 +235,7 @@ struct AdminPinRow {
 /// Pin the offer's admin as the only admin this candidate accepts for its
 /// network; a conflicting existing pin refuses the offer.
 pub async fn confirm_network_admin_pin(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     offer: &EnrollmentOfferRecord,
 ) -> Result<()> {
     let (network_id, admin_did) = (&offer.network_id, &offer.admin_did);
@@ -293,7 +293,7 @@ pub async fn confirm_network_admin_pin(
 /// The single request this identity and peer persisted for `offer`, after
 /// re-verifying it; a second request would share the offer's challenge.
 async fn persisted_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &dyn NodeIdentity,
     offer: &EnrollmentOfferRecord,
     offer_token: &str,
@@ -337,7 +337,7 @@ async fn persisted_request(
 }
 
 pub async fn write_enrollment_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
     let input = enrollment_request_input(request);

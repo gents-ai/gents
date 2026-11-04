@@ -24,7 +24,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     let foreign_owner = "did:test:foreign-owner";
     let requester = "did:test:foreign-requester";
     async fn create(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         id: &str,
         owner: &str,
         requester: Option<&str>,
@@ -44,7 +44,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
             }) },
         ).await.unwrap()
     }
-    async fn row(node: &EmbeddedNode, doc: &str) -> Value {
+    async fn row(node: &Node, doc: &str) -> Value {
         let doc = escape_graphql_string(doc);
         let response=node.execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state interrupt_requested_at}}}}")).await;
         assert!(!response.has_errors(), "{:?}", response.errors);

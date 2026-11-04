@@ -8,7 +8,7 @@ use std::sync::Arc;
 const READINESS_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
 async fn wait_for_agent_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     agent_id: &str,
     state: AgentReadinessState,

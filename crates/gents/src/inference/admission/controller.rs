@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio_util::sync::CancellationToken;
 
@@ -230,7 +230,7 @@ impl BackendAdmissionController {
 
     pub(super) async fn acquire(
         self: Arc<Self>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         pending: PendingCallMetadata,
         slot_connection: &str,
         cancel_observer: Option<CancellationToken>,
@@ -347,7 +347,7 @@ impl BackendAdmissionController {
 
     async fn start_permit(
         self: Arc<Self>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         permit: PoolPermit,
         call: InferenceCallRecord,
         cancel_observer: Option<CancellationToken>,
@@ -451,7 +451,7 @@ impl CapacityPool {
 }
 
 pub(super) struct QueuedCallGuard {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     controller: Arc<BackendAdmissionController>,
     call: InferenceCallRecord,
     doc_id: Option<String>,

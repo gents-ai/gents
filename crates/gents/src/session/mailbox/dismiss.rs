@@ -2,7 +2,7 @@ use super::*;
 use gents_protocol::mailbox_question::question_requires_reply_receipt;
 
 pub async fn dismiss_mailbox_item(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     doc_id: &str,
     principal_did: &str,
 ) -> Result<MailboxItem> {

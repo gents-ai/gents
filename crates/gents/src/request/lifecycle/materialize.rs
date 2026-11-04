@@ -62,7 +62,7 @@ fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
 }
 
 async fn resolve_created_agent_request_doc_id(
-    node: &EmbeddedNode,
+    node: &Node,
     mutation_response: &defra_node::QueryResponse,
     mutation_field: &str,
     escaped_request_id: &str,
@@ -95,7 +95,7 @@ async fn resolve_created_agent_request_doc_id(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     actor: ::identity::Did,
     node_did: &str,
     agent_id: &str,
@@ -473,7 +473,7 @@ pub async fn build_signed_request(
 /// A review exists only while its caller is waiting. Its finite validity lets
 /// the preclaim owner settle abandoned work without replaying provider calls.
 pub(crate) async fn write_pending_auxiliary_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     parent: &AgentRequest,
     purpose: gents_protocol::request_admission::RequestPurpose,
     content: String,
@@ -689,7 +689,7 @@ pub(crate) async fn build_session_message_request_with_input(
 }
 
 pub async fn activate_workspace_bound_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     request_doc_id: &str,
 ) -> Result<()> {
     let mutation = format!(
@@ -758,7 +758,7 @@ impl RequestLifecycle {
     }
 
     pub fn new_with_node_did(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         agent_id: &str,
         node_did: &str,
         request: AgentRequest,
@@ -776,7 +776,7 @@ impl RequestLifecycle {
     }
 
     pub fn new_with_execution_binding(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         _agent_id: &str,
         _node_did: &str,
         request: AgentRequest,
@@ -811,7 +811,7 @@ impl RequestLifecycle {
 
     #[allow(clippy::too_many_arguments)]
     pub async fn materialize_claimed_with_execution_binding(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         agent_id: &str,
         identity: Arc<dyn crate::store::identity::NodeIdentity>,
         content: &str,
@@ -841,7 +841,7 @@ impl RequestLifecycle {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn materialize_pending_with_execution_binding(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         agent_id: &str,
         identity: Arc<dyn crate::store::identity::NodeIdentity>,
         content: &str,
@@ -1403,7 +1403,7 @@ pub async fn write_task_delivery(
 }
 
 pub async fn write_task_delivery_local(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     actor: ::identity::Did,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
@@ -1421,7 +1421,7 @@ pub async fn write_task_delivery_local(
 }
 
 pub(crate) async fn write_trigger_delivery(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     actor: ::identity::Did,
     prepared: &crate::triggers::engine::durable::PreparedFire,
     create: &gents_protocol::request_admission::AgentRequestCreate,
@@ -1790,7 +1790,7 @@ mod task_delivery_tests {
         let identity_dir = tempfile::tempdir().unwrap();
         let _identity = pin_fixed_signing_identity(identity_dir.path());
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(PIN_FIXED_DID)
                 .build()
                 .await
@@ -1918,7 +1918,7 @@ mod task_delivery_tests {
         let identity_dir = tempfile::tempdir().unwrap();
         let _identity = pin_fixed_signing_identity(identity_dir.path());
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(PIN_FIXED_DID)
                 .build()
                 .await

@@ -1,5 +1,5 @@
 pub(super) async fn log_recovery(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     default_agent_id: &str,
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,

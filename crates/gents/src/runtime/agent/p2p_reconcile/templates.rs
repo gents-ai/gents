@@ -548,7 +548,7 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
 }
 
 pub async fn read_client_replicated_schema(
-    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    node: std::sync::Arc<defra_node::Node>,
 ) -> anyhow::Result<ReplicatedSchema> {
     let access = crate::store::config_client::ConfigAccess::local(node);
     let mut schema = ReplicatedSchema::new();
@@ -635,7 +635,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
-        async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::EmbeddedNode> {
+        async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::Node> {
             let node =
                 std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
             node.add_dac_policy_with_counter(

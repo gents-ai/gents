@@ -25,7 +25,7 @@ pub(crate) struct ClaudeAccounts {
 }
 
 pub(crate) struct Fixture {
-    pub node: Arc<EmbeddedNode>,
+    pub node: Arc<Node>,
     pub identity: Arc<KeyIdentity>,
     pub goal: GoalDocument,
     pub parent: crate::request::watcher::AgentRequest,
@@ -49,7 +49,7 @@ impl Fixture {
         let identity =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -477,11 +477,11 @@ impl Fixture {
             "children":children,"tokens_used":g.tokens_used.unwrap_or(0),"token_budget":g.token_budget})
     }
 }
-pub(crate) async fn execute(node: &EmbeddedNode, query: &str) {
+pub(crate) async fn execute(node: &Node, query: &str) {
     let response = node.execute(query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 }
-pub(crate) async fn request_rows(node: &EmbeddedNode) -> Vec<AgentRequestRow> {
+pub(crate) async fn request_rows(node: &Node) -> Vec<AgentRequestRow> {
     let response=node.execute(&format!("{{ AgentRequest(order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     crate::store::graphql::rows(&response, "AgentRequest").unwrap()

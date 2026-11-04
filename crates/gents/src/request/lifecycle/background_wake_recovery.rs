@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -30,7 +30,7 @@ enum RedriveOutcome {
 
 impl RequestLifecycle {
     pub async fn redrive_failed_background_wakeups(
-        node: &std::sync::Arc<EmbeddedNode>,
+        node: &std::sync::Arc<Node>,
         node_did: &str,
     ) -> Result<BackgroundWakeRedriveReport> {
         let (candidates, successors, pending) = load_candidates(node, node_did).await?;
@@ -109,7 +109,7 @@ impl RequestLifecycle {
 }
 
 async fn load_candidates(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<(
     Vec<AgentRequestRow>,
@@ -237,7 +237,7 @@ fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>)
 }
 
 async fn redrive_one(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     candidate: &AgentRequestRow,
 ) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();

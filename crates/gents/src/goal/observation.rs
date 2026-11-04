@@ -14,7 +14,7 @@ use crate::store::identity::NodeIdentity;
 pub(crate) const SOURCES: [&str; 3] = ["Goal", "AgentSession", "GoalObservation"];
 
 pub(crate) async fn reconcile_goal_observations(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     full: bool,
     changed: &[(&'static str, String)],
@@ -325,7 +325,7 @@ pub async fn load_session_goal_observation_state_in_txn(
 }
 
 pub(crate) async fn project_session_goal(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &Arc<dyn NodeIdentity>,
     session_id: &str,
     requester_did: Option<&str>,

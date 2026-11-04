@@ -93,7 +93,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
         let path = directory.path().join("store");
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .data_path(&path)
                 .build()
@@ -261,7 +261,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         node.shutdown().await;
         drop(node);
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .data_path(&path)
                 .build()

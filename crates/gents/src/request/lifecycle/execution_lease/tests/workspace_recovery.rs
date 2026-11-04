@@ -10,7 +10,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             .unwrap();
     let did = identity.did();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path().join("db"))
             .with_node_identity_did(did)
             .build()
@@ -91,7 +91,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .unwrap();
     let result = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
-    async fn requests(node: &EmbeddedNode, owner: &str) -> Vec<AgentRequest> {
+    async fn requests(node: &Node, owner: &str) -> Vec<AgentRequest> {
         let scope =
             crate::session::session_scope_filter(owner, "workspace-recovery-session", Some(owner));
         let result = node

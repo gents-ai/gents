@@ -7,7 +7,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::tools::surface::ToolCeiling;
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
@@ -30,7 +30,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 async fn bind_default_agent_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     agent_id: &str,
 ) {
@@ -413,7 +413,7 @@ async fn apply_control_update_hot_reloads_skill() {
 }
 
 async fn seed_raw_tools(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     tools_id: &str,
     agent_target_ids: &[&str],
@@ -537,7 +537,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
 }
 
 async fn seed_automation(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
     crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.replicated_automation", |txn| {
@@ -556,7 +556,7 @@ async fn seed_automation(
 }
 
 async fn create_task_bound(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     task_id: &str,
     agent_id: &str,
@@ -580,7 +580,7 @@ async fn create_task_bound(
 }
 
 async fn create_schedule_with_concurrency(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -616,7 +616,7 @@ async fn create_schedule_with_concurrency(
 }
 
 async fn create_event_trigger(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -1315,7 +1315,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
 }
 
 async fn bind_subscription_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     agent_id: &str,
     provider: &str,
@@ -1355,7 +1355,7 @@ async fn bind_subscription_backend(
 }
 
 async fn bind_default_agent_chatgpt_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     agent_id: &str,
 ) {
@@ -1370,7 +1370,7 @@ async fn bind_default_agent_chatgpt_backend(
     .await;
 }
 
-async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, node_did: &str) {
+async fn insert_enabled_oauth_credential(node: &defra_node::Node, node_did: &str) {
     let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: crate::inference::auth::credential::oauth_credential_id(
@@ -1906,7 +1906,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
 }
 
 async fn bind_default_agent_claude_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     agent_id: &str,
 ) {

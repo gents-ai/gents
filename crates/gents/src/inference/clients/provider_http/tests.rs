@@ -295,7 +295,7 @@ fn usage_account(backend_id: &str) -> crate::inference::usage_observation::Usage
 async fn usage_client(
     cache: &std::sync::Arc<crate::inference::usage_observation::UsageCache>,
     backend_id: &str,
-) -> (std::sync::Arc<defra_node::EmbeddedNode>, ProviderHttpClient) {
+) -> (std::sync::Arc<defra_node::Node>, ProviderHttpClient) {
     let node = crate::inference::auth::credential::test_support::test_node().await;
     let reporter = crate::inference::usage_observation::UsageReporter::new(
         cache.clone(),
@@ -310,7 +310,7 @@ async fn usage_client(
 
 pub(crate) async fn stored_usage_eventually(
     cache: &crate::inference::usage_observation::UsageCache,
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     account: &crate::inference::usage_observation::UsageAccount,
 ) -> Option<crate::inference::usage_observation::UsageObservation> {
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
@@ -399,7 +399,7 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
 #[tokio::test]
 async fn usage_capture_requires_no_persistent_schema() {
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .build()
             .await
             .expect("node without schemas"),

@@ -1,9 +1,9 @@
 use super::*;
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use gents_protocol::session::SessionProvenance;
 use serde_json::json;
 
-async fn create(node: &EmbeddedNode, mutation: String, collection: &str) -> String {
+async fn create(node: &Node, mutation: String, collection: &str) -> String {
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     crate::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
@@ -14,7 +14,7 @@ async fn create(node: &EmbeddedNode, mutation: String, collection: &str) -> Stri
 }
 
 async fn seed(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
     session_id: &str,
     created_at: &str,
@@ -38,7 +38,7 @@ async fn seed(
     .await
 }
 
-async fn seed_session(node: &EmbeddedNode, session_id: &str, parent: Option<&str>) {
+async fn seed_session(node: &Node, session_id: &str, parent: Option<&str>) {
     let session = AgentSession {
         session_id: session_id.into(),
         node_did: "did:test:node".into(),
@@ -68,7 +68,7 @@ async fn seed_session(node: &EmbeddedNode, session_id: &str, parent: Option<&str
     .await;
 }
 
-async fn seed_opened_session(node: &EmbeddedNode, node_did: &str, session_id: &str, opening: &str) {
+async fn seed_opened_session(node: &Node, node_did: &str, session_id: &str, opening: &str) {
     let session = AgentSession {
         session_id: session_id.into(),
         node_did: node_did.into(),

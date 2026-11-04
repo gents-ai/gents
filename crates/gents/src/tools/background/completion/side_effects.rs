@@ -5,7 +5,7 @@ pub(super) struct ExistingNotification {
 }
 
 async fn existing_notification(
-    node: &EmbeddedNode,
+    node: &Node,
     parent: &crate::AgentRequest,
     message_key: &str,
 ) -> Result<Option<ExistingNotification>> {
@@ -53,7 +53,7 @@ async fn existing_notification(
 }
 
 pub(super) async fn existing_tool_completion_notification(
-    node: &EmbeddedNode,
+    node: &Node,
     parent: &crate::AgentRequest,
     tool_call_id: &str,
 ) -> Result<Option<ExistingNotification>> {

@@ -2,9 +2,9 @@ use super::{AwaitMode, ToolCallLifecycle};
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
-async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
+async fn update(node: &Node, collection: &str, doc_id: &str, fields: &str) {
     let response = node
         .execute(&format!(
             r#"mutation {{ update_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#,
@@ -14,7 +14,7 @@ async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &st
     assert!(!response.has_errors(), "{:?}", response.errors);
 }
 
-async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
+async fn row(node: &Node, doc_id: &str) -> serde_json::Value {
     let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode cancel_cause tool_failure_class }} }}"#, crate::store::graphql::escape_graphql_string(doc_id))).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let rows = response.data.unwrap()["AgentToolCall"]
@@ -31,7 +31,7 @@ async fn teardown(admission: PublishedAdmission) {
 }
 
 async fn restart_obligations(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

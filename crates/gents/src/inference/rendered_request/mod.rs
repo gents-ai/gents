@@ -262,7 +262,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         async fn create_block(
-            node: &std::sync::Arc<defra_node::EmbeddedNode>,
+            node: &std::sync::Arc<defra_node::Node>,
             text: &str,
         ) -> (String, Vec<u8>) {
             let bytes = text.as_bytes().to_vec();
@@ -781,7 +781,7 @@ impl CaptureBaseReader for crate::store::config_client::ConfigAccess {
 }
 
 #[async_trait::async_trait]
-impl CaptureBaseReader for defra_node::EmbeddedNode {
+impl CaptureBaseReader for defra_node::Node {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
         let response = crate::store::graphql::graphql_with_transaction_retry(
             self,
@@ -812,7 +812,7 @@ pub(crate) struct CaptureReadCache {
 }
 
 pub(crate) async fn load_shared_json(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     stored: &str,
     cache: &mut CaptureReadCache,
 ) -> Result<String> {
@@ -1326,7 +1326,7 @@ pub async fn decode_capture_json(
 }
 
 pub async fn decode_capture_pair_embedded(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     capture_version: u32,
     stored: &str,
 ) -> Result<(Value, Value)> {
@@ -1334,7 +1334,7 @@ pub async fn decode_capture_pair_embedded(
 }
 
 pub async fn decode_capture_json_embedded(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,
@@ -1343,7 +1343,7 @@ pub async fn decode_capture_json_embedded(
 }
 
 pub(crate) async fn decode_capture_json_embedded_cached(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,

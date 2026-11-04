@@ -4,7 +4,7 @@ use serde_json::Value;
 
 const NODE_DID: &str = "did:test:inference-recovery-cas";
 
-async fn fixture(initial_state: &str) -> (std::sync::Arc<EmbeddedNode>, StaleInferenceCallRow) {
+async fn fixture(initial_state: &str) -> (std::sync::Arc<Node>, StaleInferenceCallRow) {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::store::schema::ensure_runtime_schemas(&node)
         .await
@@ -14,7 +14,7 @@ async fn fixture(initial_state: &str) -> (std::sync::Arc<EmbeddedNode>, StaleInf
 }
 
 async fn seed_call(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     initial_state: &str,
     node_did: &str,
     request_doc_id: &str,
@@ -44,7 +44,7 @@ async fn seed_call(
     snapshots.remove(0)
 }
 
-async fn stored_call(node: &EmbeddedNode) -> Value {
+async fn stored_call(node: &Node) -> Value {
     let response = node.execute(
         r#"{ InferenceCall { call_state failure_reason ended_at prompt_tokens completion_tokens } }"#,
     ).await;

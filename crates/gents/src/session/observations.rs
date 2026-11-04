@@ -240,7 +240,7 @@ pub(crate) async fn load_session_current_hop_in_txn(
 }
 
 pub(crate) async fn load_session_current_hop(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
@@ -586,7 +586,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
 }
 
 pub(crate) async fn update_session_title_with_source(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -670,7 +670,7 @@ pub async fn apply_title_in_txn(
 }
 
 pub(crate) async fn load_recent_titles_for_agent(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     exclude_session_id: &str,
     limit: usize,
@@ -738,7 +738,7 @@ pub(crate) async fn load_recent_titles_for_agent(
 }
 
 pub(crate) async fn session_needs_generated_title(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,

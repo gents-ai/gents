@@ -24,7 +24,7 @@ pub use snapshot::{load_session_history_snapshot, load_session_history_snapshot_
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -302,12 +302,12 @@ impl From<anyhow::Error> for SessionHistoryToolError {
 
 #[derive(Clone)]
 pub struct SessionHistoryTool {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
 }
 
 impl SessionHistoryTool {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<Node>, node_did: impl Into<String>) -> Self {
         Self {
             node,
             node_did: node_did.into(),
@@ -378,7 +378,7 @@ impl Tool for SessionHistoryTool {
 }
 
 pub fn build_session_history_tool(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: impl Into<String>,
 ) -> Box<dyn ToolDyn> {
     Box::new(SessionHistoryTool::new(node, node_did))

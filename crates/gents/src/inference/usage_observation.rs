@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,
@@ -303,7 +303,7 @@ pub async fn load_usage(
 
 pub async fn record_usage(
     cache: &UsageCache,
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     account: &UsageAccount,
     report: UsageReport,
 ) -> Result<()> {
@@ -312,7 +312,7 @@ pub async fn record_usage(
 
 async fn write(
     cache: &UsageCache,
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     account: &UsageAccount,
     report: UsageReport,
     read: Option<(DateTime<Utc>, Option<String>)>,
@@ -337,7 +337,7 @@ pub(crate) struct RotationFeed {
 
 pub struct UsageReporter {
     cache: Arc<UsageCache>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     pub(crate) account: UsageAccount,
     rotation: Option<RotationFeed>,
 }
@@ -351,7 +351,7 @@ impl std::fmt::Debug for UsageReporter {
 impl UsageReporter {
     pub(crate) fn new(
         cache: Arc<UsageCache>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         account: UsageAccount,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -451,7 +451,7 @@ fn should_read(trigger: UsageTrigger, now: DateTime<Utc>, previous: Option<DateT
 
 pub async fn read_account_usage(
     cache: &UsageCache,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     backend: &InferenceBackend,
     trigger: UsageTrigger,
@@ -616,7 +616,7 @@ impl AccountUsageRead {
 
 pub async fn read_node_usage(
     cache: &UsageCache,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: &str,
     trigger: UsageTrigger,
     provider: Option<&str>,
@@ -761,7 +761,7 @@ pub async fn usage_for_backend(
 }
 
 pub(crate) struct ProviderLimitsTool {
-    pub node: Arc<EmbeddedNode>,
+    pub node: Arc<Node>,
     pub node_did: String,
     pub cache: Arc<UsageCache>,
 }

@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::documents::{InferenceSampling, PackConfig};
 use crate::eval::runner::embedded::home::EmbeddedHome;
 use crate::eval::runner::executor::{InferenceBinding, TrialFixtures, TrialSpec};
@@ -210,7 +210,7 @@ fn object<'a>(value: &'a mut Value, named: &str) -> Result<&'a mut serde_json::M
 }
 
 async fn install_workspace_root(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     workspace: &Path,
 ) -> Result<()> {
     let root = escape_graphql_string(

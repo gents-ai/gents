@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::rig_compat::CachedInputTokensObservation;
 
 use super::client::AdmissionError;
@@ -35,7 +35,7 @@ fn extract_inference_call_doc_id(data: Option<&serde_json::Value>) -> Result<Str
 }
 
 pub(super) async fn persist_call_queued(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     call: &InferenceCallRecord,
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -50,7 +50,7 @@ pub(super) async fn persist_call_queued(
 }
 
 pub(super) async fn persist_call_started(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     call: &InferenceCallRecord,
 ) -> Result<String, AdmissionError> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -67,7 +67,7 @@ pub(super) async fn persist_call_started(
 }
 
 pub(super) async fn persist_existing_call_running(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     call: &InferenceCallRecord,
     doc_id: &str,
 ) -> Result<()> {
@@ -98,7 +98,7 @@ pub(super) async fn persist_existing_call_running(
 }
 
 pub(super) async fn persist_terminal_call(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     call: InferenceCallRecord,
     call_state: &str,
     failure_reason: Option<&str>,
@@ -124,7 +124,7 @@ pub(super) async fn persist_terminal_call(
 }
 
 pub(super) async fn persist_existing_call_terminal(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     call: &InferenceCallRecord,
     doc_id: &str,
     call_state: &str,

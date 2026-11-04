@@ -70,12 +70,12 @@ async fn a_closed_request_change_feed_stops_the_watcher_wait() {
         .is_none());
 }
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
 async fn insert_incoherent_agent_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     request_id: &str,
 ) -> String {
@@ -133,7 +133,7 @@ async fn insert_incoherent_agent_request(
 }
 
 async fn insert_agent_request_row(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     request_id: &str,
     session_id: &str,
@@ -193,7 +193,7 @@ async fn insert_agent_request_row(
 }
 
 async fn insert_malformed_agent_request_without_request_id(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     session_id: &str,
 ) -> String {
@@ -232,7 +232,7 @@ async fn insert_malformed_agent_request_without_request_id(
 }
 
 async fn request_terminal_fields_by_doc_id(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     doc_id: &str,
 ) -> serde_json::Value {
     let response = node
@@ -258,7 +258,7 @@ async fn request_terminal_fields_by_doc_id(
         .expect("malformed terminal row")
 }
 
-async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id: &str) {
+async fn set_request_terminal_completed(node: &defra_node::Node, doc_id: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let mutation = format!(
         r#"mutation {{
@@ -278,7 +278,7 @@ async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id:
     );
 }
 
-async fn set_request_processing(node: &defra_node::EmbeddedNode, doc_id: &str) {
+async fn set_request_processing(node: &defra_node::Node, doc_id: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let mutation = format!(
         r#"mutation {{
@@ -297,7 +297,7 @@ async fn set_request_processing(node: &defra_node::EmbeddedNode, doc_id: &str) {
 }
 
 async fn set_request_interrupt_requested_at(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     doc_id: &str,
     at: &str,
 ) {
@@ -320,7 +320,7 @@ async fn set_request_interrupt_requested_at(
 }
 
 async fn request_terminal_fields(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_id: &str,
 ) -> serde_json::Value {
     let request_id = crate::store::graphql::escape_graphql_string(request_id);

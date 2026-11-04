@@ -6,7 +6,7 @@ use crate::store::identity::NodeIdentity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 
 pub async fn resume_at_reset(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     identity: &dyn NodeIdentity,
     goal: &GoalDocument,
     now: DateTime<Utc>,

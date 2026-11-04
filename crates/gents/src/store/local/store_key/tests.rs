@@ -26,7 +26,7 @@ async fn read_log_head(store: &dyn Store, log: &AppendLog) -> Option<Vec<u8>> {
     head
 }
 
-async fn write_credential(node: &defra_node::EmbeddedNode) {
+async fn write_credential(node: &defra_node::Node) {
     crate::store::schema::ensure_runtime_schemas(node)
         .await
         .expect("schemas");
@@ -38,7 +38,7 @@ async fn write_credential(node: &defra_node::EmbeddedNode) {
     assert!(!response.has_errors(), "{:?}", response.errors);
 }
 
-async fn read_refresh_token(node: &defra_node::EmbeddedNode) -> Option<String> {
+async fn read_refresh_token(node: &defra_node::Node) -> Option<String> {
     let response = node.execute("{ OAuthCredential { refresh_token } }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.as_ref()?["OAuthCredential"][0]["refresh_token"]
@@ -176,7 +176,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     plain_options.engine = plain_options
         .engine
         .compression(regolith::CompressionType::None);
-    let control = defra_node::EmbeddedNode::builder()
+    let control = defra_node::Node::builder()
         .with_node_identity_did(node_did)
         .data_path(&plain)
         .with_regolith_options(plain_options)
@@ -293,7 +293,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     )
     .unwrap();
     let data = crate::store::local::home::default_data_dir(&home);
-    let plain = defra_node::EmbeddedNode::builder()
+    let plain = defra_node::Node::builder()
         .with_node_identity_did(node_did)
         .data_path(&data)
         .with_storage_backend(defra_node::StorageBackend::Regolith)
@@ -399,7 +399,7 @@ async fn a_store_with_data_but_no_recorded_key_is_refused() {
     let data = temp.path().join("data");
     reject_unrecorded_store(&data).expect("an absent store has nothing to refuse");
 
-    let legacy = defra_node::EmbeddedNode::builder()
+    let legacy = defra_node::Node::builder()
         .data_path(&data)
         .with_storage_backend(defra_node::StorageBackend::Regolith)
         .build()

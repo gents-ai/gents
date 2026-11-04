@@ -33,7 +33,7 @@ pub(crate) struct RootExecutionGuard {
 }
 
 impl RootExecutionGuard {
-    pub(crate) async fn validate(&self, node: &defra_node::EmbeddedNode) -> Result<()> {
+    pub(crate) async fn validate(&self, node: &defra_node::Node) -> Result<()> {
         let policy = load_workspace_root_policy(node, self.ceiling_root.as_deref()).await?;
         let Some(selected_root) = self.selected_root.as_deref() else {
             anyhow::ensure!(
@@ -150,7 +150,7 @@ pub(crate) async fn load_workspace_root_policy_in_txn(
 }
 
 pub async fn load_workspace_root_policy(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
     let response = crate::store::graphql::graphql_with_transaction_retry(

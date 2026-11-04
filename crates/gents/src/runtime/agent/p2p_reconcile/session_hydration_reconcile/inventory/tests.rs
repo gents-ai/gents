@@ -393,7 +393,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
 }
 
 async fn retain_fork_fixture_capture(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     path: &str,
 ) {

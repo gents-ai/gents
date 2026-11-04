@@ -3,9 +3,9 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
-async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
+async fn row(node: &Node, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id await_mode lifecycle_state cancel_cause status }} }}"#,

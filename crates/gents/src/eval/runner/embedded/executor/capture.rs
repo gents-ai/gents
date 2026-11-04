@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::eval::runner::executor::{Capture, CaptureResult, FileRef};
 use crate::store::graphql::{
     escape_graphql_string, graphql_with_transaction_retry, validate_collection_identifier,
@@ -14,7 +14,7 @@ use crate::store::graphql::{
 };
 
 pub(super) async fn run_captures(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     trial_did: &str,
     session_id: &str,
     workspace: &Path,
@@ -101,7 +101,7 @@ fn bind_capture_session(value: &Value, session_id: &str) -> Value {
 }
 
 pub(super) async fn capture_documents(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     filter: &Value,
     fields: &[String],

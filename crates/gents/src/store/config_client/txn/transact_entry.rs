@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::future::BoxFuture;
 use identity::Did;
 
@@ -181,7 +181,7 @@ impl ConfigAccess {
     }
 
     pub async fn transact_local_write<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
+        node: &'a Arc<Node>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
@@ -215,7 +215,7 @@ impl ConfigAccess {
     }
 
     pub(crate) async fn transact_local_write_with_finality<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
+        node: &'a Arc<Node>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
@@ -257,7 +257,7 @@ impl ConfigAccess {
 
     /// Native snapshot reads retain the supplied ACP DID without taking the mutation gate.
     pub async fn transact_local_readonly<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
+        node: &'a Arc<Node>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
@@ -295,7 +295,7 @@ impl ConfigAccess {
     /// before commit admission; native commit does not atomically check wall
     /// clock, so this is not a durable-commit-before-expiry guarantee.
     pub(crate) async fn renew_execution_lease<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
+        node: &'a Arc<Node>,
         renew: F,
     ) -> Result<T, E>
     where
@@ -330,7 +330,7 @@ impl ConfigAccess {
     }
 
     pub async fn transact_local_idempotent<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
+        node: &'a Arc<Node>,
         identity: Option<Did>,
         retry_policy: IdempotentTransactionRetry,
         operation: &'static str,

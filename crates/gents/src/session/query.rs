@@ -38,7 +38,7 @@ pub(crate) async fn session_stopped_in_txn(
 }
 
 pub(crate) async fn session_is_stopped(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -158,7 +158,7 @@ pub fn public_request_filter(scope: &str) -> String {
 }
 
 pub(super) async fn load_agent_session_row(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -172,7 +172,7 @@ pub(super) async fn load_agent_session_row(
 }
 
 pub(super) async fn load_agent_session_rows(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -198,7 +198,7 @@ pub(super) async fn load_agent_session_rows(
 }
 
 pub(super) async fn load_agent_session(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -211,7 +211,7 @@ pub(super) async fn load_agent_session(
 }
 
 pub(super) async fn require_agent_session(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -229,7 +229,7 @@ pub(super) async fn require_agent_session(
 /// `None` when no session exists yet. Runtime deliveries into an existing
 /// session adopt it (Lean `Enrollment.runtimeRequesterScope`).
 pub(crate) async fn load_session_requester_scope(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<String>> {
@@ -253,7 +253,7 @@ pub(crate) async fn load_session_requester_scope(
 }
 
 pub(crate) async fn require_session(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -264,7 +264,7 @@ pub(crate) async fn require_session(
 }
 
 pub(crate) async fn load_session_agent_id(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,

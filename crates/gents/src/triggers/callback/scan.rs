@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::event_delivery::EventConsumer;
 use serde_json::Value;
 use tokio::time::MissedTickBehavior;
@@ -35,7 +35,7 @@ pub(super) fn rescan_tick() -> tokio::time::Interval {
 
 impl CallbackEngine {
     pub(super) fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: String,
         ceiling: Option<std::path::PathBuf>,
         cancel: tokio_util::sync::CancellationToken,
@@ -45,7 +45,7 @@ impl CallbackEngine {
 
     pub(super) fn with_subscription_source(
         subs: Arc<dyn UpdateSubscriptionSource>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         node_did: String,
         ceiling: Option<std::path::PathBuf>,
         cancel: tokio_util::sync::CancellationToken,
@@ -729,7 +729,7 @@ impl CallbackEngine {
 }
 
 pub(super) async fn probe_filter(
-    node: &EmbeddedNode,
+    node: &Node,
     collection: &str,
     source_doc_id: &str,
     filter: Option<&str>,
@@ -738,7 +738,7 @@ pub(super) async fn probe_filter(
 }
 
 pub(super) async fn fetch_source_doc(
-    node: &EmbeddedNode,
+    node: &Node,
     cache: &mut SourceSchemaCache,
     collection: &str,
     source_doc_id: &str,
@@ -806,7 +806,7 @@ mod grouped_tests {
 
     #[tokio::test]
     async fn group_invocation_freezes_projected_array_once_and_surfaces_planner_error() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(Node::builder().build().await.unwrap());
         for sdl in [
             gents_protocol::schemas::CALLBACK,
             gents_protocol::schemas::CALLBACK_INVOCATION,

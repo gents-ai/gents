@@ -21,7 +21,7 @@ async fn retried_turn_preserves_failed_turn_file_order_across_restart() {
 }
 
 async fn pending_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     signer: &dyn NodeIdentity,
     mut create: AgentRequestCreate,
 ) -> RequestLifecycle {
@@ -43,7 +43,7 @@ async fn pending_request(
 }
 
 async fn finish_request(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request: &mut RequestLifecycle,
     outcome: RequestTerminalOutcome,
 ) {
@@ -271,7 +271,7 @@ async fn check_turn_chronology(retry: bool) {
     node.shutdown().await;
     drop(node);
     let reopened = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(&fixture.path)
             .with_node_identity_did(&fixture.node_did)
             .build()

@@ -34,7 +34,7 @@ fn assignment(goal: &GoalDocument) -> Assignment {
     }
 }
 
-async fn durable_rows(node: &EmbeddedNode) -> Value {
+async fn durable_rows(node: &Node) -> Value {
     graphql_with_transaction_retry(node, "{ Goal { _docID _version { cid } goal_id objective status token_budget continuation_sequence updated_at } GoalCreationClaim { _docID creation_key goal_id objective token_budget } }", "inspect edited goal").await.unwrap().data.unwrap()
 }
 

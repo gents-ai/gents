@@ -5,8 +5,8 @@ use super::materialize_enrollment_desired_in_txn;
 use crate::runtime::agent::p2p_reconcile::EnrollmentEndpointEntry;
 use crate::store::config_client::ConfigAccess;
 
-async fn fixture() -> Arc<defra_node::EmbeddedNode> {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+async fn fixture() -> Arc<defra_node::Node> {
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     // Deliberately omit the unique index: merge-parked twins remain scan-visible
     // even though local creation through the production index would reject them.
     node.add_collection(
@@ -34,7 +34,7 @@ fn authorized() -> EnrollmentEndpointEntry {
     }
 }
 
-async fn seed(node: &Arc<defra_node::EmbeddedNode>, peer: &str, ordinal: usize) {
+async fn seed(node: &Arc<defra_node::Node>, peer: &str, ordinal: usize) {
     ConfigAccess::write_local(
         node,
         "test.desired.seed",
@@ -51,7 +51,7 @@ async fn seed(node: &Arc<defra_node::EmbeddedNode>, peer: &str, ordinal: usize) 
     .unwrap();
 }
 
-async fn rows(node: &Arc<defra_node::EmbeddedNode>) -> Vec<serde_json::Value> {
+async fn rows(node: &Arc<defra_node::Node>) -> Vec<serde_json::Value> {
     let data = ConfigAccess::local(node.clone())
         .execute(
             r#"{ PeerPairingDesired {

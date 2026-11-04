@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::session_hydration::{
     canonical_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
     SESSION_HYDRATION_RECEIPT_VERSION,
@@ -359,7 +359,7 @@ async fn deliver_once(
 }
 
 pub async fn run_session_hydration_reconciler(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     enrollment: EnrollmentAuthorityHandle,
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
@@ -449,7 +449,7 @@ async fn sweep_transcript_requests(
 }
 
 struct GraphqlHydrationStore {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     enrollment: EnrollmentAuthorityHandle,
     identity: Arc<dyn NodeIdentity>,
 }
@@ -457,7 +457,7 @@ struct GraphqlHydrationStore {
 /// Read-only source operation. The caller must still persist and deliver its
 /// correlated receipt through the owned transport; no image readers are added.
 pub async fn sign_file_inventory_page(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     enrollment: EnrollmentAuthorityHandle,
     identity: Arc<dyn NodeIdentity>,
     demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
@@ -499,7 +499,7 @@ pub async fn sign_file_inventory_page(
 }
 
 struct EmbeddedHydrationDelivery {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     enrollment: EnrollmentAuthorityHandle,
 }
 

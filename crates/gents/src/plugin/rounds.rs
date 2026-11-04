@@ -305,7 +305,7 @@ mod tests {
     async fn a_job_step_keeps_its_stored_state_across_rounds() {
         let dir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(dir.path())
                 .build()
                 .await

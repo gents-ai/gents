@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -208,12 +208,12 @@ impl From<anyhow::Error> for ContextBudgetToolError {
 
 #[derive(Clone)]
 pub struct ContextBudgetTool {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
 }
 
 impl ContextBudgetTool {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<Node>, node_did: impl Into<String>) -> Self {
         Self {
             node,
             node_did: node_did.into(),
@@ -272,14 +272,14 @@ impl Tool for ContextBudgetTool {
 }
 
 pub fn build_context_budget_tool(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: impl Into<String>,
 ) -> Box<dyn ToolDyn> {
     Box::new(ContextBudgetTool::new(node, node_did))
 }
 
 pub async fn load_context_budget_snapshot(
-    node: &EmbeddedNode,
+    node: &Node,
     scope: &ContextBudgetScope,
 ) -> Result<ContextBudgetSnapshot> {
     let node_did = scope.node_did.trim();
@@ -588,7 +588,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    async fn seeded_node() -> Arc<EmbeddedNode> {
+    async fn seeded_node() -> Arc<Node> {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -730,7 +730,7 @@ mod tests {
     /// Seed a newer, larger provider dispatch for a different agent on the
     /// same node (the reported Codex background-completion shape), plus a
     /// newer dispatch by the same agent in a different session.
-    async fn seed_foreign_dispatches(node: &EmbeddedNode) {
+    async fn seed_foreign_dispatches(node: &Node) {
         for (agent_id, session_id, request_id, call_id, queued_at) in [
             (
                 "agent-codex",

@@ -299,7 +299,7 @@ async fn signed_image_receipts_commit_only_to_the_exact_pending_demand() {
     let root = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(root.path().join("node.key"), None).unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(root.path().join("db"))
             .with_node_identity_did(identity.did())
             .build()

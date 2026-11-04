@@ -125,7 +125,7 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
 }
 
 async fn resolve_tool_surfaces(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
     plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<RapidHashMap<String, Arc<ToolSurface>>> {
@@ -166,7 +166,7 @@ pub(in crate::runtime::agent::runtime) async fn resolve_startup_snapshot(
 }
 
 async fn resolve_backend_admission_configs(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
 ) -> Result<RapidHashMap<String, BackendAdmissionConfig>> {
     let mut configs = RapidHashMap::new();
@@ -224,7 +224,7 @@ async fn resolve_backend_admission_configs(
 }
 
 async fn resolve_document_snapshot_with_tools(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::runtime::agent::resolve_document_runtime_snapshot(node, resolve_context).await

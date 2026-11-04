@@ -207,7 +207,7 @@ impl FileInventorySnapshot {
     }
 
     pub async fn load(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         admission: &FileInventoryAdmission,
     ) -> Result<Self> {
         anyhow::ensure!(
@@ -231,7 +231,7 @@ impl FileInventorySnapshot {
 
     async fn load_in_txn(
         txn: &ConfigApplyTxn<'_>,
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         admission: &FileInventoryAdmission,
     ) -> Result<Self> {
         let request = &admission.request;

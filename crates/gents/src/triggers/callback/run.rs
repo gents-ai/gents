@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::Value;
 
 use crate::tools::workspace::journal::{advance, current_state};
@@ -112,7 +112,7 @@ pub fn plan_from_callback(
 }
 
 async fn load_planner_module(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     callback: &crate::documents::Callback,
 ) -> Result<Option<CallbackModuleDoc>, String> {
     let crate::documents::CallbackHandler::Module { module_id } = &callback.handler else {
@@ -301,12 +301,12 @@ pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason:
 }
 
 pub async fn run_owned_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &CallbackInvocationDoc,
     callback: &crate::documents::Callback,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
-    data_node: Option<&std::sync::Arc<EmbeddedNode>>,
+    data_node: Option<&std::sync::Arc<Node>>,
 ) -> Result<()> {
     if !invocation_is_claimable(&invocation.owner_node_did, invocation)
         && invocation.lifecycle_state != LIFECYCLE_CLAIMED
@@ -338,7 +338,7 @@ pub async fn run_owned_invocation(
 }
 
 async fn persist_claimed_to_running(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &mut CallbackInvocationDoc,
 ) -> Result<()> {
     if invocation.lifecycle_state == LIFECYCLE_RUNNING {
@@ -372,13 +372,13 @@ async fn persist_claimed_to_running(
 }
 
 async fn execute_running_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &mut CallbackInvocationDoc,
     callback: &crate::documents::Callback,
     source: &Value,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
-    data_node: Option<&std::sync::Arc<EmbeddedNode>>,
+    data_node: Option<&std::sync::Arc<Node>>,
 ) -> Result<()> {
     if callback.node_did != invocation.owner_node_did
         || callback.callback_id != invocation.callback_id
@@ -586,7 +586,7 @@ fn memory_from_outcome(
 }
 
 pub(super) async fn persist_journal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     state: &str,
@@ -621,7 +621,7 @@ async fn emit_new_plan(
 }
 
 pub(super) async fn deny(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &mut CallbackInvocationDoc,
     reason: &str,
 ) -> Result<()> {
@@ -642,7 +642,7 @@ pub(super) async fn deny(
 }
 
 async fn succeed_then_emit_result(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     workspace: &IsolatedWorkspaceDoc,
@@ -684,7 +684,7 @@ async fn succeed_then_emit_result(
 }
 
 pub async fn recover_local_invocations(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
@@ -741,7 +741,7 @@ pub async fn recover_local_invocations(
 }
 
 async fn retry_failed_plugin_invocations(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
@@ -805,7 +805,7 @@ async fn retry_failed_plugin_invocations(
 }
 
 async fn execute_recovered(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &CallbackInvocationDoc,
     callback: &crate::documents::Callback,
     ceiling: Option<&Path>,
@@ -820,7 +820,7 @@ async fn execute_recovered(
 }
 
 pub async fn finish_succeeded_if_docs_ready(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     invocation: &CallbackInvocationDoc,
 ) -> Result<bool> {
     if !matches!(

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::Semaphore;
 
 use super::admit::{Refusal, StepRow};
@@ -40,7 +40,7 @@ pub use step::{run_step, StepOutcome};
 /// `JobDriver` holds the one value; tests build it directly.
 #[derive(Clone)]
 pub struct JobRuntime {
-    pub node: Arc<EmbeddedNode>,
+    pub node: Arc<Node>,
     pub plugins: Arc<PluginExecutor>,
     /// The gents home plugins are installed under; empty when there is none.
     pub home: PathBuf,

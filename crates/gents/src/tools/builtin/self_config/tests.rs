@@ -286,7 +286,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
 #[tokio::test]
 async fn build_fails_closed_without_node_did() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(tempdir.path().join("data"))
         .build()
         .await
@@ -308,7 +308,7 @@ async fn build_fails_closed_without_node_did() {
 #[tokio::test]
 async fn build_registers_gated_family() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(tempdir.path().join("data"))
         .build()
         .await
@@ -629,7 +629,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
 async fn pack_tool(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
-) -> (Arc<EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
+) -> (Arc<Node>, String, Vec<Box<dyn ToolDyn>>) {
     let node = build_agent_node().await;
     let identity = node_identity(label);
     let node_did = identity.did().to_string();
@@ -869,7 +869,7 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
-async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Value) {
+async fn operator_replace_tools(node: &Arc<defra_node::Node>, tools: Value) {
     use crate::store::config_client::{
         ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -890,7 +890,7 @@ async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Val
 }
 
 async fn operator_grant_pack_install(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner: &str,
     tools_id: &str,
 ) {
@@ -1171,7 +1171,7 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
         .expect("an agent holding the grant may create a Context that selects it");
 }
 
-pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
+pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::Node> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let node = crate::test_support::node_builder()
         .data_path(tempdir.path().join("data"))
@@ -4256,7 +4256,7 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
 async fn account_choice_core(
     agent: &str,
 ) -> (
-    std::sync::Arc<defra_node::EmbeddedNode>,
+    std::sync::Arc<defra_node::Node>,
     std::sync::Arc<dyn crate::NodeIdentity>,
     SelfConfigCore,
 ) {
@@ -5747,7 +5747,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     );
 }
 
-async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> Value {
+async fn account_state_rows(node: &std::sync::Arc<defra_node::Node>) -> Value {
     let response = node
         .execute(
             "{ OAuthCredential { _docID credential_id enabled label access_token } \
@@ -5760,7 +5760,7 @@ async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> 
 
 async fn seed_account_view(
     cache: &crate::inference::usage_observation::UsageCache,
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     owner: &str,
 ) {
     use crate::inference::auth::credential::{
@@ -6538,7 +6538,7 @@ fn reselection_keeps_job_grants() {
 }
 
 async fn grant_pack_install_for_test(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner: &str,
     tools_id: &str,
 ) {
@@ -7227,7 +7227,7 @@ async fn pack_tool_with_local_read(
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     root: &std::path::Path,
 ) -> (
-    std::sync::Arc<defra_node::EmbeddedNode>,
+    std::sync::Arc<defra_node::Node>,
     String,
     Vec<Box<dyn ToolDyn>>,
 ) {
@@ -7267,7 +7267,7 @@ async fn pack_tool_with_local_read(
 /// resolver needs to keep the account-free reference as the provider
 /// default. Binding to `p-default` is allowed; `p-other` selects another
 /// account and must be refused.
-async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
+async fn install_chat_account_fences(node: &Arc<Node>, owner: &str) {
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for (id, auth) in [
         ("chat-original", json!({"kind":"node_oauth"})),

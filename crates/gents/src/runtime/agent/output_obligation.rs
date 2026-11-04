@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use crate::documents::OutputObligationDecision;
@@ -35,7 +35,7 @@ fn active_for_request(
 
 #[derive(Clone)]
 pub(crate) struct OutputObligationGate {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     request_doc_ids: Vec<String>,
     obligations: Vec<ActiveOutputObligation>,
 }
@@ -59,7 +59,7 @@ struct CompletedWriteIdentity {
 impl OutputObligationGate {
     #[cfg(test)]
     pub(crate) fn new(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         request_doc_id: impl Into<String>,
         obligations: Vec<ActiveOutputObligation>,
     ) -> Self {
@@ -71,7 +71,7 @@ impl OutputObligationGate {
     }
 
     pub(crate) async fn for_request(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         request: &crate::request::watcher::AgentRequest,
         configured: &[(String, crate::documents::WriteToolOutputObligation)],
     ) -> Result<Option<Self>> {

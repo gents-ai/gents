@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::{json, Value};
 
 use super::*;
@@ -19,7 +19,7 @@ const BOARD: &str = "acme/board/board";
 
 struct Fixture {
     home: tempfile::TempDir,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     access: ConfigAccess,
 }
 
@@ -30,7 +30,7 @@ impl Fixture {
             crate::store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
                 .unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
                 .build()
                 .await

@@ -124,7 +124,7 @@ pub struct MailboxWriteReceipt {
 }
 
 pub(super) async fn request_provenance(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
     context: &MailboxStampContext,
 ) -> Result<gents_protocol::row::AgentRequestRow> {
@@ -176,7 +176,7 @@ fn validate_existing_notification(
 }
 
 pub(super) async fn reuse_or_update(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     context: &MailboxStampContext,
     args: &FileMailboxItemArgs,
     identity: &NotificationIdentity,

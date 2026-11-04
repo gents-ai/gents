@@ -196,7 +196,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
 
 #[tokio::test]
 async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capability() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let denied =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let denied_update = denied
@@ -484,7 +484,7 @@ async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
 #[tokio::test]
 async fn active_request_binding_rejects_a_half_bound_pair() {
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .build()
             .await
             .expect("embedded node"),
@@ -911,7 +911,7 @@ fn generated_persistence_failure_policy_cases_match_hook_decisions() {
 async fn generated_storage_observation_cases_match_hook_runtime_classification() {
     let cases = lean_storage_observation_runtime_cases();
     assert_eq!(cases.len(), 8);
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
 
     for case in cases {
         if case.mutation_result == "notApplicable" {
@@ -963,7 +963,7 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
 }
 
 async fn create_interruptible_request_with_fields(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1020,7 +1020,7 @@ async fn create_interruptible_request_with_fields(
 }
 
 async fn create_corroborated_child_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     child_request_id: &str,
     session_id: &str,
     parent_request_id: &str,
@@ -1049,7 +1049,7 @@ async fn create_corroborated_child_request(
 }
 
 async fn bind_interruptible_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     hook: &DefraSessionHook,
     request_id: &str,
     session_id: &str,
@@ -1067,7 +1067,7 @@ async fn bind_interruptible_request(
 }
 
 async fn bind_interruptible_request_with_requester(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     hook: &DefraSessionHook,
     request_id: &str,
     session_id: &str,
@@ -1372,7 +1372,7 @@ async fn publish_claimed_provider_turn(
 }
 
 async fn fetch_tool_call_row(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session_id: &str,
     tool_call_id: &str,
 ) -> serde_json::Value {

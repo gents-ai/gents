@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{ensure, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::file_inventory::{FileInventoryPageDemand, FileInventoryReply};
 
 use crate::NodeIdentity;
@@ -13,7 +13,7 @@ use super::{delivery, FileInventorySnapshot};
 pub struct OperatorInventoryDenied;
 
 fn require_operator(
-    node: &EmbeddedNode,
+    node: &Node,
     identity: &dyn NodeIdentity,
     authenticated_actor: &str,
     demand: &FileInventoryPageDemand,
@@ -34,7 +34,7 @@ fn require_operator(
 /// image grant. Preparation preserves a page across HTTP reply loss, without
 /// asserting an explicit-transfer acknowledgment or settling a control request.
 pub async fn read_operator_inventory(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     identity: &dyn NodeIdentity,
     authenticated_actor: &str,
     demand: &FileInventoryPageDemand,

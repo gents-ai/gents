@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio_util::sync::CancellationToken;
 
 use crate::inference::backends::registry::{InferenceBackend, UNKNOWN_PROBE_STATUS};
@@ -75,7 +75,7 @@ pub(super) fn probe_timeout(backend: &InferenceBackend) -> Duration {
 }
 
 async fn record_discovered_catalog(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     backend: &InferenceBackend,
     node_did: Option<&str>,
     models: Vec<crate::documents::AdvertisedModel>,
@@ -100,7 +100,7 @@ async fn record_discovered_catalog(
 }
 
 pub async fn probe_backends_cycle(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     client: &reqwest::Client,
     backends: &[InferenceBackend],
     now: DateTime<Utc>,
@@ -128,7 +128,7 @@ pub(super) struct ProbeEnv<'a> {
 /// Shutdown cancels remote observation, never an admitted catalog write. An
 /// interrupted observation supplies no health event or complete probe-cycle view.
 pub(super) async fn probe_selected_backends(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     client: &reqwest::Client,
     backends: &[InferenceBackend],
     env: ProbeEnv<'_>,
@@ -259,7 +259,7 @@ pub(super) async fn probe_selected_backends(
 }
 
 pub(super) async fn record_probe_event(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     backend: &InferenceBackend,
     event: ProbeEvent,
     error_text: Option<String>,

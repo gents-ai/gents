@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use tokio::sync::watch;
 
@@ -23,7 +23,7 @@ pub(crate) use scoped::observe_interrupt_requested_at_scoped;
 /// owner. In P2P-replicated deployments independent writers may each stamp and
 /// CRDT merge picks one timestamp: audit meaning is preserved, microsecond
 /// ordering is not.
-pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Result<()> {
+pub async fn interrupt_request(node: &Arc<Node>, request_id: &str) -> Result<()> {
     let logical = escape_graphql_string(request_id);
     interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}"))
         .await
@@ -31,7 +31,7 @@ pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Re
 }
 
 pub async fn interrupt_request_by_doc_id(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -47,7 +47,7 @@ pub async fn interrupt_request_by_doc_id(
 }
 
 pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -128,7 +128,7 @@ pub(crate) async fn interrupt_request_by_doc_id_in_txn(
 }
 
 async fn interrupt_request_matching(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     filter: String,
 ) -> Result<Vec<String>> {
     crate::store::config_client::ConfigAccess::transact_local_write(
@@ -240,7 +240,7 @@ pub(crate) async fn interrupt_active_session_in_txn(
 }
 
 pub(crate) async fn active_session_request(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -270,7 +270,7 @@ pub(crate) async fn active_session_request(
 }
 
 pub async fn fetch_interrupt_requested_at_by_doc_id(
-    node: &EmbeddedNode,
+    node: &Node,
     request_doc_id: &str,
 ) -> Result<Option<String>> {
     anyhow::ensure!(
@@ -309,7 +309,7 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
 }
 
 pub async fn fetch_interrupt_requested_at(
-    node: &EmbeddedNode,
+    node: &Node,
     request_id: &str,
 ) -> Result<Option<String>> {
     let request_doc_id = crate::request::binding::require_request_doc_id(node, request_id).await?;
@@ -330,7 +330,7 @@ const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Exits when signaled once, the shutdown receiver changes, or the handle is
 /// aborted.
 pub fn spawn_request_interrupt_observer(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     request_doc_id: String,
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
@@ -366,7 +366,7 @@ impl InterruptChangeFeed for events::DocumentChangeSubscription {
     }
 }
 
-async fn read_interrupt_requested_at(node: &EmbeddedNode, request_doc_id: &str) -> Option<String> {
+async fn read_interrupt_requested_at(node: &Node, request_doc_id: &str) -> Option<String> {
     let query = format!(
         r#"query {{
             AgentRequest(

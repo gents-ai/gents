@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 
 use crate::tools::native::{
@@ -373,7 +373,7 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
 }
 
 pub(super) async fn enabled_mcp_service_ids(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Vec<String>> {
     Ok(
@@ -387,7 +387,7 @@ pub(super) async fn enabled_mcp_service_ids(
 }
 
 pub(crate) async fn measured_available_mcp_service_ids(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
 ) -> Result<Vec<String>> {
     let services = crate::tools::mcp::registry::configured_mcp_services(node, node_did).await?;

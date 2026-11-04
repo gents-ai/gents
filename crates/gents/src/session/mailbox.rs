@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -344,7 +344,7 @@ fn item_key_occurrence(item_key: &str) -> Option<u64> {
 }
 
 async fn load_prefix_items(
-    node: &EmbeddedNode,
+    node: &Node,
     requester_did: &str,
     source_kind: MailboxSourceKind,
     source_id: &str,
@@ -368,7 +368,7 @@ async fn load_prefix_items(
     Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
-pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Option<MailboxItem>> {
+pub async fn load_mailbox_item(node: &Node, doc_id: &str) -> Result<Option<MailboxItem>> {
     let query = format!(
         r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
         escape_graphql_string(doc_id)
@@ -382,7 +382,7 @@ pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Opti
 }
 
 async fn load_mailbox_item_by_key(
-    node: &EmbeddedNode,
+    node: &Node,
     item_key: &str,
 ) -> Result<Option<MailboxItem>> {
     let query = format!(
@@ -437,7 +437,7 @@ fn validate_file_args(
 }
 
 pub async fn stamp_create(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     context: &MailboxStampContext,
     args: FileMailboxItemArgs,
 ) -> Result<MailboxItem> {
@@ -445,7 +445,7 @@ pub async fn stamp_create(
 }
 
 pub async fn stamp_create_with_close_collections(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     context: &MailboxStampContext,
     args: FileMailboxItemArgs,
     close_collections: &[MailboxCloseCollection],
@@ -462,7 +462,7 @@ pub async fn stamp_create_with_close_collections(
 }
 
 async fn stamp_notification(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     context: &MailboxStampContext,
     mut args: FileMailboxItemArgs,
     identity: &NotificationIdentity,
@@ -607,12 +607,12 @@ impl From<anyhow::Error> for MailboxToolError {
 
 #[derive(Clone)]
 pub struct MailboxCreateTool {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     policy: MailboxNotificationPolicy,
 }
 
 impl MailboxCreateTool {
-    pub fn new(node: Arc<EmbeddedNode>, policy: MailboxNotificationPolicy) -> Self {
+    pub fn new(node: Arc<Node>, policy: MailboxNotificationPolicy) -> Self {
         Self { node, policy }
     }
 }
@@ -796,7 +796,7 @@ pub fn validate_close_collections(entries: &[MailboxCloseCollection]) -> Result<
 }
 
 pub async fn list_mailbox_items(
-    node: &EmbeddedNode,
+    node: &Node,
     requester_did: &str,
     status: Option<MailboxStatus>,
 ) -> Result<Vec<MailboxItem>> {
@@ -820,7 +820,7 @@ pub async fn list_mailbox_items(
 }
 
 async fn transition_open_item(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     item: &MailboxItem,
     target: MailboxStatus,
     resolved_doc_id: Option<&str>,
@@ -857,7 +857,7 @@ async fn transition_open_item(
 }
 
 async fn domain_document_satisfying_item(
-    node: &EmbeddedNode,
+    node: &Node,
     item: &MailboxItem,
     entries: &[MailboxCloseCollection],
 ) -> Result<Option<String>> {
@@ -904,7 +904,7 @@ const MAILBOX_SWEEP_PAGE_SIZE: usize = 16;
 const MAILBOX_SWEEP_TIME_BUDGET: Duration = Duration::from_millis(500);
 
 pub(crate) async fn sweep_open_mailbox_items(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     local_did: &str,
     after_doc_id: Option<&str>,
 ) -> Result<MailboxSweepPage> {
@@ -971,7 +971,7 @@ fn mailbox_item_cursor(raw_item: &Value) -> Result<String> {
 }
 
 async fn sweep_open_mailbox_items_with_close_collections(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     local_did: &str,
     after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
@@ -987,7 +987,7 @@ async fn sweep_open_mailbox_items_with_close_collections(
 }
 
 async fn sweep_open_mailbox_items_with_clock(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     local_did: &str,
     after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],

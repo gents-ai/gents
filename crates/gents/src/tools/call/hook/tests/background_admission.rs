@@ -353,7 +353,7 @@ impl DeniedTarget {
         }
     }
 
-    fn registry(&self, node: &Arc<EmbeddedNode>, root: &std::path::Path) -> BackgroundToolRegistry {
+    fn registry(&self, node: &Arc<Node>, root: &std::path::Path) -> BackgroundToolRegistry {
         match self {
             Self::ReadOnlyBash => BackgroundToolRegistry::from_tools(
                 vec![crate::tools::native::read_only_bash_for_test(
@@ -406,20 +406,20 @@ impl DeniedTarget {
 struct AdmissionHarness {
     _dir: tempfile::TempDir,
     root: tempfile::TempDir,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     hook: DefraSessionHook,
     request_id: String,
 }
 
 async fn admission_harness(
-    registry: impl FnOnce(&Arc<EmbeddedNode>, &std::path::Path) -> BackgroundToolRegistry,
+    registry: impl FnOnce(&Arc<Node>, &std::path::Path) -> BackgroundToolRegistry,
 ) -> AdmissionHarness {
     let dir = tempfile::tempdir().unwrap();
     let identity =
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(dir.path())
             .with_node_identity_did(identity.did())
             .build()

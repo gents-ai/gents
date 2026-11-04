@@ -116,7 +116,7 @@ fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[
 
 struct RevokingExec<'a> {
     managed: ManagedTaskHookExec,
-    node: &'a Arc<defra_node::EmbeddedNode>,
+    node: &'a Arc<defra_node::Node>,
     request_doc_id: &'a str,
     revoked: &'a [String],
 }

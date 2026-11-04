@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ pub fn agent_interrupt_allowed(
 }
 
 pub async fn interrupt_refusal(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     caller: &SessionScope,
     target: &SessionScope,
 ) -> Result<Option<String>> {
@@ -41,7 +41,7 @@ pub async fn interrupt_refusal(
 }
 
 pub async fn interrupt_session(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     target: &SessionScope,
 ) -> Result<Option<String>> {
     if node.node_identity_did() == Some(target.node_did.as_str()) {

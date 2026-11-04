@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::row::AgentRequestRow;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -51,7 +51,7 @@ fn continuation_evidence_is_current(observed: &GoalDocument, current: &GoalDocum
 
 pub struct GoalSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::DocumentChangeSubscription>,
     cancel: CancellationToken,
@@ -61,7 +61,7 @@ pub struct GoalSource {
 impl GoalSource {
     pub fn new(
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         cancel: CancellationToken,
     ) -> Self {
         Self::with_subscription_source(node.clone(), snapshot_rx, node, cancel)
@@ -70,7 +70,7 @@ impl GoalSource {
     pub fn with_subscription_source(
         subscription_source: Arc<dyn UpdateSubscriptionSource>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         cancel: CancellationToken,
     ) -> Self {
         let mut rescan_tick = tokio::time::interval(GOAL_RESCAN_INTERVAL);

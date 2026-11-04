@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -11,7 +11,7 @@ pub struct SessionStopReceipt {
 }
 
 pub async fn stop_session(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -106,7 +106,7 @@ pub async fn stop_session(
 /// witnesses; callers must not substitute fresh owners. This relies on the one-active-runtime-per-
 /// node operating convention while process and job ownership is checked with the session latch.
 pub async fn resume_session(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,

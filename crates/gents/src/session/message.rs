@@ -10,7 +10,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
 use anyhow::Result;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 #[cfg(test)]
 use std::sync::Arc;

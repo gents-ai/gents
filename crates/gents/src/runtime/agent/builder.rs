@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 
 pub(crate) type AgentFactory =
     Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
@@ -37,7 +37,7 @@ const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";
 
 #[derive(Default)]
 pub struct GentsBuilder {
-    node: Option<Arc<EmbeddedNode>>,
+    node: Option<Arc<Node>>,
     identity: Option<Arc<dyn NodeIdentity>>,
     default_agent_id: Option<String>,
     tool_ceiling: ToolCeiling,
@@ -60,7 +60,7 @@ impl GentsBuilder {
         Self::default()
     }
 
-    pub fn node(mut self, node: Arc<EmbeddedNode>) -> Self {
+    pub fn node(mut self, node: Arc<Node>) -> Self {
         self.node = Some(node);
         self
     }
@@ -162,7 +162,7 @@ impl GentsBuilder {
             .ok_or_else(|| anyhow!("Gents builder is missing identity"))?;
         if node.node_identity_did().is_none() {
             anyhow::bail!(
-                "Gents runtime requires an EmbeddedNode configured with a node signing DID"
+                "Gents runtime requires a Node configured with a node signing DID"
             );
         }
         if self.agents.is_empty() {
@@ -537,7 +537,7 @@ impl PendingAgent {
 
     async fn into_factory(
         self,
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         node_did: &str,
         tool_ceiling: &ToolCeiling,
         backend_health: &crate::inference::backends::health::BackendHealthMap,

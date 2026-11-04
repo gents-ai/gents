@@ -109,20 +109,20 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     command
 }
 
-async fn submit(node: &Arc<EmbeddedNode>, command: &SessionInputEdit) -> String {
+async fn submit(node: &Arc<Node>, command: &SessionInputEdit) -> String {
     let response = ConfigAccess::local(node.clone()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
     crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
 }
 
-async fn raw_receipt(node: &Arc<EmbeddedNode>, id: &str) -> Option<String> {
+async fn raw_receipt(node: &Arc<Node>, id: &str) -> Option<String> {
     let value = ConfigAccess::local(node.clone()).execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#, escape_graphql_string(id))).await.unwrap();
     value["data"]["AgentSessionInputEdit"][0]["receipt_json"]
         .as_str()
         .map(str::to_owned)
 }
 
-async fn requests(node: &Arc<EmbeddedNode>) -> serde_json::Value {
+async fn requests(node: &Arc<Node>) -> serde_json::Value {
     ConfigAccess::local(node.clone()).execute("{ AgentRequest { _docID request_id content lifecycle_state superseded_by_request_doc_id } }").await.unwrap()["data"]["AgentRequest"].clone()
 }
 
@@ -268,7 +268,7 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
     assert_eq!(requests(&owner.node).await, effects);
 }
 
-async fn overwrite_receipt(node: &Arc<EmbeddedNode>, id: &str, raw: &str) {
+async fn overwrite_receipt(node: &Arc<Node>, id: &str, raw: &str) {
     ConfigAccess::local(node.clone()).write("test.overwrite.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(id), escape_graphql_string(raw))).await.unwrap();
 }

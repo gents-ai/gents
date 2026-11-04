@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
+use crate::defra_node::{Node, P2PConfig, QueryResponse};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
 
@@ -17,7 +17,7 @@ use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, 
 // startup and recovery I/O before it publishes its ready status row.
 pub(crate) const RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Node-owned services can hold `EmbeddedNode` handles briefly after shutdown.
+/// Node-owned services can hold `Node` handles briefly after shutdown.
 const NODE_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Builds a home's P2P configuration from its data directory, so a reopen
@@ -28,7 +28,7 @@ pub type P2PConfigForPath = Arc<dyn Fn(&Path) -> P2PConfig + Send + Sync>;
 /// beside the data, so a store key there would protect nothing, and they stay
 /// unencrypted at rest.
 pub struct EmbeddedHome {
-    pub node: Arc<EmbeddedNode>,
+    pub node: Arc<Node>,
     pub identity: Arc<dyn NodeIdentity>,
     did: String,
     path: PathBuf,
@@ -115,7 +115,7 @@ impl EmbeddedHome {
         initialize_schemas: bool,
     ) -> Result<Self> {
         let did = identity.did().to_string();
-        let mut builder = EmbeddedNode::builder()
+        let mut builder = Node::builder()
             .data_path(&path)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(&did);
@@ -158,13 +158,13 @@ impl EmbeddedHome {
         let strong = Arc::strong_count(&self.node);
         if strong != 1 {
             bail!(
-                "simulate_process_crash: stopped EmbeddedNode retained live owners \
+                "simulate_process_crash: stopped Node retained live owners \
                  (strong_count={strong}); crash boundary would not clear process state"
             );
         }
 
         let stand_in = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .build()
                 .await
                 .map_err(|e| anyhow!("simulate_process_crash: stand-in node: {e}"))?,
@@ -177,14 +177,14 @@ impl EmbeddedHome {
                 let count = Arc::strong_count(&shared);
                 self.node = shared;
                 bail!(
-                    "simulate_process_crash: cannot exclusively drop EmbeddedNode \
+                    "simulate_process_crash: cannot exclusively drop Node \
                      (strong_count={count} after replace); restored handle is shut \
                      down and unusable — fix outstanding Arc clones before Crash"
                 );
             }
         }
 
-        let mut builder = EmbeddedNode::builder()
+        let mut builder = Node::builder()
             .data_path(&self.path)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(&self.did);
@@ -278,12 +278,12 @@ pub(crate) async fn boot_runtime_within(
     Ok((runtime, agent))
 }
 
-pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) -> Result<()> {
+pub async fn wait_for_runtime_ready(node: &Node, node_did: &str) -> Result<()> {
     wait_for_runtime_ready_within(node, node_did, RUNTIME_READY_TIMEOUT).await
 }
 
 async fn wait_for_runtime_ready_within(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     ready_timeout: Duration,
 ) -> Result<()> {
@@ -326,7 +326,7 @@ struct RuntimeSnapshot {
 }
 
 async fn fetch_runtime_snapshot(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Option<RuntimeSnapshot>> {
     let escaped_did = escape_graphql_string(node_did);
@@ -378,7 +378,7 @@ async fn fetch_runtime_snapshot(
 }
 
 async fn fetch_node_readiness_snapshot(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
 ) -> Result<Option<gents_protocol::node_readiness::NodeReadinessSnapshot>> {
     let escaped_did = escape_graphql_string(node_did);

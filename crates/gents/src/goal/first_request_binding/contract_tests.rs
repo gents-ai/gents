@@ -54,7 +54,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         let temp = tempfile::tempdir().unwrap();
         let signer = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            Node::builder()
                 .with_node_identity_did(signer.did())
                 .build()
                 .await

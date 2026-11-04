@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
@@ -19,7 +19,7 @@ use super::{
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub async fn load_request_context_observation(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -54,7 +54,7 @@ pub async fn load_request_context_observation(
 }
 
 pub async fn load_pinned_request_context_observation(
-    node: &EmbeddedNode,
+    node: &Node,
     owner: &AgentRequestRow,
 ) -> Result<Option<RequestContextObservation>> {
     let node_did = owner
@@ -123,7 +123,7 @@ pub async fn load_pinned_request_context_observation(
 /// document IDs, not logical request aliases, fence every inference read.
 /// Missing requester is an exact null identity, never a wildcard.
 pub async fn load_session_inference_observation(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,

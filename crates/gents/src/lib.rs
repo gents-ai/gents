@@ -52,7 +52,7 @@ pub(crate) mod test_support {
         let directory = tempfile::tempdir().unwrap();
         let identity =
             crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-        defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+        defra_node::Node::builder().with_node_identity_did(identity.did())
     }
 
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
@@ -153,7 +153,7 @@ pub(crate) mod test_support {
     }
 
     pub(crate) async fn install_test_agent(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         owner: &str,
         agent_id: &str,
     ) {

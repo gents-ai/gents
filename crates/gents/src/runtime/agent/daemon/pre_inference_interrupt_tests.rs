@@ -150,7 +150,7 @@ fn pre_inference_agent() -> Arc<ResolvedAgent> {
 }
 
 async fn seed_titled_session(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request: &AgentRequest,
     agent_config: &ResolvedAgent,
 ) -> anyhow::Result<()> {
@@ -185,7 +185,7 @@ async fn seed_titled_session(
 }
 
 async fn request_terminal_row(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_doc_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
     use anyhow::Context;

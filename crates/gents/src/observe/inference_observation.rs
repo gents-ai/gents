@@ -204,7 +204,7 @@ impl crate::runtime::agent::Gents {
 }
 
 async fn observation_visible(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     actor: &identity::Did,
     key: &InferenceKey,
 ) -> anyhow::Result<bool> {
@@ -308,7 +308,7 @@ mod tests {
         let requester =
             crate::KeyIdentity::load_or_create(home.path().join("requester"), None).unwrap();
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(owner.did())
                 .with_node_acp_enabled()
                 .build()

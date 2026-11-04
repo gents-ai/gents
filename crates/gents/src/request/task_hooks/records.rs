@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::{Deserialize, Serialize};
 
 use tokio_util::sync::CancellationToken;
@@ -260,7 +260,7 @@ impl TaskHookRecordHandle {
     }
 }
 
-async fn request_resolved(node: &EmbeddedNode, request_doc_id: &str) -> Result<bool> {
+async fn request_resolved(node: &Node, request_doc_id: &str) -> Result<bool> {
     #[derive(Deserialize)]
     struct Row {
         lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
@@ -283,7 +283,7 @@ async fn request_resolved(node: &EmbeddedNode, request_doc_id: &str) -> Result<b
 }
 
 async fn recover_record(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     record: TaskHookRecord,
     handle: TaskHookRecordHandle,
     shutdown: CancellationToken,
@@ -346,7 +346,7 @@ async fn recover_record(
 
 /// Recovery stops a process only when its recorded identity proves this runtime owns it.
 pub(crate) async fn recover_task_hook_records(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     store: &TaskHookRecordStore,
 ) -> Result<usize> {

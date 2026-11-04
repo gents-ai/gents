@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::file_inventory::{
     FileInventoryAdmission, FileInventoryPageDemand, FileInventoryRefusalReceipt,
     FileInventoryReply,
@@ -232,7 +232,7 @@ impl ClientInventoryProgress {
     }
 }
 
-fn progress_key(node: &EmbeddedNode, admission: &FileInventoryAdmission) -> Result<String> {
+fn progress_key(node: &Node, admission: &FileInventoryAdmission) -> Result<String> {
     let owner = node
         .node_identity_did()
         .context("file inventory client identity is unavailable")?;
@@ -281,7 +281,7 @@ fn retained_scope_key(owner: &str, peer: &str, node: &str, session: &str) -> Res
 async fn validate_progress_row(
     txn: &ConfigApplyTxn<'_>,
     row: &ProgressRow,
-    node: &EmbeddedNode,
+    node: &Node,
     verifier: &dyn NodeIdentity,
 ) -> Result<()> {
     let owner = node
@@ -323,7 +323,7 @@ async fn validate_progress_row(
 /// source. The index grants no transport or image authority; callers that fetch
 /// new metadata must resolve the canonical session independently.
 pub async fn load_client_progress_for_scope(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     peer: &str,
     source: &str,
     session: &str,
@@ -355,7 +355,7 @@ pub async fn load_client_progress_for_scope(
 
 async fn load_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    node: &EmbeddedNode,
+    node: &Node,
     key: &str,
     owner: &str,
     admission: &FileInventoryAdmission,
@@ -385,7 +385,7 @@ async fn load_in_txn(
 }
 
 pub async fn load_client_progress(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     admission: &FileInventoryAdmission,
     verifier: &dyn NodeIdentity,
 ) -> Result<Option<ClientInventoryProgress>> {
@@ -405,7 +405,7 @@ pub async fn load_client_progress(
 }
 
 pub async fn begin_client_progress(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     admission: &FileInventoryAdmission,
     attempt_id: &str,
     verifier: &dyn NodeIdentity,
@@ -414,7 +414,7 @@ pub async fn begin_client_progress(
 }
 
 pub async fn resume_client_progress(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     admission: &FileInventoryAdmission,
     initial_attempt: &str,
     verifier: &dyn NodeIdentity,
@@ -423,7 +423,7 @@ pub async fn resume_client_progress(
 }
 
 async fn start_client_progress(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     admission: &FileInventoryAdmission,
     attempt_id: &str,
     refresh: bool,
@@ -450,7 +450,7 @@ async fn start_client_progress(
 }
 
 pub async fn receive_client_reply(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
     reply: &FileInventoryReply,
     verifier: &dyn NodeIdentity,
@@ -463,7 +463,7 @@ pub async fn receive_client_reply(
 
 pub(super) async fn receive_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    node: &EmbeddedNode,
+    node: &Node,
     demand: &FileInventoryPageDemand,
     reply: &FileInventoryReply,
     verifier: &dyn NodeIdentity,

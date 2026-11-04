@@ -256,7 +256,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
         .await
         .unwrap();
     processor.process_item(text_item("first")).await.unwrap();
-    async fn count(node: &defra_node::EmbeddedNode, doc: &str) -> usize {
+    async fn count(node: &defra_node::Node, doc: &str) -> usize {
         let response = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::store::graphql::escape_graphql_string(doc))).await;
         response.data.as_ref().unwrap()["AgentOutputSegment"]
             .as_array()
@@ -700,7 +700,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
 }
 
 async fn create_pending_request(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_id: &str,
     session_id: &str,
 ) -> String {
@@ -708,7 +708,7 @@ async fn create_pending_request(
 }
 
 async fn create_pending_request_with_input(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_id: &str,
     session_id: &str,
     input: Option<&gents_protocol::request_input::RequestInput>,
@@ -790,7 +790,7 @@ struct PersistedMessageShape {
 }
 
 async fn load_message_shapes_in_scope(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -1131,7 +1131,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         crate::store::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .data_path(&data_path)
             .build()

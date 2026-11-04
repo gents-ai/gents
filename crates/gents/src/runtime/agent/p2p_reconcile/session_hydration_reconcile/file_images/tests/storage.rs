@@ -24,7 +24,7 @@ async fn fixture_with_reference(
         Arc::new(KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap());
     let requester = KeyIdentity::load_or_create(directory.path().join("client.key"), None).unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(directory.path().join("store"))
             .with_node_identity_did(identity.did())
             .build()
@@ -223,7 +223,7 @@ async fn inventory_bound_receipt_roundtrips_and_refuses_a_changed_snapshot() {
     store.node.shutdown().await;
     drop(store);
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(path)
             .with_node_identity_did(identity.did())
             .build()

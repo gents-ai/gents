@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::eval::runner::embedded::observe::{
     request_evidence_from_query_data, InferenceCallEvidence,
 };
@@ -15,7 +15,7 @@ pub(super) struct SessionRequest {
 }
 
 pub(super) async fn session_requests(
-    node: &EmbeddedNode,
+    node: &Node,
     session_id: &str,
 ) -> Result<Vec<SessionRequest>> {
     let session_id = escape_graphql_string(session_id);
@@ -46,7 +46,7 @@ pub(super) async fn session_requests(
         .collect())
 }
 
-pub(super) async fn home_usage(node: &EmbeddedNode) -> TrialUsage {
+pub(super) async fn home_usage(node: &Node) -> TrialUsage {
     let result = async {
         let response = graphql_with_transaction_retry(
             node,

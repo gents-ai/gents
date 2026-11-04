@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::message::{AssistantContent, Message, UserContent};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -389,7 +389,7 @@ fn tool_summaries(
 }
 
 pub(crate) async fn agent_session_read(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     caller: &crate::AgentRequest,
     tools: &AgentToolConfig,
     args: &AgentSessionReadArgs,

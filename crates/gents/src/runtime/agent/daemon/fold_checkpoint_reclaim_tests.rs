@@ -1,5 +1,5 @@
 async fn create_user_message(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     agent_config: &ResolvedAgent,
     session_id: &str,
     content: &str,
@@ -47,7 +47,7 @@ async fn create_user_message(
 }
 
 async fn authored_user_entries(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request: &AgentRequest,
 ) -> Vec<(String, crate::inference::llm::message::Message)> {
     let response = node
@@ -327,7 +327,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
 }
 
 async fn create_retry(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     agent_config: &ResolvedAgent,
     parent: &AgentRequest,
 ) -> AgentRequest {
@@ -367,7 +367,7 @@ async fn create_retry(
 }
 
 async fn scripted_daemon(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     agent_config: &Arc<ResolvedAgent>,
     provider_inputs: &Arc<std::sync::Mutex<Vec<String>>>,
 ) -> AgentDaemon<WakeInputModel> {

@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::file_inventory::{FileInventoryPageDemand, FileInventoryReply};
 
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use crate::NodeIdentity;
 
-fn require_source(node: &EmbeddedNode, demand: &FileInventoryPageDemand) -> Result<()> {
+fn require_source(node: &Node, demand: &FileInventoryPageDemand) -> Result<()> {
     demand.validate_reference()?;
     ensure!(
         node.node_identity_did() == Some(demand.admission.request.node_did.as_str()),
@@ -20,7 +20,7 @@ fn require_source(node: &EmbeddedNode, demand: &FileInventoryPageDemand) -> Resu
 /// The journal retains a past signed outcome, not current permission to
 /// deliver it. Callers must recheck the existing delivery authorization owner.
 pub async fn load_recorded_reply(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
     verifier: &dyn NodeIdentity,
 ) -> Result<Option<FileInventoryReply>> {
@@ -32,7 +32,7 @@ pub async fn load_recorded_reply(
 }
 
 pub async fn record_reply(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     demand: &FileInventoryPageDemand,
     candidate: &FileInventoryReply,
     verifier: &dyn NodeIdentity,

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::loop_stream::{
     LoopReplayInput, ReplayEvidenceResolveError, ReplayEvidenceViolation, TaggedMessage,
 };
 
 pub(crate) fn owned_replay_input(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     request: crate::request::watcher::AgentRequest,
     request_commit_cid: String,
     expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,

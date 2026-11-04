@@ -31,7 +31,7 @@ pub(super) fn same_goal_assignment(left: &GoalDocument, right: &GoalDocument) ->
 }
 
 pub(crate) async fn load_goal_tool_context(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     owner: &str,
     session: &str,
     request_id: &str,

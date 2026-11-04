@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::provider_audit::{AuxiliaryOutputEvent, AuxiliaryOutputObservation};
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
@@ -289,7 +289,7 @@ fn modeled_message(case: &LeanAuxiliaryOutputCase) -> Message {
     }
 }
 
-async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
+async fn claimed(node: &Arc<Node>, name: &str) -> RequestLifecycle {
     let request_id = format!("auxiliary-{name}-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
@@ -397,7 +397,7 @@ fn native_raw(
     }
 }
 
-async fn output_state(node: &Arc<EmbeddedNode>, request_doc_id: &str) -> serde_json::Value {
+async fn output_state(node: &Arc<Node>, request_doc_id: &str) -> serde_json::Value {
     let request_doc_id = crate::store::graphql::escape_graphql_string(request_doc_id);
     let response = ConfigAccess::local(node.clone())
         .execute(&format!(

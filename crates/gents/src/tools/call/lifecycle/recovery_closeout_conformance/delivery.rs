@@ -33,7 +33,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
             .unwrap(),
         0
     );
-    let row = |node: Arc<crate::defra_node::EmbeddedNode>| {
+    let row = |node: Arc<crate::defra_node::Node>| {
         let tool_doc_id = tool_doc_id.clone();
         async move {
             let response = node
@@ -116,7 +116,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         identity,
         crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
-    let pending_wakes = |node: Arc<crate::defra_node::EmbeddedNode>, session: String| async move {
+    let pending_wakes = |node: Arc<crate::defra_node::Node>, session: String| async move {
         let response = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }}, lifecycle_state: {{ _eq: "pending" }} }}) {{ _docID }} }}"#,

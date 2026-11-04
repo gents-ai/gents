@@ -45,7 +45,7 @@ async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) ->
         .await
 }
 
-async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, ConfigAccess)> {
+async fn fixture(enabled: bool) -> Result<(Arc<defra_node::Node>, ConfigAccess)> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());

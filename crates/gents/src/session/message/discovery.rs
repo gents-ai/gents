@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::session::AgentSession;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -170,7 +170,7 @@ async fn matches_trigger(
 }
 
 pub(crate) async fn agent_session_list(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     caller: &crate::AgentRequest,
     tools: &AgentToolConfig,
     args: &AgentSessionListArgs,

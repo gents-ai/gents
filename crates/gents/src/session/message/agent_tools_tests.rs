@@ -39,12 +39,12 @@ pub(super) async fn started(
     (message, caller, caused)
 }
 
-async fn materialize_session(node: &std::sync::Arc<EmbeddedNode>, caused: &crate::AgentRequest) {
+async fn materialize_session(node: &std::sync::Arc<Node>, caused: &crate::AgentRequest) {
     materialize_session_at(node, caused, &chrono::Utc::now().to_rfc3339()).await;
 }
 
 async fn materialize_session_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     caused: &crate::AgentRequest,
     created_at: &str,
 ) {
@@ -71,7 +71,7 @@ async fn materialize_session_at(
     .unwrap();
 }
 
-async fn set_state(node: &EmbeddedNode, doc_id: &str, state: &str) {
+async fn set_state(node: &Node, doc_id: &str, state: &str) {
     let response = node
         .execute(&format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
@@ -592,7 +592,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
     let target_identity =
         crate::KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap();
     let target = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(target_dir.path())
             .with_node_identity_did(target_identity.did())
             .with_p2p(test_p2p_config())
@@ -611,7 +611,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
     .await
     .unwrap();
 
-    async fn address(node: &EmbeddedNode) -> String {
+    async fn address(node: &Node) -> String {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(address) = node
@@ -682,8 +682,8 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
     }
     let peer = target.p2p().unwrap().local_peer_id().await.unwrap();
     async fn push(
-        source: &EmbeddedNode,
-        target: &Arc<EmbeddedNode>,
+        source: &Node,
+        target: &Arc<Node>,
         peer: &str,
         collection: &str,
         docs: &[String],

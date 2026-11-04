@@ -48,7 +48,7 @@ async fn key(home: &std::path::Path, name: &str) -> crate::store::identity::KeyI
     .unwrap()
 }
 
-async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<AgentSession> {
+async fn read_as(node: &Arc<Node>, actor: &dyn NodeIdentity) -> Result<AgentSession> {
     ConfigAccess::transact_local_readonly(
         node,
         Some(::identity::Did::new(actor.did())?),
@@ -66,7 +66,7 @@ async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<A
     .await
 }
 
-async fn create_session(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<String> {
+async fn create_session(node: &Arc<Node>, actor: &dyn NodeIdentity) -> Result<String> {
     ConfigAccess::transact_local_write(
         node, Some(::identity::Did::new(actor.did())?), "test.archive.create",
         |txn| Box::pin(async move {
@@ -84,7 +84,7 @@ async fn create_session(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> R
     ).await
 }
 
-async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
+async fn create_work(node: &Arc<Node>, actor: &dyn NodeIdentity) {
     let physical = ConfigAccess::transact_local_write(
         node, Some(::identity::Did::new(actor.did()).unwrap()), "test.archive.work",
         |txn| Box::pin(async move {
@@ -117,7 +117,7 @@ async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
     .await;
 }
 
-async fn work_rows(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> serde_json::Value {
+async fn work_rows(node: &Arc<Node>, actor: &dyn NodeIdentity) -> serde_json::Value {
     ConfigAccess::transact_local_readonly(
         node,
         Some(::identity::Did::new(actor.did()).unwrap()),
@@ -146,7 +146,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     let actor = key(home.path(), "actor").await;
     let data = home.path().join("data");
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(&data)
             .with_node_identity_did(actor.did())
             .build()
@@ -181,7 +181,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     node.shutdown().await;
     drop(node);
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .data_path(&data)
             .with_node_identity_did(actor.did())
             .build()
@@ -242,7 +242,7 @@ async fn archive_authority_is_native_acp_and_never_requester_scope() {
     let writer = key(home.path(), "writer").await;
     let reader = key(home.path(), "reader").await;
     let denied = key(home.path(), "denied").await;
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     let policy = node
         .add_dac_policy(
             owner.did(),
@@ -306,7 +306,7 @@ resources:
 async fn concurrent_archive_calls_commit_one_revision() {
     let home = tempfile::tempdir().unwrap();
     let actor = key(home.path(), "owner").await;
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(Node::builder().build().await.unwrap());
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();
@@ -338,7 +338,7 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(actor.did())
             .with_node_acp_enabled()
             .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())

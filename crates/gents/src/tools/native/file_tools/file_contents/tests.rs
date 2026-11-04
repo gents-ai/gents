@@ -312,7 +312,7 @@ async fn measure_per_observation_file_history_storage() {
                 .unwrap();
         let node_did = key.did().to_owned();
         let data = root.join("node");
-        let node = defra_node::EmbeddedNode::builder()
+        let node = defra_node::Node::builder()
             .data_path(&data)
             .with_node_identity_did(&node_did)
             .build()
@@ -323,7 +323,7 @@ async fn measure_per_observation_file_history_storage() {
         drop(node);
         let baseline = size(data.clone()).await;
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .data_path(&data)
                 .with_node_identity_did(&node_did)
                 .build()

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
@@ -42,7 +42,7 @@ fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
 
 struct Fixture {
     cache: crate::inference::usage_observation::UsageCache,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     access: ConfigAccess,
     did: String,
     credentials: BTreeMap<&'static str, OAuthCredential>,

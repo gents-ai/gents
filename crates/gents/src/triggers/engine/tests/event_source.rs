@@ -413,7 +413,7 @@ fn snapshot_with_event_triggers(
 }
 
 async fn persist_event_bindings(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     snapshot: &ActiveRuntimeSnapshot,
 ) {
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
@@ -439,7 +439,7 @@ async fn persist_event_bindings(
 }
 
 async fn admit_observed_event(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     intent: &FireIntent,
 ) -> FireResult {
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
@@ -1476,7 +1476,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
 }
 
 async fn create_event_trigger_doc(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
@@ -1545,7 +1545,7 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
     assert_eq!(trigger["fire_count"].as_i64(), Some(committed));
 }
 
-async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {
+async fn observed_trigger(node: &defra_node::Node, id: &str) -> serde_json::Value {
     let query = format!(
         "{{Trigger(filter:{{node_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
         escape_graphql_string(event_test_behavior().node_did()),

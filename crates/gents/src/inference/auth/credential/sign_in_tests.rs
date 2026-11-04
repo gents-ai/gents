@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use crate::store::config_client::ConfigAccess;
 
 const DID: &str = "did:key:zSignIn";
 
-async fn sign_in(node: &Arc<EmbeddedNode>, credential: &OAuthCredential) -> OAuthCredential {
+async fn sign_in(node: &Arc<Node>, credential: &OAuthCredential) -> OAuthCredential {
     let doc_id = upsert_oauth_credential_on(&ConfigAccess::local(node.clone()), credential)
         .await
         .unwrap();

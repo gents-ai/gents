@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
@@ -67,7 +67,7 @@ pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the run
 
 #[derive(Clone)]
 pub struct SelfConfigCore {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     agent_id: String,
     lockout_agent_id: String,
@@ -146,7 +146,7 @@ impl AgentAnchor {
 }
 
 impl SelfConfigCore {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: String, agent_id: String) -> Result<Self> {
+    pub fn new(node: Arc<Node>, node_did: String, agent_id: String) -> Result<Self> {
         if node_did.trim().is_empty() {
             bail!("self-config requires a non-empty node DID (fail closed)");
         }
@@ -208,7 +208,7 @@ impl SelfConfigCore {
         &self.agent_id
     }
 
-    pub(crate) fn node_handle(&self) -> Arc<EmbeddedNode> {
+    pub(crate) fn node_handle(&self) -> Arc<Node> {
         self.node.clone()
     }
 

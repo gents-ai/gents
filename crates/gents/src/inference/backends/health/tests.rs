@@ -4,7 +4,7 @@ mod oauth;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{routing::get, Json, Router};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -320,7 +320,7 @@ fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
 }
 
 async fn upsert_backend_configuration(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     backend: &InferenceBackend,
 ) {
     use crate::store::config_client::{
@@ -344,7 +344,7 @@ async fn upsert_backend_configuration(
 }
 
 async fn seed_backend_observation(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     backend: &InferenceBackend,
     status: &str,
 ) {
@@ -368,7 +368,7 @@ fn probe_options() -> BackendProberOptions {
 }
 
 async fn scheduled_cycle(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     health: &BackendHealthMap,
     schedule: &mut ProbeSchedule,
     periodic: bool,
@@ -421,7 +421,7 @@ fn assert_modeled_probe(
     assert_eq!(current.failure_count as usize, modeled.next_count);
 }
 
-async fn wait_for_promotion(node: &Arc<EmbeddedNode>, backend: &InferenceBackend) {
+async fn wait_for_promotion(node: &Arc<Node>, backend: &InferenceBackend) {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let observation = crate::inference::backends::registry::lookup_backend_observation(

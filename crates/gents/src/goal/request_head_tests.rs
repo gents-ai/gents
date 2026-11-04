@@ -574,7 +574,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

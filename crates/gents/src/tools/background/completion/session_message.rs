@@ -22,7 +22,7 @@ fn running_session_message_filter(local_did: &str) -> String {
 }
 
 pub(crate) async fn settle_running_session_message_rows(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     local_did: &str,
 ) -> Result<usize> {
     let query = format!(
@@ -52,7 +52,7 @@ pub(crate) async fn settle_running_session_message_rows(
 }
 
 pub(super) async fn settle_rows_after_request_update(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     local_did: &str,
     request_doc_id: &str,
 ) -> Result<usize> {
@@ -100,7 +100,7 @@ pub(super) async fn settle_rows_after_request_update(
     Ok(settled)
 }
 
-async fn settle_row(node: &Arc<EmbeddedNode>, row: &SessionMessageRow) -> Result<bool> {
+async fn settle_row(node: &Arc<Node>, row: &SessionMessageRow) -> Result<bool> {
     let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id(
         node.clone(),
         &row.doc_id,
@@ -177,7 +177,7 @@ fn assignment_status_reason(status: crate::goal::GoalStatus) -> &'static str {
 }
 
 pub(crate) async fn turn_assignment_handoff(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     caused: &AgentRequestRow,
     terminal: &crate::tools::call::lifecycle::CausedRequestTerminal,
 ) -> TurnAssignmentHandoff {
@@ -233,7 +233,7 @@ pub(crate) async fn turn_assignment_handoff(
 }
 
 pub(crate) async fn settle_session_message_row(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     lifecycle: &mut ToolCallLifecycle,
 ) -> Result<bool> {
     if !lifecycle.is_running()
@@ -1054,7 +1054,7 @@ mod turn_assignment_tests {
         assert_eq!(terminal.notification_status(), "completed");
     }
 
-    async fn tool_call_row(node: &Arc<EmbeddedNode>, tool_doc_id: &str) -> serde_json::Value {
+    async fn tool_call_row(node: &Arc<Node>, tool_doc_id: &str) -> serde_json::Value {
         let escaped = escape_graphql_string(tool_doc_id);
         let response = node
         .execute(&format!(
@@ -1066,7 +1066,7 @@ mod turn_assignment_tests {
     }
 
     async fn session_message_notifications(
-        node: &Arc<EmbeddedNode>,
+        node: &Arc<Node>,
         did: &str,
         session_id: &str,
     ) -> Vec<String> {
@@ -1100,7 +1100,7 @@ mod turn_assignment_tests {
         notifications
     }
 
-    async fn bind_caused_assignment(node: &Arc<EmbeddedNode>, did: &str, request_doc: &str) {
+    async fn bind_caused_assignment(node: &Arc<Node>, did: &str, request_doc: &str) {
         let session = caused_session_id(node, request_doc).await;
         let goal = crate::goal::load_canonical_goal(node, did, &session)
             .await
@@ -1111,7 +1111,7 @@ mod turn_assignment_tests {
                 escape_graphql_string(&goal.doc_id), escape_graphql_string(request_doc))).await.unwrap();
     }
 
-    async fn caused_session_id(node: &Arc<EmbeddedNode>, caused_request_doc_id: &str) -> String {
+    async fn caused_session_id(node: &Arc<Node>, caused_request_doc_id: &str) -> String {
         let doc_id = escape_graphql_string(caused_request_doc_id);
         let response = node
         .execute(&format!(

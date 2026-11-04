@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::{Node, QueryResponse};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -197,7 +197,7 @@ pub async fn reconcile_directory_tick(
 const DIRECTORY_SOURCE_COLLECTIONS: [&str; 3] = ["Node", "NodeReadiness", "Agent"];
 
 pub async fn run_directory_projection(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     source_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -247,11 +247,11 @@ async fn sweep_directory(store: &GraphqlDirectoryStore, source_did: &str) {
 }
 
 pub(crate) struct GraphqlDirectoryStore {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
 }
 
 impl GraphqlDirectoryStore {
-    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub(crate) fn new(node: Arc<Node>) -> Self {
         Self { node }
     }
 }

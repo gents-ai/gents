@@ -18,10 +18,10 @@ pub(super) use gents_protocol::node_readiness::{
 };
 pub(super) use serde_json::Value;
 
-pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+pub(super) async fn test_node() -> Arc<defra_node::Node> {
     let identity = test_identity("runtime-test-node");
     Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
@@ -89,7 +89,7 @@ struct RuntimeDiagnosticRow {
 }
 
 pub(super) async fn fetch_runtime_status(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> RuntimeStatusRow {
     fetch_runtime_status_if_present(node, node_did)
@@ -98,7 +98,7 @@ pub(super) async fn fetch_runtime_status(
 }
 
 async fn fetch_runtime_status_if_present(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> Option<RuntimeStatusRow> {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -139,7 +139,7 @@ async fn fetch_runtime_status_if_present(
 }
 
 pub(super) async fn wait_for_runtime_reconcile_phase(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     expected_reconcile_phase: &str,
 ) -> RuntimeStatusRow {
@@ -163,7 +163,7 @@ pub(super) async fn wait_for_runtime_reconcile_phase(
 }
 
 pub(super) async fn fetch_node_readiness(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> NodeReadinessSnapshot {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -196,7 +196,7 @@ pub(super) async fn fetch_node_readiness(
 }
 
 pub(super) async fn wait_for_runtime_process_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     expected_process_state: &str,
 ) {
@@ -398,7 +398,7 @@ impl crate::runtime::agent::ProcessLifecycleObserver for RecordingObserver {
 }
 
 pub(super) async fn bind_default_agent_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -410,7 +410,7 @@ pub(super) async fn bind_default_agent_backend(
 }
 
 pub(super) async fn bind_default_agent_backend_with_capacity(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -428,7 +428,7 @@ pub(super) async fn bind_default_agent_backend_with_capacity(
 }
 
 pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -480,7 +480,7 @@ pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
 }
 
 pub(super) async fn create_agent_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     request_id: &str,
     session_id: &str,
@@ -490,7 +490,7 @@ pub(super) async fn create_agent_request(
 }
 
 pub(super) async fn create_agent_request_for_agent(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     agent_id: Option<&str>,
     request_id: &str,
@@ -550,7 +550,7 @@ pub(super) async fn create_agent_request_for_agent(
 }
 
 pub(super) async fn wait_for_inference_call_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_id: &str,
     expected_state: &str,
 ) {
@@ -597,7 +597,7 @@ pub(super) async fn wait_for_inference_call_state(
 }
 
 pub(super) async fn update_backend_probe_status(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     backend_id: &str,
     probe_status: &str,
 ) {

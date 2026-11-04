@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -17,7 +17,7 @@ use crate::triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource
 
 pub(crate) struct ScheduleSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     tick_every: Duration,
     cancel: CancellationToken,
 }
@@ -25,7 +25,7 @@ pub(crate) struct ScheduleSource {
 impl ScheduleSource {
     pub(crate) fn new(
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         cancel: CancellationToken,
     ) -> Self {
         Self {

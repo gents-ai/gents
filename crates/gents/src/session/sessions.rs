@@ -4,7 +4,7 @@ use anyhow::Context;
 
 #[cfg(test)]
 pub(crate) async fn create_session_with_id(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     agent_id: &str,
     node_did: &str,
@@ -14,7 +14,7 @@ pub(crate) async fn create_session_with_id(
 
 #[cfg(test)]
 pub(crate) async fn create_session_with_agent_id(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     agent_id: &str,
@@ -24,7 +24,7 @@ pub(crate) async fn create_session_with_agent_id(
 
 #[cfg(test)]
 async fn create_session_with_agent_id_and_requester_did(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     agent_id: &str,
@@ -58,7 +58,7 @@ async fn create_session_with_agent_id_and_requester_did(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_with_agent_id_and_requester_did(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     agent_id: &str,
@@ -320,7 +320,7 @@ pub(crate) async fn touch_session_in_txn(
 }
 
 pub async fn close_session(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -469,7 +469,7 @@ pub(super) async fn patch_session_in_txn(
 }
 
 pub(crate) async fn max_sequence(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,

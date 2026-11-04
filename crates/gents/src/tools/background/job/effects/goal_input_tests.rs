@@ -18,14 +18,14 @@ fn reference(value: &Value, name: &str, roots: &[String; 2]) -> Option<GoalAssig
     })
 }
 
-async fn write(node: &Arc<EmbeddedNode>, mutation: &str) -> Value {
+async fn write(node: &Arc<Node>, mutation: &str) -> Value {
     ConfigAccess::write_local(node, "test.delivery_goal_input", mutation)
         .await
         .unwrap()
 }
 
 async fn observe_goal(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     owner: &str,
     session: &str,
     assignment: Option<&GoalAssignmentInput>,
@@ -43,7 +43,7 @@ async fn observe_goal(
         escape_graphql_string(&goal.doc_id), escape_graphql_string(&assignment.goal_id))).await;
 }
 
-async fn stored(node: &Arc<EmbeddedNode>, request_id: &str) -> AgentRequestRow {
+async fn stored(node: &Arc<Node>, request_id: &str) -> AgentRequestRow {
     let response = ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
@@ -60,7 +60,7 @@ async fn stored(node: &Arc<EmbeddedNode>, request_id: &str) -> AgentRequestRow {
 }
 
 async fn deliver(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     cause: &SessionMessageCause,
     case: &Value,
     owner: &str,
@@ -186,7 +186,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
     let remote: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(directory.path().join("remote.key"), None).unwrap());
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(PIN_FIXED_DID)
             .build()
             .await

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::data::{Invocation, StampContext};
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::input::derive_children;
@@ -30,7 +30,7 @@ const MAX_REQUESTS_PER_ROUND: usize = 16;
 /// The invoking tool call a plugin's `job_calls` run for.
 #[derive(Clone)]
 pub struct JobCaller {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     scope: ProcessControlScope,
     stamp: StampContext,
     chain: Vec<String>,
@@ -39,7 +39,7 @@ pub struct JobCaller {
 
 impl JobCaller {
     /// A caller with no children: `child_output` finds no slot.
-    pub fn new(node: Arc<EmbeddedNode>, scope: ProcessControlScope, stamp: StampContext) -> Self {
+    pub fn new(node: Arc<Node>, scope: ProcessControlScope, stamp: StampContext) -> Self {
         Self {
             node,
             scope,

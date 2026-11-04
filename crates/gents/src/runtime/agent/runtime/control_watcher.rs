@@ -44,7 +44,7 @@ pub(super) struct ControlSubscription {
 }
 
 pub(super) fn subscribe_control_changes(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
 ) -> Result<ControlSubscription> {
     let names = document_view::control_collection_names().collect::<Vec<_>>();
     let ids = crate::collection_ids(node, names.iter().copied())?;
@@ -55,7 +55,7 @@ pub(super) fn subscribe_control_changes(
 }
 
 pub(super) struct ControlWatcherInputs {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     pub(super) subscription: ControlSubscription,
     pub(super) node_did: String,
     pub(super) resolve_context: DocumentResolveContext,

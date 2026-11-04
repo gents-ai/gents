@@ -33,7 +33,7 @@ fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::Agent
 }
 
 pub(super) async fn load_agent_catalog(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     owner: &str,
 ) -> Result<agent::AgentCatalogView> {
     ConfigAccess::transact_local_readonly(
@@ -63,7 +63,7 @@ fn replacement(
 
 #[cfg(test)]
 pub(super) async fn agent_preview(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     owner: &str,
     args: &ConfigureAgentParams,
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
@@ -78,7 +78,7 @@ pub(super) async fn agent_preview(
 
 #[cfg(test)]
 pub(super) async fn agent_mutate(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     owner: &str,
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
@@ -107,7 +107,7 @@ pub async fn configure_agent(
 
 #[cfg(test)]
 async fn agent_apply(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     owner: &str,
     args: &ConfigureAgentParams,
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,

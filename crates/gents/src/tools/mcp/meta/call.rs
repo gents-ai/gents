@@ -480,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn disallowed_service_returns_before_argument_validation() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
         let tool = CallToolTool::new(MetaToolContext {
             node,
             mcp_pool: McpPool::new(),

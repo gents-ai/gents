@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-pub(crate) async fn test_node() -> Arc<EmbeddedNode> {
+pub(crate) async fn test_node() -> Arc<Node> {
     let node = Arc::new(
         crate::test_support::node_builder()
             .build()
@@ -30,7 +30,7 @@ pub(crate) fn bound_bearer(
 }
 
 pub(crate) async fn seed_credential(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,
@@ -39,7 +39,7 @@ pub(crate) async fn seed_credential(
 }
 
 pub(crate) async fn seed_credential_with_refresh_token(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,

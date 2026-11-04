@@ -11,7 +11,7 @@ use crate::store::identity::{NodeIdentity, RegisteredIdentity};
 use gents_protocol::row::AgentRequestRow;
 
 pub(crate) async fn publish_claimed_continuation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     observed: &GoalDocument,
     parent_request_id: &str,
     content: &str,
@@ -53,7 +53,7 @@ pub(crate) async fn publish_claimed_continuation(
 }
 
 pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     observed: &GoalDocument,
     parent_request_id: &str,
     reason: &str,

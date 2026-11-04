@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use defra_p2p_adapter::{P2pDocumentRequest, TransportPeerId};
 use gents_protocol::enrollment::{
     decode_offer, derive_decision_id, derive_revision_id, derive_route_receipt_id,
@@ -163,7 +163,7 @@ impl EnrollmentProjection {
 
 #[derive(Clone)]
 pub struct GraphqlEnrollmentStore {
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     identity: Arc<dyn NodeIdentity>,
     decision_lock: Arc<Mutex<()>>,
     fail_closed: Arc<FailClosedLog>,
@@ -204,9 +204,9 @@ impl FailClosedLog {
     }
 }
 
-fn enrollment_decision_gate(node: &EmbeddedNode) -> Arc<Mutex<()>> {
+fn enrollment_decision_gate(node: &Node) -> Arc<Mutex<()>> {
     static GATES: OnceLock<StdMutex<BTreeMap<usize, Weak<Mutex<()>>>>> = OnceLock::new();
-    let key = node as *const EmbeddedNode as usize;
+    let key = node as *const Node as usize;
     let mut gates = GATES
         .get_or_init(|| StdMutex::new(BTreeMap::new()))
         .lock()
@@ -221,7 +221,7 @@ fn enrollment_decision_gate(node: &EmbeddedNode) -> Arc<Mutex<()>> {
 }
 
 impl GraphqlEnrollmentStore {
-    pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
+    pub fn new(node: Arc<Node>, identity: Arc<dyn NodeIdentity>) -> Self {
         let decision_lock = enrollment_decision_gate(node.as_ref());
         Self {
             node,

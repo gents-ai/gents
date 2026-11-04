@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::file_image_hydration::{
     FileImageDemand, FileImageHydrationReceipt, FileImageSelection,
 };
@@ -50,7 +50,7 @@ impl VerifiedFileImageReceipt {
     /// The caller supplies the entry from its verified inventory page.
     pub async fn read_inventory_image(
         &self,
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         entry: &gents_protocol::file_inventory::FileInventoryEntry,
     ) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>> {
         let demand = &self.0.demand;
@@ -114,7 +114,7 @@ impl VerifiedFileImageReceipt {
     /// reader grant only after that signed creator registration has committed.
     /// The grant extends to the file documents the observation names, each of
     /// which must also be owned by the receipt's signer.
-    pub async fn grant_local_read(&self, node: Arc<EmbeddedNode>) -> Result<bool> {
+    pub async fn grant_local_read(&self, node: Arc<Node>) -> Result<bool> {
         if !self.grant_observation_read(node.clone()).await? {
             return Ok(false);
         }
@@ -143,7 +143,7 @@ impl VerifiedFileImageReceipt {
 
     /// The modeled per-document grant (`authorizesReadGrant`) for the signed
     /// observation alone.
-    pub async fn grant_observation_read(&self, node: Arc<EmbeddedNode>) -> Result<bool> {
+    pub async fn grant_observation_read(&self, node: Arc<Node>) -> Result<bool> {
         let FileImageSelection::Selected { document } = &self.0.selection else {
             return Ok(false);
         };
@@ -161,7 +161,7 @@ impl VerifiedFileImageReceipt {
 
 /// `None` until the granted observation has materialized locally.
 async fn observation_contents(
-    node: &Arc<EmbeddedNode>,
+    node: &Arc<Node>,
     document: &str,
 ) -> Result<Option<Vec<String>>> {
     let response = ConfigAccess::local(node.clone())
@@ -193,7 +193,7 @@ async fn observation_contents(
 }
 
 pub(crate) async fn grant_source_file_read(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     collection_name: &'static str,
     source_did: &str,
     requester_did: &str,

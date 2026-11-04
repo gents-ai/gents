@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use tokio_util::sync::CancellationToken;
 
 use crate::store::graphql::escape_graphql_string;
@@ -141,7 +141,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
 }
 
 pub async fn run_registry_heartbeat(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     network_id: String,
     cancel: CancellationToken,
@@ -150,7 +150,7 @@ pub async fn run_registry_heartbeat(
 }
 
 async fn registry_heartbeat(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     node_did: String,
     network_id: String,
     cancel: CancellationToken,
@@ -233,7 +233,7 @@ async fn registry_heartbeat(
 }
 
 async fn tick_registry(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     node_did: &str,
     network_id: &str,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
 use crate::store::identity::KeyIdentity;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_protocol::goal_control::{
     GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
 };
@@ -15,7 +15,7 @@ async fn submission_returns_verified_rejection_after_ignoring_invalid_receipts()
     let identity: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(temp.path().join("runtime.key"), None).unwrap());
     let node = Arc::new(
-        EmbeddedNode::builder()
+        Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

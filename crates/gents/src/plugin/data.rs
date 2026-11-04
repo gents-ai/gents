@@ -400,12 +400,12 @@ pub struct DataCaller {
 
 #[derive(Clone)]
 enum DataAccess {
-    Node(Arc<crate::defra_node::EmbeddedNode>, ::identity::Did),
+    Node(Arc<crate::defra_node::Node>, ::identity::Did),
     Operator(crate::store::config_client::ConfigAccess),
 }
 
 impl DataCaller {
-    pub fn new(node: Arc<crate::defra_node::EmbeddedNode>, node_did: &str) -> Result<Self> {
+    pub fn new(node: Arc<crate::defra_node::Node>, node_did: &str) -> Result<Self> {
         Ok(Self {
             access: DataAccess::Node(node, ::identity::Did::new(node_did.to_owned())?),
             node_did: node_did.to_owned(),

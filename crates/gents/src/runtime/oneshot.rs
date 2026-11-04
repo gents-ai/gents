@@ -4,7 +4,7 @@ use crate::inference::llm::message::Message;
 use crate::inference::llm::rig_compat::{ProviderClient, ProviderModel};
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::output_obligation::OutputObligationCheck;
 
@@ -28,7 +28,7 @@ pub struct OneshotRunResult {
 }
 
 pub async fn run_openai_oneshot(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent: &ResolvedAgent,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
@@ -36,7 +36,7 @@ pub async fn run_openai_oneshot(
 }
 
 pub async fn run_openai_oneshot_with_tools(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent: &ResolvedAgent,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
@@ -105,7 +105,7 @@ struct OneshotInputs<'a> {
 }
 
 async fn run_oneshot_with_completion_client<C>(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent: &ResolvedAgent,
     inputs: OneshotInputs<'_>,
     client: C,
@@ -180,7 +180,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 
 #[allow(clippy::too_many_arguments)]
 async fn run_oneshot_owned<M>(
-    node: Arc<EmbeddedNode>,
+    node: Arc<Node>,
     agent: &ResolvedAgent,
     provider_family: Option<String>,
     prompt_builder: &LayeredPromptBuilder,

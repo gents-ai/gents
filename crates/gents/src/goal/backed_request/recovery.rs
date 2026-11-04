@@ -58,7 +58,7 @@ fn decode_agent_request_by_retry_key(
 }
 
 pub(crate) async fn load_agent_request_by_retry_key(
-    node: &EmbeddedNode,
+    node: &Node,
     retry_key: &str,
     expected: &GoalBackedRequestFingerprint,
 ) -> Result<Option<String>> {
@@ -207,7 +207,7 @@ fn goal_creation_claim_recovery_query(node_did: &str, session_id: &str) -> Strin
 }
 
 pub(super) async fn load_goal_backed_request_by_retry_key(
-    node: &EmbeddedNode,
+    node: &Node,
     node_did: &str,
     session_id: &str,
     objective: &str,

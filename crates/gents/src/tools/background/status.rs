@@ -5,7 +5,7 @@ pub mod status_projection;
 use crate::inference::llm::message::{AssistantContent, Message, Text};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Deserialize;
 
 use crate::store::graphql::escape_graphql_string;
@@ -115,7 +115,7 @@ pub(crate) enum ReadToolOutputOutcome {
 }
 
 pub(crate) async fn handle_list_background_tools(
-    node: &std::sync::Arc<EmbeddedNode>,
+    node: &std::sync::Arc<Node>,
     caller: &ProcessControlScope,
     local_deployment_id: &str,
     // Unused here by design: list rows project status from the persisted
@@ -218,7 +218,7 @@ pub(crate) async fn handle_list_background_tools(
 }
 
 pub(crate) async fn handle_read_tool_output(
-    node: &EmbeddedNode,
+    node: &Node,
     caller: &ProcessControlScope,
     live_outputs: &LiveToolOutputRegistry,
     args: ReadToolOutputArgs,
@@ -235,7 +235,7 @@ pub(crate) async fn handle_read_tool_output(
 }
 
 pub(crate) async fn read_tool_output_slice(
-    node: &EmbeddedNode,
+    node: &Node,
     caller: &ProcessControlScope,
     // Unused here by design: elapsed/status come from the authoritative
     // persisted lifecycle projection and output evidence from the canonical
@@ -336,7 +336,7 @@ pub(crate) async fn read_tool_output_slice(
 }
 
 pub(crate) async fn canonical_tool_output(
-    node: &EmbeddedNode,
+    node: &Node,
     tool_doc_id: &str,
     request_doc_id: &str,
     session_id: &str,

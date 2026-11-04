@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use serde::Serialize;
 
 use crate::tools::call::lifecycle::FailureClass;
@@ -10,7 +10,7 @@ use crate::tools::mcp::pool::McpPool;
 
 #[derive(Clone)]
 pub struct MetaToolContext {
-    pub node: Arc<EmbeddedNode>,
+    pub node: Arc<Node>,
     pub mcp_pool: McpPool,
     pub health: ServiceHealthMap,
     pub local_hostname: String,

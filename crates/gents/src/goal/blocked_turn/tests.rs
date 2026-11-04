@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{Duration, TimeZone};
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -452,7 +452,7 @@ fn the_value_holds_no_secret() {
     }
 }
 
-async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
+async fn embedded() -> (Arc<Node>, ConfigAccess) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::ensure_node(&node, DID).await.unwrap();
