@@ -2019,7 +2019,7 @@ describe("configuration panels", () => {
     await user.click(screen.getByRole("button", { name: "Schedule" }));
     const dialog = await screen.findByRole("dialog", { name: "When it runs" });
     expect(
-      within(dialog).getByRole("checkbox", { name: "Turn it on now" }),
+      within(dialog).getByRole("checkbox", { name: "Turn on now" }),
     ).toHaveAttribute("aria-disabled", "true");
   });
 
@@ -2397,7 +2397,7 @@ describe("configuration panels", () => {
 
     await user.click(screen.getByRole("button", { name: "Event" }));
     const dialog = await screen.findByRole("dialog", { name: "When it runs" });
-    expect(within(dialog).getByLabelText("Collection")).toHaveValue("");
+    expect(within(dialog).getByLabelText("Collection to watch")).toHaveValue("");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(
       await within(dialog).findByText("Name the collection to watch."),
@@ -2405,10 +2405,13 @@ describe("configuration panels", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
     expect(api.saveEventSourceConfig).not.toHaveBeenCalled();
 
-    await user.type(within(dialog).getByLabelText("Collection"), "MailboxItem");
-    const turnOn = within(dialog).getByRole("checkbox", { name: "Turn it on now" });
+    await user.type(
+      within(dialog).getByLabelText("Collection to watch"),
+      "MailboxItem",
+    );
+    const turnOn = within(dialog).getByRole("checkbox", { name: "Turn on now" });
     expect(turnOn).toHaveAttribute("aria-checked", "false");
-    await user.click(within(dialog).getByText("Turn it on now"));
+    await user.click(within(dialog).getByText("Turn on now"));
     expect(turnOn).toHaveAttribute("aria-checked", "true");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));

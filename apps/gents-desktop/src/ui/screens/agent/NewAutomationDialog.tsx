@@ -1,6 +1,7 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { ChevronDown, Hand, Timer, Zap } from "lucide-react";
 import type {
   ConfigComponentsApplyRequest,
   EventSource,
@@ -18,16 +19,19 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@gents/ui/components/dialog";
 import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldLabel,
-} from "@gents/ui/components/field";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
+import { Field, FieldError, FieldLabel } from "@gents/ui/components/field";
 import { Input } from "@gents/ui/components/input";
 import {
   Select,
@@ -38,6 +42,7 @@ import {
   SelectValue,
 } from "@gents/ui/components/select";
 import { Textarea } from "@gents/ui/components/textarea";
+import { cn } from "@gents/ui/lib/utils";
 import { navigate } from "@/lib/router";
 import { cadenceInWords, eventInWords } from "./automation";
 import { newId, validateCronSchedule } from "./draft";
@@ -45,6 +50,7 @@ import { defaultAgentOf } from "@/lib/agents";
 import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
+import { AgentPicker } from "../BehaviorPicker";
 
 const NEW = "new:";
 export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -58,6 +64,16 @@ export const PRESETS = [
   { id: "custom", label: "Custom cron…", cron: "" },
 ] as const;
 
+type Preset = (typeof PRESETS)[number]["id"];
+type Kind = "schedule" | "event" | "manual";
+
+/** A starting point: its name, schedule and prompt fill the form. */
+export type AutomationStart = {
+  name: string;
+  preset: Preset;
+  prompt: string;
+};
+
 function Choice({
   id,
   label,
@@ -65,7 +81,6 @@ function Choice({
   onChange,
   items,
   newLabel,
-  description,
 }: {
   id: string;
   label: string;
@@ -73,7 +88,6 @@ function Choice({
   onChange: (v: string) => void;
   items: { value: string; label: string }[];
   newLabel: string;
-  description?: string;
 }) {
   const all = [...items, { value: NEW, label: newLabel }];
   return (
@@ -93,43 +107,47 @@ function Choice({
           <SelectItem value={NEW}>{newLabel}</SelectItem>
         </SelectContent>
       </Select>
-      {description && <FieldDescription>{description}</FieldDescription>}
     </Field>
   );
 }
 
-export function NewAutomationDialog({
+const KIND_ICON = { schedule: Timer, event: Zap, manual: Hand };
+
+/** What a new automation is, shaped like the composer: its name, what the
+    agent should do, and chips for when it runs and who runs it. It makes
+    its own schedule and task unless existing ones are chosen. */
+export function AutomationForm({
   deployment,
-  open,
-  onOpenChange,
   forTask = false,
   task,
   initialKind,
+  start,
+  layout,
+  onCancel,
   onCreated,
-  template,
+  onCreatedTask,
 }: {
   deployment: NodeView;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
   forTask?: boolean;
+  /** an existing task this adds a trigger to */
   task?: string;
   initialKind?: "schedule" | "event";
+  start?: AutomationStart | null;
+  layout: "page" | "dialog";
+  onCancel: () => void;
   onCreated?: (triggerId: string) => void;
-  /** a starting point: its name, schedule and prompt fill the form */
-  template?: {
-    name: string;
-    preset: (typeof PRESETS)[number]["id"];
-    prompt: string;
-  } | null;
+  /** with no trigger (run by hand), the task made */
+  onCreatedTask?: (taskId: string) => void;
 }) {
   const { changeConfig } = useApp().actions;
   const defaultAgent =
     defaultAgentOf(deployment)?.agentId ?? deployment.agents[0]?.agentId ?? "";
-  const [name, setName] = useState("");
-  const startKind = forTask ? "manual" : (initialKind ?? "schedule");
-  const [kind, setKind] = useState<"schedule" | "event" | "manual">(startKind);
+  const [name, setName] = useState(start?.name ?? "");
+  const [kind, setKind] = useState<Kind>(
+    start ? "schedule" : forTask ? "manual" : (initialKind ?? "schedule"),
+  );
   const [scheduleId, setScheduleId] = useState(NEW);
-  const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("daily");
+  const [preset, setPreset] = useState<Preset>(start?.preset ?? "daily");
   const [cron, setCron] = useState("");
   const [eventId, setEventId] = useState(NEW);
   // The watched collection must be explicit to avoid self-triggering task writes.
@@ -137,50 +155,45 @@ export function NewAutomationDialog({
   const [eventKind, setEventKind] = useState("created");
   const [taskId, setTaskId] = useState(task ?? NEW);
   const [enable, setEnable] = useState(false);
+  const [reuse, setReuse] = useState(false);
   const ids = useRef<Record<string, string>>({});
   const idFor = (key: string, prefix: string) => (ids.current[key] ??= newId(prefix));
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(start?.prompt ?? "");
   const [agentId, setAgentId] = useState(defaultAgent);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!open || !template) return;
-    setName(template.name);
-    setKind("schedule");
-    setScheduleId(NEW);
-    setPreset(template.preset);
-    setTaskId(NEW);
-    setPrompt(template.prompt);
-  }, [open, template]);
 
-  const close = (next: boolean) => {
-    if (busy) return;
-    if (!next) {
-      setName("");
-      setKind(startKind);
-      setEnable(false);
-      ids.current = {};
-      setScheduleId(NEW);
-      setPreset("daily");
-      setCron("");
-      setEventId(NEW);
-      setCollection("");
-      setEventKind("created");
-      setTaskId(task ?? NEW);
-      setPrompt("");
-      setAgentId(defaultAgent);
-      setError(null);
-    }
-    onOpenChange(next);
-  };
-
-  const runningAgentId =
-    taskId === NEW
-      ? agentId
-      : deployment.tasks.find((t) => t.taskId === taskId)?.agentId;
+  const existingTask =
+    taskId === NEW ? null : deployment.tasks.find((t) => t.taskId === taskId);
+  const runningAgentId = taskId === NEW ? agentId : existingTask?.agentId;
   const agent = agentOf(deployment, runningAgentId) ?? null;
   const readiness = agent ? agentReadiness(deployment, agent.agentId) : null;
   const agentOff = readiness !== null && !readiness.ready;
+  const fromPrompt = prompt.trim().split("\n")[0].slice(0, 60);
+
+  const when =
+    kind === "manual"
+      ? "Only by hand"
+      : kind === "event"
+        ? eventId === NEW
+          ? collection.trim()
+            ? `When ${collection.trim()} is ${eventKind.trim() || "created"}`
+            : "When something happens"
+          : (deployment.eventSources.find((e) => e.event_source_id === eventId)
+              ?.display_name ?? "When something happens")
+        : scheduleId === NEW
+          ? PRESETS.find((p) => p.id === preset)!.label.replace(
+              "Custom cron…",
+              "Custom",
+            )
+          : (deployment.schedules.find((s) => s.schedule_id === scheduleId)
+              ?.display_name ?? "On a schedule");
+  const WhenIcon = KIND_ICON[kind];
+  const canReuse =
+    !forTask &&
+    (deployment.schedules.length > 0 ||
+      deployment.eventSources.length > 0 ||
+      (!task && deployment.tasks.length > 0));
 
   const create = async () => {
     setError(null);
@@ -198,9 +211,7 @@ export function NewAutomationDialog({
       const trigger_id = idFor("trigger", "trig");
       const displayName =
         name.trim() ||
-        (taskId === NEW
-          ? prompt.trim().split("\n")[0].slice(0, 60)
-          : (deployment.tasks.find((t) => t.taskId === taskId)?.name ?? "Automation"));
+        (taskId === NEW ? fromPrompt : (existingTask?.name ?? "Automation"));
       const schedules: Schedule[] = [];
       const eventSources: EventSource[] = [];
       const tasks: Task[] = [];
@@ -281,18 +292,18 @@ export function NewAutomationDialog({
           ...(triggers.length ? { triggers } : {}),
         },
       });
-      close(false);
-      if (onCreated && source) onCreated(trigger_id);
+      if (source && onCreated) onCreated(trigger_id);
+      else if (!source && onCreatedTask) onCreatedTask(task_id);
       else
         navigate(
-          forTask
-            ? { name: "agent", nodeDid: node_did, section: "tasks", item: task_id }
-            : {
+          source
+            ? {
                 name: "agent",
                 nodeDid: node_did,
                 section: "triggers",
                 item: trigger_id,
-              },
+              }
+            : { name: "agent", nodeDid: node_did, section: "tasks", item: task_id },
         );
     } catch (e) {
       setError(errorText(e));
@@ -301,54 +312,131 @@ export function NewAutomationDialog({
     }
   };
 
+  const chooseWhen = (value: string) => {
+    if (value === "event" || value === "manual") {
+      setKind(value);
+      return;
+    }
+    setKind("schedule");
+    setScheduleId(NEW);
+    setPreset(value as Preset);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent aria-modal="true" className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>
-            {forTask ? "New task" : task ? "When it runs" : "New trigger"}
-          </DialogTitle>
-          <DialogDescription>
-            When it runs, what it does, and which agent does it. Everything else can be
-            tuned afterwards.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4">
+    <div className="grid gap-4">
+      {!task && (
+        <Input
+          id="auto-name"
+          aria-label="Name"
+          autoFocus={!start}
+          placeholder={fromPrompt || "Name it"}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="h-auto rounded-none border-0 bg-transparent px-0 py-0 font-heading text-lg font-medium text-heading shadow-none focus-visible:ring-0 md:text-lg dark:bg-transparent"
+        />
+      )}
+      {taskId === NEW ? (
+        <Textarea
+          aria-label="What the agent should do"
+          autoFocus={Boolean(start)}
+          placeholder="What should the agent do? For example: read the mailbox items from the last day and post a short digest."
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          className={cn(
+            "overflow-y-auto",
+            layout === "page" ? "min-h-40 max-h-[50vh]" : "min-h-28 max-h-64",
+          )}
+        />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Runs {existingTask?.name ?? taskId}, with its own prompt and agent.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="secondary" size="sm" aria-label={`When: ${when}`} />
+            }
+          >
+            <WhenIcon /> {when} <ChevronDown className="text-muted-foreground" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-60">
+            <DropdownMenuRadioGroup
+              value={kind === "schedule" && scheduleId === NEW ? preset : kind}
+              onValueChange={(value) => chooseWhen(value as string)}
+            >
+              {PRESETS.map((p) => (
+                <DropdownMenuRadioItem key={p.id} value={p.id}>
+                  {p.id === "custom" ? "Custom schedule…" : p.label}
+                </DropdownMenuRadioItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioItem value="event">
+                When something happens…
+              </DropdownMenuRadioItem>
+              {!task && (
+                <DropdownMenuRadioItem value="manual">
+                  Only by hand
+                </DropdownMenuRadioItem>
+              )}
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+              Times are in {TZ}.
+            </DropdownMenuLabel>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {taskId === NEW && (
+          <AgentPicker
+            deployment={deployment}
+            agentId={agentId}
+            onChange={setAgentId}
+          />
+        )}
+      </div>
+      {kind === "schedule" && scheduleId === NEW && preset === "custom" && (
+        <Input
+          aria-label="Cron expression"
+          className="font-mono"
+          placeholder="0 9 * * 1-5"
+          value={cron}
+          onChange={(e) => setCron(e.target.value)}
+        />
+      )}
+      {kind === "event" && eventId === NEW && (
+        <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
           <Field>
-            <FieldLabel htmlFor="auto-name">Name</FieldLabel>
+            <FieldLabel htmlFor="auto-collection">Collection to watch</FieldLabel>
             <Input
-              id="auto-name"
-              autoFocus
-              placeholder="Morning mailbox digest"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              id="auto-collection"
+              className="font-mono"
+              placeholder="MailboxItem"
+              value={collection}
+              onChange={(e) => setCollection(e.target.value)}
             />
           </Field>
-
           <Field>
-            <FieldLabel htmlFor="auto-kind">When</FieldLabel>
-            <Select
-              items={[
-                ...(forTask ? [{ value: "manual", label: "When I run it" }] : []),
-                { value: "schedule", label: "On a schedule" },
-                { value: "event", label: "When something happens" },
-              ]}
-              value={kind}
-              onValueChange={(v) => v && setKind(v as "schedule" | "event" | "manual")}
-            >
-              <SelectTrigger id="auto-kind" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {forTask && <SelectItem value="manual">When I run it</SelectItem>}
-                <SelectItem value="schedule">On a schedule</SelectItem>
-                <SelectItem value="event">When something happens</SelectItem>
-              </SelectContent>
-            </Select>
+            <FieldLabel htmlFor="auto-event-kind">Event kind</FieldLabel>
+            <Input
+              id="auto-event-kind"
+              className="font-mono"
+              value={eventKind}
+              onChange={(e) => setEventKind(e.target.value)}
+            />
           </Field>
-
-          {kind === "manual" ? null : kind === "schedule" ? (
-            <>
+        </div>
+      )}
+      {agentOff && agent && (
+        <p className="text-sm text-warning">
+          {agent.displayName} can’t run ({readiness?.reason}), so the automation is
+          created off.
+        </p>
+      )}
+      {canReuse &&
+        (reuse ? (
+          <div className="grid gap-3 rounded-xl bg-raised/50 p-3">
+            {kind === "schedule" && (
               <Choice
                 id="auto-schedule"
                 label="Schedule"
@@ -358,42 +446,10 @@ export function NewAutomationDialog({
                   value: s.schedule_id,
                   label: s.display_name ?? cadenceInWords(s),
                 }))}
-                newLabel="New schedule…"
+                newLabel="Its own schedule"
               />
-              {scheduleId === NEW && (
-                <Field>
-                  <FieldLabel htmlFor="auto-preset">Cadence</FieldLabel>
-                  <Select
-                    items={PRESETS.map((p) => ({ value: p.id, label: p.label }))}
-                    value={preset}
-                    onValueChange={(v) => v && setPreset(v as typeof preset)}
-                  >
-                    <SelectTrigger id="auto-preset" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRESETS.map((p) => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {preset === "custom" && (
-                    <Input
-                      aria-label="Cron expression"
-                      className="mt-2 font-mono"
-                      placeholder="0 9 * * 1-5"
-                      value={cron}
-                      onChange={(e) => setCron(e.target.value)}
-                    />
-                  )}
-                  <FieldDescription>Times are in {TZ}.</FieldDescription>
-                </Field>
-              )}
-            </>
-          ) : (
-            <>
+            )}
+            {kind === "event" && (
               <Choice
                 id="auto-event"
                 label="Event"
@@ -403,112 +459,131 @@ export function NewAutomationDialog({
                   value: e.event_source_id,
                   label: e.display_name ?? eventInWords(e),
                 }))}
-                newLabel="New event source…"
+                newLabel="Its own event"
               />
-              {eventId === NEW && (
-                <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-                  <Field>
-                    <FieldLabel htmlFor="auto-collection">Collection</FieldLabel>
-                    <Input
-                      id="auto-collection"
-                      className="font-mono"
-                      placeholder="MailboxItem"
-                      value={collection}
-                      onChange={(e) => setCollection(e.target.value)}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="auto-event-kind">Event kind</FieldLabel>
-                    <Input
-                      id="auto-event-kind"
-                      className="font-mono"
-                      value={eventKind}
-                      onChange={(e) => setEventKind(e.target.value)}
-                    />
-                  </Field>
-                </div>
-              )}
-            </>
-          )}
-
-          {!forTask && !task && (
-            <Choice
-              id="auto-task"
-              label="What"
-              value={taskId}
-              onChange={setTaskId}
-              items={deployment.tasks.map((t) => ({
-                value: t.taskId,
-                label: t.name ?? t.taskId,
-              }))}
-              newLabel="New task…"
+            )}
+            {!task && (
+              <Choice
+                id="auto-task"
+                label="Task"
+                value={taskId}
+                onChange={setTaskId}
+                items={deployment.tasks.map((t) => ({
+                  value: t.taskId,
+                  label: t.name ?? t.taskId,
+                }))}
+                newLabel="Its own task"
+              />
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setReuse(true)}
+            className="w-fit cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Use an existing schedule or task
+          </button>
+        ))}
+      {error && <FieldError>{error}</FieldError>}
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-2",
+          layout === "page" && "border-t border-border/60 pt-4",
+        )}
+      >
+        {kind !== "manual" && (
+          <span className="flex items-center gap-2 text-sm">
+            <Checkbox
+              id="auto-enable"
+              checked={enable && !agentOff}
+              disabled={agentOff}
+              onCheckedChange={(v) => setEnable(Boolean(v))}
             />
-          )}
-          {taskId === NEW && (
-            <>
-              <Field>
-                <FieldLabel htmlFor="auto-prompt">Prompt</FieldLabel>
-                <Textarea
-                  id="auto-prompt"
-                  rows={4}
-                  placeholder="Read the mailbox items from the last day and post a short digest."
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="auto-agent">Who</FieldLabel>
-                <Select
-                  items={deployment.agents.map((b) => ({
-                    value: b.agentId,
-                    label: b.displayName,
-                  }))}
-                  value={agentId}
-                  onValueChange={(v) => v && setAgentId(v)}
-                >
-                  <SelectTrigger id="auto-agent" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {deployment.agents.map((b) => (
-                      <SelectItem key={b.agentId} value={b.agentId}>
-                        {b.displayName}
-                        {b.isDefault ? " (default)" : ""}
-                        {b.enabled ? "" : " · off"}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {agentOff && agent && (
-                  <FieldDescription>
-                    {agent.displayName} can’t run ({readiness?.reason}), so the
-                    automation is created off.
-                  </FieldDescription>
-                )}
-              </Field>
-            </>
-          )}
-          {kind !== "manual" && (
-            <div className="flex items-center gap-2 text-sm">
-              <Checkbox
-                id="auto-enable"
-                checked={enable && !agentOff}
-                disabled={agentOff}
-                onCheckedChange={(v) => setEnable(Boolean(v))}
-              />
-              <label htmlFor="auto-enable">Turn it on now</label>
-            </div>
-          )}
-          {error && <FieldError>{error}</FieldError>}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" disabled={busy} onClick={() => close(false)}>
-            Cancel
-          </Button>
-          <Button variant="brand" disabled={busy} onClick={create}>
-            {busy ? "Creating…" : "Create"}
-          </Button>
-        </DialogFooter>
+            <label htmlFor="auto-enable">Turn on now</label>
+          </span>
+        )}
+        <span className="flex-1" />
+        <Button variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="brand" disabled={busy} onClick={() => void create()}>
+          {busy ? "Creating…" : "Create"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** The same form in a dialog, for the node configuration's own buttons. */
+export function NewAutomationDialog({
+  deployment,
+  open,
+  onOpenChange,
+  forTask = false,
+  task,
+  initialKind,
+  onCreated,
+  template,
+}: {
+  deployment: NodeView;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  forTask?: boolean;
+  task?: string;
+  initialKind?: "schedule" | "event";
+  onCreated?: (triggerId: string) => void;
+  template?: AutomationStart | null;
+}) {
+  const [opened, setOpened] = useState(0);
+  const change = (next: boolean) => {
+    if (next) setOpened((n) => n + 1);
+    onOpenChange(next);
+  };
+  return (
+    <Dialog open={open} onOpenChange={change}>
+      <DialogContent aria-modal="true" className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {forTask ? "New task" : task ? "When it runs" : "New automation"}
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            What the agent should do, when it runs, and which agent runs it.
+          </DialogDescription>
+        </DialogHeader>
+        {open && (
+          <AutomationForm
+            /* a fresh form each time it opens */
+            key={opened}
+            deployment={deployment}
+            forTask={forTask}
+            task={task}
+            initialKind={initialKind}
+            start={template}
+            layout="dialog"
+            onCancel={() => onOpenChange(false)}
+            onCreated={(triggerId) => {
+              onOpenChange(false);
+              if (onCreated) onCreated(triggerId);
+              else
+                navigate({
+                  name: "agent",
+                  nodeDid: deployment.nodeDid,
+                  section: "triggers",
+                  item: triggerId,
+                });
+            }}
+            onCreatedTask={(taskId) => {
+              onOpenChange(false);
+              navigate({
+                name: "agent",
+                nodeDid: deployment.nodeDid,
+                section: "tasks",
+                item: taskId,
+              });
+            }}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );

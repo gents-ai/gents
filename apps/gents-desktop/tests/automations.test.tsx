@@ -8,7 +8,7 @@ import {
   type Automation,
 } from "../src/ui/screens/automations/model";
 import { AutomationsScreen } from "../src/ui/screens/AutomationsScreen";
-import { renderIn, testApp, withFlags } from "./app-fixture";
+import { renderIn, renderRouted, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 const NOW = Date.parse("2026-11-04T12:00:00Z");
@@ -105,15 +105,36 @@ describe("the Automations page", () => {
     expect(screen.getByRole("link", { name: /Task B/ })).toBeInTheDocument();
   });
 
-  it("offers ideas while none is open, each starting New automation filled in", async () => {
-    page();
-    const templates = screen.getByLabelText("Ideas");
+  it("opens an idea as a new automation in place, filled in, and creates it", async () => {
+    withFlags({ automations: true });
+    const changeConfig = vi.fn().mockResolvedValue({});
+    const app = testApp({
+      api: { patchConfigComponents: changeConfig, applyConfigComponents: changeConfig },
+      snapshot: { bootstrap, client: { deployments: [deployment] } },
+    });
+    renderRouted(app, { name: "automations" }, (route) =>
+      route.name === "automations" ? <AutomationsScreen item={route.item} /> : null,
+    );
     await act(async () => {
       fireEvent.click(
-        within(templates).getByRole("button", { name: /Morning summary/ }),
+        within(screen.getByLabelText("Ideas")).getByRole("button", {
+          name: /Morning summary/,
+        }),
       );
     });
-    expect(await screen.findByDisplayValue("Morning summary")).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("Morning summary");
+    expect(
+      (screen.getByLabelText("What the agent should do") as HTMLTextAreaElement).value,
+    ).toContain("Summarize what happened");
+    expect(
+      screen.getByRole("button", { name: "When: Every weekday at 09:00" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    expect(changeConfig).toHaveBeenCalled();
+    expect(screen.queryByLabelText("What the agent should do")).not.toBeInTheDocument();
   });
 
   it("turns an open automation off", async () => {

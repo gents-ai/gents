@@ -28,9 +28,11 @@ import { SEARCH_FIELD } from "@/lib/textAssist";
 import { browserStorage } from "@/lib/storage";
 import { useSelectedNode } from "@/hooks/useClient";
 import { Hint } from "./Hint";
-import { NewAutomationDialog } from "./agent/NewAutomationDialog";
+import { AutomationForm } from "./agent/NewAutomationDialog";
 import { AutomationDetail } from "./automations/AutomationDetail";
 import {
+  MANUAL,
+  NEW_AUTOMATION,
   automationsOf,
   inTab,
   matches,
@@ -56,12 +58,15 @@ export function AutomationsScreen({ item }: { item?: string }) {
   const now = useMinute();
   const [filter, setFilter] = useState<AutomationTab>("all");
   const [query, setQuery] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
   const [template, setTemplate] = useState<AutomationTemplate | null>(null);
   const [templatesHidden, hideTemplates] = useTemplatesHidden();
   const start = (from: AutomationTemplate | null) => {
     setTemplate(from);
-    setCreating(true);
+    navigate({ name: "automations", item: NEW_AUTOMATION });
+  };
+  const leave = (to?: string) => {
+    setTemplate(null);
+    navigate({ name: "automations", item: to });
   };
   const all = node ? automationsOf(node) : [];
   const shown = tabOrder(
@@ -76,7 +81,30 @@ export function AutomationsScreen({ item }: { item?: string }) {
   return (
     <ScrollArea className="h-full" data-testid="automations-screen">
       <div className="mx-auto grid max-w-page gap-6 px-6 py-6">
-        {open && node ? (
+        {item === NEW_AUTOMATION && node ? (
+          <div className="grid gap-4">
+            <a
+              href={href({ name: "automations" })}
+              onClick={(e) => {
+                e.preventDefault();
+                leave();
+              }}
+              className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="size-3" /> Automations
+            </a>
+            <AutomationForm
+              /* a fresh form for each idea */
+              key={template?.id ?? "blank"}
+              deployment={node}
+              start={template}
+              layout="page"
+              onCancel={() => leave()}
+              onCreated={(triggerId) => leave(triggerId)}
+              onCreatedTask={(taskId) => leave(`${MANUAL}${taskId}`)}
+            />
+          </div>
+        ) : open && node ? (
           <div className="grid gap-4">
             <a
               href={href({ name: "automations" })}
@@ -146,8 +174,14 @@ export function AutomationsScreen({ item }: { item?: string }) {
                       <Search />
                     </Button>
                     {node && (
-                      <Button size="sm" variant="secondary" onClick={() => start(null)}>
-                        <Plus /> New automation
+                      <Button
+                        variant="brand"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() => start(null)}
+                      >
+                        <Plus className="sm:hidden" />
+                        <span className="max-sm:sr-only">New</span>
                       </Button>
                     )}
                   </div>
@@ -222,15 +256,6 @@ export function AutomationsScreen({ item }: { item?: string }) {
           </>
         )}
       </div>
-      {node && (
-        <NewAutomationDialog
-          deployment={node}
-          open={creating}
-          onOpenChange={setCreating}
-          template={template}
-          onCreated={(triggerId) => navigate({ name: "automations", item: triggerId })}
-        />
-      )}
     </ScrollArea>
   );
 }

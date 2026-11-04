@@ -417,11 +417,17 @@ export async function createTriggerDocument({
   await driver.openConfigSection("triggers");
   await driver.user.click(screen.getByRole("button", { name: "New trigger" }));
   changeField("auto-name", "Config Flow Event Trigger");
-  await chooseField(driver, "auto-kind", /^When something happens$/);
+  await driver.user.click(screen.getByRole("button", { name: /^When:/ }));
+  await driver.user.click(
+    await screen.findByRole("menuitemradio", { name: /^When something happens/ }),
+  );
+  await driver.user.click(
+    screen.getByRole("button", { name: "Use an existing schedule or task" }),
+  );
   await chooseField(driver, "auto-event", /^Config Flow Events$/);
   await chooseField(driver, "auto-task", /^Config Flow Smoke Task$/);
   await driver.user.click(
-    within(screen.getByRole("dialog", { name: "New trigger" })).getByRole("button", {
+    within(screen.getByRole("dialog", { name: "New automation" })).getByRole("button", {
       name: "Create",
     }),
   );

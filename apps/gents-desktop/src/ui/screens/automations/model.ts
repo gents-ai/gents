@@ -36,6 +36,8 @@ export type Automation = {
 };
 
 export const MANUAL = "task:";
+/** the page's item for a new automation; no automation id has this form */
+export const NEW_AUTOMATION = "new";
 
 const failedStatus = (status: string | null) =>
   status === "error" || status === "failed";
