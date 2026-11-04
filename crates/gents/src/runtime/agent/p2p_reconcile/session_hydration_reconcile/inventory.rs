@@ -206,10 +206,7 @@ impl FileInventorySnapshot {
         })
     }
 
-    pub async fn load(
-        node: &Arc<Node>,
-        admission: &FileInventoryAdmission,
-    ) -> Result<Self> {
+    pub async fn load(node: &Arc<Node>, admission: &FileInventoryAdmission) -> Result<Self> {
         anyhow::ensure!(
             node.node_identity_did() == Some(admission.request.node_did.as_str())
                 && [

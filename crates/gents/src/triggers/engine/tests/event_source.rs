@@ -412,10 +412,7 @@ fn snapshot_with_event_triggers(
     Arc::new(resolved.activate(generation, RapidHashMap::new()))
 }
 
-async fn persist_event_bindings(
-    node: &Arc<defra_node::Node>,
-    snapshot: &ActiveRuntimeSnapshot,
-) {
+async fn persist_event_bindings(node: &Arc<defra_node::Node>, snapshot: &ActiveRuntimeSnapshot) {
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for trigger in snapshot.active_event_triggers().values() {
         let behavior = snapshot.agent(&trigger.task.agent_id).unwrap();
@@ -438,10 +435,7 @@ async fn persist_event_bindings(
     }
 }
 
-async fn admit_observed_event(
-    node: &Arc<defra_node::Node>,
-    intent: &FireIntent,
-) -> FireResult {
+async fn admit_observed_event(node: &Arc<defra_node::Node>, intent: &FireIntent) -> FireResult {
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
     let identity = FireIdentity {
         owner_did: event_test_behavior().node_did().to_owned(),

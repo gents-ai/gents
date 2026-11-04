@@ -45,11 +45,7 @@ async fn seed_agent_request_for_session(
     exec(node, &mutation, "seed AgentRequest").await;
 }
 
-pub(super) async fn seed_agent_tool_call(
-    node: &Node,
-    tool_call_id: &str,
-    requester_did: &str,
-) {
+pub(super) async fn seed_agent_tool_call(node: &Node, tool_call_id: &str, requester_did: &str) {
     let tool_call_id = escape_graphql_string(tool_call_id);
     let requester_did = escape_graphql_string(requester_did);
     let tool_call_key = escape_graphql_string(&format!("issue-604-session:{tool_call_id}"));

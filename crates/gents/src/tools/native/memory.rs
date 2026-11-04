@@ -227,12 +227,7 @@ async fn read_memory(node: &Node, node_did: &str, key: &str) -> Result<MemoryOut
     })
 }
 
-async fn write_memory(
-    node: &Node,
-    node_did: &str,
-    key: &str,
-    value: &str,
-) -> Result<MemoryOutput> {
+async fn write_memory(node: &Node, node_did: &str, key: &str, value: &str) -> Result<MemoryOutput> {
     let updated_at = chrono::Utc::now().to_rfc3339();
     let output_key = key.to_string();
     let output_value = value.to_string();

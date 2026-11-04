@@ -43,10 +43,7 @@ pub(crate) async fn session_token_usage_breakdown_in_txn(
         .context("summing goal inference usage")
 }
 
-pub async fn refresh_goal_usage(
-    node: &std::sync::Arc<Node>,
-    goal: &GoalDocument,
-) -> Result<i64> {
+pub async fn refresh_goal_usage(node: &std::sync::Arc<Node>, goal: &GoalDocument) -> Result<i64> {
     let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)
         .await?
         .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))

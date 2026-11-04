@@ -325,10 +325,7 @@ struct RuntimeSnapshot {
     active_generation: i64,
 }
 
-async fn fetch_runtime_snapshot(
-    node: &Node,
-    node_did: &str,
-) -> Result<Option<RuntimeSnapshot>> {
+async fn fetch_runtime_snapshot(node: &Node, node_did: &str) -> Result<Option<RuntimeSnapshot>> {
     let escaped_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{

@@ -1,9 +1,6 @@
 use super::*;
 
-pub(super) async fn node_default_agent(
-    node: &Node,
-    node_did: &str,
-) -> Result<Option<String>> {
+pub(super) async fn node_default_agent(node: &Node, node_did: &str) -> Result<Option<String>> {
     let query = format!(
         r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_id }} }}"#,
         escape_graphql_string(node_did)

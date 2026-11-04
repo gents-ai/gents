@@ -235,12 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn additive_series_preserves_exact_install_and_requires_declared_fields() {
-        let node = std::sync::Arc::new(
-            crate::defra_node::Node::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = std::sync::Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         let base = "type EvalPatch { message: String }";
         let extended = "type EvalPatch { message: String owned_files: String @immutable }";
@@ -300,12 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn additive_schema_contract_preview_digest_and_reinstall() {
-        let node = std::sync::Arc::new(
-            crate::defra_node::Node::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = std::sync::Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         let sdl = "type EvalInput { message: String }";
         let plan = preview_schema_install(&access, sdl).await.unwrap();

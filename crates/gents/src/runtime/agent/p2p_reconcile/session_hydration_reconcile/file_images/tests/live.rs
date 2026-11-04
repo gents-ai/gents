@@ -220,11 +220,7 @@ async fn admit_on_client(node: &Arc<Node>, demand: &FileImageDemand) -> Result<S
     )?)
 }
 
-async fn receipt_row(
-    node: &Arc<Node>,
-    demand: &FileImageDemand,
-    status: &str,
-) -> Result<Value> {
+async fn receipt_row(node: &Arc<Node>, demand: &FileImageDemand, status: &str) -> Result<Value> {
     let query = format!(
         r#"{{ FileImageHydrationRequest: {}(filter: {{ request_key: {{ _eq: "{}" }} }}) {{
             _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id {}

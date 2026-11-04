@@ -712,12 +712,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
 
 #[tokio::test]
 async fn explain_preserves_native_plan_and_requires_explicit_execution() {
-    let node = Arc::new(
-        crate::defra_node::Node::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type PlanTicket { reference: String status: String @index }")
         .await
         .unwrap();

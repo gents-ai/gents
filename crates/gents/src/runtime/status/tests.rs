@@ -131,10 +131,7 @@ async fn fetch_runtime_row(node: &defra_node::Node, node_did: &str) -> NodeRunti
     serde_json::from_value(value).expect("decode NodeRuntime row")
 }
 
-async fn fetch_node_readiness_row(
-    node: &defra_node::Node,
-    node_did: &str,
-) -> NodeReadinessRow {
+async fn fetch_node_readiness_row(node: &defra_node::Node, node_did: &str) -> NodeReadinessRow {
     let escaped_node_did = escape_graphql_string(node_did);
     let response = node
         .execute(&format!(

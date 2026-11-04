@@ -296,11 +296,7 @@ async fn set_request_processing(node: &defra_node::Node, doc_id: &str) {
     );
 }
 
-async fn set_request_interrupt_requested_at(
-    node: &defra_node::Node,
-    doc_id: &str,
-    at: &str,
-) {
+async fn set_request_interrupt_requested_at(node: &defra_node::Node, doc_id: &str, at: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let at = crate::store::graphql::escape_graphql_string(at);
     let mutation = format!(
@@ -319,10 +315,7 @@ async fn set_request_interrupt_requested_at(
     );
 }
 
-async fn request_terminal_fields(
-    node: &defra_node::Node,
-    request_id: &str,
-) -> serde_json::Value {
+async fn request_terminal_fields(node: &defra_node::Node, request_id: &str) -> serde_json::Value {
     let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let query = format!(
         r#"{{

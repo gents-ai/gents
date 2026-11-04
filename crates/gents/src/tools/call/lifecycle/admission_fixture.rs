@@ -165,12 +165,7 @@ pub struct PublishedAdmission {
     pub node_did: String,
 }
 
-pub(crate) async fn complete_child(
-    node: &Arc<Node>,
-    child_id: &str,
-    node_did: &str,
-    text: &str,
-) {
+pub(crate) async fn complete_child(node: &Arc<Node>, child_id: &str, node_did: &str, text: &str) {
     let child_id_escaped = crate::store::graphql::escape_graphql_string(child_id);
     let response = node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_id_escaped}" }} }}) {{ {} }} }}"#,
@@ -616,9 +611,7 @@ pub async fn published_spawn_parent(name: &str) -> (Arc<Node>, PathBuf, ToolCall
     (node, path, tool)
 }
 
-pub async fn published_background_bridge(
-    name: &str,
-) -> (Arc<Node>, PathBuf, ToolCallLifecycle) {
+pub async fn published_background_bridge(name: &str) -> (Arc<Node>, PathBuf, ToolCallLifecycle) {
     let PublishedAdmission {
         node, path, tool, ..
     } = published_admission(PublishedAdmissionOptions {

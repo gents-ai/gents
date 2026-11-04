@@ -1402,12 +1402,7 @@ mod data_calls {
     const NODE: &str = "did:key:z6Mknode";
 
     async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::Node> {
-        let node = Arc::new(
-            crate::defra_node::Node::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type Note { owner: String body: String }")
             .await
             .unwrap();

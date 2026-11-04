@@ -31,11 +31,7 @@ pub(super) async fn update(node: &crate::defra_node::Node, doc_id: &str, fields:
     .await;
 }
 
-pub(super) async fn update_request(
-    node: &crate::defra_node::Node,
-    doc_id: &str,
-    fields: &str,
-) {
+pub(super) async fn update_request(node: &crate::defra_node::Node, doc_id: &str, fields: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     execute_fixture_write(node, &format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#

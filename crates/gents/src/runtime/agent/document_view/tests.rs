@@ -29,11 +29,7 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-async fn bind_default_agent_backend(
-    node: &Arc<defra_node::Node>,
-    node_did: &str,
-    agent_id: &str,
-) {
+async fn bind_default_agent_backend(node: &Arc<defra_node::Node>, node_did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, node_did, agent_id).await;
     crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
         .await

@@ -1035,10 +1035,7 @@ struct RuntimeStatusRow {
     last_reconcile_error: String,
 }
 
-async fn fetch_runtime_status(
-    node: &Arc<defra_node::Node>,
-    node_did: &str,
-) -> RuntimeStatusRow {
+async fn fetch_runtime_status(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusRow {
     let node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{

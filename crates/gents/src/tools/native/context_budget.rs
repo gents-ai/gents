@@ -271,10 +271,7 @@ impl Tool for ContextBudgetTool {
     }
 }
 
-pub fn build_context_budget_tool(
-    node: Arc<Node>,
-    node_did: impl Into<String>,
-) -> Box<dyn ToolDyn> {
+pub fn build_context_budget_tool(node: Arc<Node>, node_did: impl Into<String>) -> Box<dyn ToolDyn> {
     Box::new(ContextBudgetTool::new(node, node_did))
 }
 

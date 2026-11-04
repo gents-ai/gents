@@ -481,11 +481,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
     }
 }
 
-async fn configure_bash_output_budget(
-    node: &std::sync::Arc<Node>,
-    owner: &str,
-    budget: i64,
-) {
+async fn configure_bash_output_budget(node: &std::sync::Arc<Node>, owner: &str, budget: i64) {
     use crate::store::config_client::{
         apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -505,10 +501,7 @@ async fn configure_bash_output_budget(
     .unwrap();
 }
 
-async fn interrupted_presentation(
-    node: &std::sync::Arc<Node>,
-    tool: &ToolCallLifecycle,
-) -> String {
+async fn interrupted_presentation(node: &std::sync::Arc<Node>, tool: &ToolCallLifecycle) -> String {
     crate::tools::call::lifecycle::load_tool_call_presentation(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
         tool.doc_id().unwrap(),

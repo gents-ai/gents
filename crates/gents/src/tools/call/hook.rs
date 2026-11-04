@@ -1424,11 +1424,7 @@ impl DefraSessionHook {
     }
 
     #[cfg(test)]
-    pub fn with_identity(
-        node: Arc<Node>,
-        node_did: &str,
-        failure_policy: FailurePolicy,
-    ) -> Self {
+    pub fn with_identity(node: Arc<Node>, node_did: &str, failure_policy: FailurePolicy) -> Self {
         let background_executions = BackgroundExecutionRegistry::default();
         let background_live_outputs = background_executions.live_outputs.clone();
         Self {

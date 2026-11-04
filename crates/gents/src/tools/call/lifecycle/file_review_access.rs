@@ -160,10 +160,7 @@ impl VerifiedFileImageReceipt {
 }
 
 /// `None` until the granted observation has materialized locally.
-async fn observation_contents(
-    node: &Arc<Node>,
-    document: &str,
-) -> Result<Option<Vec<String>>> {
+async fn observation_contents(node: &Arc<Node>, document: &str) -> Result<Option<Vec<String>>> {
     let response = ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ {}(docID: "{}") {{ file_changes }} }}"#,

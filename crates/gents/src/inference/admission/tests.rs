@@ -385,11 +385,7 @@ async fn wait_for_call_row_count(node: &Node, expected: usize) -> Vec<Value> {
     panic!("timed out waiting for at least {expected} InferenceCall rows, last rows={last:?}");
 }
 
-async fn wait_for_request_call_state(
-    node: &Node,
-    request_id: &str,
-    expected_state: &str,
-) -> Value {
+async fn wait_for_request_call_state(node: &Node, request_id: &str, expected_state: &str) -> Value {
     let mut last = Vec::new();
     for _ in 0..100 {
         let rows = call_rows(node).await;

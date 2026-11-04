@@ -381,10 +381,7 @@ pub async fn load_mailbox_item(node: &Node, doc_id: &str) -> Result<Option<Mailb
     Ok(found.pop())
 }
 
-async fn load_mailbox_item_by_key(
-    node: &Node,
-    item_key: &str,
-) -> Result<Option<MailboxItem>> {
+async fn load_mailbox_item_by_key(node: &Node, item_key: &str) -> Result<Option<MailboxItem>> {
     let query = format!(
         r#"{{ MailboxItem(filter: {{ item_key: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
         escape_graphql_string(item_key)

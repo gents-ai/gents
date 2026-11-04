@@ -40,11 +40,7 @@ pub(super) async fn load(
 }
 
 impl Policy {
-    pub(super) async fn is_current(
-        &self,
-        node: &Arc<Node>,
-        parent: &AgentRequest,
-    ) -> Result<bool> {
+    pub(super) async fn is_current(&self, node: &Arc<Node>, parent: &AgentRequest) -> Result<bool> {
         Ok(crate::session::message::load_configured_task(
             node,
             &parent.node_did,

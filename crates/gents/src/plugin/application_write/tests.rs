@@ -36,12 +36,7 @@ fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {
     }
 }
 async fn fixture() -> (Arc<crate::defra_node::Node>, WriteTool) {
-    let node = Arc::new(
-        crate::defra_node::Node::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection(
         "type Parcel { reference: String status: String tags: [String] payload: JSON }",
     )
@@ -206,12 +201,7 @@ async fn managed_credentials_scope_and_injection_are_refused() {
 
 #[tokio::test]
 async fn native_relationship_input_uses_the_target_document_id() {
-    let node = Arc::new(
-        crate::defra_node::Node::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection(
         "type Writer { name: String books: [Volume] } type Volume { title: String author: Writer }",
     )
@@ -243,12 +233,7 @@ async fn native_relationship_input_uses_the_target_document_id() {
 async fn a_collection_grant_cannot_bypass_native_document_acp() {
     const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
-    let node = Arc::new(
-        crate::defra_node::Node::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     let policy = node.add_dac_policy(OWNER, "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_collection(&format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::store::graphql::escape_graphql_string(&policy))).await.unwrap();
     let owner = WriteTool::new(
@@ -308,12 +293,7 @@ mod plugin {
     const NODE: &str = "did:key:z6Mknode";
 
     async fn node() -> Arc<crate::defra_node::Node> {
-        let node = Arc::new(
-            crate::defra_node::Node::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection(
             "type Note { owner: String body: String tags: [String] }
              type Keyed { owner: String key: String @index(unique: true) body: String created_at: String }

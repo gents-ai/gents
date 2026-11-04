@@ -709,9 +709,7 @@ async fn owned_test_hook_with_identity_policy(
     let requester_did = identity.as_ref().map(|_| node_did);
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let builder = match identity.as_ref() {
-        Some(identity) => {
-            defra_node::Node::builder().with_node_identity_did(identity.did())
-        }
+        Some(identity) => defra_node::Node::builder().with_node_identity_did(identity.did()),
         None => crate::test_support::node_builder(),
     };
     let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());

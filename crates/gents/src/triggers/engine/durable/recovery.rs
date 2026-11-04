@@ -6,10 +6,7 @@ use anyhow::{Context, Result};
 use defra_node::Node;
 use gents_protocol::trigger_delivery::TriggerFire;
 
-pub(crate) async fn recover_outcomes(
-    node: &std::sync::Arc<Node>,
-    owner: &str,
-) -> Result<usize> {
+pub(crate) async fn recover_outcomes(node: &std::sync::Arc<Node>, owner: &str) -> Result<usize> {
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,

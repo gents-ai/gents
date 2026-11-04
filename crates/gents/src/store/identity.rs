@@ -202,9 +202,7 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
 }
 
 /// P2P administration must carry the node DID explicitly across worker boundaries.
-pub fn node_p2p(
-    node: &defra_node::Node,
-) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
+pub fn node_p2p(node: &defra_node::Node) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
     let context = defra_core::RequestContext::default()
         .with_identity(node.node_identity_did().map(ToOwned::to_owned));
     node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))

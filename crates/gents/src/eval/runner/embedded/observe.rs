@@ -361,10 +361,7 @@ pub(crate) struct RequestPollRow {
     pub(crate) session_id: Option<String>,
 }
 
-pub(crate) async fn poll_request(
-    node: &Node,
-    request_id: &str,
-) -> Result<Option<RequestPollRow>> {
+pub(crate) async fn poll_request(node: &Node, request_id: &str) -> Result<Option<RequestPollRow>> {
     let response =
         graphql_with_transaction_retry(node, &poll_query(request_id), "await terminal").await?;
     Ok(first_row(&response, "AgentRequest")?)

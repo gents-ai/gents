@@ -319,10 +319,7 @@ fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
     }
 }
 
-async fn upsert_backend_configuration(
-    node: &std::sync::Arc<Node>,
-    backend: &InferenceBackend,
-) {
+async fn upsert_backend_configuration(node: &std::sync::Arc<Node>, backend: &InferenceBackend) {
     use crate::store::config_client::{
         ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -343,11 +340,7 @@ async fn upsert_backend_configuration(
     .unwrap();
 }
 
-async fn seed_backend_observation(
-    node: &Arc<Node>,
-    backend: &InferenceBackend,
-    status: &str,
-) {
+async fn seed_backend_observation(node: &Arc<Node>, backend: &InferenceBackend, status: &str) {
     upsert_backend_configuration(node, backend).await;
     crate::inference::backends::registry::set_backend_probe_status(
         node,

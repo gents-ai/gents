@@ -372,10 +372,7 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
     deduped
 }
 
-pub(super) async fn enabled_mcp_service_ids(
-    node: &Node,
-    node_did: &str,
-) -> Result<Vec<String>> {
+pub(super) async fn enabled_mcp_service_ids(node: &Node, node_did: &str) -> Result<Vec<String>> {
     Ok(
         crate::tools::mcp::registry::configured_mcp_services(node, node_did)
             .await?

@@ -254,9 +254,7 @@ impl Gents {
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
         if node.node_identity_did().is_none() {
-            anyhow::bail!(
-                "Gents runtime requires a Node configured with a node signing DID"
-            );
+            anyhow::bail!("Gents runtime requires a Node configured with a node signing DID");
         }
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
