@@ -12,6 +12,7 @@ import {
   triggerReadiness,
   type Readiness,
 } from "../agent/automation";
+import { packOrigin } from "../agent/ListDetail";
 
 /** One thing that runs: a trigger and the task it starts, or a task with no
     trigger, which runs only by hand. */
@@ -33,6 +34,8 @@ export type Automation = {
   runs: number;
   task: TaskView | null;
   trigger: TriggerView | null;
+  /** the pack it came from, as the configuration lists group it */
+  pack: string | null;
 };
 
 export const MANUAL = "task:";
@@ -63,6 +66,7 @@ function fromTrigger(node: NodeView, t: TriggerView): Automation {
     runs: t.fireCount ?? 0,
     task,
     trigger: t,
+    pack: packOrigin(t.config.tags) ?? packOrigin(task?.tags),
   };
 }
 
@@ -92,6 +96,7 @@ function fromTask(node: NodeView, task: TaskView): Automation {
     runs: task.recentRuns.totalFires,
     task,
     trigger: null,
+    pack: packOrigin(task.tags),
   };
 }
 
@@ -102,6 +107,27 @@ export function automationsOf(node: NodeView): Automation[] {
     ...node.triggers.map((t) => fromTrigger(node, t)),
     ...node.tasks.filter((t) => !triggered.has(t.taskId)).map((t) => fromTask(node, t)),
   ];
+}
+
+/** Your own automations, then one group per pack by name; in each, the
+    ones that run on their own before the ones run by hand. */
+export function byPack(
+  list: Automation[],
+): { pack: string | null; items: Automation[] }[] {
+  const order = (items: Automation[]) => [
+    ...items.filter((a) => a.kind !== "manual"),
+    ...items.filter((a) => a.kind === "manual"),
+  ];
+  const packs = [
+    ...new Set(list.map((a) => a.pack).filter((p): p is string => p !== null)),
+  ].sort();
+  return [
+    { pack: null, items: order(list.filter((a) => a.pack === null)) },
+    ...packs.map((pack) => ({
+      pack,
+      items: order(list.filter((a) => a.pack === pack)),
+    })),
+  ].filter((g) => g.items.length > 0);
 }
 
 export type AutomationTab = "all" | "next" | "attention" | "off";

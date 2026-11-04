@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import {
   automationsOf,
+  byPack,
   inTab,
   runsOf,
   type Automation,
@@ -98,11 +99,46 @@ describe("the Automations page", () => {
     return { changeConfig, runTask, app };
   };
 
-  it("lists the active node's automations, the hand-run ones under their own heading", () => {
+  it("lists the active node's automations together, the hand-run ones last", () => {
     page();
-    expect(screen.getByRole("link", { name: /Trigger A/ })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Run by hand" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Task B/ })).toBeInTheDocument();
+    const links = screen
+      .getAllByRole("link")
+      .map((l) => l.textContent ?? "")
+      .filter((t) => /Trigger A|Task B/.test(t));
+    expect(links).toHaveLength(2);
+    expect(links[0]).toMatch(/Trigger A/);
+    expect(links[1]).toMatch(/Task B.*Run by hand/);
+    expect(
+      screen.queryByRole("heading", { name: "Run by hand" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("groups what came from a pack under the pack's name, after your own", async () => {
+    withFlags({ automations: true });
+    const fromPack: DeploymentView = {
+      ...deployment,
+      tasks: deployment.tasks.map((t) =>
+        t.taskId === "task-b" ? { ...t, tags: ["gents:pack:demo/research"] } : t,
+      ),
+    };
+    expect(
+      byPack(automationsOf(fromPack)).map((g) => [g.pack, g.items.length]),
+    ).toEqual([
+      [null, 1],
+      ["demo/research", 1],
+    ]);
+    const app = testApp({
+      snapshot: { bootstrap, client: { deployments: [fromPack] } },
+    });
+    renderIn(app, <AutomationsScreen />);
+    const group = screen.getByRole("region", { name: "From demo/research" });
+    expect(within(group).getByRole("link", { name: /Task B/ })).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(within(group).getByRole("button", { expanded: true }));
+    });
+    expect(
+      within(group).queryByRole("link", { name: /Task B/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("opens an idea as a new automation in place, filled in, and creates it", async () => {

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Hand,
   Lightbulb,
   ListFilter,
+  Package,
   Play,
   Plus,
   Search,
@@ -29,12 +31,14 @@ import { SEARCH_FIELD } from "@/lib/textAssist";
 import { browserStorage } from "@/lib/storage";
 import { useSelectedNode } from "@/hooks/useClient";
 import { Hint } from "./Hint";
+import { usePackGroups } from "./agent/ListDetail";
 import { AutomationForm } from "./agent/NewAutomationDialog";
 import { AutomationDetail } from "./automations/AutomationDetail";
 import {
   MANUAL,
   NEW_AUTOMATION,
   automationsOf,
+  byPack,
   inTab,
   matches,
   tabOrder,
@@ -74,8 +78,8 @@ export function AutomationsScreen({ item }: { item?: string }) {
     all.filter((a) => matches(a, query ?? "") && inTab(a, filter, now)),
     filter,
   );
-  const scheduled = shown.filter((a) => a.kind !== "manual");
-  const byHand = shown.filter((a) => a.kind === "manual");
+  const groups = byPack(shown);
+  const packGroups = usePackGroups("automations");
   const open = item ? (all.find((a) => a.id === item) ?? null) : null;
   const name = node ? (node.node.displayName ?? node.label) : "this node";
 
@@ -246,17 +250,36 @@ export function AutomationsScreen({ item }: { item?: string }) {
             ) : shown.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nothing matches.</p>
             ) : (
-              <>
-                {scheduled.length > 0 && <List automations={scheduled} now={now} />}
-                {byHand.length > 0 && (
-                  <section className="grid gap-2">
-                    <h2 className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
-                      Run by hand
-                    </h2>
-                    <List automations={byHand} now={now} />
-                  </section>
-                )}
-              </>
+              <div className="grid gap-4">
+                {groups.map((g) => {
+                  if (g.pack === null)
+                    return <List key="own" automations={g.items} now={now} />;
+                  const pack = g.pack;
+                  const expanded = Boolean(query) || packGroups.isOpen(pack, true);
+                  return (
+                    <section key={pack} aria-label={`From ${pack}`} className="grid">
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        onClick={() => packGroups.toggle(pack, true)}
+                        className="flex w-fit cursor-pointer items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        <ChevronDown
+                          aria-hidden
+                          className={cn(
+                            "size-3.5 transition-transform",
+                            !expanded && "-rotate-90",
+                          )}
+                        />
+                        <Package aria-hidden className="size-3.5" />
+                        <span className="font-medium text-foreground">{pack}</span>
+                        <span>· {g.items.length} from this pack</span>
+                      </button>
+                      {expanded && <List automations={g.items} now={now} />}
+                    </section>
+                  );
+                })}
+              </div>
             )}
           </>
         )}
