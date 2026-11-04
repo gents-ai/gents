@@ -2,11 +2,17 @@ use std::hash::{Hash, Hasher};
 
 use anyhow::{Context, Result};
 use gents::store::config_client::ConfigAccess;
+use gents_protocol::client_protocol::{
+    derive_session_delivery, PairingSignal, SessionDelivery, SessionDeliveryView,
+    SessionRowObservation, SubmittedAttempt,
+};
 
 use super::super::bootstrap::normalize_required;
 use super::{find_request_in_scope, ClientCore, RefreshedRequestProjection};
-use crate::client::query::load_chat_patch;
+use crate::client::query::{load_chat_patch, SelectedSessionRead};
 use crate::client::store::ClientStore;
+use crate::client::sync_projection::project_client_route;
+use crate::error::{BridgeError, BridgeErrorCode};
 
 #[cfg(test)]
 mod tests;
@@ -69,7 +75,82 @@ fn strip_cli_operator_hints(message: &str) -> String {
         .to_string()
 }
 
+/// The read's answer while the node's canonical session row is absent.
+fn session_delivery_error(delivery: SessionDelivery, node_did: &str, node: &str) -> BridgeError {
+    let (code, message) = match delivery {
+        SessionDelivery::Delivering => (
+            BridgeErrorCode::SessionDelivering,
+            format!("Sending to {node}. It has not picked up the message yet."),
+        ),
+        SessionDelivery::NotConnected => (
+            BridgeErrorCode::SessionNotConnected,
+            format!(
+                "Not connected to {node}. The message is saved on this computer and sends when the connection returns."
+            ),
+        ),
+        SessionDelivery::Accepted => (
+            BridgeErrorCode::SessionAccepted,
+            format!("{node} picked up the message. Its session is on the way back."),
+        ),
+        SessionDelivery::NoRequest => (
+            BridgeErrorCode::NotFound,
+            format!("{node} has no record of this session, and this computer sent nothing to it."),
+        ),
+        SessionDelivery::Visible | SessionDelivery::IntegrityFault => (
+            BridgeErrorCode::Unknown,
+            format!("The session on {node} could not be classified without its row."),
+        ),
+    };
+    let mut error = BridgeError::new(code, message);
+    error.endpoint = Some(node_did.to_owned());
+    error
+}
+
 impl ClientCore {
+    /// Classifies a selected session whose canonical row has not replicated
+    /// here from the request the read found and the client-to-runtime
+    /// pairing. Operator reads commit and read the request in the node's own
+    /// database, so no pairing leg separates that request from the node; they
+    /// classify as connected and never report a pairing they do not use.
+    fn awaiting_node_session(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        submitted: Option<SubmittedAttempt>,
+        operator: bool,
+    ) -> BridgeError {
+        let sync = self.sync_state.snapshot();
+        let pairing = if operator {
+            PairingSignal::Connected
+        } else {
+            project_client_route(&sync, node_did)
+        };
+        let request_id = submitted
+            .as_ref()
+            .map(|submitted| submitted.attempt.request.request_id.clone());
+        let delivery = derive_session_delivery(&SessionDeliveryView {
+            submitted,
+            pairing,
+            session_row: SessionRowObservation::Absent,
+        });
+        tracing::debug!(
+            target: "gents_desktop_core::replication",
+            node_did,
+            session_id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            ?pairing,
+            ?delivery,
+            operator,
+            "selected session awaits its node"
+        );
+        let node = sync
+            .peers
+            .iter()
+            .find(|peer| peer.node_did == node_did && !peer.label.trim().is_empty())
+            .map_or(node_did, |peer| peer.label.as_str());
+        session_delivery_error(delivery, node_did, node)
+    }
+
     /// Terminal reads refresh operator configuration omitted by the client P2P route.
     /// Catalog replacement must precede the final request publication to retain page rows.
     pub async fn refresh_local_request(
@@ -103,15 +184,30 @@ impl ClientCore {
                 "local",
             ),
         };
-        let mut patch = load_chat_patch(
-            &access,
-            node_did,
-            session_id,
-            request_id,
-            fallback_request_id,
-            page_request_doc_ids,
-        )
-        .await?;
+        let access = &access;
+        let read = || async move {
+            match load_chat_patch(
+                access,
+                node_did,
+                session_id,
+                request_id,
+                fallback_request_id,
+                page_request_doc_ids,
+            )
+            .await?
+            {
+                SelectedSessionRead::Visible(patch) => Ok(*patch),
+                SelectedSessionRead::Absent(submitted) => {
+                    Err(anyhow::Error::from(self.awaiting_node_session(
+                        node_did,
+                        session_id,
+                        submitted,
+                        source == "operator",
+                    )))
+                }
+            }
+        };
+        let mut patch = read().await?;
         let rows = patch.row_count();
         if rows == 0 {
             return Ok(None);
@@ -184,15 +280,7 @@ impl ClientCore {
         if terminal {
             self.refresh_node(node_did).await?;
             captured = self.store.capture_read();
-            patch = load_chat_patch(
-                &access,
-                node_did,
-                session_id,
-                request_id,
-                fallback_request_id,
-                page_request_doc_ids,
-            )
-            .await?;
+            patch = read().await?;
             if patch.row_count() == 0 {
                 return Ok(None);
             }

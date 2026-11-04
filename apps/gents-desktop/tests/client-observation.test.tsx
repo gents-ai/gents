@@ -49,7 +49,7 @@ function showWindow(shown: boolean) {
 
 describe("following the client while it runs", () => {
   it.each([false, true])(
-    "paces polling by live-source availability (%s)",
+    "reads the open session on store updates and never on a timer (live source %s)",
     async (hasLive) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       let stop: (() => void) | undefined;
@@ -79,23 +79,38 @@ describe("following the client while it runs", () => {
         });
         const app = testApp({ api, snapshot: running, session });
         expect(app.trackedRequestId()).toBe("r-1");
+        let update: ((event: { reason?: string }) => Promise<void>) | undefined;
         stop = startClientObservation(
           app,
-          vi.fn(async () => () => {}),
+          vi.fn(async (listener) => {
+            update = listener as typeof update;
+            return () => {};
+          }),
         );
         await vi.advanceTimersByTimeAsync(0);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
-        const interval = hasLive ? 250 : 1_500;
-        await vi.advanceTimersByTimeAsync(interval - 1);
+        await vi.advanceTimersByTimeAsync(10_000);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
         expect(api.fetchSessionLiveDelta).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
+
+        void update?.({ reason: "store" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(0);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+
+        void update?.({ reason: "store" });
+        await vi.advanceTimersByTimeAsync(0);
         expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(hasLive ? 1 : 0);
-        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 1 : 2);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 2 : 3);
+        /* the live read stood in for the update; the full read it owes
+           follows once the read gap ends */
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
         stop();
         await vi.advanceTimersByTimeAsync(3_000);
-        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 1 : 2);
-        expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(hasLive ? 1 : 0);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
       } finally {
         stop?.();
         vi.useRealTimers();
@@ -103,7 +118,7 @@ describe("following the client while it runs", () => {
     },
   );
 
-  it("reads nothing on a timer while the window is hidden, and reads in full on show", async () => {
+  it("reads nothing while the window is hidden, and reads in full on show", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     let stop: (() => void) | undefined;
     try {
@@ -118,16 +133,6 @@ describe("following the client while it runs", () => {
         timelineItems: [liveAssistant({ itemKey: "live", content: "hello" })],
       });
       api.fetchSessionSnapshot.mockResolvedValue(session);
-      api.fetchSessionLiveDelta.mockResolvedValue({
-        outcome: "unchanged",
-        liveCursor: "source",
-        requestId: "r-1",
-        revision: { storeVersion: 1, provenanceVersion: 1 },
-        turnState: "running",
-        status: null,
-        content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
-        reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
-      });
       const app = testApp({ api, snapshot: running, session });
       stop = startClientObservation(
         app,
@@ -147,57 +152,10 @@ describe("following the client while it runs", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(indexReads + 1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
       expect(api.fetchSessionLiveDelta).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(250);
-      expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(250);
-      expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(2);
-    } finally {
-      stop?.();
-      Reflect.deleteProperty(document, "visibilityState");
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps one poll running when the window shows during a read", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    let stop: (() => void) | undefined;
-    try {
-      const api = bridgeApi();
-      const session = sessionSnapshot({
-        sessionId: "s-1",
-        nodeDid: NODE_DID,
-        turnState: "running",
-        latestRequestId: "r-1",
-        projectionRevision: { storeVersion: 1, provenanceVersion: 1 },
-      });
-      api.fetchSessionSnapshot.mockResolvedValue(session);
-      const app = testApp({ api, snapshot: running, session });
-      stop = startClientObservation(
-        app,
-        vi.fn(async () => () => {}),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
-
-      let land: (() => void) | undefined;
-      api.fetchSessionSnapshot.mockImplementationOnce(
-        () => new Promise((resolve) => (land = () => resolve(session))),
-      );
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
-      showWindow(false);
-      showWindow(true);
-      land!();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
-
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(4);
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(5);
     } finally {
       stop?.();
       Reflect.deleteProperty(document, "visibilityState");
