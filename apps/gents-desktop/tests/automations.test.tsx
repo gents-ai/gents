@@ -105,9 +105,9 @@ describe("the Automations page", () => {
     expect(screen.getByRole("link", { name: /Task B/ })).toBeInTheDocument();
   });
 
-  it("offers templates while none is open, each starting New automation filled in", async () => {
+  it("offers ideas while none is open, each starting New automation filled in", async () => {
     page();
-    const templates = screen.getByLabelText("Templates");
+    const templates = screen.getByLabelText("Ideas");
     await act(async () => {
       fireEvent.click(
         within(templates).getByRole("button", { name: /Morning summary/ }),

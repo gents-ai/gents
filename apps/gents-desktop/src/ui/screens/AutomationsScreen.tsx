@@ -75,160 +75,152 @@ export function AutomationsScreen({ item }: { item?: string }) {
 
   return (
     <ScrollArea className="h-full" data-testid="automations-screen">
-      {/* measured, so the templates can reach the panel's edge */}
-      <div className="@container">
-        <div className="mx-auto grid max-w-page gap-6 px-6 py-6">
-          {open && node ? (
-            <div className="grid gap-4">
-              <a
-                href={href({ name: "automations" })}
-                className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                <ArrowLeft className="size-3" /> Automations
-              </a>
-              <AutomationDetail node={node} automation={open} />
-            </div>
-          ) : (
-            <>
-              <header className="grid gap-3">
-                <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-                  <div className="min-w-0 flex-1">
-                    <h1 className="font-heading text-lg font-medium text-heading">
-                      Automations
-                    </h1>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      What runs on its own on {name}: on a schedule, when something
-                      happens, or when you start it.
-                    </p>
-                  </div>
-                  {all.length > 0 && (
-                    <div className="flex items-center gap-1">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          render={
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label="Show"
-                              className={cn(
-                                "text-muted-foreground",
-                                filter !== "all" && "text-foreground",
-                              )}
-                            />
-                          }
-                        >
-                          <ListFilter />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48">
-                          <DropdownMenuRadioGroup
-                            value={filter}
-                            onValueChange={(value) => setFilter(value as AutomationTab)}
-                          >
-                            {FILTERS.map((f) => (
-                              <DropdownMenuRadioItem key={f.key} value={f.key}>
-                                <span className="flex-1">{f.label}</span>
-                                <span className="text-xs text-muted-foreground tabular-nums">
-                                  {all.filter((a) => inTab(a, f.key, now)).length}
-                                </span>
-                              </DropdownMenuRadioItem>
-                            ))}
-                          </DropdownMenuRadioGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Search automations"
-                        aria-expanded={query !== null}
-                        className={cn(
-                          "text-muted-foreground",
-                          query !== null && "text-foreground",
-                        )}
-                        onClick={() => setQuery(query === null ? "" : null)}
-                      >
-                        <Search />
-                      </Button>
-                      {node && (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => start(null)}
-                        >
-                          <Plus /> New automation
-                        </Button>
-                      )}
-                    </div>
-                  )}
+      <div className="mx-auto grid max-w-page gap-6 px-6 py-6">
+        {open && node ? (
+          <div className="grid gap-4">
+            <a
+              href={href({ name: "automations" })}
+              className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="size-3" /> Automations
+            </a>
+            <AutomationDetail node={node} automation={open} />
+          </div>
+        ) : (
+          <>
+            <header className="grid gap-3">
+              <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                <div className="min-w-0 flex-1">
+                  <h1 className="font-heading text-lg font-medium text-heading">
+                    Automations
+                  </h1>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    Work that runs on its own on {name}.
+                  </p>
                 </div>
-                {query !== null && (
-                  <div className="relative">
-                    <Input
-                      autoFocus
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
-                      {...SEARCH_FIELD}
-                      placeholder="Search automations"
-                      className="h-8 w-full pr-8"
-                      aria-label="Search automations"
-                    />
+                {all.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Show"
+                            className={cn(
+                              "text-muted-foreground",
+                              filter !== "all" && "text-foreground",
+                            )}
+                          />
+                        }
+                      >
+                        <ListFilter />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuRadioGroup
+                          value={filter}
+                          onValueChange={(value) => setFilter(value as AutomationTab)}
+                        >
+                          {FILTERS.map((f) => (
+                            <DropdownMenuRadioItem key={f.key} value={f.key}>
+                              <span className="flex-1">{f.label}</span>
+                              <span className="text-xs text-muted-foreground tabular-nums">
+                                {all.filter((a) => inTab(a, f.key, now)).length}
+                              </span>
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                     <Button
                       variant="ghost"
-                      size="icon-xs"
-                      aria-label="Clear search"
-                      className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
-                      onClick={() => setQuery(null)}
+                      size="icon-sm"
+                      aria-label="Search automations"
+                      aria-expanded={query !== null}
+                      className={cn(
+                        "text-muted-foreground",
+                        query !== null && "text-foreground",
+                      )}
+                      onClick={() => setQuery(query === null ? "" : null)}
                     >
-                      <X />
+                      <Search />
                     </Button>
+                    {node && (
+                      <Button size="sm" variant="secondary" onClick={() => start(null)}>
+                        <Plus /> New automation
+                      </Button>
+                    )}
                   </div>
                 )}
-                {filter !== "all" && (
-                  <button
-                    type="button"
-                    onClick={() => setFilter("all")}
-                    className="flex w-fit cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              </div>
+              {query !== null && (
+                <div className="relative">
+                  <Input
+                    autoFocus
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
+                    {...SEARCH_FIELD}
+                    placeholder="Search automations"
+                    className="h-8 w-full pr-8"
+                    aria-label="Search automations"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Clear search"
+                    className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+                    onClick={() => setQuery(null)}
                   >
-                    Showing {FILTERS.find((f) => f.key === filter)!.label.toLowerCase()}
-                    <X className="size-3" />
-                  </button>
-                )}
-              </header>
-              {node && all.length > 0 && !templatesHidden && (
-                <TemplateRow onUse={start} onHide={() => hideTemplates(true)} />
+                    <X />
+                  </Button>
+                </div>
               )}
-              {all.length === 0 ? (
-                <>
-                  <Empty node={name} onNew={node ? () => start(null) : undefined} />
-                  {node && <Templates onUse={start} />}
-                </>
-              ) : shown.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Nothing matches.</p>
-              ) : (
-                <>
-                  {scheduled.length > 0 && <List automations={scheduled} now={now} />}
-                  {byHand.length > 0 && (
-                    <section className="grid gap-2">
-                      <h2 className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
-                        Run by hand
-                      </h2>
-                      <List automations={byHand} now={now} />
-                    </section>
-                  )}
-                </>
-              )}
-              {node && all.length > 0 && templatesHidden && (
+              {filter !== "all" && (
                 <button
                   type="button"
-                  onClick={() => hideTemplates(false)}
-                  className="w-fit cursor-pointer text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setFilter("all")}
+                  className="flex w-fit cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
                 >
-                  Show templates
+                  Showing {FILTERS.find((f) => f.key === filter)!.label.toLowerCase()}
+                  <X className="size-3" />
                 </button>
               )}
-            </>
-          )}
-        </div>
+            </header>
+            {node && all.length > 0 && !templatesHidden && (
+              <TemplateRow onUse={start} onHide={() => hideTemplates(true)} />
+            )}
+            {all.length === 0 ? (
+              <>
+                <Empty node={name} onNew={node ? () => start(null) : undefined} />
+                {node && <Templates onUse={start} />}
+              </>
+            ) : shown.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Nothing matches.</p>
+            ) : (
+              <>
+                {scheduled.length > 0 && <List automations={scheduled} now={now} />}
+                {byHand.length > 0 && (
+                  <section className="grid gap-2">
+                    <h2 className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+                      Run by hand
+                    </h2>
+                    <List automations={byHand} now={now} />
+                  </section>
+                )}
+              </>
+            )}
+            {node && all.length > 0 && templatesHidden && (
+              <button
+                type="button"
+                onClick={() => hideTemplates(false)}
+                className="w-fit cursor-pointer text-xs text-muted-foreground hover:text-foreground"
+              >
+                Show ideas
+              </button>
+            )}
+          </>
+        )}
       </div>
       {node && (
         <NewAutomationDialog
@@ -317,7 +309,7 @@ function Empty({ node, onNew }: { node: string; onNew?: () => void }) {
       </h2>
       <p className="max-w-md text-sm text-muted-foreground">
         An agent can run a task for you on a schedule, when something happens, or
-        whenever you start it. Start from a template below, or from scratch.
+        whenever you start it. Start from one of the ideas below, or from scratch.
       </p>
       {onNew && (
         <Button size="sm" variant="secondary" className="mt-2" onClick={onNew}>
@@ -343,6 +335,9 @@ const CADENCE: Record<AutomationTemplate["preset"], string> = {
 /* the node summary cards' surface */
 const SURFACE =
   "cursor-pointer rounded-xl bg-raised/50 text-left transition-colors outline-none hover:bg-raised focus-visible:bg-raised";
+/* a card inside that surface: the page's own ground, lifted on hover */
+const INSET =
+  "cursor-pointer rounded-xl bg-background/70 text-left transition-colors outline-none hover:bg-background focus-visible:ring-2 focus-visible:ring-ring/50";
 
 /** Whether the templates row is hidden on this device. */
 function useTemplatesHidden() {
@@ -357,9 +352,8 @@ function useTemplatesHidden() {
   return [hidden, hide] as const;
 }
 
-/* ready-made automations, each opening New automation filled in: a row
-   of cards that starts at the column and runs on to the panel's edge,
-   scrolled by swiping or by its arrows */
+/* ready-made automations, each opening New automation filled in: a card
+   holding a row of them, scrolled by swiping or by its arrows */
 function TemplateRow({
   onUse,
   onHide,
@@ -388,13 +382,13 @@ function TemplateRow({
   const step = (direction: 1 | -1) =>
     strip.current?.scrollBy({ left: direction * 2 * CARD, behavior: "smooth" });
   return (
-    <section aria-label="Templates" className="grid gap-2">
-      <div className="flex items-center gap-1">
-        <h2 className="flex-1 text-xs text-muted-foreground">Start from a template</h2>
+    <section aria-label="Ideas" className="grid gap-3 rounded-2xl bg-raised/50 py-3">
+      <div className="flex items-center gap-1 pr-2 pl-4">
+        <h2 className="flex-1 text-xs text-muted-foreground">Ideas</h2>
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Earlier templates"
+          aria-label="Earlier ideas"
           className="text-muted-foreground"
           disabled={ends.start}
           onClick={() => step(-1)}
@@ -404,7 +398,7 @@ function TemplateRow({
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="More templates"
+          aria-label="More ideas"
           className="text-muted-foreground"
           disabled={ends.end}
           onClick={() => step(1)}
@@ -414,20 +408,18 @@ function TemplateRow({
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Hide templates"
+          aria-label="Hide ideas"
           className="text-muted-foreground"
           onClick={onHide}
         >
           <X />
         </Button>
       </div>
-      {/* the right margin cancels the space between the column and the
-          panel's edge: half of what the panel is wider than the column */}
       <div
         ref={strip}
         onScroll={measure}
         className={cn(
-          "mr-[calc((100%-100cqw)/2)] flex snap-x snap-mandatory gap-2 overflow-x-auto pr-10 [scrollbar-width:none]",
+          "flex snap-x snap-mandatory scroll-px-4 gap-2 overflow-x-auto px-4 [scrollbar-width:none]",
           !ends.end &&
             "[mask-image:linear-gradient(to_right,black_calc(100%-3rem),transparent)]",
         )}
@@ -440,9 +432,9 @@ function TemplateRow({
               onFocus={(e) =>
                 e.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })
               }
-              className={cn(SURFACE, "grid w-48 shrink-0 snap-start gap-2.5 p-3")}
+              className={cn(INSET, "grid w-48 shrink-0 snap-start gap-2.5 p-3")}
             >
-              <span className="grid size-8 place-items-center rounded-lg bg-background/60">
+              <span className="grid size-8 place-items-center rounded-lg bg-raised">
                 <t.icon className="size-4 text-muted-foreground" />
               </span>
               <span className="grid min-w-0 gap-0.5">
@@ -467,9 +459,9 @@ function Templates({ onUse }: { onUse: (t: AutomationTemplate) => void }) {
         id="automation-templates"
         className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase"
       >
-        Start from a template
+        Ideas
       </h2>
-      <div className="grid gap-3 sm:grid-cols-2" aria-label="Templates">
+      <div className="grid gap-3 sm:grid-cols-2" aria-label="Ideas">
         {TEMPLATES.map((t) => (
           <button
             key={t.id}
