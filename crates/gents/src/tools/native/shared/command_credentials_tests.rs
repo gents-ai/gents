@@ -13,6 +13,23 @@ struct Case {
     protects_credentials: bool,
 }
 
+#[test]
+fn failed_credential_inspection_records_failure_and_stays_closed() {
+    let folder = tempfile::tempdir().unwrap();
+    let updates = folder.path().join("service-updates");
+    std::fs::create_dir(&updates).unwrap();
+    let dangling = folder.path().join("dangling");
+    std::os::unix::fs::symlink("missing", &dangling).unwrap();
+    std::os::unix::fs::symlink(&dangling, updates.join("link")).unwrap();
+    let before =
+        crate::tools::native::command_observability::snapshot().credential_inspection_failures;
+    let result = report_capture_failure(CredentialProtection::capture([updates]), None);
+    assert!(result.is_err());
+    let after =
+        crate::tools::native::command_observability::snapshot().credential_inspection_failures;
+    assert!(after > before);
+}
+
 async fn run(
     profile: String,
     parameters: Vec<String>,
