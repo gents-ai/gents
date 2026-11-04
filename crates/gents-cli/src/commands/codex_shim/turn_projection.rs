@@ -849,7 +849,7 @@ pub(in crate::commands::codex_shim) mod tests {
                 );
             }
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[test]
@@ -1165,7 +1165,7 @@ pub(in crate::commands::codex_shim) mod tests {
             turn_completed_count, 1,
             "the turn must terminate exactly once"
         );
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1265,6 +1265,6 @@ pub(in crate::commands::codex_shim) mod tests {
             (before_send..=after_send).contains(&observed),
             "the observation fallback must be the emit-time clock, got {observed}"
         );
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 }

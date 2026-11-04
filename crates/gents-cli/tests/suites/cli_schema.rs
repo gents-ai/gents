@@ -218,7 +218,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 after.data.context("read data")?[collection][0]["owned_files"],
                 owned
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             drop(node);
             // Defra's background task cleanup may outlive shutdown; preserve
             // this isolated test store instead of deleting it underneath them.

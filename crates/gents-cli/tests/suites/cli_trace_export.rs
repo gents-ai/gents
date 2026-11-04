@@ -59,7 +59,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     let output = run_cli_text(
@@ -402,7 +402,7 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     let output = run_cli_text(
@@ -842,7 +842,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         seed_rendered_request_rows(&node).await?;
         seed_v2_rendered_request_rows(&node).await?;
         seed_manifest_rendered_request_row(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
     let home = agent_home.to_str().context("agent home utf8")?;
 
@@ -1058,7 +1058,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     let home = agent_home.to_str().context("agent home utf8")?;

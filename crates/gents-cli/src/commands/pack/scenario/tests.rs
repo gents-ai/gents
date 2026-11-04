@@ -296,7 +296,7 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
             .await
             .unwrap();
     assert!(errors.is_empty(), "{errors:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 const COLOURED: &str = "\u{1b}[32m INFO\u{1b}[0m \u{1b}[2mgents::triggers::engine::event_source\u{1b}[0m\u{1b}[2m:\u{1b}[0m event source now observing source collection \u{1b}[3msource_collection\u{1b}[0m\u{1b}[2m=\u{1b}[0mExperimentJob \u{1b}[3mgeneration\u{1b}[0m\u{1b}[2m=\u{1b}[0m3";

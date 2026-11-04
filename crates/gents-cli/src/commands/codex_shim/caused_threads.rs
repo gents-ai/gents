@@ -201,7 +201,7 @@ mod tests {
             .collect::<Vec<_>>();
         threads.sort();
         assert_eq!(threads, ["child-a", "child-b"]);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -265,7 +265,7 @@ mod tests {
             expected.sort();
             expected.dedup();
             assert_eq!(actual, expected, "{}", case["name"]);
-            state.node.shutdown().await;
+            state.node.shutdown().await.expect("shut down test node");
         }
     }
 }

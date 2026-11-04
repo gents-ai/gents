@@ -36,10 +36,11 @@ pub(crate) async fn record_plugin_store_change(
     .await?;
     let result =
         gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await;
-    if let Some(node) = access.local_node() {
-        node.shutdown().await;
-    }
-    result.map_err(Into::into)
+    crate::finish_node_operation(
+        result.map_err(Into::into),
+        access.local_node().map(AsRef::as_ref),
+    )
+    .await
 }
 
 pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {
@@ -75,10 +76,11 @@ pub(super) async fn resolve_plugin_slot_owner(
     let (access, owner) = resolve_scope_owner(scope).await?;
     let result =
         gents::pack::preview_pack_inference_bindings(&access, manifest, &owner, requested).await;
-    if let Some(node) = access.local_node() {
-        node.shutdown().await;
-    }
-    result?;
+    crate::finish_node_operation(
+        result.map_err(Into::into),
+        access.local_node().map(AsRef::as_ref),
+    )
+    .await?;
     Ok(Some(owner))
 }
 

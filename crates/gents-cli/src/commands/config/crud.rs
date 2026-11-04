@@ -407,7 +407,7 @@ mod tests {
         assert!(load_one(&access, TOOLS_SPEC, "absent", "same")
             .await
             .is_err());
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         Ok(())
     }
 }

@@ -90,7 +90,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                     .is_empty()
             );
             assert!(load_node(&node, owner).await?.is_none());
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             continue;
         };
         let summary = initialized.with_context(|| format!("{case:?}"))?;
@@ -192,7 +192,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{steps:?}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
     Ok(())
 }
@@ -284,6 +284,6 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         advertised.max_output_tokens.unwrap()
     );
     drop(runtime);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     Ok(())
 }

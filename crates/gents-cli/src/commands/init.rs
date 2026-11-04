@@ -347,8 +347,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         Ok(output)
     }
     .await;
-    init_node.shutdown().await;
-    result
+    crate::finish_node_operation(result, Some(init_node.as_ref())).await
 }
 
 fn added_account_note(sign_in: &gents::inference::auth::credential::SignIn) -> Option<String> {

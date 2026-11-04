@@ -111,6 +111,6 @@ mod tests {
         assert!(load_bound_model_selection_id(&node, first.did(), "missing")
             .await
             .is_err());
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

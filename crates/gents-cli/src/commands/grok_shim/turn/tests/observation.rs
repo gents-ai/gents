@@ -213,7 +213,7 @@ async fn missed_or_closed_feed_projects_final_output_before_returning_terminal()
             "final output is visible exactly once before terminal returns"
         );
         drop(manager);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -297,5 +297,5 @@ async fn session_discovery_read_profile() {
     std::fs::write(output, serde_json::to_vec_pretty(&samples).unwrap()).unwrap();
     drop(manager);
     drop(engine);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

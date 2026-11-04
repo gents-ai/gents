@@ -649,7 +649,7 @@ mod tests {
                     .and_then(|row| row.doc_id);
                 assert_eq!(found, expected, "{}: {query}", case["name"]);
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
         }
     }
 }

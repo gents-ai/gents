@@ -247,7 +247,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("no healthy probe observation"));
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -348,7 +348,7 @@ mod tests {
             reports[0]["error"],
             "backend is disabled or has no healthy probe observation"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]

@@ -91,6 +91,6 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
         observation.catalogs[0].models[0].model_name,
         "retained-model"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     Ok(())
 }

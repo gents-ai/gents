@@ -284,7 +284,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
             escape_graphql_string(&node_did),
         ))
         .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     anyhow::ensure!(
         !response.has_errors(),
         "reading agent readiness: {:?}",

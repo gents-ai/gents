@@ -229,7 +229,7 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
     .await
     .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[derive(Deserialize)]

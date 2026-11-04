@@ -440,7 +440,7 @@ mod tests {
         let duplicate = first.err().or_else(|| second.err()).unwrap();
         assert!(duplicate.to_string().contains("already consumed"));
 
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         drop(node);
         let restarted = nonce_test_node(&node_path).await;
         let replay = consume_operator_nonce(&restarted, "did:key:admin", "nonce-concurrent", now)

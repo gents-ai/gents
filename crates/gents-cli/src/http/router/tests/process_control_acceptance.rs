@@ -214,7 +214,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     shutdown.send(true).unwrap();
     running.await.unwrap().unwrap();
     drop(server);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
