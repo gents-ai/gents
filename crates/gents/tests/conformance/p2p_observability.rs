@@ -11,7 +11,7 @@ use storage::stores::PushRetryMarkerStats;
 
 fn pinned_upstream_wire() -> serde_json::Value {
     let upstream = SyncStatus {
-        gossip_unfollowed_dropped_total: 0,
+        gossip_unfollowed_dropped_total: 53,
         push_backlog: PushBacklogSnapshot {
             queue_item_capacity: 128,
             queue_byte_capacity: 1_048_576,
@@ -255,6 +255,7 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
             broadcast_coalesced_total: 41,
             push_updates_coalesced_total: 43,
             gossip_direction_filtered_total: 47,
+            gossip_unfollowed_dropped_total: 53,
             pending_dags: 13,
             pending_dag_capacity: 1_000,
             pending_dag_high_water: 14,
@@ -394,6 +395,18 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
 /// The DAG-fetch arbitration estimates DefraDB adds to `SyncStatus` and each
 /// peer fetch entry: a pin that carries them must decode, and one that does
 /// not (above) reads them as absent.
+#[test]
+fn older_sync_status_without_unfollowed_gossip_counter_decodes() {
+    let mut wire = pinned_upstream_wire();
+    wire.as_object_mut()
+        .expect("DefraDB sync status object")
+        .remove("gossip_unfollowed_dropped_total");
+    let snapshot = JsonP2pSyncStatusAdapter
+        .adapt(&wire)
+        .expect("adapt older DefraDB sync status");
+    assert_eq!(snapshot.gossip_unfollowed_dropped_total, 0);
+}
+
 #[test]
 fn arbitration_estimates_decode_when_the_pin_carries_them() {
     let mut wire = pinned_upstream_wire();
