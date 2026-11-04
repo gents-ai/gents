@@ -131,6 +131,16 @@ describe("the Automations page", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^When:/ }));
+    });
+    expect(await screen.findByText(/^Times are in /)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitemradio", { name: "Every hour" }));
+    });
+    expect(
+      screen.getByRole("button", { name: "When: Every hour" }),
+    ).toBeInTheDocument();
+    await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
     });
     expect(changeConfig).toHaveBeenCalled();

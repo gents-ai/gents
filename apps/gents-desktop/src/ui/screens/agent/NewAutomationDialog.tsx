@@ -25,7 +25,6 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -382,9 +381,10 @@ export function AutomationForm({
               )}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+            {/* plain text: the kit's menu label must sit inside a group */}
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">
               Times are in {TZ}.
-            </DropdownMenuLabel>
+            </p>
           </DropdownMenuContent>
         </DropdownMenu>
         {taskId === NEW && (
