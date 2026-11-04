@@ -511,7 +511,7 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
         .await
         .unwrap();
     assert_eq!(seeds["data"]["QuietItem"], json!([]), "{seeds:#?}");
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 
     let verdicts = load_verdicts(&canary.access, &request.owner, &request.run_id)
         .await
