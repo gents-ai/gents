@@ -35,20 +35,32 @@ export function collectionInWords(name: string): string {
   return plural.charAt(0).toUpperCase() + plural.slice(1);
 }
 
+const listOf = <T,>(value: readonly T[] | null | undefined): readonly T[] =>
+  Array.isArray(value) ? value : [];
+
+/** A surface's tool declarations. The generated type says a list, but the
+    runtime stores and sends them wrapped as `{ entries: [...] }`. */
+function surfaceEntries(raw: unknown): readonly { collection?: unknown }[] {
+  if (Array.isArray(raw)) return raw;
+  const wrapped = (raw as { entries?: unknown } | null)?.entries;
+  return Array.isArray(wrapped) ? wrapped : [];
+}
+
 /** What the node can be watched for, from what its snapshot knows: the
     core collections that are safe to watch, the collections its packs'
     tools read and write, and those its event triggers already watch. */
 export function collectionGroups(node: NodeView): Group[] {
   const fromPacks = new Set<string>();
-  for (const surface of node.datastoreToolSurfaces)
-    for (const entry of surface.entries ?? []) fromPacks.add(entry.collection);
-  for (const tools of node.tools) {
-    for (const c of tools.datastore?.defra_query_collections ?? []) fromPacks.add(c);
-    for (const c of tools.datastore?.write_collections ?? []) fromPacks.add(c);
-    for (const c of tools.built_ins?.p2p_collections ?? []) fromPacks.add(c);
+  for (const surface of listOf(node.datastoreToolSurfaces))
+    for (const entry of surfaceEntries(surface.entries))
+      if (typeof entry?.collection === "string") fromPacks.add(entry.collection);
+  for (const tools of listOf(node.tools)) {
+    for (const c of listOf(tools.datastore?.defra_query_collections)) fromPacks.add(c);
+    for (const c of listOf(tools.datastore?.write_collections)) fromPacks.add(c);
+    for (const c of listOf(tools.built_ins?.p2p_collections)) fromPacks.add(c);
   }
   for (const c of CORE) fromPacks.delete(c);
-  const watched = new Set(node.eventSources.map((e) => e.source_collection));
+  const watched = new Set(listOf(node.eventSources).map((e) => e.source_collection));
   for (const c of [...CORE, ...fromPacks]) watched.delete(c);
   return [
     { value: "Gents", items: CORE },

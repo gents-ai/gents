@@ -106,6 +106,12 @@ describe("what an event automation can watch", () => {
           node_did: deployment.nodeDid,
           entries: [{ kind: "query", tool_name: "find_notes", collection: "AcmeNote" }],
         },
+        {
+          surface_id: "wrapped",
+          node_did: deployment.nodeDid,
+          /* as the runtime sends it */
+          entries: { entries: [{ tool_name: "add_move", collection: "ChessMove" }] },
+        },
       ],
       eventSources: [
         {
@@ -117,7 +123,7 @@ describe("what an event automation can watch", () => {
     } as DeploymentView;
     expect(collectionGroups(node)).toEqual([
       { value: "Gents", items: ["MailboxItem"] },
-      { value: "From your packs", items: ["AcmeNote"] },
+      { value: "From your packs", items: ["AcmeNote", "ChessMove"] },
       { value: "Already watched", items: ["GameMove"] },
       { value: "", items: [OTHER] },
     ]);
