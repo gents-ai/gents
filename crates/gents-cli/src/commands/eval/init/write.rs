@@ -546,8 +546,18 @@ async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinit
     let (manifest, assets) = read_pack(dir)?;
     let home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
     let result = install_and_read_back(&home, &manifest, &assets, expected).await;
-    home.node.shutdown().await;
-    result
+    let shutdown = home
+        .node
+        .shutdown()
+        .await
+        .context("closing evaluation node");
+    match (result, shutdown) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) | (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(shutdown_error)) => {
+            Err(error.context(format!("node shutdown also failed: {shutdown_error:#}")))
+        }
+    }
 }
 
 async fn install_and_read_back(

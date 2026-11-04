@@ -1,6 +1,6 @@
 use crate::client::store::ClientStore;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 use super::super::graphql::{escape_graphql_string, normalize_required};

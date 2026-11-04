@@ -150,7 +150,7 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::json;
 
     use super::*;

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, HttpConfig, P2PConfig};
+use defra_node::{HttpConfig, Node as EmbeddedNode, P2PConfig};
 #[cfg(test)]
 use defra_node::{NodeBuilder, StorageBackend};
 use defra_p2p_adapter::P2POperations as P2POps;
@@ -97,8 +97,13 @@ impl ClientCore {
         ) {
             Ok(access) => access,
             Err(error) => {
-                node.shutdown().await;
-                return Err(error.into());
+                let error: anyhow::Error = error.into();
+                return match node.shutdown().await {
+                    Ok(()) => Err(error),
+                    Err(shutdown_error) => Err(error.context(format!(
+                        "desktop node shutdown also failed: {shutdown_error}"
+                    ))),
+                };
             }
         };
 
@@ -243,30 +248,36 @@ impl ClientCore {
                 *core.store_access.get_mut() = Some(store_access);
                 Ok(core)
             }
-            Err(error) => {
-                node.shutdown().await;
-                Err(error)
-            }
+            Err(error) => match node.shutdown().await {
+                Ok(()) => Err(error),
+                Err(shutdown_error) => Err(error.context(format!(
+                    "desktop node shutdown also failed: {shutdown_error}"
+                ))),
+            },
         }
     }
 }
 
 fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PConfig {
     P2PConfig {
-        port: options.port,
+        port: Some(options.port),
         bind_addr: options.bind_addr,
         relay_mode: options.relay_mode.clone(),
         discovery: options.discovery.clone(),
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(paths.iroh_secret_key_path().to_path_buf()),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: options.load_persisted_collections,
-        max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
-        max_concurrent_push_tasks: options.max_concurrent_push_tasks,
-        rate_limit_burst: options.rate_limit_burst,
-        rate_limit_rate: options.rate_limit_rate,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: options.max_pending_dags,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
+            max_concurrent_push_tasks: options.max_concurrent_push_tasks,
+            rate_limit_burst: options.rate_limit_burst,
+            rate_limit_rate: options.rate_limit_rate,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags: options.max_pending_dags,
+            replicator_retry_intervals: None,
+        },
         // DefraDB forwards merges to explicit downstream replicators itself.
         rebroadcast_on_merge: false,
     }

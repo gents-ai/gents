@@ -25,7 +25,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let did = owner.did().to_owned();
     let agent_id = gents::default_agent_id_for_node(&did);
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .data_path(dir.path().join("node"))
             .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
             .with_node_identity_did(&did)

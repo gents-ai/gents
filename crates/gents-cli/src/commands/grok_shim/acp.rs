@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures_util::future::BoxFuture;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
 
 use super::projection::caused_sessions::{

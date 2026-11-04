@@ -1,7 +1,7 @@
 use crate::support::*;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::ensure_runtime_schemas;
 use serde_json::Value;
 

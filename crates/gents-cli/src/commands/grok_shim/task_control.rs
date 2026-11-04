@@ -1,6 +1,6 @@
 //! Stock task-button control, delegated to the runtime's process owner.
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::{
     store::graphql::escape_graphql_string, tools::call::hook::BackgroundExecutionRegistry,
 };

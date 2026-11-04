@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tools::native::{load_session_inference_observation, SessionTokenUsage};
 use serde_json::{json, Value};

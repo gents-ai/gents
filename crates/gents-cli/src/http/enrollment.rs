@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
@@ -347,7 +347,7 @@ pub async fn ensure_enrollment_network(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::defra_node::{EmbeddedNode, StorageBackend};
+    use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
     use gents::store::graphql::ensure_no_errors;
     use gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION;
     use gents_protocol::enrollment::{

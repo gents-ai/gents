@@ -342,7 +342,7 @@ fn ensure_demand(row: &Value, demand: &FileImageDemand) -> Result<()> {
 }
 
 async fn admit_image_demand(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     demand: &FileImageDemand,
 ) -> Result<()> {
     let query = demand_query(demand);

@@ -356,7 +356,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
 mod tests {
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents::documents::Tools;
     use gents::{ensure_runtime_schemas, upsert_agent};
     use serde_json::Value;

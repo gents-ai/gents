@@ -341,7 +341,7 @@ mod tests {
             tokio::task::spawn_blocking(move || gents::KeyIdentity::load_or_create(key, None))
                 .await??;
         let node = std::sync::Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(source.did())
                 .with_node_acp_enabled()
                 .build()

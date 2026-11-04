@@ -178,7 +178,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             let node = gents::store::local::store_key::open_home_store_key(&agent_home, &data)
                 .await?
                 .encrypt(
-                    gents::defra_node::EmbeddedNode::builder()
+                    gents::defra_node::Node::builder()
                         .data_path(&data)
                         .with_storage_backend(gents::defra_node::StorageBackend::Regolith),
                 )

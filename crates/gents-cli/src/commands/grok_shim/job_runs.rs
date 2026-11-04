@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::dispatch::split_address;
 use gents::tools::background::job::view::{

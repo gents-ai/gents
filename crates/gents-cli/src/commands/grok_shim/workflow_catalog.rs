@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::documents::{load_agent_tools_in_txn, PluginToolRef};
 use gents::plugin::executor::PluginExecutor;
 use gents::plugin::store::InstalledPlugin;
@@ -87,7 +87,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents::documents::{AgentContext, IntegrationTools, PluginToolRef, Tools};
     use serde_json::{json, Value};
 

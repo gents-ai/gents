@@ -1,7 +1,7 @@
 pub(super) use crate::commands::inference_binding::load_bound_context_window;
 use crate::commands::inference_binding::load_bound_profile;
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";

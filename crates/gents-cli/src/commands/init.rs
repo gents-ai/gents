@@ -1651,7 +1651,7 @@ mod tests {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let owner = identity.did().to_string();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.clone())
                 .build()
                 .await
@@ -1732,7 +1732,7 @@ mod tests {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let owner = identity.did().to_string();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.clone())
                 .build()
                 .await
@@ -1812,7 +1812,7 @@ mod tests {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let owner = identity.did().to_string();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.clone())
                 .build()
                 .await

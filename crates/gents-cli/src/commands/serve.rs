@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{http::Uri, routing::get, Router};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::{
     DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity, ProcessLifecycleObserver,
     ProcessLifecycleState,
@@ -833,8 +833,13 @@ async fn serve_foreground(
         match gents::store::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
             Ok(access) => access,
             Err(error) => {
-                node.shutdown().await;
-                return Err(error.into());
+                let error: anyhow::Error = error.into();
+                return match node.shutdown().await {
+                    Ok(()) => Err(error),
+                    Err(shutdown_error) => {
+                        Err(error.context(format!("node shutdown also failed: {shutdown_error}")))
+                    }
+                };
             }
         };
     *store_lifetime = Some(store_access.clone());
@@ -1372,9 +1377,15 @@ async fn serve_foreground(
         grok_shutdown_error.map_or(runtime_result, Err)
     };
     tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage started");
-    runtime.shutdown_node().await;
+    let node_result = runtime.shutdown_node().await;
     tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage completed");
-    runtime_result
+    match (runtime_result, node_result) {
+        (Ok(()), result) => result,
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(shutdown_error)) => {
+            Err(error.context(format!("node shutdown also failed: {shutdown_error:#}")))
+        }
+    }
 }
 
 struct ServeRuntime {
@@ -1383,7 +1394,7 @@ struct ServeRuntime {
     shutdown_rx: Option<watch::Receiver<bool>>,
     handle: Option<tokio::task::JoinHandle<Result<()>>>,
     shutdown_owner: Option<(
-        Arc<gents::defra_node::EmbeddedNode>,
+        Arc<gents::defra_node::Node>,
         gents::store::config_client::ConfigAccess,
     )>,
 }
@@ -1414,16 +1425,18 @@ impl ServeRuntime {
 
     fn retain_shutdown_owner(
         mut self,
-        node: Arc<gents::defra_node::EmbeddedNode>,
+        node: Arc<gents::defra_node::Node>,
         access: gents::store::config_client::ConfigAccess,
     ) -> Self {
         self.shutdown_owner = Some((node, access));
         self
     }
 
-    async fn shutdown_node(&mut self) {
+    async fn shutdown_node(&mut self) -> Result<()> {
         if let Some((node, access)) = self.shutdown_owner.take() {
-            shutdown_claimed_node(node, access).await;
+            shutdown_claimed_node(node, access).await
+        } else {
+            Ok(())
         }
     }
 
@@ -1463,27 +1476,25 @@ impl Drop for ServeRuntime {
                         );
                     }
                 }
-                shutdown_claimed_node(node, access).await;
+                if let Err(error) = shutdown_claimed_node(node, access).await {
+                    tracing::warn!(error = %format!("{error:#}"), "gents node shutdown failed during cancelled serve shutdown");
+                }
             });
         }
     }
 }
 
 async fn shutdown_claimed_node(
-    node: Arc<gents::defra_node::EmbeddedNode>,
+    node: Arc<gents::defra_node::Node>,
     access: gents::store::config_client::ConfigAccess,
-) {
+) -> Result<()> {
     let shutdown = tokio::spawn(async move {
-        node.shutdown().await;
+        let result = node.shutdown().await.context("closing gents node");
         drop(node);
         drop(access);
+        result
     });
-    if let Err(error) = shutdown.await {
-        tracing::warn!(
-            error = %error,
-            "gents node shutdown task failed to join"
-        );
-    }
+    shutdown.await.context("joining gents node shutdown task")?
 }
 
 struct ServerIdentity {
@@ -1649,7 +1660,7 @@ fn resolve_server_p2p_config(
             .with_context(|| format!("creating P2P key directory {}", parent.display()))?;
     }
     Ok(Some(defra_node::P2PConfig {
-        port: args.p2p_port.unwrap_or(0),
+        port: Some(args.p2p_port.unwrap_or(0)),
         bind_addr: Some(
             args.p2p_bind_addr
                 .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -1671,13 +1682,17 @@ fn resolve_server_p2p_config(
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(secret_key_path),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: true,
-        max_concurrent_dag_fetches,
-        max_concurrent_push_tasks,
-        rate_limit_burst,
-        rate_limit_rate,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches,
+            max_concurrent_push_tasks,
+            rate_limit_burst,
+            rate_limit_rate,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags,
+            replicator_retry_intervals: None,
+        },
         rebroadcast_on_merge: false,
     }))
 }
@@ -1732,22 +1747,22 @@ fn validate_p2p_admission_config(
 
 fn log_p2p_admission_config(config: &defra_node::P2PConfig) {
     tracing::info!(
-        max_pending_dags = config.max_pending_dags,
-        max_concurrent_push_tasks = config.max_concurrent_push_tasks,
-        max_concurrent_dag_fetches = config.max_concurrent_dag_fetches,
-        rate_limit_burst = config.rate_limit_burst,
-        rate_limit_rate = config.rate_limit_rate,
+        max_pending_dags = config.sync.max_pending_dags,
+        max_concurrent_push_tasks = config.sync.max_concurrent_push_tasks,
+        max_concurrent_dag_fetches = config.sync.max_concurrent_dag_fetches,
+        rate_limit_burst = config.sync.rate_limit_burst,
+        rate_limit_rate = config.sync.rate_limit_rate,
         "P2P admission configuration"
     );
 }
 
 fn p2p_admission_state(config: &defra_node::P2PConfig) -> P2pAdmissionState {
     P2pAdmissionState {
-        max_pending_dags: config.max_pending_dags,
-        max_concurrent_push_tasks: config.max_concurrent_push_tasks,
-        max_concurrent_dag_fetches: config.max_concurrent_dag_fetches,
-        rate_limit_burst: config.rate_limit_burst,
-        rate_limit_rate: config.rate_limit_rate,
+        max_pending_dags: config.sync.max_pending_dags,
+        max_concurrent_push_tasks: config.sync.max_concurrent_push_tasks,
+        max_concurrent_dag_fetches: config.sync.max_concurrent_dag_fetches,
+        rate_limit_burst: config.sync.rate_limit_burst,
+        rate_limit_rate: config.sync.rate_limit_rate,
     }
 }
 

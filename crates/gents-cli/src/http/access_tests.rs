@@ -157,7 +157,7 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
             .unwrap()
             .with_extra_routes(runtime_routes(&endpoint, &owner)),
     );
-    let node = gents::defra_node::EmbeddedNode::builder()
+    let node = gents::defra_node::Node::builder()
         .with_node_identity_did(owner.did())
         .with_node_acp_enabled()
         .with_http(config)

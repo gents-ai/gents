@@ -646,7 +646,7 @@ async fn wait_for_replicated_reply(
 
 #[derive(Clone)]
 struct ReadinessProbe {
-    node: Arc<gents::defra_node::EmbeddedNode>,
+    node: Arc<gents::defra_node::Node>,
     p2p: Arc<dyn defra_p2p_adapter::P2POperations>,
     store: Arc<gents_desktop_core::client::ObservedStore>,
     graphql: String,

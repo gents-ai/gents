@@ -1384,7 +1384,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("reasoning projection directory");
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .data_path(temp.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

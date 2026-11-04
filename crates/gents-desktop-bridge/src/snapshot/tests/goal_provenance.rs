@@ -13,7 +13,7 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
     let home = tempfile::tempdir().unwrap();
     let identity = gents::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

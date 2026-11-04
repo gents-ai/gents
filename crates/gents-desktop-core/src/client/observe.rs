@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use events::DocumentChangeSubscription;
 use gents_protocol::schemas::AGENT_TOOL_CALL_NAME;
 use tokio::sync::watch;

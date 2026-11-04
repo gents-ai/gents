@@ -491,7 +491,7 @@ pub(crate) async fn create_goal_backed_agent_request(
 #[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
 pub(crate) async fn create_goal_backed_agent_request_local(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     actor: identity::Did,
     graphql: &GraphqlEndpoint,
     node_did: &str,

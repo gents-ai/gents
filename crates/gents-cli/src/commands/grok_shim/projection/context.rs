@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 pub(super) type ContextOrder = (chrono::DateTime<chrono::Utc>, i64, String);

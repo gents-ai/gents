@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_writes::write_agent_document;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::AdvertisedModel;
 use gents::documents::BackendAuth;
 use gents::store::config_client::{

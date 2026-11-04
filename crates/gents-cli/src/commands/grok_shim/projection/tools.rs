@@ -2,7 +2,7 @@ use rapidhash::RapidHashMap;
 use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tools::call::lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};

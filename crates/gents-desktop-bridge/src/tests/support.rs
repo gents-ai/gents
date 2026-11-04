@@ -23,7 +23,7 @@ pub fn node_builder() -> gents::defra_node::NodeBuilder {
     let directory = tempfile::tempdir().unwrap();
     let identity =
         gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    gents::defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+    gents::defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
 pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {

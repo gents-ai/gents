@@ -1,7 +1,7 @@
 use super::super::graphql::{escape_graphql_string, normalize_required};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::documents::{EventSource, Schedule, Task, Trigger};
 use gents::store::collection::Collection;
 use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};

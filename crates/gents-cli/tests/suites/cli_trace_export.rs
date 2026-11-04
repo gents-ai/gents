@@ -10,7 +10,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use gents::inference::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;

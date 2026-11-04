@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::schemas::ALL_COLLECTION_NAMES;
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
