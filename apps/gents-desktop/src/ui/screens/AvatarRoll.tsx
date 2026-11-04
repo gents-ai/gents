@@ -11,7 +11,10 @@ import { NodeAvatar } from "./AgentAvatar";
     it until `settleAvatar`. A click mid-roll rolls again. `onChange` takes
     each new one; keeping it is the owner's. On hover it grows to twice its
     size so the portrait can be seen, and a tab with dice slides out from
-    under it, leaving the face uncovered. */
+    under it, leaving the face uncovered. It is laid out at the hovered size
+    and drawn at half scale at rest, so the zoom shows the portrait at its own
+    resolution instead of enlarging the small drawing; everything inside is
+    sized for the hovered scale. */
 export function AvatarRoll({
   rollId,
   name,
@@ -47,19 +50,24 @@ export function AvatarRoll({
       onPointerEnter={preloadAvatars}
       onFocus={preloadAvatars}
       className={cn(
-        "group/roll relative size-14 shrink-0 cursor-pointer rounded-full ring-offset-2 ring-offset-background outline-none transition-[scale,box-shadow] duration-200 ease-out hover:z-10 hover:scale-200 hover:shadow-xl hover:ring-1 hover:ring-offset-1 hover:ring-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:scale-100 disabled:shadow-none disabled:ring-0 motion-reduce:transition-none",
+        "group/roll relative -m-7 size-28 shrink-0 scale-50 cursor-pointer rounded-full ring-offset-4 ring-offset-background outline-none transition-[scale,box-shadow] duration-200 ease-out hover:z-10 hover:scale-100 hover:shadow-2xl hover:ring-2 hover:ring-offset-2 hover:ring-muted-foreground focus-visible:ring-4 focus-visible:ring-ring disabled:cursor-default disabled:scale-50 disabled:shadow-none disabled:ring-0 motion-reduce:transition-none",
         className,
       )}
     >
       {!disabled && (
         <span
           aria-hidden
-          className="absolute top-1/2 left-1/2 flex h-[calc(50%+1.25rem)] w-5 -translate-x-1/2 -translate-y-5 items-end justify-center rounded-b-full border border-border bg-muted pb-1 text-muted-foreground opacity-0 transition-[translate,opacity] duration-200 ease-out group-hover/roll:translate-y-0 group-hover/roll:text-foreground group-hover/roll:opacity-100 group-focus-visible/roll:translate-y-0 group-focus-visible/roll:opacity-100 motion-reduce:transition-none"
+          className="absolute top-1/2 left-1/2 flex h-[calc(50%+2.5rem)] w-10 -translate-x-1/2 -translate-y-10 items-end justify-center rounded-b-full border-2 border-border bg-muted pb-2 text-muted-foreground opacity-0 transition-[translate,opacity] duration-200 ease-out group-hover/roll:translate-y-0 group-hover/roll:text-foreground group-hover/roll:opacity-100 group-focus-visible/roll:translate-y-0 group-focus-visible/roll:opacity-100 motion-reduce:transition-none"
         >
-          <Dices className="size-2.5" />
+          <Dices className="size-5" />
         </span>
       )}
-      <NodeAvatar name={name} avatar={avatar} rollId={rollId} className="size-full" />
+      <NodeAvatar
+        name={name}
+        avatar={avatar}
+        rollId={rollId}
+        className="size-full text-[1.75rem]"
+      />
     </button>
   );
 }

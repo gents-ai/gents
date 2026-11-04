@@ -66,7 +66,7 @@ function fixture() {
 
 it("checks without dispatch and explicitly resumes the retained Goal while preserving newer text", async () => {
   const f = fixture();
-  const check = screen.getByRole("button", { name: "Check Goal delivery" });
+  const check = screen.getByRole("button", { name: "Check goal delivery" });
   check.focus();
   expect(check).toHaveFocus();
   fireEvent.click(check);
@@ -75,11 +75,11 @@ it("checks without dispatch and explicitly resumes the retained Goal while prese
   await screen.findByText(
     "This change is not confirmed yet. Check again or resume the saved change.",
   );
-  fireEvent.click(screen.getByRole("button", { name: "Resume saved Goal change" }));
+  fireEvent.click(screen.getByRole("button", { name: "Resume saved goal change" }));
   await screen.findByText("Goal change saved");
   expect(f.control).toHaveBeenCalledWith(f.request);
   expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
-  expect(screen.queryByRole("button", { name: "Resume saved Goal change" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Resume saved goal change" })).toBeNull();
 });
 
 it("shows a verified refusal and dismisses only that saved change", async () => {
@@ -91,9 +91,9 @@ it("shows a verified refusal and dismisses only that saved change", async () => 
     outcome: { kind: "rejected", reason: "The Goal was replaced" },
   });
   f.ack.mockResolvedValue(undefined);
-  fireEvent.click(screen.getByRole("button", { name: "Check Goal delivery" }));
-  await screen.findByText("The Goal was replaced");
-  expect(screen.queryByRole("button", { name: "Resume saved Goal change" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Check goal delivery" }));
+  await screen.findByText("The Goal was replaced.");
+  expect(screen.queryByRole("button", { name: "Resume saved goal change" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Dismiss saved change" }));
   await waitFor(() =>
     expect(screen.queryByRole("status", { name: "Saved Goal change" })).toBeNull(),
@@ -106,9 +106,9 @@ it("disables recovery while the original call is still in flight", () => {
   const f = fixture();
   f.app.stores.chat.setState({ goalCommandsInFlight: new Set(["original-command"]) });
   return waitFor(() => {
-    expect(screen.getByRole("button", { name: "Check Goal delivery" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Check goal delivery" })).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Resume saved Goal change" }),
+      screen.getByRole("button", { name: "Resume saved goal change" }),
     ).toBeDisabled();
   });
 });
@@ -123,7 +123,7 @@ it("retains a confirmed result after its recovery view closes without navigating
       }),
   );
   f.ack.mockResolvedValue(undefined);
-  fireEvent.click(screen.getByRole("button", { name: "Check Goal delivery" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check goal delivery" }));
   await waitFor(() => expect(f.read).toHaveBeenCalledTimes(1));
   f.view.unmount();
   finish({

@@ -1,8 +1,8 @@
 use gents::{
     JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
-    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPushBacklogSnapshot,
-    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
-    P2pSyncStatusSnapshot,
+    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPendingPeerOccupancySnapshot,
+    P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot,
+    P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
 
 use p2p::sync::{DispatchSnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
@@ -318,6 +318,7 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
                     busy_ppm: 0,
                     in_flight: 2,
                     in_flight_bytes: 32_768,
+                    ..Default::default()
                 },
                 P2pPeerFetchSnapshot {
                     peer: "peer-fetch-b".into(),
@@ -331,6 +332,7 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
                     busy_ppm: 1_000_000,
                     in_flight: 1,
                     in_flight_bytes: 4096,
+                    ..Default::default()
                 },
             ],
             non_authoritative_broadcast_tasks: 7,
@@ -369,8 +371,92 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
                 last_block_received_at: Some("2026-10-22T14:00:03Z".into()),
                 last_head_acked_at: None,
             }],
+            pending_dag_attempt_ewma_median_ms: None,
+            pending_dag_attempt_ewma_max_ms: None,
+            pending_dag_no_progress_median_ppm: None,
+            pending_dag_tie_reorders: 0,
+            pending_dag_peer_occupancy: Vec::new(),
         },
         "the observability adapter must map every pinned DefraDB sync field without drift"
+    );
+}
+
+/// The DAG-fetch arbitration estimates DefraDB adds to `SyncStatus` and each
+/// peer fetch entry: a pin that carries them must decode, and one that does
+/// not (above) reads them as absent.
+#[test]
+fn arbitration_estimates_decode_when_the_pin_carries_them() {
+    let mut wire = pinned_upstream_wire();
+    let status = wire.as_object_mut().expect("DefraDB sync status object");
+    for (field, value) in [
+        (
+            "pending_dag_attempt_ewma_median_ms",
+            serde_json::json!(4_500),
+        ),
+        ("pending_dag_attempt_ewma_max_ms", serde_json::json!(35_000)),
+        (
+            "pending_dag_no_progress_median_ppm",
+            serde_json::json!(null),
+        ),
+        ("pending_dag_tie_reorders", serde_json::json!(12)),
+        (
+            "pending_dag_peer_occupancy",
+            serde_json::json!([{ "peer": "peer-a", "held": 3, "occupancy_q8": 640 }]),
+        ),
+    ] {
+        status.insert(field.into(), value);
+    }
+    let fetch = wire["peer_fetches"][0]
+        .as_object_mut()
+        .expect("peer fetch entry object");
+    for (field, value) in [
+        ("success_latency_micros", serde_json::json!(84_000)),
+        ("useful_ewma_ppm", serde_json::json!(170_000)),
+        ("attempt_cost_micros", serde_json::json!(490_000)),
+        ("expected_useful_micros", serde_json::json!(2_882_352)),
+        ("ewma_age_millis", serde_json::json!(null)),
+    ] {
+        fetch.insert(field.into(), value);
+    }
+
+    let adapted = JsonP2pSyncStatusAdapter
+        .adapt(&wire)
+        .expect("adapt a DefraDB SyncStatus carrying arbitration estimates");
+    assert_eq!(adapted.pending_dag_attempt_ewma_median_ms, Some(4_500));
+    assert_eq!(adapted.pending_dag_attempt_ewma_max_ms, Some(35_000));
+    assert_eq!(adapted.pending_dag_no_progress_median_ppm, None);
+    assert_eq!(adapted.pending_dag_tie_reorders, 12);
+    assert_eq!(
+        adapted.pending_dag_peer_occupancy,
+        vec![P2pPendingPeerOccupancySnapshot {
+            peer: "peer-a".into(),
+            held: 3,
+            occupancy_q8: 640,
+        }]
+    );
+    let fetch = &adapted.peer_fetches[0];
+    assert_eq!(
+        (
+            fetch.success_latency_micros,
+            fetch.useful_ewma_ppm,
+            fetch.attempt_cost_micros,
+            fetch.expected_useful_micros,
+            fetch.ewma_age_millis,
+        ),
+        (
+            Some(84_000),
+            Some(170_000),
+            Some(490_000),
+            Some(2_882_352),
+            None
+        )
+    );
+    assert_eq!(adapted.peer_fetches[1].success_latency_micros, None);
+
+    wire["pending_dag_peer_occupancy"][0]["unmodeled"] = serde_json::json!(1);
+    assert!(
+        JsonP2pSyncStatusAdapter.adapt(&wire).is_err(),
+        "an occupancy row with an unknown field must fail the adapter"
     );
 }
 

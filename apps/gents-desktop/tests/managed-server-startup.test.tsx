@@ -637,9 +637,10 @@ describe("first-run local node startup", () => {
     expect(failed.querySelector('[data-state="error"]')).not.toBeNull();
     expect(screen.getByRole("heading", { name: "Startup paused" })).toBeInTheDocument();
     expect(screen.getByText("Try again")).toBeInTheDocument();
-    expect(screen.getByTestId("diagnostics-hint")).toHaveTextContent(
-      `Logs: ${bootstrap.diagnosticsHint}`,
-    );
+    const logs = screen.getByRole("button", { name: "Where to find the logs" });
+    expect(screen.queryByText(bootstrap.diagnosticsHint)).not.toBeVisible();
+    await userEvent.click(logs);
+    expect(screen.getByText(bootstrap.diagnosticsHint)).toBeVisible();
     expect(screen.queryByTestId("setup-continue")).not.toBeInTheDocument();
   });
 

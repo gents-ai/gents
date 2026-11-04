@@ -19,6 +19,7 @@ import { useHomeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
+import { shownNodes, useHidden } from "@/lib/hidden";
 import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { NodeActivity } from "./NodeActivity";
 
@@ -51,7 +52,8 @@ export function NodeSwitcher({
 }) {
   const { actions } = useApp();
   const homeDid = useHomeDid();
-  const nodes = useFleet(useShallow(fleetNodes));
+  const hidden = useHidden();
+  const nodes = shownNodes(useFleet(useShallow(fleetNodes)), hidden, current);
   /* as the Nodes page has them: this machine's first, then the remote ones */
   const groups = [
     { label: "Local", nodes: nodes.filter((n) => isLocalNode(n, homeDid)) },
@@ -105,7 +107,7 @@ export function NodeSwitcher({
                         <NodeAvatar
                           name={name}
                           {...nodeAvatarOf(node)}
-                          className="size-6"
+                          className={cn("size-6", !node.dialSucceeded && "opacity-50")}
                         />
                         <span
                           aria-hidden
@@ -119,7 +121,8 @@ export function NodeSwitcher({
                       {node.dialSucceeded ? (
                         <NodeActivity nodeDid={node.nodeDid} className="ml-auto" />
                       ) : (
-                        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        // the item lights every child while highlighted; this stays quiet
+                        <span className="ml-auto shrink-0 text-xs text-muted-foreground!">
                           Offline
                         </span>
                       )}

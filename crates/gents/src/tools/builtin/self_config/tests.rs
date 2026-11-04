@@ -1327,6 +1327,47 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
 }
 
 #[tokio::test]
+async fn effective_config_reports_inherited_workspace_network_as_disabled() {
+    let node = build_agent_node().await;
+    let identity = node_identity("workspace-network-report");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let root = tempfile::tempdir().unwrap();
+    let core = SelfConfigCore::new(node, owner, "beh-test".into())
+        .unwrap()
+        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+            file_mode: crate::tools::surface::FileToolMode::ReadWrite,
+            bash_mode: crate::tools::surface::BashMode::Unrestricted,
+            root: Some(root.path().into()),
+        });
+    core.apply(tools_request(
+        &core,
+        vec![(
+            "host".into(),
+            Some(json!({
+                "root": root.path().to_str().unwrap(),
+                "bash": {"mode": "Unrestricted", "execution_mode": "workspace_write"}
+            })),
+        )],
+    ))
+    .await
+    .unwrap();
+
+    let report = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        report["tool_grants"]["configured"]["network_mode"],
+        "inherit"
+    );
+    assert_eq!(
+        report["runtime_effective"]["effective"]["network_mode"],
+        "disabled"
+    );
+}
+
+#[tokio::test]
 async fn skill_import_previews_without_writes_and_requires_file_authority() {
     let node = build_agent_node().await;
     let identity = node_identity("skill-import");

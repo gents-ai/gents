@@ -13,6 +13,23 @@ struct Case {
     protects_credentials: bool,
 }
 
+#[test]
+fn failed_credential_inspection_records_failure_and_stays_closed() {
+    let folder = tempfile::tempdir().unwrap();
+    let updates = folder.path().join("service-updates");
+    std::fs::create_dir(&updates).unwrap();
+    let dangling = folder.path().join("dangling");
+    std::os::unix::fs::symlink("missing", &dangling).unwrap();
+    std::os::unix::fs::symlink(&dangling, updates.join("link")).unwrap();
+    let before =
+        crate::tools::native::command_observability::snapshot().credential_inspection_failures;
+    let result = report_capture_failure(CredentialProtection::capture([updates]), None);
+    assert!(result.is_err());
+    let after =
+        crate::tools::native::command_observability::snapshot().credential_inspection_failures;
+    assert!(after > before);
+}
+
 async fn run(
     profile: String,
     parameters: Vec<String>,
@@ -170,6 +187,51 @@ print('protected hard-link aliases denied')
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("protected hard-link aliases denied"));
+}
+
+#[tokio::test]
+async fn dangling_links_protect_relative_and_absolute_targets() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let updates = root.join("service-updates/operation/backup");
+    std::fs::create_dir_all(&updates).unwrap();
+    let relative = updates.join("host-123");
+    let absolute = root.join("absent-target");
+    std::os::unix::fs::symlink("host-123", updates.join("SingletonLock")).unwrap();
+    std::os::unix::fs::symlink(&absolute, updates.join("SingletonSocket")).unwrap();
+    let protection = CredentialProtection::capture([root.join("service-updates")]).unwrap();
+    assert!(protection.snapshot().contains(&relative));
+    assert!(protection.snapshot().contains(&absolute));
+
+    let mut profile = macos_workspace_write_policy(CommandNetworkMode::Disabled);
+    let mut parameters = vec![format!("-DWRITABLE_ROOT={}", root.display())];
+    protection.apply(&mut profile, &mut parameters).unwrap();
+    let script = r#"import pathlib, sys
+for name in sys.argv[1:]:
+    try:
+        pathlib.Path(name).write_text('created')
+    except PermissionError:
+        continue
+    raise AssertionError('dangling target was writable: ' + name)
+"#;
+    let targets = [relative, absolute].map(|path| path.to_string_lossy().into_owned());
+    let output = run(profile, parameters, &root, script, &targets).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn dangling_link_to_another_dangling_link_stays_closed() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let updates = root.join("service-updates");
+    std::fs::create_dir(&updates).unwrap();
+    std::os::unix::fs::symlink("missing", root.join("dangling")).unwrap();
+    std::os::unix::fs::symlink(root.join("dangling"), updates.join("link")).unwrap();
+    assert!(CredentialProtection::capture([updates]).is_err());
 }
 
 #[test]

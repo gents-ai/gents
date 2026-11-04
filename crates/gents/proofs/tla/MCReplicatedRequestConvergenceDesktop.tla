@@ -1,0 +1,4 @@
+---- MODULE MCReplicatedRequestConvergenceDesktop ----
+EXTENDS ReplicatedRequestConvergence
+
+====

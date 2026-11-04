@@ -26,6 +26,7 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { currentRoute, navigate, reviewNavigation, type Route } from "@/lib/router";
 import { isLocalNode } from "@/lib/firstRun";
+import { shownNodes, useHidden } from "@/lib/hidden";
 import { switchedRoute } from "@/app/NodeSwitcher";
 import { NodeAvatar } from "./AgentAvatar";
 import { NodeActivity } from "@/app/NodeActivity";
@@ -160,6 +161,7 @@ function useEntries(): SearchEntry[] {
   const homeDid = useHomeDid();
   const selected = useSelectedNodeDid();
   const sections = useAgentSections();
+  const hidden = useHidden();
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
@@ -183,16 +185,21 @@ function useEntries(): SearchEntry[] {
           (m) => m.status === "open" && m.kind !== "finished",
         ),
       ),
-      agents: nodes.flatMap((n) =>
-        n.agents.map((a) => ({
-          agentId: a.agentId,
-          nodeDid: n.nodeDid,
-          name: a.displayName ?? a.agentId,
-          node: nodeName(n.nodeDid),
-          pack: packOrigin(a.tags),
-        })),
-      ),
-      nodes: nodes.map((n) => ({
+      /* the hidden ones are left out, and so is a hidden node's agents */
+      agents: nodes
+        .filter((n) => !hidden.node(n.nodeDid))
+        .flatMap((n) =>
+          n.agents
+            .filter((a) => !hidden.agent(n.nodeDid, a.agentId))
+            .map((a) => ({
+              agentId: a.agentId,
+              nodeDid: n.nodeDid,
+              name: a.displayName ?? a.agentId,
+              node: nodeName(n.nodeDid),
+              pack: packOrigin(a.tags),
+            })),
+        ),
+      nodes: shownNodes(nodes, hidden, null).map((n) => ({
         nodeDid: n.nodeDid,
         name: nodeName(n.nodeDid),
         avatar: n.nodeConfig?.avatar ?? null,
@@ -221,7 +228,7 @@ function useEntries(): SearchEntry[] {
       ],
       actions: ACTIONS,
     });
-  }, [fleet, selected, sections, homeDid]);
+  }, [fleet, selected, sections, homeDid, hidden]);
 }
 
 function PaletteBody({

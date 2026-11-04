@@ -36,6 +36,19 @@ describe("trigger readiness", () => {
     expect(triggerReadiness(ready, trigger).ok).toBe(true);
   });
 
+  it("says the last run failed when the runtime records an error", () => {
+    const ready = withReadiness([
+      { state: "ready", agentId: "default" },
+    ] as DeploymentView["nodeReadiness"]["agents"]);
+    expect(
+      triggerReadiness(ready, {
+        ...trigger,
+        lastStatus: "error",
+        lastError: "refused",
+      }),
+    ).toEqual({ ok: true, note: "Last run failed: refused" });
+  });
+
   it("never promises a trigger is Ready", () => {
     const ready = withReadiness([
       { state: "ready", agentId: "default" },
