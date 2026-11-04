@@ -1247,7 +1247,7 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
             Ok(None) => panic!("the path field is set: {case}"),
             Err(reason) => {
                 assert!(!case["admitted"].as_bool().unwrap(), "{case}: {reason}");
-                assert!(reason.contains("gents plugin dirs add"), "{reason}");
+                assert!(reason.contains("gents pack plugin dirs add"), "{reason}");
             }
         }
     }

@@ -277,6 +277,7 @@ fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
     run_cli_json(
         &runtime.home_dir,
         &[
+            "debug",
             "response",
             "show",
             "--graphql",
@@ -290,6 +291,7 @@ fn response_wait(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
     run_cli_json(
         &runtime.home_dir,
         &[
+            "debug",
             "response",
             "wait",
             "--graphql",
@@ -311,6 +313,7 @@ fn response_wait_failure(
     run_cli_failure_stderr(
         &runtime.home_dir,
         &[
+            "debug",
             "response",
             "wait",
             "--graphql",
@@ -372,6 +375,7 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
     let waited = run_cli_json(
         &runtime.home_dir,
         &[
+            "debug",
             "response",
             "wait",
             "--graphql",

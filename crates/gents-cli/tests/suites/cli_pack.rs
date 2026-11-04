@@ -64,6 +64,7 @@ fn a_document_pack_with_a_plugin_installs_and_its_removal_refuses_intact() -> Re
     let echoed = run_cli_json(
         temp.path(),
         &[
+            "pack",
             "plugin",
             "run",
             "gents/echo_tool",
@@ -88,6 +89,7 @@ fn a_document_pack_with_a_plugin_installs_and_its_removal_refuses_intact() -> Re
     let retained = run_cli_json(
         temp.path(),
         &[
+            "pack",
             "plugin",
             "run",
             "gents/echo_tool",

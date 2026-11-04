@@ -93,6 +93,8 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Owner(args) => account::owner(args).await,
         PackCommand::Publish(args) => registry::publish(args).await,
         PackCommand::Fetch(args) => registry::fetch(args).await,
+        PackCommand::Plugin { command } => crate::commands::plugin::dispatch(command).await,
+        PackCommand::Ux { command } => crate::commands::ux::dispatch(command).await,
     }
 }
 #[cfg(test)]

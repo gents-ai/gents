@@ -1597,6 +1597,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -1755,7 +1756,10 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
         Some(expected_agent_queued)
     );
 
-    let cli_snapshot = run_cli_json(&home_dir, &["fleet", "slots", "--graphql", &graphql])?;
+    let cli_snapshot = run_cli_json(
+        &home_dir,
+        &["debug", "fleet", "slots", "--graphql", &graphql],
+    )?;
     assert_eq!(
         cli_snapshot.pointer("/totals/assigned"),
         snapshot.pointer("/totals/assigned")
@@ -2560,6 +2564,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let request = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2587,6 +2592,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let tool_calls = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2689,6 +2695,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let messages = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2725,6 +2732,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let denied = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2742,6 +2750,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let diagnostic = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2764,6 +2773,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let inventory = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2823,7 +2833,7 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
     .await
     .context("seeding the traced request")?;
 
-    let trace = ["trace", "timeline", "--graphql", &graphql];
+    let trace = ["debug", "trace", "timeline", "--graphql", &graphql];
     let request = ["--request-id", "home-trace-req"];
     // Every CLI caller holds its own User key: another User sees no such row.
     let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;

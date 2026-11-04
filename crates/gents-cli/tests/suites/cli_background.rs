@@ -20,6 +20,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let output = run_cli_json(
         tempdir.path(),
         &[
+            "debug",
             "background",
             "list",
             "--home",
@@ -63,6 +64,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let unfiltered_state_output = run_cli_json(
         tempdir.path(),
         &[
+            "debug",
             "background",
             "list",
             "--home",
@@ -84,6 +86,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let status_fallback_output = run_cli_json(
         tempdir.path(),
         &[
+            "debug",
             "background",
             "list",
             "--home",
@@ -116,6 +119,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let table = run_cli_text(
         tempdir.path(),
         &[
+            "debug",
             "background",
             "list",
             "--home",

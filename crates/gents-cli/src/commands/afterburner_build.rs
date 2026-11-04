@@ -26,7 +26,7 @@ fn validate_source_language(owner: &str, declared: &str) -> Result<SourceLang> {
     let normalized = declared.trim().to_ascii_lowercase();
     anyhow::ensure!(
         gents::pack::SUPPORTED_PLUGIN_LANGUAGES.contains(&normalized.as_str()),
-        "{owner} declares language {declared:?}; Afterburner can compile it, but gents plugin \
+        "{owner} declares language {declared:?}; Afterburner can compile it, but gents pack plugin \
          run cannot run it under its declared bounds yet, so it is refused rather than built \
          unusable; supported languages: {}",
         gents::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")

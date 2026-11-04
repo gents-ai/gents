@@ -182,7 +182,7 @@ mod tests {
         match result.unwrap_err() {
             OAuthAuthProblem::Other(text) => {
                 assert!(text.contains("on hold"), "{text}");
-                assert!(text.contains("gents claude-login"), "{text}");
+                assert!(text.contains("gents auth login claude"), "{text}");
             }
             other => panic!("expected Other, got {other:?}"),
         }
