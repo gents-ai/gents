@@ -240,7 +240,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         "{}: completion changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -404,7 +404,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         "{}: redrive changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -676,7 +676,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         "claim preserves the preceding assistant wait"
     );
     drop(continuation);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -766,6 +766,6 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         Some(bound),
         hop
     ));
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }

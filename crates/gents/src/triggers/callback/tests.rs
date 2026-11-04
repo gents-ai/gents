@@ -1431,7 +1431,7 @@ async fn document_written_before_engine_start_fires_once_across_restarts() {
     backlog.start_engine().await;
     assert_eq!(backlog.invoked().await, vec![pending]);
     assert!(!backlog.invoked().await.contains(&backlog.history));
-    backlog.node.shutdown().await;
+    backlog.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1444,7 +1444,7 @@ async fn one_delivery_pass_drains_a_backlog_beyond_one_journal_page() {
     written.sort();
     backlog.start_engine().await;
     assert_eq!(backlog.invoked().await, written);
-    backlog.node.shutdown().await;
+    backlog.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1486,7 +1486,7 @@ async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
         seeded,
         "the recovered arrival is checkpointed"
     );
-    backlog.node.shutdown().await;
+    backlog.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1511,7 +1511,7 @@ async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
         .await
         .unwrap());
     assert!(backlog.invoked().await.is_empty());
-    backlog.node.shutdown().await;
+    backlog.node.shutdown().await.expect("close test node");
 }
 
 #[test]

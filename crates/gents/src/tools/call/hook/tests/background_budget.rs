@@ -207,7 +207,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 struct NamedPendingTool(String);
@@ -357,7 +357,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         executions.wait_for_completion(child).await;
     }
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 struct NoisyTool(String);
@@ -523,5 +523,5 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     assert_eq!(notices, 1, "redrive must not publish a second notice");
 
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

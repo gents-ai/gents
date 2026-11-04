@@ -66,7 +66,7 @@ async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt(
     .await;
     assert!(fired);
     assert_eq!(lost.unwrap_err().unconfirmed, expected(&["unknown_commit"]));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 
     let (endpoint, _state, server) = fake_transaction_server(FirstCommit::Conflict).await;
     let access = ConfigAccess::graphql(endpoint);
@@ -148,7 +148,7 @@ async fn http_transaction_cursors_keep_all_pages() {
         .collect();
     values.sort();
     assert_eq!(values, (0..66).collect::<Vec<_>>());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -180,7 +180,7 @@ async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
     .unwrap();
     assert_eq!(response["data"]["ReadGateProbe"][0]["value"], "ready");
     drop(held);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -298,7 +298,7 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
         events[1].get("affected_documents").map(String::as_str),
         Some("1")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test(start_paused = true)]
@@ -337,7 +337,7 @@ async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
         events[0].get("affected_documents").map(String::as_str),
         Some("0")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -482,7 +482,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
         "{}",
         ErrorChain(error.as_ref())
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -555,7 +555,7 @@ async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
         fired,
         "outside write consumed the armed first-mutation pause"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -663,7 +663,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
         events[0].get("rollback").map(String::as_str),
         Some("not_needed")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -801,7 +801,7 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
         .filter_map(|row| row["value"].as_str())
         .collect();
     assert_eq!(values, ["next"], "abandoned transaction leaked a write");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -899,7 +899,7 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
         json!([{"value":"after"}]),
         "the swallowed abandoned transaction committed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test(start_paused = true)]
@@ -934,7 +934,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
         events[0].get("rollback").map(String::as_str),
         Some("not_needed")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -988,7 +988,7 @@ async fn stalled_callback_releases_the_embedded_write_gate() {
         response.data.unwrap()["WriteAfterStall"][0]["value"],
         "committed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1042,7 +1042,7 @@ async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate(
         response.data.unwrap()["NestedWriteProbe"][0]["value"],
         "committed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1118,7 +1118,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
         Some("1")
     );
     drop(events);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test(start_paused = true)]
@@ -1361,7 +1361,7 @@ async fn failed_rollback_abandons_before_transaction_retry_backoff() {
         super::MUTATION_WRITE_GATE_CAPACITY
     );
     drop(transaction);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1500,7 +1500,7 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
         gate_held, scenario.expected_gate_held,
         "native gate observation must match the Lean cleanup-timeout state"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[derive(Deserialize)]
@@ -1676,7 +1676,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
         held.clear();
         drop(access);
         drop(gate);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -1748,7 +1748,7 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
         durable.data.unwrap()["OwnedWriteFact"][0]["value"],
         "canonical"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1835,7 +1835,7 @@ async fn thirty_two_hot_document_writers_converge_without_event_loss() {
     let durable = node.execute("{ HotMutationState { key value } }").await;
     assert!(!durable.has_errors(), "{:?}", durable.errors);
     assert_eq!(durable.data.unwrap()["HotMutationState"][0]["value"], 33);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1957,7 +1957,7 @@ resources:
             expected_owner
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2103,7 +2103,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
         .await
         .unwrap();
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2188,7 +2188,7 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
         .await
         .unwrap();
     assert_eq!(after["data"]["ReadSnapshotProbe"][0]["value"], "after");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[derive(Clone, Copy)]
@@ -2625,7 +2625,7 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
     )
     .await
     .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -2673,7 +2673,7 @@ fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously()
         )
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     });
 }
 
@@ -2739,6 +2739,6 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
         )
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

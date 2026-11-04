@@ -221,7 +221,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
         batch[2].is_err(),
         "invalid owner error must remain per-trigger"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -240,7 +240,7 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
     assert_eq!(cursors.len(), 128);
     assert!(cursors.iter().all(|cursor| matches!(cursor, Ok(None))));
     assert_eq!(query_count, 2, "128 scopes use two 64-alias queries");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -298,7 +298,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     );
     drop(intent);
     cancel.cancel();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

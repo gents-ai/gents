@@ -79,7 +79,7 @@ async fn job_row(name: &str) -> PublishedAdmission {
 }
 
 async fn finish(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -594,7 +594,7 @@ async fn read_step_row_carries_the_pin_progress_and_derived_children() {
     job.write_step_state(&row, Some(&block)).await;
     let step = read_step_row(&job.access, &row).await.unwrap();
     assert_eq!(step.resume, Some(block));
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -628,7 +628,7 @@ async fn read_step_row_in_txn_sees_the_transactions_own_writes() {
         .await
         .unwrap();
     assert_eq!(spent, 3);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 use crate::pack::{write_home_install, HomePackInstall, PackKind};
@@ -816,7 +816,7 @@ async fn read_step_row_state_follows_the_row_lifecycle_first() {
         let stored = read_step_row(&job.access, &row).await.unwrap();
         assert_eq!(stored.state, expected, "case {}", index + 1);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -833,7 +833,7 @@ async fn control_outcome_of_a_settled_row_read_back_is_already_terminal() {
             state: JobState::Completed
         }
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("close test node");
 }
 
 pub(crate) async fn stepper(output: Value) -> Stepper {
@@ -1015,7 +1015,7 @@ impl Stepper {
     }
 
     pub(crate) async fn close(self) {
-        self.job.node.shutdown().await;
+        self.job.node.shutdown().await.expect("close test node");
     }
 }
 

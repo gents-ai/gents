@@ -267,5 +267,5 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

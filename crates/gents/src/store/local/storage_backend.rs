@@ -505,7 +505,7 @@ mod tests {
                 .is_none(),
             "the refusal must precede baseline registration"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[cfg(unix)]

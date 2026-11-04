@@ -123,7 +123,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
             &harness.hook,
             &harness.request_id,
         ));
-    harness.node.shutdown().await;
+    harness.node.shutdown().await.expect("close test node");
 }
 
 #[cfg(unix)]
@@ -305,7 +305,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
                 &harness.hook,
                 &harness.request_id,
             ));
-        harness.node.shutdown().await;
+        harness.node.shutdown().await.expect("close test node");
     }
 }
 
@@ -542,7 +542,7 @@ async fn spawned_target_rejection_case(
         case.name,
         target.target()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -617,6 +617,6 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
             .lock()
             .await
             .remove(&hook_execution_fixture_key(&hook, &request_id));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

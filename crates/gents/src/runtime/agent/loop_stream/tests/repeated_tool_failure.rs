@@ -226,7 +226,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
                 .unwrap_or_else(|| panic!("{name}: accepted stop call is durable"));
             assert_eq!(stop["lifecycle_state"], "cancelled", "{name}: {stop}");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -283,7 +283,7 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
         .all(|result| result.contains("duration_ms")));
     assert!(collected.tool_results[3].contains("repeated_tool_call_not_run"));
     assert_eq!(model.seen_requests().await.len(), 5);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 struct EnvelopeShapedTool {
@@ -361,5 +361,5 @@ async fn envelope_shaped_errors_from_other_tools_keep_their_hint() {
         .tool_results
         .iter()
         .all(|result| !result.contains("repeated_tool_call_not_run")));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

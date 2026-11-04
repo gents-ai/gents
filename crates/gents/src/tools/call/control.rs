@@ -554,7 +554,7 @@ mod tests {
                 expected => panic!("unexpected stop action {expected}: {case}"),
             }
             drop(owner);
-            fixture.node.shutdown().await;
+            fixture.node.shutdown().await.expect("close test node");
             let _ = std::fs::remove_dir_all(&fixture.path);
         }
     }
@@ -597,7 +597,7 @@ mod tests {
         worker.await.unwrap();
         assert!(reload(&child, &fixture.node).await.is_cancelled());
         drop(owner);
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(&fixture.path);
     }
 
@@ -916,7 +916,7 @@ mod tests {
                 }
             }
             assert!(registry.process_record_list().is_empty(), "{name}");
-            admission.node.shutdown().await;
+            admission.node.shutdown().await.expect("close test node");
             let _ = std::fs::remove_dir_all(admission.path);
         }
     }

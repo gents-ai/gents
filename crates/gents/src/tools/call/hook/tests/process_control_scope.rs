@@ -271,7 +271,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         .lock()
         .await
         .remove(&hook_execution_fixture_key(&hook, request_id));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -499,7 +499,7 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         .lock()
         .await
         .remove(&hook_execution_fixture_key(&owner, &owner_cancel_request));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 mod job_control {
@@ -765,7 +765,7 @@ mod job_control {
                 .lock()
                 .await
                 .remove(&hook_execution_fixture_key(&self.owner, &self.request_id));
-            self.node.shutdown().await;
+            self.node.shutdown().await.expect("close test node");
         }
     }
 

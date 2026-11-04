@@ -469,7 +469,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             "{name}: provider input or exact acknowledgement changed"
         );
         drop(lifecycle);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
     assert!(conflicting_history_cases > 0);
 }

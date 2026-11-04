@@ -230,7 +230,7 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
             data["data"]["NativeCompletionProbe"][0]["value"],
             "persisted"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
     assert!(exercised >= 2, "Lean must cover timeout and cancellation");
 }
@@ -374,5 +374,5 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
             .len(),
         0
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

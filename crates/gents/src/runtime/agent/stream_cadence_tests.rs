@@ -248,7 +248,7 @@ async fn processor_stream(stream: Stream, end: End, chunks_per_second: u32) -> P
         execution_generation: generation,
     };
     let result = persisted(&node, &doc_id, &source, &output_writer).await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(data_path);
     result
 }
@@ -329,7 +329,7 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
         execution_generation: generation,
     };
     let result = persisted(&node, &request.doc_id, &source, &output_writer).await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(data_path);
     result
 }

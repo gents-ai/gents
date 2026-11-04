@@ -880,6 +880,6 @@ mod grouped_tests {
             frozen,
             "replay must preserve original projected input"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

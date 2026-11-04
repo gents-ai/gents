@@ -372,6 +372,6 @@ mod tests {
             *seen.lock().unwrap(),
             [json!({"n": 1}), json!({"n": 1}), json!({"n": 2})]
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

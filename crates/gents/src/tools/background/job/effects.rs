@@ -616,7 +616,7 @@ mod tests {
         assert!(stamp(&node, &child).await.is_none());
         assert!(interrupt_slots(&node, &caller, &[target]).await.is_err());
         assert!(stamp(&node, &child).await.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[test]
@@ -718,7 +718,7 @@ mod tests {
 
     impl Harness {
         async fn close(self) {
-            self.node.shutdown().await;
+            self.node.shutdown().await.expect("close test node");
             std::fs::remove_dir_all(&self.path).unwrap();
         }
     }

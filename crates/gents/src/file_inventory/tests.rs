@@ -809,7 +809,7 @@ async fn generated_reply_journals_preserve_immutable_outcomes() {
             "{invalid}"
         );
     }
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
     drop(names);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
@@ -1068,7 +1068,7 @@ async fn native_inventory_admission_and_response_commit_preserve_attempts_and_ro
                 .is_none());
         }
     }
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
     drop(names);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
@@ -1169,7 +1169,7 @@ async fn generated_preparation_retries_keep_the_original_snapshot() {
             .unwrap()
             .is_none());
     }
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
     drop(names);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
@@ -1273,7 +1273,7 @@ async fn generated_client_scope_requires_a_unique_retained_admission() {
             .is_err());
         }
         let path = fixture.path.clone();
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("close test node");
         drop(fixture);
         tokio::fs::remove_dir_all(path).await.unwrap();
     }
@@ -1539,7 +1539,7 @@ async fn generated_client_progress_survives_reload_and_rollback() {
             }
         }
         let path = fixture.path.clone();
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("close test node");
         drop(fixture);
         let reopened = std::sync::Arc::new(
             crate::defra_node::Node::builder()
@@ -1579,7 +1579,7 @@ async fn generated_client_progress_survives_reload_and_rollback() {
         assert!(load_client_progress(&reopened, &admission, &names.source)
             .await
             .is_err());
-        reopened.shutdown().await;
+        reopened.shutdown().await.expect("close test node");
         drop(reopened);
         drop(names);
         tokio::fs::remove_dir_all(path).await.unwrap();
@@ -1750,7 +1750,7 @@ async fn generated_operator_inventory_requires_the_native_owner() {
             Some(refused)
         );
     }
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
     drop(names);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

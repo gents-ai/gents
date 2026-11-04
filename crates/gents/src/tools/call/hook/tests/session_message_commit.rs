@@ -217,7 +217,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
             dir.path().to_string_lossy().as_ref()
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -446,5 +446,5 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     )
     .await;
     assert_eq!(previous[0]["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

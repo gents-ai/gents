@@ -289,7 +289,7 @@ async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
     .await
     .expect("detached relinquishment must finish before its outcome is observed");
     assert_eq!(lease_tuple(&request_row(&node, &doc_id).await), before);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -371,7 +371,7 @@ async fn native_relinquishment_follows_generated_drop_cases() {
         exercised += 1;
     }
     assert_eq!(exercised, 3);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

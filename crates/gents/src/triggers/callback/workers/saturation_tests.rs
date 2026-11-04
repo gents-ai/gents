@@ -415,7 +415,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     if stopped.is_err() {
         server.abort();
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

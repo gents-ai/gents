@@ -81,7 +81,7 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
         Some("Runtime skill")
     );
     held.discard().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -713,7 +713,7 @@ async fn retired_reserved_ids_are_never_visible() {
     assert_eq!(ids(&view.triggers), ["ordinary"]);
     assert_eq!(ids(&view.event_sources), ["ordinary"]);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -741,7 +741,7 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
     .unwrap();
     assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

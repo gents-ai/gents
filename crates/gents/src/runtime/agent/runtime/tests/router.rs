@@ -154,7 +154,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
         .get("failure_reason")
         .and_then(Value::as_str)
         .is_some_and(|reason| reason.contains("execution_origin")));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -230,7 +230,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
         "closed admission leaked work"
     );
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -313,7 +313,7 @@ async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
         .unwrap()
         .unwrap();
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -381,7 +381,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     );
     assert!(executor_rx.try_recv().is_err(), "request reached executor");
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

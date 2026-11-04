@@ -698,7 +698,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
             .catalogs,
         vec![empty]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -828,7 +828,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         !stored.contains(SECRET),
         "credential material persisted: {stored}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -938,7 +938,7 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -984,7 +984,7 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
         [original]
     );
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     let node = std::sync::Arc::new(open().await?);
     record_model_catalog(&node, &backend, catalog_action(&actions[2], &backend)?).await?;
@@ -1005,6 +1005,6 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
         chrono::DateTime::parse_from_rfc3339(&observed.catalogs[0].observed_at)?.timestamp(),
         case["expected"]["observed_at"].as_i64().unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }

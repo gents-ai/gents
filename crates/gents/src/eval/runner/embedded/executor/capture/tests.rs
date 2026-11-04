@@ -96,7 +96,7 @@ async fn delegation_case_capture_excludes_session_title_requests() {
     .unwrap();
     assert_eq!(normal.len(), 1);
     assert_eq!(normal[0]["request_id"], "normal");
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -139,7 +139,7 @@ async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
         bind_capture_session(&json!("literal $session text"), session_id),
         json!("literal $session text")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -302,7 +302,7 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
         .unwrap()
         .evaluate(&check["params"], &evidence);
     assert_eq!(verdict.kind, OutcomeKind::Passed, "{:?}", verdict.raw);
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }
 
 fn captured(workspace: &Path, glob: &str) -> (Vec<FileRef>, Vec<String>) {

@@ -65,7 +65,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
     .await
     .unwrap();
     assert_eq!(reconstructed, message);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -139,7 +139,7 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         format!("{error:#}").contains("not-yet-replicated-close"),
         "{error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -207,7 +207,7 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
         rows[1]["message_key"],
         format!("authored:{request_doc_id}:prompt")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -391,7 +391,7 @@ async fn provider_publication_request_size_benchmark() {
             "fresh_publication_median_ms": fresh[2], "replay_median_ms": replay[2],
             "fresh_request_scans": fresh_scans, "replay_request_scans": replay_scans,
         }));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
     let result = serde_json::json!({"measurements": measurements, "persistent_node": true});
@@ -439,7 +439,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -533,7 +533,7 @@ async fn publication_and_replay_read_only_the_selected_source() {
     .unwrap();
     assert_eq!(history.len(), 4);
     assert_eq!(history.last(), Some(&message));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(path).unwrap();
 }
 
@@ -580,7 +580,7 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
         writes >= 3,
         "tool-bearing publication must have multiple writes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -747,7 +747,7 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
     assert_eq!(writes, 0);
     assert_eq!(snapshot().await, committed);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -873,7 +873,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
         committed,
         "external replay must preserve all physical IDs, request facts and session observation"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -934,7 +934,7 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
         segments[0]["close"].is_null(),
         "failed closure writes no close fact"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -998,7 +998,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         3,
         "two immutable flushes plus terminal-only closure"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1095,7 +1095,7 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
             (_, observation) => panic!("terminal={terminal}: unexpected {observation:?}"),
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1175,7 +1175,7 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             after.data, before.data,
             "lost-ack replay must not append a closing record"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -1237,7 +1237,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     .await
     .unwrap();
     assert_eq!(observed, message);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1443,7 +1443,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
             .is_empty(),
         "headerless replay must remain read-only"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1531,7 +1531,7 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
         assert_eq!(a.arguments, b.arguments);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1708,7 +1708,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     .await
     .unwrap();
     assert_eq!(output, "one receipt-loss dispatch result");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1808,7 +1808,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
             .unwrap(),
         before
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1901,7 +1901,7 @@ async fn cancelled_flush_replays_before_inference_close_or_publication() {
             assert_eq!(replay.message_doc_id, message_doc_id);
             assert_eq!(access.execute(&query).await.unwrap(), after);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }

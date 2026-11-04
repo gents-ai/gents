@@ -517,7 +517,7 @@ mod tests {
                 }
             }
             drop(owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }

@@ -476,8 +476,8 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
     cancel.cancel();
     enrollment_task.await??;
     pairing_task.await??;
-    client_node.shutdown().await;
-    source_node.shutdown().await;
+    client_node.shutdown().await.expect("close test node");
+    source_node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -976,7 +976,7 @@ async fn a_mismatched_cached_inventory_document_id_is_not_served() -> Result<()>
             .is_none(),
         "a mismatched cached document id was committed"
     );
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1005,7 +1005,7 @@ async fn a_terminal_inventory_row_is_not_served() -> Result<()> {
         wait_request(&store.node, &row.demand).await?.response == terminal.response,
         "a terminal row was recommitted"
     );
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -1033,7 +1033,7 @@ async fn an_invalid_cached_inventory_demand_propagates() -> Result<()> {
         delivery.0.load(std::sync::atomic::Ordering::SeqCst) == 0,
         "a failed preflight delivered"
     );
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
     Ok(())
 }
 

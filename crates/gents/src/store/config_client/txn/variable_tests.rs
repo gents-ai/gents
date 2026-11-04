@@ -63,7 +63,7 @@ async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
         .await;
     assert!(!read.has_errors());
     assert_eq!(read.data.unwrap()["MutationVariableProbe"][0], before);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -90,5 +90,5 @@ async fn embedded_transaction_preserves_json_variables_and_rollback() {
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

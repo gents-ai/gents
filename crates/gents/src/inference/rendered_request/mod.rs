@@ -250,7 +250,7 @@ mod tests {
                 .unwrap(),
             expected
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(cached.content_key, requested_entry.content_key);
         assert!(!cache.contains_key(&missing_id));
         assert!(!cache.contains_key(&unrequested_id));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]

@@ -484,7 +484,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 "{}: notification facts",
                 case.name
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("close test node");
         }
     }
     assert_eq!(
@@ -757,7 +757,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             "{}: notification facts",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -813,5 +813,5 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
         .unwrap();
     assert!(parent_row["interrupt_requested_at"].is_null());
     assert_eq!(wake_row["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

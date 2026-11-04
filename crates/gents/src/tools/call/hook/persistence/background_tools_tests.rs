@@ -90,7 +90,7 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
     assert!(registry.process_record(&call_id, &doc_id).is_some());
     process.finish().await;
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -187,7 +187,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
         assert_eq!(result["data"]["AgentMessage"].as_array().unwrap().len(), 1);
         process.finish().await;
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 }
@@ -305,7 +305,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
     let notifications = result["data"]["AgentMessage"].as_array().unwrap();
     assert_eq!(notifications.len(), 1);
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -445,7 +445,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
     assert_eq!(row.state().as_str(), "failed");
     process.finish().await;
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -489,7 +489,7 @@ async fn failed_replay_adopts_competing_durable_terminal() {
     assert!(stale.is_cancelled());
     assert!(!registry.contains(&call, &doc).await);
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -701,7 +701,7 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
     );
 
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -758,6 +758,6 @@ async fn completed_background_call_resolves_parent_from_physical_request() {
         .unwrap();
     assert_eq!(result["data"]["AgentMessage"].as_array().unwrap().len(), 1);
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }

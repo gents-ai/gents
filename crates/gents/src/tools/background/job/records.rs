@@ -334,7 +334,7 @@ mod tests {
     }
 
     async fn finish(admission: PublishedAdmission) {
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 

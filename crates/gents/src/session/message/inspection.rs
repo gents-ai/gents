@@ -797,7 +797,7 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("not messageable"), "{error:#}");
         drop(worker);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 }

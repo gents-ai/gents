@@ -769,7 +769,7 @@ mod tests {
     }
 
     async fn finish(admission: PublishedAdmission) {
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 
@@ -1368,7 +1368,7 @@ mod tests {
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
         assert!(plain_resume(&job, &prior).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1386,7 +1386,7 @@ mod tests {
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
         assert!(plain_resume(&job, &prior).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1411,7 +1411,7 @@ mod tests {
         );
         let done = finished(&mut job, "call-3", None, None, JobState::Completed).await;
         assert!(plain_resume(&job, &done).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1429,7 +1429,7 @@ mod tests {
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
         assert!(plain_resume(&job, &prior).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1461,7 +1461,7 @@ mod tests {
         )
         .await;
         assert!(admitted.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1501,7 +1501,7 @@ mod tests {
         )
         .await;
         assert_eq!(refused, Err(Refusal::PolicyDenied));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1526,7 +1526,7 @@ mod tests {
         assert_eq!(validated.pin.replayed_from.as_deref(), Some(prior.as_str()));
         assert_eq!(validated.replayed_from.as_deref(), Some(prior.as_str()));
         assert_eq!(validated.echo.kind, JobControlEchoKind::EngineCurrent);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1539,7 +1539,7 @@ mod tests {
         );
         assert!(validate_budget(&job, &prior, 4).await.is_ok());
         assert!(validate_budget(&job, &prior, 5).await.is_ok());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     async fn validate_budget(
@@ -1581,7 +1581,7 @@ mod tests {
             ["run".to_owned(), "call-1".to_owned()]
         );
         assert_eq!(validated.echo, resume_echo(&resume_block(&prior)));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 
     fn pinned(row_pin: JobPin) -> StepRow {
@@ -1740,6 +1740,6 @@ mod tests {
         assert!(!head);
         assert_eq!(resumed_by, Some(format!("{}:call-3", caller().session_id)));
         assert!(target(&job, PLUGIN, &newest).await.0 .1);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("close test node");
     }
 }

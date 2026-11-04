@@ -660,7 +660,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
             "{}: the durable binding must match the capture contract",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 

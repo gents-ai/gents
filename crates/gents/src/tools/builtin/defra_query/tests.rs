@@ -112,7 +112,7 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
             "{error}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 async fn seeded_node() -> Arc<defra_node::Node> {
@@ -586,7 +586,7 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
     assert_eq!(result["results"][0]["name"], "T005");
     assert_eq!(result["results"][4]["name"], "T009");
     assert!(result.get("count").is_none());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -707,7 +707,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         let result: Value = serde_json::from_str(&Tool::call(&tool, count).await.unwrap()).unwrap();
         assert_eq!(result["total_count"], 0);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -789,5 +789,5 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
         .await
         .unwrap();
     assert_eq!(persisted["data"]["PlanTicket"][0]["status"], "open");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

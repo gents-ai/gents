@@ -449,7 +449,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             "{}",
             case["name"]
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -529,7 +529,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             error.to_string().contains("expected_count_field"),
             "{reason}: unexpected error {error:#}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -645,5 +645,5 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         !error.to_string().contains("unique physical tool binding"),
         "two same-tool writes must resolve individually, not surface as name ambiguity: {error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

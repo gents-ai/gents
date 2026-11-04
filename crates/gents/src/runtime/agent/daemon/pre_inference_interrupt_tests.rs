@@ -320,7 +320,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         "no provider call may run in the pre-inference window"
     );
     capture.assert_source("preparation");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -499,7 +499,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         0,
         "no provider call may run before execution begins"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -599,7 +599,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     assert!(!row["terminalized_at"].is_null(), "{row}");
     assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     capture.assert_source("mid_flight");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[cfg(unix)]

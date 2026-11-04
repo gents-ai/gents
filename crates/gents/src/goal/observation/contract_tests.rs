@@ -134,7 +134,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             "observation: {observation:?}"
         );
     }
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("close test node");
 }
 
 async fn durable_rows(f: &Fixture) -> Value {
@@ -284,7 +284,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             cancel.cancel();
             run.await.unwrap();
             drop(changes_tx);
-            f.node.shutdown().await;
+            f.node.shutdown().await.expect("close test node");
         }
     }
 }
@@ -326,7 +326,7 @@ async fn invalid_session_does_not_starve_other_goal_observations() {
         .await
         .is_err());
     assert_eq!(durable_rows(&f).await, settled);
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -418,7 +418,7 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         .await
         .unwrap();
     assert_eq!(durable_rows(&f).await, settled);
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -532,5 +532,5 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
     .await
     .unwrap()
     .is_none());
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("close test node");
 }

@@ -96,7 +96,7 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     );
     assert!(empty.entries.is_empty());
     assert_ne!(empty.binding.digest, terminal.binding.digest);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
 
@@ -387,7 +387,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             }
             other => panic!("unhandled source projection outcome {other}"),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
@@ -736,7 +736,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                 .binding,
             snapshot.binding
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
@@ -921,7 +921,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         .await
         .unwrap();
     assert_eq!(inventory.binding, repeated.binding);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
 

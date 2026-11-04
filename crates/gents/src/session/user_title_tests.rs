@@ -170,7 +170,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         .unwrap()
         .last_activity_at = "2026-01-04T00:00:00Z".into();
     assert_eq!(generated, expected_generated);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -238,6 +238,6 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         .unwrap()
         .unwrap();
         assert_eq!(after, expected, "Lean user title case {}", case["name"]);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

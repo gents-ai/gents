@@ -133,7 +133,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             assert_eq!(before, after, "{} must not write", case.name);
         }
         assert_eq!(after["Goal"][0]["goal_id"], before["Goal"][0]["goal_id"]);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -202,5 +202,5 @@ async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
     assert!(set_goal(&node, owner, "operator", Some("  "), None, None)
         .await
         .is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

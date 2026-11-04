@@ -74,7 +74,7 @@ async fn embedded_collections_round_trip() {
         .expect("list collections");
     assert_eq!(collections, vec![collection_name]);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 /// Every builtin template's filter fields must be `@immutable` in the
@@ -187,8 +187,8 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
         }
     }
 
-    local.shutdown().await;
-    remote.shutdown().await;
+    local.shutdown().await.expect("close test node");
+    remote.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -227,8 +227,8 @@ async fn embedded_replicators_round_trip() {
         "replicators={replicators:?}"
     );
 
-    local.shutdown().await;
-    remote.shutdown().await;
+    local.shutdown().await.expect("close test node");
+    remote.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -309,8 +309,8 @@ async fn embedded_filtered_replicator_replays_existing_matching_documents() {
         "filtered tool-call replay should not leak non-matching rows"
     );
 
-    sender.shutdown().await;
-    receiver.shutdown().await;
+    sender.shutdown().await.expect("close test node");
+    receiver.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -461,6 +461,6 @@ async fn assert_selected_delivery_outlives_deadline(
             panic!("selected replay did not converge within the native recovery window: expected={document_count} observed={} status={status}", observed.len());
         }
     }
-    sender.shutdown().await;
-    receiver.shutdown().await;
+    sender.shutdown().await.expect("close test node");
+    receiver.shutdown().await.expect("close test node");
 }

@@ -1512,7 +1512,7 @@ mod tests {
                 assert_eq!(session.requester_did.as_deref(), Some(foreign.did()));
             }
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     async fn refused_pending_request_under_session(
@@ -1635,7 +1635,7 @@ mod tests {
                 "{session_id}: the refusal must leave the undecodable row untouched"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1737,7 +1737,7 @@ mod tests {
                 session.observation
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[derive(Clone)]
@@ -1826,7 +1826,7 @@ mod tests {
                     data["AgentSession"].as_array().unwrap().is_empty(),
                     "an undecodable row mints no session"
                 );
-                node.shutdown().await;
+                node.shutdown().await.expect("close test node");
             });
         });
         let logs = captured.lock().unwrap().clone();
@@ -1924,7 +1924,7 @@ mod tests {
             identity.did(),
         )
         .is_err());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]

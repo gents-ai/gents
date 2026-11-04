@@ -671,6 +671,6 @@ mod tests {
         .unwrap();
         assert_ne!(stored.doc_id, independent.doc_id);
         assert!(independent.state.quiesced_at.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

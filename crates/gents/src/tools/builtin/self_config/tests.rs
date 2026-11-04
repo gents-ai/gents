@@ -2120,7 +2120,7 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
         serde_json::from_str::<Value>(&tool.call(read).await.unwrap()).unwrap(),
         after
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 pub(super) async fn call_config_tool(
@@ -2196,7 +2196,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     tool.call(trigger.to_string()).await.unwrap();
     let rows = access.execute("{ Trigger { trigger_id } }").await.unwrap();
     assert_eq!(rows["data"]["Trigger"].as_array().unwrap().len(), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2302,7 +2302,7 @@ async fn config_errors_name_the_next_call() {
             .contains(r#"copy an exact ID from ["agent","list"]"#),
         "{unknown}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2387,7 +2387,7 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
     )
     .unwrap();
     assert_eq!(read["config_execution"]["mutation_entered"], false);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

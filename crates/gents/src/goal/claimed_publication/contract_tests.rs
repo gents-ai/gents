@@ -174,7 +174,7 @@ async fn run_generated_running_wait() {
         ),
         "the old-parent claim publishes nothing once the wake is the latest request"
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
 }
 
 async fn discharge_completion_obligation(node: &crate::defra_node::Node, doc_id: &str) {
@@ -705,7 +705,7 @@ async fn run_generated_wait_observations() {
             outcome => panic!("unmapped generated wait outcome {outcome}"),
         }
         assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("close test node");
     }
     assert_eq!(
         abandoned_follow_ups, 1,
@@ -850,7 +850,7 @@ async fn run_historical_publication_cases() {
             "{} durable result",
             case.name
         );
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("close test node");
     }
     assert_eq!(
         seen.len(),
@@ -899,7 +899,7 @@ async fn queued_claimed_publication_observes_pause_before_creating_child() {
     let mut expected = before;
     expected["status"] = json!("paused");
     assert_eq!(fixture.observe().await, expected);
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -958,5 +958,5 @@ async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
     .expect("replay recovers the published continuation");
     assert!(!replay.created);
     assert_eq!(replay.request_id, first.request_id);
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("close test node");
 }

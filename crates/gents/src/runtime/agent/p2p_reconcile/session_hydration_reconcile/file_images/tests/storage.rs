@@ -132,7 +132,7 @@ async fn receipt_projection_failure_rolls_back_the_immutable_outcome() {
             store.prior(&row).await.unwrap().unwrap().selection,
             FileImageSelection::Missing
         );
-        store.node.shutdown().await;
+        store.node.shutdown().await.expect("close test node");
     }
 }
 
@@ -189,7 +189,7 @@ async fn the_requester_cannot_read_or_delete_the_source_receipt() {
             .is_err()
     );
     assert_eq!(journal(&store).await, before);
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -220,7 +220,7 @@ async fn inventory_bound_receipt_roundtrips_and_refuses_a_changed_snapshot() {
     assert_eq!(store.prior(&row).await.unwrap().unwrap(), receipt);
     let identity = store.identity.clone();
     let path = _directory.path().join("store");
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
     drop(store);
     let node = Arc::new(
         Node::builder()
@@ -237,7 +237,7 @@ async fn inventory_bound_receipt_roundtrips_and_refuses_a_changed_snapshot() {
         identity,
     };
     assert_eq!(store.prior(&row).await.unwrap().unwrap(), receipt);
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
 }
 
 /// The pending-identity preflight reads the cached physical document and
@@ -282,7 +282,7 @@ async fn still_pending_requires_the_exact_physical_row_and_demand() {
             .unwrap(),
         "a served row is no longer pending"
     );
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
 }
 
 /// An inventory-bound demand is only pending while its inventory reference is
@@ -315,7 +315,7 @@ async fn still_pending_compares_the_inventory_reference() {
     assert!(!ImageRequestStore::still_pending(&store, &unbound)
         .await
         .unwrap());
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -333,5 +333,5 @@ async fn malformed_inventory_reference_does_not_block_another_pending_image() {
         })
     }).await.unwrap();
     assert_eq!(store.pending_images().await.unwrap(), vec![row]);
-    store.node.shutdown().await;
+    store.node.shutdown().await.expect("close test node");
 }

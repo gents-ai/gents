@@ -289,5 +289,5 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         "{}: distinct current assignment",
         case["name"]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

@@ -1764,7 +1764,7 @@ pub(super) mod tests {
             )).await
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(data_path);
     }
 
@@ -2043,7 +2043,7 @@ pub(super) mod tests {
         drop(watcher);
 
         drop(daemon);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(admission.path).unwrap();
     }
 
@@ -2206,7 +2206,7 @@ pub(super) mod tests {
             "a later failed request must not inherit the earlier reply"
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(data_path);
     }
 
@@ -2340,7 +2340,7 @@ pub(super) mod tests {
             "exact replacement did not reach provider"
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(data_path);
     }
     include!("pre_inference_interrupt_tests.rs");

@@ -126,5 +126,5 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         first,
         "repeat interrupt preserves latch timestamp"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

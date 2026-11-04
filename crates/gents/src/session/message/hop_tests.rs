@@ -113,7 +113,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             "{name}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -201,7 +201,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         serde_json::to_value(&receipt_after).unwrap(),
         serde_json::to_value(&receipt_before).unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -291,7 +291,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
     assert!(data["AgentRequest"].as_array().unwrap().is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -383,6 +383,6 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             Ok(true)
         ));
     }
-    message.admission.node.shutdown().await;
+    message.admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

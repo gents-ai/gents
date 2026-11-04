@@ -258,7 +258,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         );
         assert_eq!(outcome_rows(&access).await, before, "{name}: rollback");
         drop(access);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         drop(node);
         let node = Arc::new(
             defra_node::Node::builder()
@@ -292,6 +292,6 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         } else {
             assert_eq!(after, before, "{name}: settled outcome changed");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(live.output_tokens, Some(23));
         assert_eq!(live.reported_input_tokens, live.input_tokens);
         assert_eq!(live.reported_output_tokens, live.output_tokens);
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -274,7 +274,7 @@ mod tests {
         let finished = last_tool_call(&node).await.expect("completed tool");
         assert_eq!(finished.state.as_deref(), Some("completed"));
         assert_eq!(finished.result.as_deref(), Some("saved the record"));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }

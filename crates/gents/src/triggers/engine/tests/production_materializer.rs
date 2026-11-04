@@ -374,7 +374,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             "{test_session}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -759,7 +759,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
             .goal_id,
         replacement.goal_id
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

@@ -217,7 +217,7 @@ async fn observations_in_one_session_have_separate_file_documents_and_read_back_
             .await
             .is_err());
     }
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -277,7 +277,7 @@ async fn concurrent_edits_of_one_path_keep_observation_documents_distinct() {
             .0,
         right
     );
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -319,7 +319,7 @@ async fn measure_per_observation_file_history_storage() {
             .await
             .unwrap();
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         drop(node);
         let baseline = size(data.clone()).await;
         let node = std::sync::Arc::new(
@@ -371,7 +371,7 @@ async fn measure_per_observation_file_history_storage() {
                 },
             ).await.unwrap();
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         drop(node);
         size(data)
             .await

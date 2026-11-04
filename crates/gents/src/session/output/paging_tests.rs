@@ -177,5 +177,5 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
     })
     .await
     .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

@@ -203,7 +203,7 @@ mod tests {
         for field in ["access_token", "refresh_token", "id_token"] {
             assert!(!diagnostic.contains(field), "{diagnostic}");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -236,6 +236,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["total_count"], 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

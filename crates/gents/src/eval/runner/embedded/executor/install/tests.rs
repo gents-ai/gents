@@ -37,7 +37,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
         rows[0]["inference_profile_id"], "frozen-profile",
         "the slot marker never reaches the trial home"
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -77,7 +77,7 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
     .unwrap();
     assert_eq!(agent.default_agent_id(), "subject");
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -159,5 +159,5 @@ async fn subject_schemas_are_installed_before_documents_without_fixture_copies()
             .unwrap(),
         response
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
 }

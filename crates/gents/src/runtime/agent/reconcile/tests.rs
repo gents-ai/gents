@@ -475,7 +475,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     })
     .await
     .expect("dropping the slot owner must abort and drop its held executor");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -1630,7 +1630,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
         "supervisor lost retired slot drain failure: {error:#}"
     );
     runtime_status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]

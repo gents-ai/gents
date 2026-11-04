@@ -722,7 +722,7 @@ mod tests {
         );
         assert!(rows.tool_calls[0].args.is_empty());
         assert!(rows.tool_calls[0].result.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -786,7 +786,7 @@ mod tests {
             .find(|row| row.tool_call_id == "job-call")
             .expect("the job row");
         assert_eq!(job.child_request_id, None);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -871,7 +871,7 @@ mod tests {
             .unwrap()
             .contains("synthetic-inline-secret"));
 
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1021,7 +1021,7 @@ mod tests {
         let after = accounts().await;
         assert_eq!(after["call-a"], None, "before the reused slot's sign-in");
         assert_eq!(after["call-later"], label("label-new"));
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1107,6 +1107,6 @@ mod tests {
             "the semantic event must preserve its immediate native usage-only parent",
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

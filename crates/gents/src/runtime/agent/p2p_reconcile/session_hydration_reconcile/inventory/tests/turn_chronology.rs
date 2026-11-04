@@ -268,7 +268,7 @@ async fn check_turn_chronology(retry: bool) {
         .unwrap()
         .known_inventory());
     drop((first_request, successor, first_tool, second_tool));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     let reopened = Arc::new(
         Node::builder()
@@ -284,6 +284,6 @@ async fn check_turn_chronology(retry: bool) {
     assert_eq!(restored.binding, snapshot.binding);
     assert_eq!(restored.entries, snapshot.entries);
     assert_modeled_resource_order(&contracts, "sequential_resource", &restored, &expected);
-    reopened.shutdown().await;
+    reopened.shutdown().await.expect("close test node");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

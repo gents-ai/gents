@@ -1543,7 +1543,7 @@ mod tests {
             .unwrap()
             .documents
             .is_empty());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -1755,7 +1755,7 @@ mod tests {
         );
 
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         let _ = std::fs::remove_dir_all(path);
     }
 

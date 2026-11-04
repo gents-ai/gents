@@ -159,7 +159,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
                 "{name}: canonical output for {index} must not be empty"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -251,7 +251,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
                 "canonical output {index} must be delivered"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -376,7 +376,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         output.contains("visible-proof.txt"),
         "canonical output must carry the successful bash listing: {output}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -461,6 +461,6 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             );
         }
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

@@ -344,6 +344,6 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 .iter()
                 .any(|row| row["session_id"] == task_session));
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }

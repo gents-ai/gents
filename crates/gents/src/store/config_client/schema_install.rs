@@ -290,7 +290,7 @@ mod tests {
                 "{conflicting}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]

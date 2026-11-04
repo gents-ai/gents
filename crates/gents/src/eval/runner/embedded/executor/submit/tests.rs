@@ -110,7 +110,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     )
     .await
     .unwrap();
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("close test node");
     let StageSubmission::Submitted {
         request_id,
         remaining,

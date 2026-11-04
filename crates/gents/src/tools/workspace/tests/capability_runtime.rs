@@ -209,7 +209,7 @@ async fn runtime_seal_case(unowned: bool) {
     assert!(!fx.repo.join("patch.rs").exists());
     assert!(!fx.repo.join(".tmp-build/test-build.log").exists());
     drop(owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     // Keep the DB directory alive for Defra background tasks.
     std::mem::forget(db_dir);
 }

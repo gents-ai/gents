@@ -346,7 +346,7 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
         pack.coordinate
     );
     assert_eq!(rows["data"]["PackInstallation"][0]["plugin_store"], true);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2188,7 +2188,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             .len(),
         1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2553,7 +2553,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                 );
             }
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 
@@ -2601,7 +2601,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         .unwrap()["unconfirmed"]
         .as_bool()
         .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     let error = super::documents::install_documents_with_plugins(
         &access,
         OWNER,
@@ -2749,7 +2749,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
             .digest,
         new_digest
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2815,7 +2815,7 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
             .unwrap()
             .is_some()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -2918,7 +2918,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         rows["data"]["Tools"][0]["integrations"]["plugins"][0]["digest"],
         new_digest
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3002,7 +3002,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         .await
         .unwrap();
     assert!(rows["data"]["Tools"].as_array().unwrap().is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3128,7 +3128,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
         old
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3202,7 +3202,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
             .unwrap(),
         old_home
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3264,7 +3264,7 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
         .unwrap();
     assert!(result["data"]["PackSchemaDependency"].is_array());
     assert!(result["data"]["PackSchemaRoot"].is_array());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -3332,7 +3332,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         before
     );
     assert_eq!(access.execute("{Tools(filter: {tools_id: {_eq: \"drift-tools\"}}) {display_name integrations} PackInstallation {coordinate digest}}").await.unwrap(), docs);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]
@@ -3432,5 +3432,5 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     );
     let rows = access.execute("{ AckProbe { value } }").await.unwrap();
     assert_eq!(rows["data"]["AckProbe"], json!([{"value":"committed"}]));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

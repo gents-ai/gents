@@ -1221,7 +1221,7 @@ mod tests {
         entry.last_error = Some("connection refused".into());
         super::persist_health_snapshot(&failed_context, &map, &[entry.clone()], later).await;
         assert!(map.persisted.lock().await.is_empty());
-        unavailable.shutdown().await;
+        unavailable.shutdown().await.expect("close test node");
         crate::store::config_client::ConfigAccess::write_local(
             &node,
             "test.health_repair",
@@ -1252,7 +1252,7 @@ mod tests {
             row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["last_error_class"],
             "connection_refused"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     fn health_state_from_lean(case: &LeanMcpHealthCase, state: &str) -> HealthStateInternal {
@@ -1721,7 +1721,7 @@ mod tests {
         assert_eq!(after[1]["_docID"], expected_tied.as_str());
         assert!(after.iter().all(|row| row["status"] == "stale"));
         assert_eq!(map.persisted.lock().await.len(), 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
     #[tokio::test]
     async fn probe_shutdown_cancels_pending_mcp_without_pruning_or_failure() {
@@ -1826,7 +1826,7 @@ mod tests {
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(health.snapshot_full(3).await, before);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]

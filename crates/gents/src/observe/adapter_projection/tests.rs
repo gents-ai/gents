@@ -1326,6 +1326,6 @@ async fn an_agent_new_row_links_the_request_it_caused() {
             parent_tool_call_id: Some(tool_call_id),
         })
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

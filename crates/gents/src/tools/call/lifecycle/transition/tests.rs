@@ -17,7 +17,7 @@ async fn published_job_row(name: &str) -> PublishedAdmission {
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

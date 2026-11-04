@@ -191,7 +191,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             "{} durable result",
             case.name
         );
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("close test node");
     }
 }
 
@@ -233,7 +233,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             expected["status"] = json!(case.target);
         }
         assert_eq!(f.observe().await, expected);
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("close test node");
     }
 }
 
@@ -272,7 +272,7 @@ async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_childr
             rows_before,
             "{state:?}: resume duplicated existing work"
         );
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("close test node");
     }
 }
 
@@ -353,6 +353,6 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
                 .count(),
             usize::from(resume_first)
         );
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("close test node");
     }
 }

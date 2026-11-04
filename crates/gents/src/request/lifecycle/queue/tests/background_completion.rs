@@ -1094,7 +1094,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     drop(watcher);
     drop(first_lifecycle);
     drop(second_lifecycle);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
