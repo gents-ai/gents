@@ -133,9 +133,9 @@ mod tests {
             "AdmiralReport",
         ])
         .unwrap();
-        let Command::Data {
+        let Some(Command::Data {
             command: DataCommand::Query(args),
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected query")
         };
@@ -169,9 +169,9 @@ mod tests {
             r#"{"doc_id":"doc","field":"body","offset_bytes":2000,"expected_hash":"sha256:abc"}"#,
         ])
         .unwrap();
-        let Command::Data {
+        let Some(Command::Data {
             command: DataCommand::Query(args),
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected query")
         };

@@ -719,6 +719,12 @@ async fn serve_foreground(
     )
     .await?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
+    crate::client_settings::apply_client_setting(
+        &mut args,
+        &crate::client_settings::ClientSettings::read(&home_dir)?,
+        startup.is_some(),
+        cfg!(unix),
+    );
     let http_ip = args
         .http_addr
         .unwrap_or(crate::network_settings::DEFAULT_HTTP_ADDR);
@@ -1991,7 +1997,7 @@ mod grok_shim_tests {
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("server should parse");
         match cli.command {
-            Command::Server(args) => args,
+            Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
     }

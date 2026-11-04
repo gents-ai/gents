@@ -219,7 +219,7 @@ mod tests {
             home_path.to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)
@@ -300,7 +300,7 @@ mod tests {
             home.path().to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)

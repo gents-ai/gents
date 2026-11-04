@@ -257,7 +257,7 @@ mod tests {
             .expect("service install parses")
             .command
         {
-            Command::Service { command } => match command.into_parts().2 {
+            Some(Command::Service { command }) => match command.into_parts().2 {
                 ServiceAction::Install { network, .. } => network,
                 _ => panic!("expected install"),
             },
@@ -269,7 +269,7 @@ mod tests {
         let mut full = vec!["gents", "server"];
         full.extend_from_slice(argv);
         match Cli::try_parse_from(full).expect("server parses").command {
-            Command::Server(args) => args,
+            Some(Command::Server(args)) => args,
             _ => panic!("expected server"),
         }
     }
@@ -502,7 +502,7 @@ mod tests {
             "operator.json",
         ])
         .unwrap();
-        let Command::Service { command } = cli.command else {
+        let Some(Command::Service { command }) = cli.command else {
             panic!("service command");
         };
         let ServiceAction::Install {

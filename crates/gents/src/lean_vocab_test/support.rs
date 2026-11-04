@@ -540,6 +540,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
     pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
+    pub(crate) codex_shim_connection_admission_cases: Vec<LeanCodexShimConnectionAdmissionCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
@@ -3296,6 +3297,11 @@ pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimT
 
 pub(crate) fn lean_codex_shim_binding_cases() -> &'static [LeanCodexShimBindingCase] {
     &lean_contract_snapshot().codex_shim_binding_cases
+}
+
+pub(crate) fn lean_codex_shim_connection_admission_cases(
+) -> &'static [LeanCodexShimConnectionAdmissionCase] {
+    &lean_contract_snapshot().codex_shim_connection_admission_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {

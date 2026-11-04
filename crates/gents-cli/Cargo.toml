@@ -152,6 +152,7 @@ db.workspace = true
 defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
+portable-pty = "0.9"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

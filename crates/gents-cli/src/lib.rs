@@ -21,6 +21,7 @@ pub mod enrollment {
 }
 mod caused_sessions;
 mod cli;
+mod client_settings;
 mod commands;
 mod config_bundle;
 mod config_import;
@@ -423,14 +424,15 @@ pub fn run_cli() -> Result<()> {
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
-        Command::NativeFsRunner(args) => {
+        None => return commands::start::run(cli.home).await,
+        Some(Command::NativeFsRunner(args)) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
-        Command::DocsBundle(args) => return commands::docs_bundle::docs_bundle(args),
-        Command::Codex(args) => {
+        Some(Command::DocsBundle(args)) => return commands::docs_bundle::docs_bundle(args),
+        Some(Command::Codex(args)) => {
             return commands::codex::codex(args).await;
         }
-        command => command,
+        Some(command) => command,
     };
     gents::enable_self_runner();
     if let Command::Eval { command } = &command {

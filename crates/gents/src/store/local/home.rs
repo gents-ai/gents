@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 mod init_config;
@@ -23,6 +24,20 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 pub enum HomeError {
     #[error("unable to resolve the user's home directory; set GENTS_HOME")]
     HomeDirUnresolved,
+    #[error("reading the remembered home file {}", path.display())]
+    RememberedHomeRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the remembered home file {} must hold one absolute path", path.display())]
+    RememberedHomeInvalid { path: PathBuf },
+    #[error("writing the remembered home file {}", path.display())]
+    RememberedHomeWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error(transparent)]
     LockHeld(#[from] StoreLockHeld),
     #[error(transparent)]
@@ -219,17 +234,106 @@ pub fn store_lock_held<'a>(
 type Result<T, E = HomeError> = std::result::Result<T, E>;
 
 pub fn default_home_dir() -> Result<PathBuf> {
-    let home = match std::env::var_os(GENTS_HOME_ENV).filter(|value| !value.is_empty()) {
-        Some(home) => PathBuf::from(home),
-        None => dirs::home_dir()
-            .ok_or(HomeError::HomeDirUnresolved)?
-            .join(".gents"),
-    };
+    let home = default_home_from(
+        std::env::var_os(GENTS_HOME_ENV),
+        dirs::config_dir().as_deref(),
+        dirs::home_dir().as_deref(),
+    )?;
     refuse_real_gents_home(&home, GENTS_HOME_ENV);
     Ok(home)
 }
 
 pub const GENTS_HOME_ENV: &str = "GENTS_HOME";
+
+/// An unreadable remembered file is an error: falling back to `~/.gents` would
+/// open the wrong data.
+fn default_home_from(
+    env_home: Option<OsString>,
+    config_dir: Option<&Path>,
+    user_home: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(home) = env_home.filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
+    if let Some(home) = config_dir.map(read_remembered_home).transpose()?.flatten() {
+        return Ok(home);
+    }
+    Ok(user_home
+        .ok_or(HomeError::HomeDirUnresolved)?
+        .join(".gents"))
+}
+
+/// Outside any home, so resetting a home cannot remove it.
+fn remembered_home_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("gents")
+}
+
+const REMEMBERED_HOME_FILE_NAME: &str = "home";
+
+/// Only the trailing newline is trimmed; any other whitespace belongs to the path.
+fn read_remembered_home(config_dir: &Path) -> Result<Option<PathBuf>> {
+    let path = remembered_home_dir(config_dir).join(REMEMBERED_HOME_FILE_NAME);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(HomeError::RememberedHomeRead { path, source }),
+    };
+    let home = Path::new(contents.strip_suffix('\n').unwrap_or(&contents));
+    if !home.is_absolute() {
+        return Err(HomeError::RememberedHomeInvalid { path });
+    }
+    Ok(Some(home.to_path_buf()))
+}
+
+/// Makes `chosen` the default home for later commands, or forgets any earlier
+/// choice when `chosen` is `~/.gents`. Only setup calls this: a one-off `--home`
+/// or `GENTS_HOME` never changes what is remembered.
+pub fn remember_home(chosen: &Path) -> Result<()> {
+    let config_dir = dirs::config_dir().ok_or(HomeError::HomeDirUnresolved)?;
+    refuse_real_gents_home(&remembered_home_dir(&config_dir), GENTS_HOME_ENV);
+    remember_home_in(
+        &config_dir,
+        &dirs::home_dir().ok_or(HomeError::HomeDirUnresolved)?,
+        chosen,
+    )
+}
+
+fn remember_home_in(config_dir: &Path, user_home: &Path, chosen: &Path) -> Result<()> {
+    let dir = remembered_home_dir(config_dir);
+    let path = dir.join(REMEMBERED_HOME_FILE_NAME);
+    write_remembered_home(&dir, &path, user_home, chosen)
+        .map_err(|source| HomeError::RememberedHomeWrite { path, source })
+}
+
+fn write_remembered_home(
+    dir: &Path,
+    path: &Path,
+    user_home: &Path,
+    chosen: &Path,
+) -> std::io::Result<()> {
+    let chosen = std::path::absolute(chosen)?;
+    if chosen == user_home.join(".gents") {
+        return match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+    }
+    let chosen = chosen.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the home path is not UTF-8",
+        )
+    })?;
+    std::fs::create_dir_all(dir)?;
+    let staged = tempfile::NamedTempFile::new_in(dir)?;
+    use std::io::Write as _;
+    writeln!(staged.as_file(), "{chosen}")?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
 
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
@@ -238,6 +342,8 @@ pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
 /// Host-local listen addresses for `gents server`; binding precedes opening
 /// the store, so they cannot live in a document.
 pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
+/// The interface `gents` opens for this home; no file means Codex.
+pub const CLIENT_CONFIG_FILE_NAME: &str = "client.json";
 pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
 pub const PACKS_DIR_NAME: &str = "packs";
 pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
@@ -264,6 +370,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
     NETWORK_CONFIG_FILE_NAME,
+    CLIENT_CONFIG_FILE_NAME,
     P2P_SECRET_KEY_FILE_NAME,
     PACKS_DIR_NAME,
     PLUGINS_DIR_NAME,
