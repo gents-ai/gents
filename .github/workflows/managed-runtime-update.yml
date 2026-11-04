@@ -13,6 +13,10 @@ on:
       - 'crates/gents-cli/src/cli/args/**'
       - 'crates/gents-cli/src/lib.rs'
       - 'crates/gents-cli/src/commands/prepare_runtime*'
+      - 'crates/gents-cli/src/commands/start*'
+      - 'crates/gents-cli/src/commands/start/**'
+      - 'crates/gents-cli/src/commands/codex*'
+      - 'crates/gents-cli/tests/suites/cli_onboarding_live.rs'
       - 'crates/gents-cli/src/http/runtime_control.rs'
       - 'crates/gents/src/runtime/service.rs'
       - 'crates/gents/src/runtime/agent/runtime/startup.rs'
@@ -96,3 +100,7 @@ jobs:
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario busy-timeout
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario health-failure
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario config-health-failure
+      - name: Exercise first-run setup against launchd
+        if: runner.os == 'macOS'
+        run: |
+          cargo test --locked -p gents-cli --features live-e2e,native-e2e --test cli_live_suite cli_onboarding_live::no_model:: --profile fast-dev -- --ignored --nocapture --test-threads=1

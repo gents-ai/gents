@@ -159,7 +159,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
 
 /// Normal completion drains the embedded node before releasing its store claim;
 /// aborting background tasks without awaiting them can retain the database.
-async fn init_home(mut args: InitArgs) -> Result<Value> {
+pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;

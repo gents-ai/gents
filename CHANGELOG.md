@@ -21,6 +21,12 @@ source consistency checks, not a separate runtime compatibility version.
   | `init` | hidden, still works |
   | `prepare-runtime` | hidden, still works |
 
+- `gents` with no command sets up a home on first run, brings up its runtime
+  through the native service without enabling it at login, and opens the
+  configured interface. Without a terminal it prints help and exits 2, as a
+  missing subcommand did. `gents` refuses a Codex endpoint that does not identify
+  itself as this home's, and the shim answers that question at `GET /runtime`.
+
 ## 1.0.0-rc1 - 2026-11-03
 
 - P2P DAG fetches rank providers by measured health, rotate past a provider

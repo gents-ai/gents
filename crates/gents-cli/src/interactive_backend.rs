@@ -200,13 +200,13 @@ pub(crate) async fn confirm(question: &str, default_yes: bool) -> bool {
     }
 }
 
-async fn prompt_line(text: &str) -> Result<String> {
+pub(crate) async fn prompt_line(text: &str) -> Result<String> {
     eprint!("{text}");
     let _ = std::io::stderr().flush();
     read_line().await
 }
 
-async fn prompt_line_default(label: &str, default: &str) -> Result<String> {
+pub(crate) async fn prompt_line_default(label: &str, default: &str) -> Result<String> {
     eprint!("{label} [{default}]: ");
     let _ = std::io::stderr().flush();
     let line = read_line().await?;

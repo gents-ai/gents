@@ -114,6 +114,7 @@ Data and debugging  data  debug
 Measure             eval  optimization
                     version
 
+Run `gents` with no command to set up a home and open a conversation.
 Run `gents <command> --help` for details.
 
 Options:
@@ -166,9 +167,7 @@ const SERVER_AFTER_HELP: &str = "\
 `server` reads the initialized home directory, starts the embedded DefraDB runtime, serves GraphQL locally, and starts IROH P2P for desktop pairing.
 
 Common flow:
-  gents init
-  gents server
-  gents codex
+  gents
 
 The server runs the Codex TUI endpoint by default (loopback only); disable it
 with --no-codex-shim. `gents codex` in another terminal connects to it.
@@ -423,7 +422,7 @@ pub fn run_cli() -> Result<()> {
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
-        None => return commands::start::run(cli.home).await,
+        None => return commands::start::run(cli.home, cli.store_key_custody).await,
         Some(Command::NativeFsRunner(args)) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
@@ -688,7 +687,7 @@ pub(crate) async fn persistent_node_builder_with_stored_identity(
 ) -> Result<NodeBuilder> {
     let config = read_init_config(home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "gents home {} is not initialized; run `gents init --home {}` first",
+            "gents home {} is not initialized; run `gents --home {}` first",
             home_dir.display(),
             home_dir.display()
         )
@@ -962,7 +961,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("run `gents init --home"));
+        assert!(error.to_string().contains("run `gents --home"));
     }
 
     #[test]

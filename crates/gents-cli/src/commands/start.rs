@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::CommandFactory as _;
 
-use crate::cli::args::CodexArgs;
+use crate::cli::args::{CodexArgs, StoreKeyCustodyArg};
 use crate::cli::Cli;
 use crate::client_settings::{ensure_client_supported, ClientSettings, InterfaceClient};
 use crate::commands::codex::{
@@ -15,10 +15,12 @@ use crate::graphql_access::graphql_endpoint_available;
 use crate::home_state::{read_init_config, read_runtime_state, resolve_home_dir};
 use crate::native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform};
 
+mod setup;
+
 const GROK_BIN_ENV: &str = "GENTS_GROK_BIN";
 const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
 
-pub(crate) enum InterfaceEndpoint {
+enum InterfaceEndpoint {
     Codex { remote: String },
     Grok { socket: PathBuf },
 }
@@ -90,7 +92,10 @@ impl InterfaceEndpoint {
 }
 
 /// Dispatched before telemetry, so nothing writes over the interface.
-pub(crate) async fn run(home: Option<PathBuf>) -> Result<()> {
+pub(crate) async fn run(
+    home: Option<PathBuf>,
+    store_key_custody: Option<StoreKeyCustodyArg>,
+) -> Result<()> {
     // Setup prompts go to stderr, so a redirected stderr would hide them.
     if !std::io::stdin().is_terminal()
         || !std::io::stdout().is_terminal()
@@ -99,13 +104,14 @@ pub(crate) async fn run(home: Option<PathBuf>) -> Result<()> {
         eprint!("{}", Cli::command().render_help());
         std::process::exit(2);
     }
-    let home = crate::absolutize(resolve_home_dir(home.as_deref()))?;
-    let Some(config) = read_init_config(&home)? else {
-        bail!(
-            "home {} is not initialized; run `gents init --home {}` first",
-            home.display(),
-            home.display()
-        );
+    let home_given = home.map(crate::absolutize).transpose()?;
+    let mut home = crate::absolutize(resolve_home_dir(home_given.as_deref()))?;
+    let config = match read_init_config(&home)? {
+        Some(config) => config,
+        None => {
+            home = setup::setup(home_given, store_key_custody).await?;
+            read_init_config(&home)?.context("setup left this home uninitialized")?
+        }
     };
     let endpoint = InterfaceEndpoint::for_client(ClientSettings::read(&home)?.client)?;
     ensure_runtime(&home, &config.node_did, &endpoint).await?;
@@ -181,7 +187,6 @@ fn grok_command_args(socket: &Path) -> Vec<String> {
     ]
 }
 
-/// How to install the interface, and what works without it.
 pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
     let (how, override_env) = match client {
         InterfaceClient::Codex => (

@@ -133,7 +133,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
 async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigAccess> {
     anyhow::ensure!(
         crate::read_init_config(home)?.is_some(),
-        "gents home {} is not initialized; run `gents init --home {}` first",
+        "gents home {} is not initialized; run `gents --home {}` first",
         home.display(),
         home.display(),
     );

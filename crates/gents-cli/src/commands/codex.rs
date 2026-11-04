@@ -43,7 +43,6 @@ pub(crate) async fn open_codex(args: CodexArgs) -> Result<()> {
     .await
 }
 
-/// The binary an interface runs: the override in `env_name`, else `default` on `PATH`.
 pub(crate) fn interface_bin(env_name: &str, default: &str) -> String {
     std::env::var(env_name)
         .ok()
@@ -52,7 +51,6 @@ pub(crate) fn interface_bin(env_name: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-/// Runs an interface on this terminal until it exits.
 pub(crate) async fn launch_interface(
     name: &str,
     bin: &str,

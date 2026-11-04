@@ -29,6 +29,12 @@ const INSTALL_MESSAGE: &str = "Codex was not found";
 /// Longer than the 60 s `gents` itself waits for the endpoint.
 const RUNTIME_UP: Duration = Duration::from_secs(90);
 const EXIT: Duration = Duration::from_secs(10);
+const PROMPT: Duration = Duration::from_secs(30);
+const TURN: Duration = Duration::from_secs(240);
+const FOLDER_QUESTION: &str = "Data folder [";
+const INFERENCE_QUESTION: &str = "How do you want to run inference?";
+const TOOLS_QUESTION: &str = "What may agents do?";
+const ENDPOINT_TEXT: &str = "127.0.0.1:21929";
 
 /// One test's temporary user. Owns the launchd job from the moment it exists,
 /// and every refusal happens before that, so `Drop` never removes a job this
@@ -56,10 +62,24 @@ fn job_loaded(target: &str) -> Result<bool> {
         .success())
 }
 
+/// The safety boundary: this binary built without `native-e2e` addresses the
+/// user's daily service, so nothing may reach launchd until the build's own
+/// `service update-check` report has passed this.
+fn isolated_label(metadata: &Value) -> Result<&str> {
+    let os = metadata["os"].as_str().unwrap_or_default();
+    ensure!(
+        os == "macos",
+        "this suite drives launchd; refusing on {os:?}"
+    );
+    let label = metadata["service_label"].as_str().unwrap_or_default();
+    ensure!(
+        label.ends_with(".native-e2e"),
+        "refusing to address the daily runtime {label:?}; run through `make live-onboarding`"
+    );
+    Ok(label)
+}
+
 impl LiveBox {
-    /// The label check is the safety boundary: this binary built without
-    /// `native-e2e` addresses the user's daily service, so nothing may reach
-    /// launchd until the build has reported its own label.
     fn new() -> Result<Self> {
         let temp = tempfile::tempdir().context("creating the temporary HOME")?;
         let root = fs::canonicalize(temp.path())?;
@@ -74,16 +94,7 @@ impl LiveBox {
             String::from_utf8_lossy(&output.stderr)
         );
         let metadata: Value = serde_json::from_slice(&output.stdout)?;
-        let os = metadata["os"].as_str().unwrap_or_default();
-        ensure!(
-            os == "macos",
-            "this suite drives launchd; refusing on {os:?}"
-        );
-        let label = metadata["service_label"].as_str().unwrap_or_default();
-        ensure!(
-            label.ends_with(".native-e2e"),
-            "refusing to address the daily runtime {label:?}; run through `make live-onboarding`"
-        );
+        let label = isolated_label(&metadata)?;
 
         let uid = Command::new("/usr/bin/id").arg("-u").output()?;
         ensure!(uid.status.success(), "could not identify the user domain");
@@ -145,6 +156,19 @@ impl LiveBox {
 
     fn log(&self, name: &str) -> PathBuf {
         self.root.join(format!("{name}.terminal.log"))
+    }
+
+    fn remembered_home(&self) -> PathBuf {
+        self.root.join("Library/Application Support/gents/home")
+    }
+
+    /// Bare `gents` choosing file store-key custody, as it would on a first run.
+    fn first_run(&self, interface: &str) -> Command {
+        let mut command = self.gents();
+        command
+            .env("GENTS_CODEX_BIN", interface)
+            .args(["--store-key-custody", "file"]);
+        command
     }
 
     fn init_home(&self, name: &str, endpoint: &str, model: &str) -> Result<InitializedHome> {
@@ -398,6 +422,19 @@ impl Terminal {
         Ok(())
     }
 
+    async fn answer(&mut self, question: &str, answer: &str) -> Result<()> {
+        self.expect(question, PROMPT).await?;
+        self.send(&format!("{answer}\r"))
+    }
+
+    /// The questions after the folder: a custom backend, and the default tools.
+    async fn answer_inference_and_tools(&mut self, endpoint: &str, model: &str) -> Result<()> {
+        self.answer(INFERENCE_QUESTION, "3").await?;
+        self.answer("Backend base URL", endpoint).await?;
+        self.answer("Model name:", model).await?;
+        self.answer(TOOLS_QUESTION, "").await
+    }
+
     /// Returns once the child exited and its output reached the transcript.
     async fn wait_exit(&mut self, timeout: Duration) -> Result<u32> {
         let deadline = Instant::now() + timeout;
@@ -435,6 +472,44 @@ impl Drop for Terminal {
             let _ = self.child.kill();
         }
     }
+}
+
+/// The configured model server, checked before anything is installed.
+async fn live_model() -> Result<(String, String)> {
+    let endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
+        .context("with_model tests read GENTS_CLI_E2E_MODEL_ENDPOINT")?;
+    let model = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
+        .context("with_model tests read GENTS_CLI_E2E_MODEL_NAME")?;
+    let models = format!("{}/models", endpoint.trim_end_matches('/'));
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .build()?
+        .get(&models)
+        .send()
+        .await
+        .with_context(|| format!("the model server at {models} is unreachable"))?
+        .error_for_status()
+        .with_context(|| format!("the model server at {models} refused the request"))?;
+    Ok((endpoint, model))
+}
+
+/// The installed interface, or `None` after printing that the test is skipped.
+fn real_interface(name: &str) -> Option<PathBuf> {
+    let found = std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file());
+    if found.is_none() {
+        eprintln!("skipped: {name} is not installed");
+    }
+    found
+}
+
+fn node_did_of(home: &Path) -> Result<String> {
+    read_json_file(&home.join("init.json"))?["node_did"]
+        .as_str()
+        .map(str::to_string)
+        .context("init.json names a node DID")
 }
 
 /// A new connection each call, as a client that just started would make.
@@ -500,6 +575,29 @@ impl HeldShimPort {
 
 mod no_model {
     use super::*;
+
+    #[test]
+    #[ignore = "ignored only so `make live-onboarding` runs it; touches nothing"]
+    fn only_an_isolated_build_on_macos_passes_the_label_check() {
+        for (os, label) in [
+            ("macos", "ai.gents.runtime"),
+            ("macos", ""),
+            ("macos", "ai.gents.runtime.native-e2e.other"),
+            ("linux", "ai.gents.runtime.native-e2e"),
+        ] {
+            let metadata = json!({"os": os, "service_label": label});
+            assert!(
+                isolated_label(&metadata).is_err(),
+                "{os} {label} must be refused"
+            );
+        }
+        assert!(isolated_label(&json!({})).is_err());
+        assert_eq!(
+            isolated_label(&json!({"os": "macos", "service_label": "ai.gents.runtime.native-e2e"}))
+                .unwrap(),
+            "ai.gents.runtime.native-e2e"
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
@@ -653,6 +751,274 @@ mod no_model {
             "the foreground server must still be running"
         );
         ensure!(!live.plist().exists(), "nothing may be installed");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn first_run_sets_up_and_leaves_the_runtime_up() -> Result<()> {
+        let live = LiveBox::new()?;
+        let folder = live.folder("my data");
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("first-run"))?;
+
+        for row in [
+            "      ██████  ",
+            "██████        ",
+            "          ████",
+            "    ██        ",
+            "      ██████  ",
+        ] {
+            terminal.expect(row, PROMPT).await?;
+        }
+        terminal.expect(INSTALL_MESSAGE, PROMPT).await?;
+        terminal
+            .answer(FOLDER_QUESTION, &folder.to_string_lossy())
+            .await?;
+        terminal
+            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
+        terminal.expect("gents chat", EXIT).await?;
+        terminal.expect_exit(1).await?;
+
+        assert_eq!(
+            read_json_file(&folder.join("init.json"))?["tool_ceiling"],
+            json!("Readonly")
+        );
+        assert_eq!(
+            fs::read_to_string(live.remembered_home())?.trim_end_matches('\n'),
+            folder.to_string_lossy()
+        );
+        ensure!(
+            !terminal.transcript().contains(r#""status":"initialized""#)
+                && !terminal.transcript().contains(r#""status": "initialized""#),
+            "setup must not print init's JSON: {}",
+            terminal.transcript()
+        );
+        ensure!(live.plist().is_file(), "the service was not installed");
+        shim_call("/", "thread/loaded/list", json!({})).await?;
+
+        let pid = live.service_pid().context("the service runs")?;
+        let mut no_flags = live.gents();
+        no_flags.env("GENTS_CODEX_BIN", MISSING_BIN);
+        let mut second = Terminal::spawn(&no_flags, &live.log("second-run"))?;
+        second.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
+        second.expect_exit(1).await?;
+        ensure!(
+            !second.transcript().contains(FOLDER_QUESTION)
+                && !second.transcript().contains(INFERENCE_QUESTION),
+            "a set up home asks nothing: {}",
+            second.transcript()
+        );
+        assert_eq!(live.service_pid(), Some(pid));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_failed_setup_remembers_nothing() -> Result<()> {
+        let live = LiveBox::new()?;
+        let file = live.root.join("a-file");
+        fs::write(&file, "not a folder")?;
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("failed"))?;
+        terminal
+            .answer(FOLDER_QUESTION, &file.to_string_lossy())
+            .await?;
+        let code = terminal.wait_exit(PROMPT).await?;
+
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        ensure!(!live.plist().exists(), "nothing is installed");
+        assert_eq!(fs::read_to_string(&file)?, "not a folder");
+
+        let mut rerun = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("rerun"))?;
+        rerun.expect(FOLDER_QUESTION, PROMPT).await?;
+        rerun.send("\x03")?;
+        rerun.wait_exit(EXIT).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn an_initialized_folder_skips_the_remaining_questions() -> Result<()> {
+        let live = LiveBox::new()?;
+        let home = live.init_home("existing", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let held = HeldShimPort::serving(b"").await?;
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("existing"))?;
+        terminal
+            .answer(FOLDER_QUESTION, &home.home.to_string_lossy())
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        ensure!(
+            !terminal.transcript().contains(INFERENCE_QUESTION)
+                && !terminal.transcript().contains(TOOLS_QUESTION),
+            "an initialized folder asks nothing more: {}",
+            terminal.transcript()
+        );
+        assert_eq!(
+            fs::read_to_string(live.remembered_home())?.trim_end_matches('\n'),
+            home.home.to_string_lossy()
+        );
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_given_home_is_not_asked_and_not_remembered() -> Result<()> {
+        let live = LiveBox::new()?;
+        let home = live.folder("given");
+        let held = HeldShimPort::serving(b"").await?;
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&home);
+
+        let mut terminal = Terminal::spawn(&command, &live.log("given"))?;
+        terminal
+            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        ensure!(
+            !terminal.transcript().contains(FOLDER_QUESTION),
+            "a given home is not asked for: {}",
+            terminal.transcript()
+        );
+        ensure!(home.join("init.json").is_file(), "the given home is set up");
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_vanished_remembered_folder_is_the_suggested_answer() -> Result<()> {
+        let live = LiveBox::new()?;
+        let vanished = live.root.join("vanished folder");
+        let remembered = live.remembered_home();
+        fs::create_dir_all(remembered.parent().context("the file has a parent")?)?;
+        fs::write(&remembered, format!("{}\n", vanished.display()))?;
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("vanished"))?;
+        terminal
+            .expect(&format!("{FOLDER_QUESTION}{}]", vanished.display()), PROMPT)
+            .await?;
+        terminal.send("\x03")?;
+        terminal.wait_exit(EXIT).await?;
+        Ok(())
+    }
+}
+
+mod with_model {
+    use super::*;
+
+    /// Runs first-run setup into `folder` against the model, up to opening the interface.
+    async fn set_up(
+        live: &LiveBox,
+        interface: &str,
+        folder: &Path,
+        endpoint: &str,
+        model: &str,
+    ) -> Result<Terminal> {
+        let mut terminal = Terminal::spawn(&live.first_run(interface), &live.log("first-run"))?;
+        terminal
+            .answer(FOLDER_QUESTION, &folder.to_string_lossy())
+            .await?;
+        terminal.answer_inference_and_tools(endpoint, model).await?;
+        Ok(terminal)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model and real launchd; run through `make live-onboarding`"]
+    async fn first_run_then_chat_completes_a_turn() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+
+        let mut terminal = set_up(&live, MISSING_BIN, &folder, &endpoint, &model).await?;
+        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        crate::support::graphql::register_served_home(&folder, HTTP_PORT)?;
+
+        let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
+        let mut chat = live.gents();
+        chat.args(["chat", "--home"])
+            .arg(&folder)
+            .args(["--output", "json", &prompt]);
+        let output = tokio::time::timeout(
+            TURN,
+            tokio::process::Command::from(chat)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .context("gents chat did not finish")??;
+        ensure!(
+            output.status.success(),
+            "gents chat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let graphql = graphql_url(HTTP_PORT);
+        let (request, _, _) = wait_for_request(&graphql, &node_did_of(&folder)?, &prompt).await?;
+        wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
+    async fn first_run_opens_real_codex_and_a_turn_completes() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(codex) = real_interface("codex") else {
+            return Ok(());
+        };
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let codex = codex.to_string_lossy();
+
+        let mut terminal = set_up(&live, &codex, &folder, &endpoint, &model).await?;
+        let result = turn_in_codex(&live, &mut terminal, &folder).await;
+        result.with_context(|| format!("Codex transcript:\n{}", terminal.transcript()))
+    }
+
+    async fn turn_in_codex(live: &LiveBox, terminal: &mut Terminal, folder: &Path) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let loaded = shim_call("/", "thread/loaded/list", json!({})).await;
+            if loaded.is_ok_and(|loaded| {
+                loaded["data"]
+                    .as_array()
+                    .is_some_and(|data| !data.is_empty())
+            }) {
+                break;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "Codex loaded no thread within 60 s"
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let pid = live.service_pid().context("the service runs")?;
+        crate::support::graphql::register_served_home(folder, HTTP_PORT)?;
+
+        let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
+        terminal.send(&prompt)?;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        terminal.send("\r")?;
+
+        let graphql = graphql_url(HTTP_PORT);
+        let (request, _, _) = wait_for_request(&graphql, &node_did_of(folder)?, &prompt).await?;
+        wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+
+        terminal.send("\x03")?;
+        terminal.wait_exit(PROMPT).await?;
+        assert_eq!(live.service_pid(), Some(pid));
+        shim_call("/", "thread/loaded/list", json!({})).await?;
         Ok(())
     }
 }
