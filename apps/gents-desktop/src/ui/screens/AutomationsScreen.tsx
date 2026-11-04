@@ -44,8 +44,9 @@ const FILTERS: { key: AutomationTab; label: string }[] = [
   { key: "off", label: "Off" },
 ];
 
-/** What runs on its own on the active node: the automations as a list
-    beside the one open, or, with none open, ways to start one. */
+/** What runs on its own on the active node, in one column: the
+    automations, then templates to start a new one from. Opening one shows
+    it in place of the list. */
 export function AutomationsScreen({ item }: { item?: string }) {
   const node = useSelectedNode();
   const now = useMinute();
@@ -68,145 +69,141 @@ export function AutomationsScreen({ item }: { item?: string }) {
   const name = node ? (node.node.displayName ?? node.label) : "this node";
 
   return (
-    <div className="flex h-full min-h-0" data-testid="automations-screen">
-      <aside
-        className={cn(
-          "flex w-full min-w-0 flex-col border-border/60 md:w-72 md:shrink-0 md:border-r",
-          open && "max-md:hidden",
-        )}
-      >
-        <div className="flex items-center gap-1 px-4 pt-5 pb-2">
-          <h1 className="min-w-0 flex-1 truncate font-heading text-lg font-medium text-heading">
-            Automations
-          </h1>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Show"
-                  className={cn(
-                    "text-muted-foreground",
-                    filter !== "all" && "text-foreground",
-                  )}
-                />
-              }
+    <ScrollArea className="h-full min-h-0" data-testid="automations-screen">
+      <div className="mx-auto grid max-w-3xl gap-8 px-6 py-8">
+        {open && node ? (
+          <div className="grid gap-4">
+            <a
+              href={href({ name: "automations" })}
+              className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
             >
-              <ListFilter />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuRadioGroup
-                value={filter}
-                onValueChange={(value) => setFilter(value as AutomationTab)}
-              >
-                {FILTERS.map((f) => (
-                  <DropdownMenuRadioItem key={f.key} value={f.key}>
-                    <span className="flex-1">{f.label}</span>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {all.filter((a) => inTab(a, f.key, now)).length}
-                    </span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Search automations"
-            aria-expanded={query !== null}
-            className={cn("text-muted-foreground", query !== null && "text-foreground")}
-            onClick={() => setQuery(query === null ? "" : null)}
-          >
-            <Search />
-          </Button>
-        </div>
-        {query !== null && (
-          <div className="relative px-3 pb-2">
-            <Input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
-              {...SEARCH_FIELD}
-              placeholder="Search automations"
-              className="h-8 w-full pr-8"
-              aria-label="Search automations"
-            />
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Clear search"
-              className="absolute top-1/2 right-4 -translate-y-1/2 text-muted-foreground"
-              onClick={() => setQuery(null)}
-            >
-              <X />
-            </Button>
+              <ArrowLeft className="size-3" /> Automations
+            </a>
+            <AutomationDetail node={node} automation={open} />
           </div>
+        ) : (
+          <>
+            <header className="grid gap-3">
+              <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                <div className="min-w-0 flex-1">
+                  <h1 className="font-heading text-xl font-medium text-heading">
+                    Automations
+                  </h1>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    What runs on its own on {name}: on a schedule, when something
+                    happens, or when you start it.
+                  </p>
+                </div>
+                {all.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Show"
+                            className={cn(
+                              "text-muted-foreground",
+                              filter !== "all" && "text-foreground",
+                            )}
+                          />
+                        }
+                      >
+                        <ListFilter />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuRadioGroup
+                          value={filter}
+                          onValueChange={(value) => setFilter(value as AutomationTab)}
+                        >
+                          {FILTERS.map((f) => (
+                            <DropdownMenuRadioItem key={f.key} value={f.key}>
+                              <span className="flex-1">{f.label}</span>
+                              <span className="text-xs text-muted-foreground tabular-nums">
+                                {all.filter((a) => inTab(a, f.key, now)).length}
+                              </span>
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Search automations"
+                      aria-expanded={query !== null}
+                      className={cn(
+                        "text-muted-foreground",
+                        query !== null && "text-foreground",
+                      )}
+                      onClick={() => setQuery(query === null ? "" : null)}
+                    >
+                      <Search />
+                    </Button>
+                    {node && (
+                      <Button size="sm" variant="outline" onClick={() => start(null)}>
+                        <Plus /> New automation
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+              {query !== null && (
+                <div className="relative">
+                  <Input
+                    autoFocus
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
+                    {...SEARCH_FIELD}
+                    placeholder="Search automations"
+                    className="h-8 w-full pr-8"
+                    aria-label="Search automations"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Clear search"
+                    className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+                    onClick={() => setQuery(null)}
+                  >
+                    <X />
+                  </Button>
+                </div>
+              )}
+              {filter !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => setFilter("all")}
+                  className="flex w-fit cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Showing {FILTERS.find((f) => f.key === filter)!.label.toLowerCase()}
+                  <X className="size-3" />
+                </button>
+              )}
+            </header>
+            {all.length === 0 ? (
+              <Empty node={name} onNew={node ? () => start(null) : undefined} />
+            ) : shown.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Nothing matches.</p>
+            ) : (
+              <>
+                {scheduled.length > 0 && <List automations={scheduled} now={now} />}
+                {byHand.length > 0 && (
+                  <section className="grid gap-2">
+                    <h2 className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+                      Run by hand
+                    </h2>
+                    <List automations={byHand} now={now} />
+                  </section>
+                )}
+              </>
+            )}
+            {node && <Templates onUse={start} />}
+          </>
         )}
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="grid gap-px px-2 pb-4">
-            {node && (
-              <button
-                type="button"
-                onClick={() => start(null)}
-                className="flex h-9 cursor-pointer items-center gap-2.5 rounded-lg px-2 text-sm transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
-              >
-                <Plus className="size-4 text-muted-foreground" /> New automation
-              </button>
-            )}
-            {filter !== "all" && (
-              <button
-                type="button"
-                onClick={() => setFilter("all")}
-                className="mx-2 mt-1 mb-1 flex w-fit cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Showing {FILTERS.find((f) => f.key === filter)!.label.toLowerCase()}
-                <X className="size-3" />
-              </button>
-            )}
-            {scheduled.map((a) => (
-              <Row key={a.id} automation={a} now={now} current={a.id === item} />
-            ))}
-            {byHand.length > 0 && (
-              <h2 className="mt-3 mb-1 px-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
-                Run by hand
-              </h2>
-            )}
-            {byHand.map((a) => (
-              <Row key={a.id} automation={a} now={now} current={a.id === item} />
-            ))}
-            {all.length > 0 && shown.length === 0 && (
-              <p className="px-2 pt-2 text-sm text-muted-foreground">
-                Nothing matches.
-              </p>
-            )}
-            {all.length === 0 && (
-              <p className="px-2 pt-2 text-sm text-muted-foreground">
-                No automations yet.
-              </p>
-            )}
-          </div>
-        </ScrollArea>
-      </aside>
-      <ScrollArea className={cn("min-h-0 min-w-0 flex-1", !open && "max-md:hidden")}>
-        <div className="mx-auto max-w-3xl px-6 py-8">
-          {open && node ? (
-            <>
-              <a
-                href={href({ name: "automations" })}
-                className="mb-4 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground md:hidden"
-              >
-                <ArrowLeft className="size-3" /> Automations
-              </a>
-              <AutomationDetail node={node} automation={open} />
-            </>
-          ) : (
-            <Start node={name} onUse={start} />
-          )}
-        </div>
-      </ScrollArea>
+      </div>
       {node && (
         <NewAutomationDialog
           deployment={node}
@@ -216,14 +213,14 @@ export function AutomationsScreen({ item }: { item?: string }) {
           onCreated={(triggerId) => navigate({ name: "automations", item: triggerId })}
         />
       )}
-    </div>
+    </ScrollArea>
   );
 }
 
 const ICON = { schedule: Timer, event: Zap, manual: Hand };
 
-/* what a row says under its name: why it can't run, how its last run went,
-   or when it runs next */
+/* what a row says beside its name: why it can't run, how its last run
+   went, or when it runs next */
 function statusOf(a: Automation, now: number): { text: string; warn: boolean } {
   if (!a.on) return { text: "Off", warn: false };
   if (!a.readiness.ok) return { text: a.readiness.reason, warn: true };
@@ -231,72 +228,86 @@ function statusOf(a: Automation, now: number): { text: string; warn: boolean } {
   const next = a.nextRunAt ? Date.parse(a.nextRunAt) : null;
   if (next && next > now) return { text: `Next in ${span(next - now)}`, warn: false };
   if (a.lastRunAt) return { text: `Ran ${when(a.lastRunAt, now)} ago`, warn: false };
-  return { text: a.when, warn: false };
+  return { text: "Not run yet", warn: false };
 }
 
-function Row({
-  automation: a,
-  now,
-  current,
-}: {
-  automation: Automation;
-  now: number;
-  current: boolean;
-}) {
+function List({ automations, now }: { automations: Automation[]; now: number }) {
+  return (
+    <ul className="grid divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
+      {automations.map((a) => (
+        <li key={a.id}>
+          <Row automation={a} now={now} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Row({ automation: a, now }: { automation: Automation; now: number }) {
   const Icon = ICON[a.kind];
   const status = statusOf(a, now);
   return (
     <a
       href={href({ name: "automations", item: a.id })}
-      aria-current={current ? "page" : undefined}
-      className={cn(
-        "flex items-start gap-2.5 rounded-lg px-2 py-2 transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50",
-        current && "bg-accent",
-      )}
+      className="flex items-center gap-3 px-4 py-3 transition-colors outline-none hover:bg-accent/50 focus-visible:bg-accent/50"
     >
-      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1">
-        <span
-          className={cn("block truncate text-sm", !a.on && "text-muted-foreground")}
-        >
+      <Icon className="size-4 shrink-0 text-muted-foreground" />
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className={cn("truncate text-sm", !a.on && "text-muted-foreground")}>
           {a.name}
         </span>
-        <span
-          className={cn(
-            "block truncate text-xs",
-            status.warn ? "text-warning" : "text-muted-foreground",
-          )}
-        >
-          {status.text}
+        <span className="truncate text-xs text-muted-foreground">
+          {a.when} · {a.does}
         </span>
+      </span>
+      <span
+        className={cn(
+          "max-w-[40%] shrink-0 truncate text-right text-xs",
+          status.warn ? "text-warning" : "text-muted-foreground",
+        )}
+      >
+        {status.text}
       </span>
     </a>
   );
 }
 
-/* with nothing open: what an automation is, and ready-made ones to start
-   from, each opening New automation filled in */
-function Start({
-  node,
-  onUse,
-}: {
-  node: string;
-  onUse: (t: AutomationTemplate) => void;
-}) {
+/* with no automations yet: what one is, before the templates */
+function Empty({ node, onNew }: { node: string; onNew?: () => void }) {
   return (
-    <section aria-label="Start an automation" className="grid gap-8 pt-6">
-      <div className="grid justify-items-center gap-2 text-center">
-        <span className="grid size-12 place-items-center rounded-2xl bg-raised text-muted-foreground">
-          <Play className="size-6" />
-        </span>
-        <h2 className="mt-2 font-heading text-lg font-medium text-heading">
-          Automate work on {node}
-        </h2>
-        <p className="max-w-md text-sm text-muted-foreground">
-          An agent can run a task for you on a schedule, when something happens, or
-          whenever you start it.
-        </p>
-      </div>
+    <section
+      aria-label="No automations yet"
+      className="grid justify-items-center gap-2 rounded-xl border border-dashed border-border/60 px-6 py-10 text-center"
+    >
+      <span className="grid size-12 place-items-center rounded-2xl bg-raised text-muted-foreground">
+        <Play className="size-6" />
+      </span>
+      <h2 className="mt-2 font-heading text-lg font-medium text-heading">
+        Automate work on {node}
+      </h2>
+      <p className="max-w-md text-sm text-muted-foreground">
+        An agent can run a task for you on a schedule, when something happens, or
+        whenever you start it. Start from a template below, or from scratch.
+      </p>
+      {onNew && (
+        <Button size="sm" variant="outline" className="mt-2" onClick={onNew}>
+          <Plus /> New automation
+        </Button>
+      )}
+    </section>
+  );
+}
+
+/* ready-made automations, each opening New automation filled in */
+function Templates({ onUse }: { onUse: (t: AutomationTemplate) => void }) {
+  return (
+    <section aria-labelledby="automation-templates" className="grid gap-3">
+      <h2
+        id="automation-templates"
+        className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase"
+      >
+        Start from a template
+      </h2>
       <div className="grid gap-3 sm:grid-cols-2" aria-label="Templates">
         {TEMPLATES.map((t) => (
           <button
