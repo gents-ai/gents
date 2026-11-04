@@ -236,6 +236,8 @@ impl ClientCore {
                 shutdown_completion: tokio::sync::Mutex::new(None),
                 #[cfg(test)]
                 shutdown_test_pause: tokio::sync::Mutex::new(None),
+                #[cfg(test)]
+                shutdown_test_error: std::sync::atomic::AtomicBool::new(false),
                 last_mutation_error: std::sync::RwLock::new(None),
                 local_peer_id,
                 listen_addresses,
@@ -611,6 +613,54 @@ fn write_client_store_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn desktop_peer_key_and_admission_survive_node_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path().join("client"));
+        paths.ensure_root_dirs().await.unwrap();
+        let options = ClientCoreOptions {
+            max_pending_dags: 123,
+            ..ClientCoreOptions::local_only()
+        };
+        let config = desktop_p2p_config(&paths, &options);
+        assert_eq!(config.port, Some(options.port));
+        assert_eq!(config.bind_addr, options.bind_addr);
+        assert_eq!(config.peer_key, defra_node::PeerKeySource::File);
+        assert_eq!(
+            config.secret_key_path.as_deref(),
+            Some(paths.iroh_secret_key_path())
+        );
+
+        let first = NodeBuilder::default()
+            .with_p2p(config.clone())
+            .build()
+            .await
+            .unwrap();
+        let p2p = first.p2p_arc().unwrap();
+        let peer_id = p2p.local_peer_id().await.unwrap();
+        let key = std::fs::read(paths.iroh_secret_key_path()).unwrap();
+        let status = p2p.sync_status().await.unwrap();
+        assert_eq!(status["pending_dag_capacity"], 123);
+        drop(p2p);
+        first.shutdown().await.unwrap();
+        drop(first);
+
+        let reopened = NodeBuilder::default()
+            .with_p2p(config)
+            .build()
+            .await
+            .unwrap();
+        let p2p = reopened.p2p_arc().unwrap();
+        assert_eq!(p2p.local_peer_id().await.unwrap(), peer_id);
+        assert_eq!(
+            p2p.sync_status().await.unwrap()["pending_dag_capacity"],
+            123
+        );
+        assert!(std::fs::read(paths.iroh_secret_key_path()).unwrap() == key);
+        drop(p2p);
+        reopened.shutdown().await.unwrap();
+    }
 
     #[derive(Debug, Default)]
     struct RecordingKeyProvider {

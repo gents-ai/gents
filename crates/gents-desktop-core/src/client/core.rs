@@ -372,6 +372,8 @@ pub struct ClientCore {
     shutdown_completion: Mutex<Option<watch::Receiver<Option<ShutdownOutcome>>>>,
     #[cfg(test)]
     shutdown_test_pause: Mutex<Option<Arc<ShutdownTestPause>>>,
+    #[cfg(test)]
+    shutdown_test_error: std::sync::atomic::AtomicBool,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
@@ -675,7 +677,7 @@ impl ClientCore {
                 let result = owner
                     .shutdown_inner()
                     .await
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| format!("{error:#}"));
                 result_tx.send_replace(Some(result));
             });
         }
@@ -714,10 +716,22 @@ impl ClientCore {
             pause.node_shutdown_started.notify_one();
             pause.allow_node_shutdown.notified().await;
         }
-        self.node
+        let shutdown = self
+            .node
             .shutdown()
             .await
-            .context("shutting down desktop node")?;
+            .context("shutting down desktop node");
+        #[cfg(test)]
+        let shutdown = shutdown.and_then(|()| {
+            if self
+                .shutdown_test_error
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                anyhow::bail!("injected database close failure");
+            }
+            Ok(())
+        });
+        shutdown?;
         #[cfg(test)]
         if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
             pause.node_shutdown_returned.notify_one();
