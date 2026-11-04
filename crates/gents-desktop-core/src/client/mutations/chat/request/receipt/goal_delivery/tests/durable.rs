@@ -155,7 +155,7 @@ async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Res
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     checked
 }
 
@@ -194,7 +194,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
         journal::goal::reserve(&node, &proposal)
     );
     assert_eq!(left?.reference, right?.reference);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     let node = open().await?;
     let record = journal::goal::recover(&node, &proposal.intent)
@@ -214,7 +214,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
     let acknowledged =
         journal::goal::update(&node, &proposal.intent, &proposal.reference, None).await?;
     assert_eq!(facts.records_json(&[acknowledged])?, trace[2]["after"]);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     let node = open().await?;
     let record = journal::goal::recover(&node, &proposal.intent)
@@ -227,7 +227,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
     let replay = journal::goal::reserve(&node, &proposal).await?;
     assert_eq!(replay.reference, record.reference);
     assert!(replay.prepared.is_none());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 
@@ -283,6 +283,6 @@ async fn competing_distinct_signed_proposals_share_one_committed_goal_preparatio
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     checked
 }

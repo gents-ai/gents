@@ -538,7 +538,7 @@ async fn recorded_origin_review_retains_metadata_without_a_route_but_does_not_gr
         assert_eq!(local["data"][collection], json!([]));
     }
     core.shutdown().await?;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 

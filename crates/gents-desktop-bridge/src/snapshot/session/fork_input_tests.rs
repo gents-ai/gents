@@ -205,7 +205,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
         .await
         .unwrap();
     assert_eq!(copied, original);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]

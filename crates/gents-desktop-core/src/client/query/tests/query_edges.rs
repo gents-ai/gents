@@ -191,7 +191,7 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
         docs[..8],
         "same top eight as complete history, including physical ties"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]

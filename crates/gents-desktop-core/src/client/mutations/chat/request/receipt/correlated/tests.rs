@@ -365,7 +365,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     result
 }
 
@@ -401,7 +401,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let right = right?;
     assert_eq!(left.reference, right.reference);
     assert_eq!(facts.decision_json(left.result())?, trace[0]["output"]);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
 
     let node = Arc::new(
@@ -432,7 +432,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     drop(node);
     result?;
 
@@ -461,7 +461,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     result
 }
 
@@ -637,7 +637,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             Ok::<(), anyhow::Error>(())
         }
         .await;
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         result?;
     }
     Ok(())
@@ -899,6 +899,6 @@ async fn first_submission_uses_the_caller_identity_and_freezes_goal_assignment()
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     result
 }

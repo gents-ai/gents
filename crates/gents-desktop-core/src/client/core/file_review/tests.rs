@@ -149,7 +149,7 @@ async fn file_image_review_admission_reuses_only_the_exact_reference() {
             .len(),
         1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -231,7 +231,7 @@ async fn explicit_file_review_retry_preserves_refusals_and_resumes_verified_deli
     assert!(resumable_image_demand(&access, &original, &identity)
         .await
         .is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 async fn write_receipt(access: &ConfigAccess, demand: &FileImageDemand, row: &Value) {
@@ -410,5 +410,5 @@ async fn inventory_bound_admission_and_signed_receipt_keep_structured_reference(
     let mut wrong = signed.clone();
     wrong["inventory_reference"]["snapshot_digest"] = json!("different-snapshot");
     assert!(verified_receipt(&wrong, &demand, &identity).await.is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

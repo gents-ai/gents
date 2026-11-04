@@ -332,5 +332,5 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         measured.queries() <= 2,
         "opening provenance must batch its reads"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }

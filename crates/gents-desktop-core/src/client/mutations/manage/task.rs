@@ -871,7 +871,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         Ok(())
     }
 

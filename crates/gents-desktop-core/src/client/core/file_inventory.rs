@@ -437,7 +437,7 @@ mod tests {
             .await
             .is_err());
         sink.verify().await;
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         Ok(())
     }
 

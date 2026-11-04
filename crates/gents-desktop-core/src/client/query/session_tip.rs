@@ -570,7 +570,7 @@ mod tests {
             &mut RequestPromptOwnership::default()
         )
         .is_err());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[test]
@@ -763,7 +763,7 @@ mod tests {
             std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
         }
         tracing::info!(report = %report, "folded prompt ownership benchmark");
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -854,7 +854,7 @@ mod tests {
             .session_tip_request("session", Some("agent"), Some("other"), "foreign")
             .expect("foreign row in its own scope");
         assert_eq!(foreign_tip.request_id, "foreign");
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 }
 

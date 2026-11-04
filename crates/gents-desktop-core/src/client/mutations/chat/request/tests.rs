@@ -234,7 +234,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     .unwrap_err()
     .to_string()
     .contains("target session"));
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }
 

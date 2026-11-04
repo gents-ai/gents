@@ -474,7 +474,7 @@ mod tests {
             .unwrap();
         let pending = test_pending();
         journal::save(&node, &pending).await.unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         drop(node);
 
         let reopened = std::sync::Arc::new(
@@ -512,7 +512,7 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        reopened.shutdown().await;
+        reopened.shutdown().await.expect("close test node");
     }
 
     fn receipt_row(create: &AgentRequestCreate) -> Value {
@@ -800,7 +800,7 @@ mod tests {
         let mut different_signature = pending.create.clone();
         different_signature.admission.signature[0] ^= 1;
         assert!(owner_receipt(&access, &different_signature).await.is_err());
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -831,7 +831,7 @@ mod tests {
             .expect("local non-GraphQL errors remain uncertain");
         assert_eq!(unknown.request_id, pending.request_id);
         assert_eq!(unknown.pending.mutation, pending.mutation);
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]

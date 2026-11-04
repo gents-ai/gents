@@ -1240,7 +1240,7 @@ mod dependency_identity_tests {
             assert_eq!(store.compaction_entries.len(), 1);
             assert_eq!(store.compaction_entries[0].compaction_key, expected);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("close test node");
         Ok(())
     }
 

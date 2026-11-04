@@ -320,7 +320,7 @@ async fn a_plaintext_client_upgrade_returns_a_started_core_with_lifecycle_exclus
         .build()
         .await
         .expect("legacy client store");
-    legacy.shutdown().await;
+    legacy.shutdown().await.expect("close test node");
     drop(legacy);
 
     let lifecycle_owner = Arc::new(tokio::sync::Mutex::new(()));

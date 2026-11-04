@@ -1145,7 +1145,7 @@ async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
     observer.shutdown().await;
     let _ = core.store.take_resync_requests();
 
-    core.node.shutdown().await;
+    core.node.shutdown().await.expect("close test node");
     let error = core
         .refresh_node("did:test:selection-recovery")
         .await

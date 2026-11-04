@@ -785,7 +785,7 @@ mod tests {
             assert!(!is_known_off_lineage(name, &on_client), "{name}");
         }
         core.shutdown().await.unwrap();
-        runtime.shutdown().await;
+        runtime.shutdown().await.expect("close test node");
     }
 
     #[tokio::test]
@@ -910,7 +910,7 @@ mod tests {
             .all(|name| old_subscriptions.contains(name)));
         drop(admin);
         drop(access);
-        plain.shutdown().await;
+        plain.shutdown().await.expect("close test node");
         drop(plain);
         assert!(!paths.store_encryption_path().exists());
 

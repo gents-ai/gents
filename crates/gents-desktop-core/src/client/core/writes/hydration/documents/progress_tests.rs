@@ -118,7 +118,7 @@ async fn local_hydration_counts_exact_origin_documents_without_reading_the_origi
     );
     assert_eq!(incomplete.phase, ClientHydrationPhase::Serving);
     assert_eq!(incomplete.covered_count, origins.len());
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[test]

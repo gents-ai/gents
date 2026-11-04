@@ -810,6 +810,6 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
         );
         assert_eq!(store.inference_backends.len(), 1);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
     Ok(())
 }

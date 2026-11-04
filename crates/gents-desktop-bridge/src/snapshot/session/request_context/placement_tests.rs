@@ -120,7 +120,7 @@ async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
             .is_empty()
     );
     assert_eq!(reads.queries(), 2);
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
 
 #[tokio::test]
@@ -287,5 +287,5 @@ async fn compaction_placement_read_benchmark() {
         std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     }
     tracing::info!(report = %report, "compaction placement read benchmark");
-    node.shutdown().await;
+    node.shutdown().await.expect("close test node");
 }
