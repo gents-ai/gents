@@ -75,7 +75,7 @@ fn plugin_pack(
     std::fs::write(
         dir.join("README.md"),
         format!(
-            "# {}\n\n{description}\n\nInstall with `gents plugin install {}/{}`.\n",
+            "# {}\n\n{description}\n\nInstall with `gents pack plugin install {}/{}`.\n",
             package.name, package.namespace, package.name
         ),
     )?;

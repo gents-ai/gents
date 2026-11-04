@@ -358,7 +358,7 @@ async fn a_call_with_nobody_listening_fails_at_once_naming_the_command() {
         .await
         .unwrap_err();
     let message = format!("{error:#}");
-    assert!(message.contains("gents plugin dirs add"), "{message}");
+    assert!(message.contains("gents pack plugin dirs add"), "{message}");
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(pending(home.path()).unwrap().is_empty());
 }

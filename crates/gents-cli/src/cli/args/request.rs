@@ -46,7 +46,7 @@ pub(crate) struct RequestPendingMutationArgs {
     #[command(flatten)]
     pub(crate) scope: RequestPendingArgs,
     #[arg(long = "expected-request-doc-id", required = true, action = clap::ArgAction::Append,
-        help = "Every physical ID from request pending, in its observed order; repeat for each entry")]
+        help = "Every physical ID from `debug request pending`, in its observed order; repeat for each entry")]
     pub(crate) expected_request_doc_ids: Vec<String>,
 }
 

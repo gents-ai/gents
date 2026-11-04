@@ -44,7 +44,7 @@ args = sys.argv[1:]
 log = pathlib.Path(os.environ["CALL_LOG"])
 with log.open("a") as stream:
     stream.write(json.dumps(args) + "\\n")
-if args[0] == "query":
+if args[:2] == ["data", "query"]:
     print(json.dumps({"results": [{"node_did": "did:test:node", "default_agent_did": None if os.getenv("MISSING_DEFAULT_AGENT") else "did:test:provisioned-agent"}]}))
 elif args[:2] == ["config", "apply"] and os.getenv("FAIL_CONFIG_APPLY"):
     print(json.dumps({"errors": ["specific validation failure"]}))

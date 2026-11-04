@@ -290,7 +290,7 @@ fn ux_plugin_source(names: &Names) -> (String, String) {
 // its own. Plain ESM, no build step; only `@gents/ux-sdk`, `react` and
 // `react/jsx-runtime` may be imported. Everything it does goes through
 // `ctx`, so disabling the plugin undoes all of it. Run `gents pack check`
-// to lint, `gents ux module` to see what the desktop receives. To read and
+// to lint, `gents pack ux module` to see what the desktop receives. To read and
 // write the node's documents, declare a surface under `ux[].data` in the
 // manifest and use `useQuery` / `useWrite` from the SDK.
 import {{ NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'

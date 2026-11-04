@@ -34,7 +34,17 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-document-{}", Uuid::new_v4().simple());
-    let init = run_init_json(&home_dir, &["--node-name", &agent_name])?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            &agent_name,
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -51,6 +61,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let created = run_cli_json(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "CliDocumentNote",
@@ -68,6 +79,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let rows = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -91,6 +103,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let unknown_field = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "CliDocumentNote",
@@ -107,6 +120,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let metadata_field = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "CliDocumentNote",
@@ -126,6 +140,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let unknown_collection = run_cli_failure_stderr(
         &home_dir,
         &[
+            "data",
             "document",
             "create",
             "NoSuchCollection",
@@ -226,7 +241,17 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let sdl = write_note_sdl(tempdir.path())?;
     let sdl = sdl.to_str().context("utf-8 SDL path")?;
     run_init_json(&other_dir, &["--node-name", "cli-document-other"])?;
-    let init = run_init_json(&home_dir, &["--node-name", "cli-document-served"])?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "cli-document-served",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
@@ -245,6 +270,7 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let refusal = run_cli_failure_stderr(
         &other_dir,
         &[
+            "data",
             "document",
             "create",
             "CliDocumentNote",
@@ -268,6 +294,7 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let rows = run_cli_json(
         &home_dir,
         &[
+            "data",
             "query",
             "--graphql",
             &graphql,

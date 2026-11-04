@@ -617,16 +617,16 @@ capture_diagnostics() {
 
   if [ -n "${request_id}" ]; then
     if run_bounded "${partial_response_log}" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
-      "${GENTS_BINARY}" response show --home "${GENTS_HOME}" --request-id "${request_id}"; then
+      "${GENTS_BINARY}" debug response show --home "${GENTS_HOME}" --request-id "${request_id}"; then
       if [ ! -s "${response_log}" ]; then
         cp "${partial_response_log}" "${response_log}"
       fi
     fi
     run_bounded "${timeline_log}" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
-      "${GENTS_BINARY}" trace timeline --home "${GENTS_HOME}" --request-id "${request_id}" || true
+      "${GENTS_BINARY}" debug trace timeline --home "${GENTS_HOME}" --request-id "${request_id}" || true
     if [ ! -s "${trajectory_path}" ]; then
       run_bounded "${logs_dir}/partial-atif-export.log" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
-        "${GENTS_BINARY}" trace project \
+        "${GENTS_BINARY}" debug trace project \
         --home "${GENTS_HOME}" \
         --request-id "${request_id}" \
         --projection atif \
@@ -803,7 +803,7 @@ wait_for_server_ready
 
 metadata=$(printf '{"harness":"harbor","model_name":"%s"}' "${GENTS_MODEL}")
 set -- \
-  request submit
+  debug request submit
 set -- "$@" \
   --home "${GENTS_HOME}" \
   --content-file "${GENTS_INSTRUCTION_FILE}" \
@@ -830,7 +830,7 @@ if [ -z "${request_id}" ]; then
   exit 1
 fi
 
-"${GENTS_BINARY}" request show \
+"${GENTS_BINARY}" debug request show \
   --home "${GENTS_HOME}" \
   --request-id "${request_id}" \
   --output json \
@@ -841,7 +841,7 @@ waiter_restart_count=0
 while :; do
   : >"${response_log}"
   : >"${response_wait_attempt_log}"
-  "${GENTS_BINARY}" response wait \
+  "${GENTS_BINARY}" debug response wait \
     --home "${GENTS_HOME}" \
     --request-id "${request_id}" \
     --timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
@@ -906,7 +906,7 @@ printf '{\n  "outcome": "%s",\n  "response_status": "%s",\n  "max_turns": %s,\n 
   "${outcome}" "${response_status:-missing}" "${GENTS_MAX_TURNS}" "${GENTS_MAX_TOTAL}" "${request_id}" \
   >"${outcome_log}"
 
-"${GENTS_BINARY}" trace project \
+"${GENTS_BINARY}" debug trace project \
   --home "${GENTS_HOME}" \
   --request-id "${request_id}" \
   --projection atif \
@@ -924,7 +924,7 @@ if [ "${normalized_outcome}" != "${outcome}" ]; then
 fi
 outcome=${normalized_outcome}
 
-# `response wait` succeeds on any terminal response; infrastructure failures
+# `debug response wait` succeeds on any terminal response; infrastructure failures
 # must not be handed to the verifier as a model zero, while agent-budget
 # exhaustion (turns or aggregate tokens) returns the workspace for scoring.
 # Genuine failures stay agent exceptions for retry/recovery.

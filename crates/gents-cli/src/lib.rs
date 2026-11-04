@@ -100,29 +100,23 @@ const DEFAULT_LOG_FILTER: &str = concat!(
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
-const CLI_AFTER_HELP: &str = "\
-Quick start:
-  gents init
-  gents server
-  gents codex
+const ROOT_HELP_TEMPLATE: &str = "\
+{about-with-newline}
+{usage-heading} {usage}
 
-Or without the Codex TUI:
-  gents chat
+Start               chat  codex  status
+Work                session  goal  task  job  mailbox
+Accounts            auth  cloud
+Configure           config  tools  mcp  pack
+Runtime             server  service  provision  reset  diagnose  p2p  desktop
+Data and debugging  data  debug
+Measure             eval  optimization
+                    version
 
-Inspect the local runtime:
-  gents status
-  gents response show REQUEST_ID
-  gents task list
-  gents task show TASK_ID
-  gents task run TASK_ID --wait
-  gents background list
-  gents mcp probe --all
-  gents reset
+Run `gents <command> --help` for details.
 
-Update runtime documents:
-  gents config backend set ...
-  gents config agent set ...
-  gents config tools set ...";
+Options:
+{options}";
 const INIT_AFTER_HELP: &str = "\
 Bootstrap a local home directory with one default backend, one default agent, and a safe read-only Tools document.
 
@@ -131,7 +125,7 @@ Examples:
   gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
   gents init --backend-preset openrouter --model-name MODEL
   gents init --backend-preset openai --model-name MODEL
-  gents init --backend-preset claude-cli-subscription   # then: gents claude-login
+  gents init --backend-preset claude-cli-subscription   # then: gents auth login claude
   gents init --write
   gents init --yolo
   gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
@@ -194,7 +188,7 @@ Examples:
 
 Diagnostics:
   gents status
-  gents response show REQUEST_ID";
+  gents debug response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
 Launches the `codex` terminal UI as a separate process connected to the local
 node's Codex shim. Codex-side approvals and sandboxing are bypassed: the tool
@@ -230,9 +224,9 @@ const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
 
 Examples:
-  gents schema apply ./app-schemas
-  gents schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
-  gents schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
+  gents data schema apply ./app-schemas
+  gents data schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents data schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
 
 Directory inputs apply *.graphql and *.gql files, then additive patch files
 named *.patch.json or *.json-patch. Patch files contain a JSON Patch array, or
@@ -250,12 +244,12 @@ Live native-process enrichment requires --graphql pointing at the running runtim
 Native-process matches are scoped by tool name because runtime liveness does not expose per-call native process IDs.
 
 Examples:
-  gents background list
-  gents background list --home /path/to/home
-  gents background list --graphql http://127.0.0.1:9191/api/v0/graphql
-  gents background list --request REQUEST_ID
-  gents background list --state running --age-gt 5m
-  gents background list --output json";
+  gents debug background list
+  gents debug background list --home /path/to/home
+  gents debug background list --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents debug background list --request REQUEST_ID
+  gents debug background list --state running --age-gt 5m
+  gents debug background list --output json";
 const MCP_AFTER_HELP: &str = "\
 Examples:
   gents mcp register web --endpoint http://127.0.0.1:9213/mcp
@@ -268,9 +262,9 @@ const FLEET_AFTER_HELP: &str = "\
 Shows the live fleet slot-accounting snapshot exposed by the local runtime HTTP API.
 
 Examples:
-  gents fleet slots
-  gents fleet slots --home /path/to/home
-  gents fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
+  gents debug fleet slots
+  gents debug fleet slots --home /path/to/home
+  gents debug fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
 const CLOUD_AFTER_HELP: &str = "\
 Signs in through another device: the cloud prints a short code, you approve it on the
 console page it names, and the workspace token is stored as an OAuthCredential document
@@ -299,16 +293,16 @@ AgentToolCall rows, then infers Amy baseline fields without mutating runtime
 state.
 
 Examples:
-  gents trace export --home /path/to/home
-  gents trace export --graphql http://127.0.0.1:9191/api/v0/graphql
-  gents trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
-  gents trace timeline --request-id REQUEST_ID --home /path/to/home
-  gents trace project --projection atif --request-id REQUEST_ID --format native-json --output-file /logs/agent/trajectory.json --home /path/to/home
-  gents trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
-  gents trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
-  gents trace project --projection multi-agent --request-id REQUEST_ID --scope-node-did DID --home /path/to/home
-  gents trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
-  gents trace project-schema --projection multi-agent --format eval-jsonl";
+  gents debug trace export --home /path/to/home
+  gents debug trace export --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents debug trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
+  gents debug trace timeline --request-id REQUEST_ID --home /path/to/home
+  gents debug trace project --projection atif --request-id REQUEST_ID --format native-json --output-file /logs/agent/trajectory.json --home /path/to/home
+  gents debug trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
+  gents debug trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
+  gents debug trace project --projection multi-agent --request-id REQUEST_ID --scope-node-did DID --home /path/to/home
+  gents debug trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
+  gents debug trace project-schema --projection multi-agent --format eval-jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   gents config validate --root infra/agents/default
@@ -320,18 +314,18 @@ Examples:
   gents config agent set --graphql URL --node-did <NODE_DID> --context-id <context-id> --inference-profile-id <profile-id>
   gents config tools set --graphql URL --file tools.json";
 const REQUEST_AFTER_HELP: &str = "\
-`request` is the low-level document path. Most users should prefer `gents chat`.
+`debug request` is the low-level document path. Most users should prefer `gents chat`.
 
 Examples:
-  gents request submit --content \"summarize this repo\"
-  gents request show REQUEST_ID";
+  gents debug request submit --content \"summarize this repo\"
+  gents debug request show REQUEST_ID";
 const RESPONSE_AFTER_HELP: &str = "\
 Views the canonical terminal output of a request: the request row's
 lifecycle_state and terminal_output selection.
 
 Examples:
-  gents response wait REQUEST_ID
-  gents response show REQUEST_ID";
+  gents debug response wait REQUEST_ID
+  gents debug response show REQUEST_ID";
 const SESSION_AFTER_HELP: &str = "\
 Fork a conversation into a new session seeded from a user-turn prefix \
 of the source. Child inherits node identity; agent can be swapped with \
@@ -495,36 +489,48 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Service { command } => service_command(command).await,
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
-        Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
-        Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
-        Command::Accounts { command } => commands::accounts::dispatch(command).await,
-        Command::GrokLogin(args) => commands::grok_login::grok_login(args).await,
-        Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
-        Command::ClaudeLogin(args) => commands::claude_login::claude_login(args).await,
-        Command::ClaudeGatewayLogin(args) => {
-            commands::claude_gateway_login::claude_gateway_login(args).await
-        }
+        Command::Auth { command } => match command {
+            AuthCommand::Login { command } => match command {
+                AuthLoginCommand::Codex(args) => commands::codex_login::codex_login(args).await,
+                AuthLoginCommand::Grok(args) => commands::grok_login::grok_login(args).await,
+                AuthLoginCommand::Claude(args) => commands::claude_login::claude_login(args).await,
+                AuthLoginCommand::ClaudeGateway(args) => {
+                    commands::claude_gateway_login::claude_gateway_login(args).await
+                }
+            },
+            AuthCommand::Probe { command } => match command {
+                AuthProbeCommand::Codex(args) => {
+                    commands::codex_auth_probe::codex_auth_probe(args).await
+                }
+                AuthProbeCommand::Grok(args) => {
+                    commands::grok_auth_probe::grok_auth_probe(args).await
+                }
+            },
+            AuthCommand::Accounts { command } => commands::accounts::dispatch(command).await,
+        },
         Command::Cloud { command } => commands::cloud::dispatch(command).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
-        Command::Schema { command } => commands::schema::dispatch(command).await,
-        Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,
-        Command::Query(args) => commands::query::query(args).await,
-        Command::Export(args) => commands::export::export(args).await,
-        Command::Write(args) => commands::write::write(args).await,
-        Command::Document { command } => commands::document::dispatch(command).await,
-        Command::Background { command } => commands::background::dispatch(command).await,
+        Command::Data { command } => match command {
+            DataCommand::Query(args) => commands::query::query(args).await,
+            DataCommand::Write(args) => commands::write::write(args).await,
+            DataCommand::Export(args) => commands::export::export(args).await,
+            DataCommand::Document { command } => commands::document::dispatch(command).await,
+            DataCommand::Schema { command } => commands::schema::dispatch(command).await,
+        },
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
-        Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Task { command } => commands::task::dispatch(command).await,
         Command::Pack { command } => commands::pack::dispatch(command).await,
-        Command::Plugin { command } => commands::plugin::dispatch(command).await,
-        Command::Ux { command } => commands::ux::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,
-        Command::Request { command } => commands::request::dispatch(command).await,
-        Command::Response { command } => commands::response::dispatch(command).await,
+        Command::Debug { command } => match command {
+            DebugCommand::Request { command } => commands::request::dispatch(command).await,
+            DebugCommand::Response { command } => commands::response::dispatch(command).await,
+            DebugCommand::Trace { command } => commands::trace::dispatch(command).await,
+            DebugCommand::Background { command } => commands::background::dispatch(command).await,
+            DebugCommand::Fleet { command } => commands::fleet::dispatch(command).await,
+        },
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Goal { command } => commands::goal::dispatch(command).await,
         Command::Job { command } => commands::job::dispatch(command).await,

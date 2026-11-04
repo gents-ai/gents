@@ -778,7 +778,7 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         .last_error
         .clone()
         .unwrap_or_default()
-        .contains(&format!("gents codex-login --node-did {did}")));
+        .contains(&format!("gents auth login codex --node-did {did}")));
 }
 
 #[tokio::test]

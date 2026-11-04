@@ -346,7 +346,7 @@ fn require_documents_dependency(dependency: &super::super::PackManifest) -> Resu
     anyhow::ensure!(
         matches!(dependency.metadata.kind, super::super::PackKind::Documents),
         "dependency {}/{} is a {:?} pack, which cannot be installed as a dependency; \
-         install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`",
+         install it with `gents pack install` or `gents pack plugin install`, then remove it from `dependencies`",
         dependency.metadata.namespace, dependency.name, dependency.metadata.kind
     );
     anyhow::ensure!(
