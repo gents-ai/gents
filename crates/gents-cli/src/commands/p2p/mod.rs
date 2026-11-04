@@ -26,6 +26,7 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
         P2pCommand::Status(args) => access::p2p_status(args).await,
         P2pCommand::Peers(args) => access::p2p_peers(args).await,
         P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
+        P2pCommand::Scheduler(args) => access::p2p_scheduler(args).await,
         P2pCommand::Pairings { command } => match command {
             P2pPairingsCommand::List(args) => pairings::p2p_pairings_list(args).await,
         },

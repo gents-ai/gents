@@ -38,3 +38,13 @@ pub(super) async fn p2p_peers(args: P2pAccessArgs) -> Result<()> {
     print_json(&output)?;
     Ok(())
 }
+
+pub(super) async fn p2p_scheduler(args: P2pAccessArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
+    let client = super::p2p_http_client()?;
+    let request = graphql.authorize(client.get(format!("{api_base}/p2p/sync/scheduler")))?;
+    let snapshot: Value = crate::http_get_json(request).await?;
+    print_json(&snapshot)?;
+    Ok(())
+}

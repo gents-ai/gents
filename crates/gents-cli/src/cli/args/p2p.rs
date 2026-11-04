@@ -42,6 +42,8 @@ pub(crate) enum P2pCommand {
     Peers(P2pAccessArgs),
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
+    #[command(about = "Inspect aggregate pending-DAG scheduler state")]
+    Scheduler(P2pAccessArgs),
     #[command(
         about = "Inspect authenticated enrollment-owned P2P pairings",
         after_help = "\
