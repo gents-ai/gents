@@ -321,6 +321,15 @@ function Empty({ node, onNew }: { node: string; onNew?: () => void }) {
 
 const HIDE_TEMPLATES = "gents.automations.hideTemplates";
 const SHOWN = 4;
+/* when a template runs, short enough for a card */
+const CADENCE: Record<AutomationTemplate["preset"], string> = {
+  daily: "Daily · 9:00",
+  weekdays: "Weekdays · 9:00",
+  weekly: "Mondays · 9:00",
+  hourly: "Every hour",
+  "15min": "Every 15 minutes",
+  custom: "Your schedule",
+};
 /* the node summary cards' surface */
 const SURFACE =
   "cursor-pointer rounded-xl bg-raised/50 text-left transition-colors outline-none hover:bg-raised focus-visible:bg-raised";
@@ -349,7 +358,7 @@ function TemplateRow({
 }) {
   const [more, setMore] = useState(false);
   return (
-    <section aria-label="Templates" className="grid gap-2">
+    <section aria-label="Templates" className="grid w-fit max-w-full gap-2">
       <div className="flex items-center gap-2">
         <h2 className="flex-1 text-xs text-muted-foreground">Start from a template</h2>
         {TEMPLATES.length > SHOWN && (
@@ -371,16 +380,23 @@ function TemplateRow({
           <X />
         </Button>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="flex flex-wrap gap-2">
         {(more ? TEMPLATES : TEMPLATES.slice(0, SHOWN)).map((t) => (
           <Hint key={t.id} label={t.blurb}>
             <button
               type="button"
               onClick={() => onUse(t)}
-              className={cn(SURFACE, "flex min-w-0 items-center gap-2 px-3 py-2.5")}
+              className={cn(SURFACE, "grid w-40 gap-2.5 p-3")}
             >
-              <t.icon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="truncate text-sm">{t.name}</span>
+              <span className="grid size-8 place-items-center rounded-lg bg-background/60">
+                <t.icon className="size-4 text-muted-foreground" />
+              </span>
+              <span className="grid min-w-0 gap-0.5">
+                <span className="truncate text-sm">{t.name}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {CADENCE[t.preset]}
+                </span>
+              </span>
             </button>
           </Hint>
         ))}
