@@ -41,14 +41,14 @@ for (const colorScheme of ["light", "dark"] as const) {
     expect(box!.height).toBeLessThan(160);
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-    const check = panel.getByRole("button", { name: "Check Goal delivery" });
+    const check = panel.getByRole("button", { name: "Check goal delivery" });
     await check.focus();
     await expect(check).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(
-      panel.getByRole("button", { name: "Resume saved Goal change" }),
+      panel.getByRole("button", { name: "Resume saved goal change" }),
     ).toBeFocused();
-    await panel.locator("summary").focus();
+    await panel.getByRole("button", { name: /Show details/ }).focus();
     await page.keyboard.press("Enter");
     await expect(
       panel.getByText(
@@ -63,7 +63,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await page.getByTestId("session-session-intro").click();
     await expect(panel).toBeVisible();
     await expect(
-      panel.getByRole("button", { name: "Resume saved Goal change" }),
+      panel.getByRole("button", { name: "Resume saved goal change" }),
     ).toBeEnabled();
   });
 }

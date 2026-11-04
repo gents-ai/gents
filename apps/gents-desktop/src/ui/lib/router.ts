@@ -54,9 +54,21 @@ const asDesktop = (nav: Nav): DesktopNav => nav as unknown as DesktopNav;
 
 let current: DesktopNav | null = null;
 
+/* how often the route has changed since launch, so work begun at launch
+   can tell the person has since moved on */
+let moves = 0;
+let lastPath: string | null = null;
+
 export function bindNav(nav: Nav | null) {
   current = nav ? asDesktop(nav) : null;
+  if (!current) return;
+  const path = pathFor(current.route);
+  if (lastPath !== null && path !== lastPath) moves += 1;
+  lastPath = path;
 }
+
+/** How many times the route has changed since launch. */
+export const routeMoves = () => moves;
 
 export function href(route: Route) {
   return pathFor(route);

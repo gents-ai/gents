@@ -69,7 +69,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(panel.getByRole("alert")).toHaveText(
       "Delivery is still unconfirmed. Check again or resume the saved answer.",
     );
-    await panel.locator("summary").click();
+    await panel.getByRole("button", { name: /Show details/ }).click();
     await expect(panel.getByText("Keep this local", { exact: false })).toBeVisible();
     await panel.screenshot({
       path: info.outputPath(`mailbox-answer-${colorScheme}.png`),

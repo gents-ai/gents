@@ -1,8 +1,9 @@
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
+import { errorWords } from "../../../lib/reasonText";
+import { Notice } from "../../components/Notice";
 import { useApp } from "@/app/AppContext";
 import { workspace } from "@/app/workspace";
 import { StorageFullRecovery } from "./StorageFullRecovery";
@@ -170,86 +171,76 @@ function SavedMessage({
     }
   }
   return (
-    <section
+    <Notice
+      tone={notDelivered ? "destructive" : "info"}
       role="status"
       aria-label={draft.mailbox ? "Saved answer" : "Saved message"}
-      className="my-2 rounded-2xl border border-border bg-raised p-3 text-xs shadow-xs"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="mr-auto text-muted-foreground">
-          {notDelivered
+      className="my-2"
+      title={
+        notDelivered
+          ? draft.mailbox
+            ? "The answer wasn't delivered"
+            : "The message wasn't delivered"
+          : confirmed
             ? draft.mailbox
-              ? "Answer was not delivered"
-              : "Message was not delivered"
-            : confirmed
-              ? draft.mailbox
-                ? "Answer sent"
-                : "Message sent"
-              : busy
-                ? `Checking saved ${noun}…`
-                : submitting
-                  ? `Sending saved ${noun}…`
-                  : draft.mailbox
-                    ? "Answer awaiting confirmation"
-                    : "Message awaiting confirmation"}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={busy || disabled}
-          onClick={() => void recover(false)}
-        >
-          {busy ? "Checking…" : `Check ${noun} delivery`}
-        </Button>
-        {notDelivered ? (
+              ? "Answer sent"
+              : "Message sent"
+            : busy
+              ? `Checking the saved ${noun}…`
+              : submitting
+                ? `Sending the saved ${noun}…`
+                : draft.mailbox
+                  ? "Answer awaiting confirmation"
+                  : "Message awaiting confirmation"
+      }
+      details={description(draft)}
+      detailsText
+      detailsLabel={`Saved ${noun}`}
+      actions={
+        <>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             disabled={busy || disabled}
-            onClick={() => void dismiss()}
+            onClick={() => void recover(false)}
           >
-            Dismiss saved {noun}
+            {busy ? "Checking…" : `Check ${noun} delivery`}
           </Button>
-        ) : (
-          !confirmed && (
+          {notDelivered ? (
             <Button
               variant="ghost"
               size="sm"
               disabled={busy || disabled}
-              onClick={() => void recover(true)}
+              onClick={() => void dismiss()}
             >
-              Resume saved {noun}
+              Dismiss saved {noun}
             </Button>
-          )
-        )}
-      </div>
+          ) : (
+            !confirmed && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy || disabled}
+                onClick={() => void recover(true)}
+              >
+                Resume saved {noun}
+              </Button>
+            )
+          )}
+        </>
+      }
+    >
       {draft.result?.outcome === "deliveryUnknown" && (
         <StorageFullRecovery
           nodeDid={draft.nodeDid}
           error={draft.result?.deliveryError}
         />
       )}
-      <details className="group mt-1 text-muted-foreground">
-        <summary className="flex w-fit cursor-pointer list-none items-center gap-1 select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
-          <ChevronRight
-            aria-hidden
-            className="size-3 transition-transform group-open:rotate-90"
-          />
-          Saved {noun}
-        </summary>
-        <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
-          {description(draft)}
-        </p>
-      </details>
       {error && (
-        <p
-          role="alert"
-          tabIndex={0}
-          className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-destructive"
-        >
-          {error}
+        <p role="alert" tabIndex={0} className="text-destructive">
+          {errorWords(error)}
         </p>
       )}
-    </section>
+    </Notice>
   );
 }
