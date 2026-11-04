@@ -1,3 +1,4 @@
+import { cancelCauseText } from "../../lib/reasonText";
 import type {
   RenderedToolCallView,
   ToolDiffLineKind,
@@ -83,6 +84,15 @@ const mailboxFiling = (
   }
 };
 
+/** "You stopped it at 12:16 AM." */
+function stopped(cause: NonNullable<RenderedToolCallView["cancelCause"]>) {
+  const at =
+    cause.at && !Number.isNaN(Date.parse(cause.at)) ? new Date(cause.at) : null;
+  return `${cancelCauseText(cause.cause)}${
+    at ? ` at ${at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""
+  }.`;
+}
+
 export function toolSummary(t: RenderedToolCallView): {
   kind: string;
   primary: string;
@@ -100,7 +110,13 @@ export function toolSummary(t: RenderedToolCallView): {
     };
   switch (p.kind) {
     case "command":
-      return { kind: "$", primary: spoken(p.command), secondary: exit(p), mono: true };
+      return {
+        kind: "$",
+        primary: spoken(p.command),
+        /* a stopped command says who stopped it, where an exit code would be */
+        secondary: t.cancelCause ? stopped(t.cancelCause) : exit(p),
+        mono: true,
+      };
     case "fileRead":
       return {
         kind: p.operation.replace("_file", ""),
@@ -199,7 +215,7 @@ export function reasoningWithheld(reasoning: string | null | undefined): boolean
 }
 
 export const stepStatus = (tool: RenderedToolCallView): ToolStepStatus => {
-  if (tool.denial) return "stopped";
+  if (tool.denial || tool.cancelCause) return "stopped";
   const kind = tool.statusKind;
   if (kind === "running") return "running";
   if (kind === "error") return "failed";

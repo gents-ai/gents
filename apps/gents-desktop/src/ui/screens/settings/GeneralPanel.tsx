@@ -22,6 +22,7 @@ import { Button } from "@gents/ui/components/button";
 import { openCustomizeNav } from "@/app/CustomizeNav";
 import { ChoiceRow } from "../agent/editors";
 import { Group, Row } from "../agent/rows";
+import { NodesGroup } from "./NodesGroup";
 
 const THEMES: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "System", icon: Monitor },
@@ -106,6 +107,7 @@ export function GeneralPanel() {
           </Row>
         )}
       </Group>
+      <NodesGroup />
       <Group title="Privacy">
         {usageTelemetry?.configured || usageTelemetry?.enabled ? (
           <ChoiceRow

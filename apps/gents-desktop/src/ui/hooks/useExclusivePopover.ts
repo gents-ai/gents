@@ -30,9 +30,16 @@ export function useExclusivePopover(onClose?: () => void) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const requestedOpenRef = useRef(false);
-  // Only detects never-mounted cancellation; Base UI acknowledges mounted closes.
-  const popupRef = useRef<HTMLDivElement | null>(null);
+  const popupElement = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
+
+  const popupRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      popupElement.current = element;
+      if (!element && !requestedOpenRef.current) release(id);
+    },
+    [id],
+  );
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -45,9 +52,9 @@ export function useExclusivePopover(onClose?: () => void) {
         setOpen(true);
       },
       closeForPeer: () => {
-        if (!requestedOpenRef.current) return popupRef.current !== null;
+        if (!requestedOpenRef.current) return popupElement.current !== null;
         requestedOpenRef.current = false;
-        const awaitsUnmount = popupRef.current !== null;
+        const awaitsUnmount = popupElement.current !== null;
         setOpen(false);
         onCloseRef.current?.();
         return awaitsUnmount;
@@ -71,7 +78,7 @@ export function useExclusivePopover(onClose?: () => void) {
         if (pendingPopoverId === id) pendingPopoverId = null;
         setOpen(false);
         if (wasRequestedOpen) onCloseRef.current?.();
-        if (activePopoverId === id && popupRef.current === null) release(id);
+        if (activePopoverId === id && popupElement.current === null) release(id);
         return;
       }
       requestedOpenRef.current = true;
@@ -95,7 +102,7 @@ export function useExclusivePopover(onClose?: () => void) {
 
   const onOpenChangeComplete = useCallback(
     (next: boolean) => {
-      if (!next && !requestedOpenRef.current) release(id);
+      if (!next && !requestedOpenRef.current && !popupElement.current) release(id);
     },
     [id],
   );
@@ -105,5 +112,12 @@ export function useExclusivePopover(onClose?: () => void) {
     [id],
   );
 
-  return { open, onOpenChange, onOpenChangeComplete, popupRef, peerPending };
+  return {
+    open,
+    onOpenChange,
+    onOpenChangeComplete,
+    popupRef,
+    popupFocusRef: popupElement,
+    peerPending,
+  };
 }

@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowUpRight,
   ChevronDown,
+  EyeOff,
   Package,
   Plus,
   Trash2,
@@ -71,7 +72,7 @@ function ListItem({
   if (nested || compact) {
     return (
       <li
-        className={`flex items-center hover:bg-accent ${nested ? "bg-background/40" : ""}`}
+        className={`flex items-center hover:bg-accent ${nested ? "bg-background/40" : ""} ${r.hidden ? "opacity-75" : ""}`}
       >
         <RowLink
           onOpen={r.onOpen}
@@ -99,7 +100,7 @@ function ListItem({
     );
   }
   return (
-    <li className="flex items-center hover:bg-accent">
+    <li className={`flex items-center hover:bg-accent ${r.hidden ? "opacity-75" : ""}`}>
       <RowLink
         onOpen={r.onOpen}
         href={r.href ?? href({ ...base, item: r.id })}
@@ -191,6 +192,9 @@ export type ListRow = {
   href?: string;
   children?: ListRow[];
   metaLeadToggles?: boolean;
+  /** left out of the menus on this device: listed last, under a foldable
+      Hidden group */
+  hidden?: boolean;
 };
 
 /* which packs' groups the person opened (true) or folded (false) in a list,
@@ -290,6 +294,7 @@ export function ListDetail({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [allNested, setAllNested] = useState<Set<string>>(() => new Set());
   const packGroups = usePackGroups(base.section);
+  const hiddenGroup = usePackGroups(`${base.section}.hidden`);
 
   const origins = useMemo(
     () =>
@@ -346,7 +351,11 @@ export function ListDetail({
   /* a pack's entries start folded under the person's own, so packs don't
      flood the list; with none of their own showing, the groups are the
      list, so they start open */
-  const groupsOpenByDefault = !shown.some((r) => packOrigin(r.tags) === null);
+  const groupsOpenByDefault = !shown.some(
+    (r) => !r.hidden && packOrigin(r.tags) === null,
+  );
+  const hiddenRows = shown.filter((r) => r.hidden);
+  const hiddenOpen = Boolean(q) || hiddenGroup.isOpen("hidden", false);
   const groupOpen = (pack: string) => packGroups.isOpen(pack, groupsOpenByDefault);
   const toggleGroup = (pack: string) => packGroups.toggle(pack, groupsOpenByDefault);
   const renderRow = (r: ListRow, inPackGroup: boolean) => (
@@ -419,10 +428,10 @@ export function ListDetail({
         {/* your own entries first, then each pack's under its name, foldable;
             a search shows every match, folded or not */}
         {shown
-          .filter((r) => packOrigin(r.tags) === null)
+          .filter((r) => !r.hidden && packOrigin(r.tags) === null)
           .map((r) => renderRow(r, false))}
         {origins.map((pack) => {
-          const entries = shown.filter((r) => packOrigin(r.tags) === pack);
+          const entries = shown.filter((r) => !r.hidden && packOrigin(r.tags) === pack);
           if (entries.length === 0) return null;
           const open = Boolean(q) || groupOpen(pack);
           return (
@@ -453,6 +462,28 @@ export function ListDetail({
             </Fragment>
           );
         })}
+        {/* what this device leaves out of the menus, last and folded */}
+        {hiddenRows.length > 0 && (
+          <>
+            <li className="flex items-center bg-background/40 pr-4">
+              <button
+                type="button"
+                aria-expanded={hiddenOpen}
+                onClick={() => hiddenGroup.toggle("hidden", false)}
+                className="flex min-w-0 flex-1 items-center gap-2 py-2.5 pl-4 text-left text-xs text-muted-foreground hover:text-foreground"
+              >
+                <ChevronDown
+                  aria-hidden
+                  className={`size-3.5 shrink-0 transition-transform ${hiddenOpen ? "" : "-rotate-90"}`}
+                />
+                <EyeOff aria-hidden className="size-3.5 shrink-0" />
+                <span className="truncate font-medium text-foreground">Hidden</span>
+                <span className="shrink-0">· {hiddenRows.length}</span>
+              </button>
+            </li>
+            {hiddenOpen && hiddenRows.map((r) => renderRow(r, false))}
+          </>
+        )}
         {rows.length === 0 && <EmptyRow>{empty}</EmptyRow>}
         {rows.length > 0 && shown.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">

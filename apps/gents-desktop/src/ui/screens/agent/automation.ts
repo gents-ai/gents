@@ -71,6 +71,11 @@ export function sourceInWords(deployment: NodeView, t: TriggerView): string | nu
   return e ? eventInWords(e) : null;
 }
 
+/** Whether an automation's last run failed: a schedule writes "error" for a
+    fire that failed, and "failed" is kept for other sources. */
+export const lastRunFailed = (t: Pick<TriggerView, "lastStatus">) =>
+  t.lastStatus === "error" || t.lastStatus === "failed";
+
 export type Readiness =
   { ok: true; note: string | null } | { ok: false; reason: string };
 
@@ -93,7 +98,7 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
   const readiness = agentReadiness(deployment, b.agentId);
   if (!readiness.ready)
     return { ok: false, reason: `${b.displayName}: ${readiness.reason}` };
-  if (t.lastStatus === "failed")
+  if (lastRunFailed(t))
     return {
       ok: true,
       note: `Last run failed${t.lastError ? `: ${t.lastError}` : ""}`,
