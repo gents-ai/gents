@@ -28,7 +28,7 @@ async fn refused(tools: &Tools, args: Value) -> String {
 }
 
 async fn setup(label: &str, categories: &[&str]) -> (Arc<Node>, String, Tools) {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity(label);
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -208,7 +208,7 @@ async fn type_errors_name_the_field_path_and_shape() {
 
 #[tokio::test]
 async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("tools-drop");
     let owner = identity.did().to_string();
     for agent in ["setup", "worker"] {
@@ -484,7 +484,7 @@ async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
 
 #[tokio::test]
 async fn help_is_layered_and_its_recipes_run_as_written() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("recipes");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;

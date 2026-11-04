@@ -347,7 +347,7 @@ async fn build_registers_gated_family() {
 
 #[tokio::test]
 async fn pack_install_uses_current_node_and_inference_chain() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("pack-install");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
@@ -629,8 +629,8 @@ async fn pack_install_uses_current_node_and_inference_chain() {
 async fn pack_tool(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
-) -> (Arc<Node>, String, Vec<Box<dyn ToolDyn>>) {
-    let node = build_agent_node().await;
+) -> (tempfile::TempDir, Arc<Node>, String, Vec<Box<dyn ToolDyn>>) {
+    let (store_dir, node) = build_agent_node().await;
     let identity = node_identity(label);
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
@@ -645,7 +645,7 @@ async fn pack_tool(
         &tool_config,
         plugins,
     );
-    (node, node_did, tools)
+    (store_dir, node, node_did, tools)
 }
 
 async fn config_call(
@@ -663,7 +663,7 @@ async fn config_call(
 #[tokio::test]
 async fn pack_list_pages_the_packs_the_home_store_holds() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-list", plugins).await;
+    let (_store_dir, _node, _did, tools) = pack_tool("pack-list", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["source"], "store_and_installations");
@@ -695,7 +695,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
         .unwrap_err();
     assert!(error.to_string().contains("between 1 and 50"), "{error}");
 
-    let (_node, _did, homeless) = pack_tool("pack-list-homeless", test_plugins()).await;
+    let (_store_dir, _node, _did, homeless) = pack_tool("pack-list-homeless", test_plugins()).await;
     let page: Value =
         serde_json::from_str(&config_call(&homeless, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["page"]["total"], 0);
@@ -705,7 +705,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
 #[tokio::test]
 async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
     let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-list-damaged", plugins).await;
+    let (_store_dir, _node, _did, tools) = pack_tool("pack-list-damaged", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     let digest = page["items"][0]["artifact_digest"].as_str().unwrap();
@@ -733,7 +733,7 @@ async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offlin
     let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let _registry = crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("pack-update-offline", plugins).await;
+    let (_store_dir, _node, _did, tools) = pack_tool("pack-update-offline", plugins).await;
     let error = config_call(
         &tools,
         &["pack", "preview", "update", "fixture/documents_fixture"],
@@ -771,7 +771,7 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
     pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_id": "fixture-worker", "name": "wf-run"}]);
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (_node, _did, tools) = pack_tool("pack-job-block", plugins).await;
+    let (_store_dir, _node, _did, tools) = pack_tool("pack-job-block", plugins).await;
     let error = format!(
         "{:#}",
         config_call(
@@ -800,7 +800,7 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
     pack_config["tools"][0]["integrations"] = json!({"plugins": [{"plugin": "acme/missing"}]});
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (node, _did, tools) = pack_tool("pack-unresolved-plugin", plugins).await;
+    let (_store_dir, node, _did, tools) = pack_tool("pack-unresolved-plugin", plugins).await;
     let error = format!(
         "{:#}",
         config_call(
@@ -832,7 +832,7 @@ async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
 
 #[tokio::test]
 async fn config_tools_cannot_self_grant_pack_install() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("pack-self-grant");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
@@ -900,7 +900,7 @@ async fn operator_grant_pack_install(node: &Arc<defra_node::Node>, owner: &str, 
 
 #[tokio::test]
 async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("granted-tools-edit");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "granted").await;
@@ -950,7 +950,7 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
 
 #[tokio::test]
 async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("pack-holder-sibling");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
@@ -1017,8 +1017,11 @@ async fn config_call_message(
 async fn reselection_tools(
     label: &str,
     hold_pack_install: bool,
-) -> Vec<Box<dyn crate::inference::llm::tool::ToolDyn>> {
-    let node = build_agent_node().await;
+) -> (
+    tempfile::TempDir,
+    Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>,
+) {
+    let (store_dir, node) = build_agent_node().await;
     let identity = node_identity(label);
     let owner = identity.did().to_string();
     for agent in ["worker", "sibling", "granted", "granted-2"] {
@@ -1029,19 +1032,20 @@ async fn reselection_tools(
     let mut tool_config = config(&["node", "agent", "tools"]);
     tool_config.agent_id = "worker".to_owned();
     tool_config.enable_pack_install = hold_pack_install;
-    build_self_config_tools(
+    let tools = build_self_config_tools(
         std::sync::Arc::default(),
         node,
         owner,
         Some(identity),
         &tool_config,
         test_plugins(),
-    )
+    );
+    (store_dir, tools)
 }
 
 #[tokio::test]
 async fn context_reselect_cannot_acquire_grants() {
-    let tools = reselection_tools("context-reselect", false).await;
+    let (_tools_store_dir, tools) = reselection_tools("context-reselect", false).await;
     for target in [None, Some("sibling")] {
         let mut argv = argv_of(&["agent", "context", "edit"]);
         if let Some(target) = target {
@@ -1072,7 +1076,7 @@ async fn context_reselect_cannot_acquire_grants() {
         !missing.contains("operator grant"),
         "the reference validator, not the grant guard, refuses a missing document: {missing}"
     );
-    let holder = reselection_tools("context-reselect-holder", true).await;
+    let (_holder_store_dir, holder) = reselection_tools("context-reselect-holder", true).await;
     call_config_tool(
         &holder,
         argv_of(&[
@@ -1089,7 +1093,7 @@ async fn context_reselect_cannot_acquire_grants() {
 
 #[tokio::test]
 async fn agent_reselect_cannot_acquire_grants() {
-    let tools = reselection_tools("agent-reselect", false).await;
+    let (_tools_store_dir, tools) = reselection_tools("agent-reselect", false).await;
     for target in ["worker", "sibling"] {
         let refused = config_call_message(
             &tools,
@@ -1110,7 +1114,7 @@ async fn agent_reselect_cannot_acquire_grants() {
             "{target}: {refused}"
         );
     }
-    let holder = reselection_tools("agent-reselect-holder", true).await;
+    let (_holder_store_dir, holder) = reselection_tools("agent-reselect-holder", true).await;
     call_config_tool(
         &holder,
         argv_of(&[
@@ -1127,7 +1131,7 @@ async fn agent_reselect_cannot_acquire_grants() {
 
 #[tokio::test]
 async fn context_reselect_between_granted_tools_is_accepted() {
-    let tools = reselection_tools("context-between-granted", false).await;
+    let (_tools_store_dir, tools) = reselection_tools("context-between-granted", false).await;
     call_config_tool(
         &tools,
         argv_of(&[
@@ -1153,7 +1157,7 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
         "--set",
         r#"tools_id="granted:tools""#,
     ]);
-    let tools = reselection_tools("context-create-granted", false).await;
+    let (_tools_store_dir, tools) = reselection_tools("context-create-granted", false).await;
     let refused = config_call_message(&tools, create.clone())
         .await
         .expect_err("a new Context must not select Tools whose grant the agent does not hold");
@@ -1161,13 +1165,13 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
         refused.contains("selects Tools carrying an operator grant this agent does not hold"),
         "{refused}"
     );
-    let holder = reselection_tools("context-create-holder", true).await;
+    let (_holder_store_dir, holder) = reselection_tools("context-create-holder", true).await;
     call_config_tool(&holder, create)
         .await
         .expect("an agent holding the grant may create a Context that selects it");
 }
 
-pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::Node> {
+pub(super) async fn build_agent_node() -> (tempfile::TempDir, std::sync::Arc<defra_node::Node>) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let node = crate::test_support::node_builder()
         .data_path(tempdir.path().join("data"))
@@ -1177,7 +1181,7 @@ pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::Node> {
     crate::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas register");
-    std::sync::Arc::new(node)
+    (tempdir, std::sync::Arc::new(node))
 }
 
 pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdentity> {
@@ -1190,7 +1194,7 @@ pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdenti
 
 #[tokio::test]
 async fn automation_rejects_invalid_template_before_publication_and_can_recover() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("template-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -1248,7 +1252,7 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
 
 #[tokio::test]
 async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recover() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("event-source-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -1324,7 +1328,7 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
 
 #[tokio::test]
 async fn skill_import_previews_without_writes_and_requires_file_authority() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("skill-import");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -1473,7 +1477,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
 
 #[tokio::test]
 async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("configuration-discovery");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -1610,7 +1614,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         DiscoverySourceOutcome, MappingSupportLevel,
     };
 
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("setup-discovery-flow");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -1838,7 +1842,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 
 #[tokio::test]
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("datastore-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -2080,7 +2084,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
 
 #[tokio::test]
 async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("structured-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "working").await;
@@ -2139,7 +2143,7 @@ pub(super) async fn call_config_tool(
 #[tokio::test]
 async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     use crate::inference::llm::tool::Tool;
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("schema-recovery");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -2201,7 +2205,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
 
 #[tokio::test]
 async fn config_errors_name_the_next_call() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("next-call");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -2307,7 +2311,7 @@ async fn config_errors_name_the_next_call() {
 
 #[tokio::test]
 async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("config-execution");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -2392,7 +2396,7 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
 
 #[tokio::test]
 async fn agent_category_gates_the_tool() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-gate");
     let node_did = identity.did().to_string();
 
@@ -2424,7 +2428,7 @@ async fn agent_category_gates_the_tool() {
 
 #[tokio::test]
 async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact_signer() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-only-owner");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "current").await;
@@ -2499,7 +2503,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
 
 #[tokio::test]
 async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("config-inventory");
     let owner = identity.did().to_string();
     for agent in ["alpha", "beta", "gamma"] {
@@ -2592,7 +2596,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
             .unwrap();
     });
 
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("local-backend-create");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
@@ -2707,7 +2711,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 
 #[tokio::test]
 async fn config_targets_owned_working_agent_for_all_bound_documents() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("targeted-config");
     let owner = identity.did().to_string();
     for agent in ["setup", "working"] {
@@ -3048,7 +3052,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
 
 #[tokio::test]
 async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("config-cleanup");
     let owner = identity.did().to_string();
     for agent in ["beh-test", "orphan"] {
@@ -3174,7 +3178,7 @@ fn take_agent_tool(
 
 #[tokio::test]
 async fn agent_default_commits_through_the_agent_owner() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-default");
     let node_did = identity.did().to_string();
     for agent in ["seed", "working"] {
@@ -3238,7 +3242,7 @@ async fn agent_default_commits_through_the_agent_owner() {
 
 #[tokio::test]
 async fn agent_create_commits_and_resolves_after_restart() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-create");
     let node_did = identity.did().to_string();
 
@@ -3473,7 +3477,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
 
 #[tokio::test]
 async fn agent_clone_accepts_sibling_agent_id() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-clone");
     let node_did = identity.did().to_string();
     let qualified_sibling_id = "sibling-agent".to_owned();
@@ -3517,7 +3521,7 @@ async fn agent_clone_accepts_sibling_agent_id() {
 
 #[tokio::test]
 async fn agent_clone_cannot_copy_unheld_grants() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-clone-grants");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "granted").await;
@@ -3593,7 +3597,7 @@ async fn agent_clone_cannot_copy_unheld_grants() {
 
 #[tokio::test]
 async fn agent_clone_by_holder_copies_granted_source() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-clone-holder");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "granted").await;
@@ -3635,7 +3639,7 @@ async fn agent_clone_by_holder_copies_granted_source() {
 
 #[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("canonical-self-config");
     let other = node_identity("other-self-config");
     let owner = identity.did().to_string();
@@ -3705,7 +3709,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
 
 #[tokio::test]
 async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("tools-root-policy");
     let owner = identity.did().to_string();
     let agent_id = "root-policy";
@@ -4074,7 +4078,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("self-config-secret");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "secret").await;
@@ -4120,7 +4124,7 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
 async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     const VARIABLE: &str = "GENTS_TEST_UNRELATED_PATCH_ENV_REFERENCE";
     const SENTINEL: &str = "sentinel-env-secret-never-stored";
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("self-config-env-reference");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "envref").await;
@@ -4183,7 +4187,7 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
 
 #[tokio::test]
 async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("self-config-account");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "acct").await;
@@ -4256,7 +4260,7 @@ async fn account_choice_core(
     std::sync::Arc<dyn crate::NodeIdentity>,
     SelfConfigCore,
 ) {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity(agent);
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, agent).await;
@@ -4743,7 +4747,7 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
 
 #[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("self-config-lsp-guard");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
@@ -4809,7 +4813,7 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
 
 #[tokio::test]
 async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("profile-context-window");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
@@ -4881,7 +4885,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
 
 #[tokio::test]
 async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("engineer-god-mode");
     let owner = identity.did().to_string();
     for agent in ["setup", "lead", "caller"] {
@@ -5332,7 +5336,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
 #[tokio::test]
 async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_calls() {
     const SECRET: &str = "operator-api-key-never-exposed";
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("backend-catalog-read");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
@@ -5447,7 +5451,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let _registry =
         crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", format!("http://{address}"));
-    let (node, did, tools) = pack_tool("registry-search", test_plugins()).await;
+    let (_store_dir, node, did, tools) = pack_tool("registry-search", test_plugins()).await;
     let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
     let first: Value = serde_json::from_str(
         &tool
@@ -5493,7 +5497,7 @@ async fn pack_documents_install_and_release_documents_dependencies() {
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
-    let (node, did, tools) = pack_tool("documents-dependencies", plugins).await;
+    let (_store_dir, node, did, tools) = pack_tool("documents-dependencies", plugins).await;
     let slots = ["--inference-slot", "worker=setup:inference"];
     let mut args = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
     args.extend(slots);
@@ -5579,7 +5583,7 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
-    let (_node, _did, tools) = pack_tool("dependency-plugin-authority", plugins).await;
+    let (_store_dir, _node, _did, tools) = pack_tool("dependency-plugin-authority", plugins).await;
     let slots = ["--inference-slot", "worker=setup:inference"];
     let mut preview_argv = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
     preview_argv.extend(slots);
@@ -5619,7 +5623,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
-    let (node, did, tools) = pack_tool("inspect-documents-pack", plugins).await;
+    let (_store_dir, node, did, tools) = pack_tool("inspect-documents-pack", plugins).await;
     let result: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
             .await
@@ -5864,7 +5868,7 @@ async fn seed_account_view(
 
 #[tokio::test]
 async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("config-accounts");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
@@ -5947,7 +5951,7 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
 
 #[tokio::test]
 async fn config_backend_accounts_is_readable_without_the_backend_grant() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("config-accounts-grant");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
@@ -5977,7 +5981,7 @@ async fn config_backend_accounts_is_readable_without_the_backend_grant() {
 
 #[tokio::test]
 async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifiers() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("agent-clear");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "seed").await;
@@ -6055,7 +6059,7 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
 
 #[tokio::test]
 async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("disable-preview-parity");
     let owner = identity.did().to_owned();
     for id in ["current", "default"] {
@@ -6099,7 +6103,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
 
 #[tokio::test]
 async fn agent_only_edits_preserve_an_optional_absent_context() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("contextless-agent-edit");
     let owner = identity.did().to_owned();
     for id in ["current", "other"] {
@@ -6152,7 +6156,7 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
 
 #[tokio::test]
 async fn public_agent_management_previews_without_publishing_and_checks_signer() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("public-agent-management");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "seed").await;
@@ -6217,7 +6221,7 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
 
 #[tokio::test]
 async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("disabled-agent-edit");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "target").await;
@@ -6315,7 +6319,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
 
 #[tokio::test]
 async fn public_prompt_edits_require_an_existing_unshared_context_without_partial_writes() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("prompt-context-ownership");
     let owner = identity.did().to_owned();
     for id in ["missing", "shared", "sibling", "private"] {
@@ -6560,7 +6564,7 @@ async fn grant_pack_install_for_test(node: &Arc<defra_node::Node>, owner: &str, 
 
 #[tokio::test]
 async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("clone-grant-bound");
     let owner = identity.did().to_owned();
     for id in ["worker", "source"] {
@@ -6622,7 +6626,7 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
 
 #[tokio::test]
 async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("reselection-grant-bound");
     let owner = identity.did().to_owned();
     for id in ["worker", "sibling", "granted"] {
@@ -6682,7 +6686,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("native-pack");
     let did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &did, "setup").await;
@@ -6862,7 +6866,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
-    let node = build_agent_node().await;
+    let (_store_dir, node) = build_agent_node().await;
     let identity = node_identity("native-pack-refusals");
     let did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &did, "setup").await;
@@ -7018,7 +7022,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     std::fs::write(&artifact, &bytes).unwrap();
 
     let (home, plugins) = crate::test_support::home_with_pack_dir(&directory);
-    let (node, did, tools) =
+    let (_store_dir, node, did, tools) =
         pack_tool_with_local_read("local-mixed-documents", plugins, fixture.path()).await;
 
     // get: reports kind, digest and the operator blocker for the plugin.
@@ -7187,7 +7191,7 @@ async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
         home.path().to_owned(),
     )));
     let workspace = &workspace;
-    let (_node, _did, tools) =
+    let (_store_dir, _node, _did, tools) =
         pack_tool_with_local_read("local-plugins-only", plugins, workspace.path()).await;
     let path = artifact.to_str().unwrap().to_owned();
 
@@ -7219,11 +7223,12 @@ async fn pack_tool_with_local_read(
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     root: &std::path::Path,
 ) -> (
+    tempfile::TempDir,
     std::sync::Arc<defra_node::Node>,
     String,
     Vec<Box<dyn ToolDyn>>,
 ) {
-    let node = build_agent_node().await;
+    let (store_dir, node) = build_agent_node().await;
     let identity = node_identity(label);
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
@@ -7250,7 +7255,7 @@ async fn pack_tool_with_local_read(
     )
     .await
     .unwrap();
-    (node, node_did, tools)
+    (store_dir, node, node_did, tools)
 }
 
 /// Installs two ChatGptCodex OAuth backends for `owner` — the provider's
@@ -7327,7 +7332,7 @@ async fn install_chat_account_fences(node: &Arc<Node>, owner: &str) {
 #[tokio::test]
 async fn pack_documents_install_refuses_non_default_account_inference_bindings() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (node, did, tools) = pack_tool("documents-account-fence", plugins).await;
+    let (_store_dir, node, did, tools) = pack_tool("documents-account-fence", plugins).await;
     install_chat_account_fences(&node, &did).await;
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let get: Value = serde_json::from_str(
