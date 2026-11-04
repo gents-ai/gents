@@ -602,6 +602,28 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             assert!(format!("{error:#}").contains(expected_error), "{error:#}");
             continue;
         }
+        if schema == "ID" {
+            // An ID takes a string, but DefraDB only persists document IDs;
+            // a canonical decimal count must be rejected before admission.
+            node.add_collection(&format!("type {collection} {{ count: ID }}"))
+                .await
+                .unwrap();
+            let mutation = format!(
+                "mutation {{ create_{collection}(input: [{{count: \"10\"}}]) {{ _docID }} }}"
+            );
+            let response = node.execute(&mutation).await;
+            assert!(response.has_errors(), "numeric ID must be refused");
+            assert!(format!("{:?}", response.errors).contains("malformed document ID"));
+            let response = node
+                .execute(&format!("{{ {collection} {{ _docID }} }}"))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            assert!(response.data.unwrap()[&collection]
+                .as_array()
+                .unwrap()
+                .is_empty());
+            continue;
+        }
         if case["storage"] != true {
             continue;
         }

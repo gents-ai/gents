@@ -31,7 +31,7 @@ pub(crate) fn parameters(schema: &str) -> Result<Value> {
 }
 
 pub fn can_hold_canonical_count(schema: &str) -> bool {
-    if schema.trim_end_matches('!') == "DateTime" {
+    if matches!(schema.trim_end_matches('!'), "DateTime" | "ID") {
         return false;
     }
     parameters(schema).is_ok_and(|shape| match shape.get("type") {

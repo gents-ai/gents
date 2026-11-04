@@ -5,7 +5,7 @@ namespace CompletionRetry.CountCarrier
 open ToolPolicy.WriteInput
 
 inductive Field where
-  | integer | number | text | json | dateTime | boolean | list | relation | unsupported
+  | integer | number | text | identifier | json | dateTime | boolean | list | relation | unsupported
   deriving DecidableEq, Repr
 
 inductive Encoding where
@@ -19,14 +19,14 @@ def encodingKind : Encoding → Kind
 def inputKinds : Field → List Kind
   | .integer => [.integer]
   | .number => [.number]
-  | .text | .dateTime => [.text]
+  | .text | .identifier | .dateTime => [.text]
   | .json => [.object, .array, .text, .number, .boolean]
   | .boolean => [.boolean]
   | .list => [.array]
   | .relation | .unsupported => []
 
 def storageAdmits (field : Field) (_encoding : Encoding) : Bool :=
-  field != .dateTime
+  field != .dateTime && field != .identifier
 
 def admitsEncoding (field : Field) (encoding : Encoding) : Bool :=
   (inputKinds field).any (fun expected => compatible expected (encodingKind encoding)) &&
@@ -102,6 +102,8 @@ theorem admission_iff_wire_witness (field : Field) (maximum : Nat) (h : 10 ≤ m
     cases encoding <;> simp_all [canCarry]
 
 theorem datetime_has_no_count : canCarry .dateTime = false := by decide
+
+theorem identifier_has_no_count : canCarry .identifier = false := by decide
 
 theorem noncanonical_has_no_count (value maximum : Nat) :
     parseCount none value maximum = none := by simp [parseCount]

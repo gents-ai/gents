@@ -10,7 +10,7 @@ structure FieldCase where
 
 private def scalars : List FieldCase :=
   [⟨"Int", .integer⟩, ⟨"Float", .number⟩, ⟨"Float32", .number⟩,
-   ⟨"Float64", .number⟩, ⟨"String", .text⟩, ⟨"ID", .text⟩,
+   ⟨"Float64", .number⟩, ⟨"String", .text⟩, ⟨"ID", .identifier⟩,
    ⟨"Blob", .text⟩, ⟨"JSON", .json⟩, ⟨"DateTime", .dateTime⟩,
    ⟨"Boolean", .boolean⟩]
 
