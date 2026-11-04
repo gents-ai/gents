@@ -1,7 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { createDesktopClient } from "@source-inc/gents-desktop-client";
-import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
+import {
+  MemoryNavProvider,
+  useNav,
+  type Nav,
+  type Route as ShellRoute,
+} from "@gents/shell";
 import { Toaster } from "@gents/ui/components/sonner";
 import { toast } from "sonner";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
@@ -28,6 +33,11 @@ import { AppProvider, useApp } from "./ui/app/AppContext";
 import { AppShell } from "./ui/app/AppShell";
 import { NodeNavigationGuard } from "./ui/app/NodeNavigationGuard";
 import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
+import {
+  pluginWindowStart,
+  useClosesWhenPluginGone,
+  type PluginWindowStart,
+} from "./ui/app/pluginWindow";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
 import { useDockVisit } from "./ui/app/workspace";
@@ -48,6 +58,7 @@ import {
   type Route,
 } from "./ui/lib/router";
 import { useSwipeNav } from "./ui/lib/swipe-nav";
+import { closeWindow } from "./lib/nativeShell";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
 import { SettingsScreen } from "./ui/screens/settings/SettingsScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
@@ -64,12 +75,23 @@ import "./ui/screens/surfaces";
 
 import "./App.css";
 
-function App({ bridge }: { bridge?: DesktopBridge } = {}) {
+/** `start`: a UX plugin's page in a window of its own, read from the
+    address the shell opened the window at unless given */
+function App({
+  bridge,
+  start: given,
+}: { bridge?: DesktopBridge; start?: PluginWindowStart | null } = {}) {
+  /* the window's address never changes: navigation is memory-only */
+  const start = given === undefined ? pluginWindowStart(window.location.search) : given;
+  /* the kit's memory history carries the desktop's own routes as they are */
+  const initial = start
+    ? ({ name: "plugin", pluginId: start.pluginId } as unknown as ShellRoute)
+    : undefined;
   return (
     <ErrorBoundary>
-      <MemoryNavProvider>
+      <MemoryNavProvider initial={initial}>
         <NavBinder>
-          <AppHost bridge={bridge} />
+          <AppHost bridge={bridge} start={start} />
         </NavBinder>
       </MemoryNavProvider>
     </ErrorBoundary>
@@ -97,14 +119,68 @@ function defaultBridge(): DesktopBridge {
   };
 }
 
-function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
+function AppHost({
+  bridge: given,
+  start,
+}: {
+  bridge?: DesktopBridge;
+  start: PluginWindowStart | null;
+}) {
   const [bridge] = useState(() => given ?? defaultBridge());
   const [app] = useState(() => createDesktopApp({ reportFailure: toast, ...bridge }));
   return (
     <AppProvider value={app}>
-      <AppReactions app={app} bridge={bridge} />
-      <AppBody />
+      {start ? (
+        <>
+          <PluginWindowReactions app={app} bridge={bridge} start={start} />
+          <PluginWindowBody pluginId={start.pluginId} />
+        </>
+      ) : (
+        <>
+          <AppReactions app={app} bridge={bridge} />
+          <AppBody />
+        </>
+      )}
     </AppProvider>
+  );
+}
+
+/* A plugin page's own window: the client and the plugin host, and the node
+   it was opened from. Startup and recovery stay with the main window. */
+function PluginWindowReactions({
+  app,
+  bridge,
+  start,
+}: {
+  app: DesktopApp;
+  bridge: DesktopBridge;
+  start: PluginWindowStart;
+}) {
+  useClientRuntime(app, bridge.listenToUpdates);
+  usePlatformSetup();
+  useUxHost(app, bridge.listenToUpdates);
+  const { selectNode } = app.actions;
+  useEffect(() => {
+    if (start.nodeDid) selectNode(start.nodeDid);
+  }, [selectNode, start.nodeDid]);
+  return null;
+}
+
+/* only the page: no Sidebar, Panel, composer or setup */
+function PluginWindowBody({ pluginId }: { pluginId: string }) {
+  const startup = useStartup();
+  useClosesWhenPluginGone(pluginId, closeWindow);
+  if (startup.phase !== "ready") return <StartupScreen />;
+  return (
+    <TooltipProvider>
+      <div
+        className="h-dvh min-h-0 bg-background text-foreground"
+        data-testid="plugin-window"
+      >
+        <PluginPageScreen pluginId={pluginId} windowed />
+      </div>
+      <Toaster closeButton />
+    </TooltipProvider>
   );
 }
 

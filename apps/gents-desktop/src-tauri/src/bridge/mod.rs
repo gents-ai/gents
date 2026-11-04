@@ -1,3 +1,5 @@
+#[cfg(desktop)]
+mod plugin_window;
 mod product_telemetry;
 #[cfg(target_os = "macos")]
 mod swipe;
@@ -104,11 +106,19 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         windows::desktop_window_setup_complete,
         swipe::swipe_scroll_edges,
+        plugin_window::desktop_open_plugin_window,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled
     ]);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(desktop, not(target_os = "macos")))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        plugin_window::desktop_open_plugin_window,
+        product_telemetry::product_telemetry_app_opened,
+        product_telemetry::product_telemetry_status,
+        product_telemetry::product_telemetry_set_enabled
+    ]);
+    #[cfg(mobile)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,

@@ -12,6 +12,7 @@ import type {
   PackWireSources,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { announceUxPluginsChanged } from "@/contrib/runtime-door";
 import { defaultAgentOf } from "@/lib/agents";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { ChoiceRow } from "./editors";
@@ -128,6 +129,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     try {
       await actions.installPack({ package: pack, edited, grantAuthority });
       toast.success(`Installed ${pack}`);
+      void announceUxPluginsChanged(false);
       await refresh();
     } catch (error) {
       const text = errorText(error);
@@ -154,6 +156,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     try {
       await actions.updatePack(pack, edited);
       toast.success(`Updated ${pack}`);
+      void announceUxPluginsChanged(true);
       await refresh();
     } catch (error) {
       if (editedChoice(error)) {
@@ -174,6 +177,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     try {
       await actions.removePack(pack);
       toast.success(`Removed ${pack}`);
+      void announceUxPluginsChanged(false);
       await refresh();
     } catch (error) {
       toast.error(errorText(error));

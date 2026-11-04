@@ -88,6 +88,16 @@ export function announceWindowSetupComplete() {
   return invoke<void>("desktop_window_setup_complete");
 }
 
+/** a UX plugin's page in a window of its own, or that window brought
+    forward when it is already open */
+export function openPluginWindow(request: {
+  pluginId: string;
+  nodeDid: string | null;
+  title: string;
+}) {
+  return invoke<void>("desktop_open_plugin_window", request);
+}
+
 export const canPickDirectory = inNativeShell;
 
 export async function confirmPluginMessage(

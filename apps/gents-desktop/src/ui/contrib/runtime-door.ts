@@ -247,6 +247,47 @@ export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
 /** the panel's Reload button */
 export const reloadRuntimeUxPlugins = (): Promise<void> => scanRuntimeUxPlugins(true);
 
+/** settles once no scan is running, so a plugin missing mid-reload is not
+    taken for gone */
+export function uxScanSettled(): Promise<void> {
+  return inFlight ?? Promise.resolve();
+}
+
+/* Every window keeps its own inventory, so a pack installed, updated or
+   removed in one is rescanned in all: here at once, the others through a
+   storage event (which never reaches the window that wrote it). */
+const CHANGED_KEY = "gents.ux-plugins-changed.v1";
+
+/** after a pack change: an update reloads what is already loaded, an install
+    or removal only adds and drops */
+export function announceUxPluginsChanged(reloadKnown: boolean): Promise<void> {
+  try {
+    window.localStorage.setItem(
+      CHANGED_KEY,
+      JSON.stringify({ reloadKnown, at: Date.now() }),
+    );
+  } catch {
+    /* no storage: only this window rescans */
+  }
+  return scanRuntimeUxPlugins(reloadKnown);
+}
+
+export function followOtherWindowsPackChanges(): () => void {
+  const follow = (event: StorageEvent) => {
+    if (event.key !== CHANGED_KEY || !event.newValue) return;
+    let reloadKnown = false;
+    try {
+      reloadKnown =
+        (JSON.parse(event.newValue) as { reloadKnown?: unknown }).reloadKnown === true;
+    } catch {
+      /* unreadable: a plain scan */
+    }
+    void scanRuntimeUxPlugins(reloadKnown);
+  };
+  window.addEventListener("storage", follow);
+  return () => window.removeEventListener("storage", follow);
+}
+
 /** test seam */
 export function resetRuntimeDoor(): void {
   known.clear();
