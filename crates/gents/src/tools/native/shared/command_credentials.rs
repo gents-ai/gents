@@ -165,7 +165,15 @@ impl CredentialProtection {
             Err(error) => return Err(error).context("inspecting credential exclusion"),
         };
         if metadata.is_symlink() {
-            let target = path.canonicalize().context("resolving credential link")?;
+            let target = match path.canonicalize() {
+                Ok(target) => target,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let parent = path.parent().context("credential link has no parent")?;
+                    let target = std::fs::read_link(path).context("reading credential link")?;
+                    resolve_missing(&parent.join(target))?
+                }
+                Err(error) => return Err(error).context("resolving credential link"),
+            };
             self.paths.insert(target.clone());
             self.inspect(&target, inspected, hard_links)?;
         } else if metadata.is_dir() {
