@@ -643,11 +643,10 @@ async fn loaded_threads(route: &str) -> Result<Vec<String>> {
     )?)
 }
 
-/// Waits for `route` to load a thread outside `known`. A `--cd` makes real Codex ask
-/// whether to trust the directory, and it asks every time because the shim keeps no
-/// answer. Enter accepts that, and does nothing in an empty composer.
+/// Waits for `route` to load a thread outside `known`. Nothing is pressed, so any Codex
+/// screen in the way of a thread, such as its trust question, fails this.
 async fn wait_for_loaded_thread(
-    terminal: &mut Terminal,
+    terminal: &Terminal,
     route: &str,
     known: &[String],
 ) -> Result<String> {
@@ -663,7 +662,6 @@ async fn wait_for_loaded_thread(
             "Codex loaded no thread on {route} within {OPENS_THREAD:?}; transcript:\n{}",
             terminal.transcript()
         );
-        terminal.send("\r")?;
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
@@ -1248,11 +1246,11 @@ mod with_model {
             ]);
             Terminal::spawn(&command, &live.log(log))
         };
-        let mut window_a = window(&a, &prompt_a, "window-a")?;
-        let mut window_b = window(&b, &prompt_b, "window-b")?;
+        let window_a = window(&a, &prompt_a, "window-a")?;
+        let window_b = window(&b, &prompt_b, "window-b")?;
 
-        wait_for_loaded_thread(&mut window_a, &route_a, &[]).await?;
-        wait_for_loaded_thread(&mut window_b, &route_b, &[]).await?;
+        wait_for_loaded_thread(&window_a, &route_a, &[]).await?;
+        wait_for_loaded_thread(&window_b, &route_b, &[]).await?;
         let graphql = graphql_url(HTTP_PORT);
         let turns: Result<_> = async {
             let (request_a, session_a, agent_a) =
@@ -1295,8 +1293,8 @@ mod with_model {
         let known = loaded_threads(&route_b).await?;
         let mut from_project = live.bare_gents(&codex, &home.home);
         from_project.current_dir(&project).args(["--agent", &b]);
-        let mut window_project = Terminal::spawn(&from_project, &live.log("window-project"))?;
-        let thread = wait_for_loaded_thread(&mut window_project, &route_b, &known).await?;
+        let window_project = Terminal::spawn(&from_project, &live.log("window-project"))?;
+        let thread = wait_for_loaded_thread(&window_project, &route_b, &known).await?;
         let listed = shim_call(&route_b, "thread/list", json!({})).await?;
         let started = listed["data"]
             .as_array()
