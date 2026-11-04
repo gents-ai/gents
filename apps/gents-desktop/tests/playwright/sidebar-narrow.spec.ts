@@ -58,6 +58,15 @@ const header = (page: Page) =>
   page.getByTestId("working-node").evaluate((el) => el.getBoundingClientRect().height);
 
 test.describe("the sidebar at its narrowest", () => {
+  /* it sets its own 1440×900 window, so the laptop and narrow projects
+     would only repeat the desktop Chromium run */
+  test.beforeEach(({}, info) => {
+    test.skip(
+      info.project.name === "chromium-laptop" ||
+        info.project.name === "chromium-narrow",
+      "sets its own desktop window",
+    );
+  });
   test("keeps the node's name and every row on one line", async ({ page }) => {
     await expandedAt(page, "mailbox-many", { navWidth: 304 });
     const wide = await header(page);

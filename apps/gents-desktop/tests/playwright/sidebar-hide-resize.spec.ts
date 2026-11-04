@@ -32,6 +32,15 @@ const settled = (page: Page) =>
 const paneX = async (page: Page) => (await page.getByTestId("pane").boundingBox())!.x;
 
 test.describe("the sidebar", () => {
+  /* it sets its own 1440×900 window, so the laptop and narrow projects
+     would only repeat the desktop Chromium run */
+  test.beforeEach(({}, info) => {
+    test.skip(
+      info.project.name === "chromium-laptop" ||
+        info.project.name === "chromium-narrow",
+      "sets its own desktop window",
+    );
+  });
   test("hides entirely, comes back over the page from the window's edge, and is shown again", async ({
     page,
   }) => {
