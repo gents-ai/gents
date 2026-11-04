@@ -131,7 +131,7 @@ describe("the Automations page", () => {
       snapshot: { bootstrap, client: { deployments: [fromPack] } },
     });
     renderIn(app, <AutomationsScreen />);
-    const group = screen.getByRole("region", { name: "From demo/research" });
+    const group = screen.getByRole("group", { name: "From demo/research" });
     expect(within(group).getByRole("link", { name: /Task B/ })).toBeInTheDocument();
     await act(async () => {
       fireEvent.click(within(group).getByRole("button", { expanded: true }));

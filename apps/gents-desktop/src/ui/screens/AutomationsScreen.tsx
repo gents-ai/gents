@@ -250,19 +250,25 @@ export function AutomationsScreen({ item }: { item?: string }) {
             ) : shown.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nothing matches.</p>
             ) : (
-              <div className="grid gap-4">
+              /* one divided list, as on the sessions page: your own rows,
+                 then each pack's header and its rows */
+              <ul className="divide-y divide-border/60">
                 {groups.map((g) => {
                   if (g.pack === null)
-                    return <List key="own" automations={g.items} now={now} />;
+                    return g.items.map((a) => (
+                      <li key={a.id}>
+                        <Row automation={a} now={now} />
+                      </li>
+                    ));
                   const pack = g.pack;
                   const expanded = Boolean(query) || packGroups.isOpen(pack, true);
                   return (
-                    <section key={pack} aria-label={`From ${pack}`} className="grid">
+                    <li key={pack} role="group" aria-label={`From ${pack}`}>
                       <button
                         type="button"
                         aria-expanded={expanded}
                         onClick={() => packGroups.toggle(pack, true)}
-                        className="flex w-fit cursor-pointer items-center gap-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                        className="flex w-fit cursor-pointer items-center gap-2 py-3 text-xs text-muted-foreground hover:text-foreground"
                       >
                         <ChevronDown
                           aria-hidden
@@ -275,11 +281,19 @@ export function AutomationsScreen({ item }: { item?: string }) {
                         <span className="font-medium text-foreground">{pack}</span>
                         <span>· {g.items.length} from this pack</span>
                       </button>
-                      {expanded && <List automations={g.items} now={now} />}
-                    </section>
+                      {expanded && (
+                        <ul className="divide-y divide-border/60 border-t border-border/60">
+                          {g.items.map((a) => (
+                            <li key={a.id}>
+                              <Row automation={a} now={now} />
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
                   );
                 })}
-              </div>
+              </ul>
             )}
           </>
         )}
@@ -300,18 +314,6 @@ function statusOf(a: Automation, now: number): { text: string; warn: boolean } {
   if (next && next > now) return { text: `Next in ${span(next - now)}`, warn: false };
   if (a.lastRunAt) return { text: `Ran ${when(a.lastRunAt, now)} ago`, warn: false };
   return { text: "Not run yet", warn: false };
-}
-
-function List({ automations, now }: { automations: Automation[]; now: number }) {
-  return (
-    <ul className="divide-y divide-border/60">
-      {automations.map((a) => (
-        <li key={a.id}>
-          <Row automation={a} now={now} />
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 /* drawn like a sessions row: a highlight that reaches past the column,
