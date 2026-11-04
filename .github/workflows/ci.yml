@@ -94,6 +94,9 @@ jobs:
       - name: Check the macOS toolchain selection
         run: python3 .github/scripts/test-macos-rust-toolchain.py
 
+      - name: Check isolated runtime runner validation
+        run: python3 .github/scripts/test-isolated-runtime-runner.py
+
       - name: Check desktop Rust build and test graph routing
         run: python3 .github/scripts/test-desktop-rust-suite.py
 
@@ -150,7 +153,7 @@ jobs:
         ARM64,
         studio,
         "${{ (matrix.suite == 'runtime' || matrix.suite == 'support') && 'studio-1' || 'studio-2' }}",
-        "ci-${{ matrix.suite }}",
+        "${{ matrix.suite == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true' && 'ci-runtime-isolated' || format('ci-{0}', matrix.suite) }}",
       ]
     strategy:
       fail-fast: false
@@ -164,6 +167,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # Enable only after provisioning a separate OS account and runner. The
+      # configured path must be the running fleet node's actual gents home.
+      - name: Verify isolated runtime runner
+        if: matrix.suite == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true'
+        env:
+          GENTS_CI_FLEET_HOME: ${{ vars.GENTS_CI_FLEET_HOME }}
+        run: |
+          python3 .github/scripts/check-isolated-runtime-runner.py
+          echo "LEAN_CACHE_ROOT=$HOME/.cache/gents-lean" >> "$GITHUB_ENV"
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> "$GITHUB_ENV"
 
       # A Command Line Tools update repointed the default SDK to MacOSX27.2.sdk,
       # whose libSystem.B.tbd declares arm64e.x1-macos targets that neither
