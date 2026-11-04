@@ -22,7 +22,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@gents/ui/components/dialog";
-import { Field, FieldError, FieldLabel } from "@gents/ui/components/field";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@gents/ui/components/field";
 import { Input } from "@gents/ui/components/input";
 import {
   Select,
@@ -42,6 +47,7 @@ import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
 import { AgentPicker } from "../BehaviorPicker";
+import { Disclosure } from "../../components/Disclosure";
 import { CollectionPicker, OTHER } from "./CollectionPicker";
 
 const NEW = "new:";
@@ -57,6 +63,15 @@ export const PRESETS = [
 ] as const;
 
 type Preset = (typeof PRESETS)[number]["id"];
+type Concurrency = NonNullable<Trigger["concurrency"]>;
+
+/* what happens when it's due while a run is still going */
+const OVERLAP: { value: Concurrency; label: string }[] = [
+  { value: "serial", label: "Skip that run" },
+  { value: "queued_serial", label: "Run each one afterwards, in turn" },
+  { value: "latest_only", label: "Run once afterwards, for the latest" },
+  { value: "parallel", label: "Run them at the same time" },
+];
 type Kind = "schedule" | "event" | "manual";
 
 /** A starting point: its name, schedule and prompt fill the form. */
@@ -177,6 +192,10 @@ export function AutomationForm({
   const [cron, setCron] = useState("");
   const [eventId, setEventId] = useState(NEW);
   // The watched collection must be explicit to avoid self-triggering task writes.
+  const [description, setDescription] = useState("");
+  const [concurrency, setConcurrency] = useState<Concurrency>("serial");
+  const [goal, setGoal] = useState("");
+  const [goalBudget, setGoalBudget] = useState("");
   const [watch, setWatch] = useState("");
   const [collection, setCollection] = useState("");
   const [taskId, setTaskId] = useState(task ?? NEW);
@@ -206,7 +225,7 @@ export function AutomationForm({
   // an answer to the last refusal clears it
   useEffect(
     () => setError(null),
-    [prompt, kind, preset, watch, collection, agentId, taskId],
+    [prompt, kind, preset, watch, collection, agentId, taskId, goal, goalBudget],
   );
 
   const create = async () => {
@@ -225,6 +244,15 @@ export function AutomationForm({
     }
     if (taskId === NEW && !agentId) {
       setError("Choose the agent that runs it.");
+      return;
+    }
+    const budget = goalBudget.trim() ? Number(goalBudget) : null;
+    if (budget !== null && !(Number.isInteger(budget) && budget > 0)) {
+      setError("A token budget is a whole number of tokens.");
+      return;
+    }
+    if (budget !== null && !goal.trim()) {
+      setError("A token budget needs a goal.");
       return;
     }
     setBusy(true);
@@ -285,12 +313,12 @@ export function AutomationForm({
           node_did,
           task_id,
           display_name: displayName,
-          description: null,
+          description: description.trim() || null,
           agent_id: agentId,
           prompt_template: prompt.trim(),
           emit_outcome: false,
-          goal_objective_template: null,
-          goal_token_budget: null,
+          goal_objective_template: goal.trim() || null,
+          goal_token_budget: budget,
           enabled: true,
           output_schema_ref: null,
         });
@@ -304,7 +332,7 @@ export function AutomationForm({
           task_id,
           source,
           enabled: enable && !agentOff,
-          concurrency: "serial",
+          concurrency,
         });
       await changeConfig("applyConfigComponents", {
         document: {
@@ -464,6 +492,76 @@ export function AutomationForm({
             onChange={setAgentId}
           />
         </div>
+      )}
+      {(taskId === NEW || kind !== "manual") && (
+        <Disclosure
+          summary="More options"
+          summaryClassName="text-xs text-muted-foreground hover:text-foreground"
+        >
+          <div className="mt-3 grid gap-4">
+            {kind !== "manual" && (
+              <Field>
+                <FieldLabel htmlFor="auto-overlap">
+                  If it's still running when it's due again
+                </FieldLabel>
+                <Select
+                  items={OVERLAP}
+                  value={concurrency}
+                  onValueChange={(v) => v && setConcurrency(v as Concurrency)}
+                >
+                  <SelectTrigger id="auto-overlap" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OVERLAP.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+            {taskId === NEW && (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="auto-goal">Keep going until</FieldLabel>
+                  <Input
+                    id="auto-goal"
+                    placeholder="Every failing test passes"
+                    value={goal}
+                    onChange={(e) => setGoal(e.target.value)}
+                  />
+                  <FieldDescription>
+                    A goal it works toward across turns, instead of stopping after one
+                    reply.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="auto-goal-budget">
+                    Token budget for the goal
+                  </FieldLabel>
+                  <Input
+                    id="auto-goal-budget"
+                    inputMode="numeric"
+                    placeholder="No limit"
+                    value={goalBudget}
+                    onChange={(e) => setGoalBudget(e.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="auto-description">Description</FieldLabel>
+                  <Input
+                    id="auto-description"
+                    placeholder="What it's for, in a line"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                </Field>
+              </>
+            )}
+          </div>
+        </Disclosure>
       )}
       {agentOff && agent && (
         <p className="text-sm text-warning">

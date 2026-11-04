@@ -214,6 +214,45 @@ describe("the Automations page", () => {
     expect(screen.queryByLabelText("What the agent should do")).not.toBeInTheDocument();
   });
 
+  it("keeps a goal, its budget and what happens on overlap under More options", async () => {
+    withFlags({ automations: true });
+    const changeConfig = vi.fn().mockResolvedValue({});
+    const app = testApp({
+      api: { applyConfigComponents: changeConfig },
+      snapshot: { bootstrap, client: { deployments: [deployment] } },
+    });
+    renderRouted(app, { name: "automations", item: "new" }, (route) =>
+      route.name === "automations" ? <AutomationsScreen item={route.item} /> : null,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /On a schedule/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "Hourly" }));
+    fireEvent.change(screen.getByLabelText("What the agent should do"), {
+      target: { value: "Fix the failing tests" },
+    });
+    fireEvent.click(screen.getByText("More options"));
+    fireEvent.change(screen.getByLabelText("Token budget for the goal"), {
+      target: { value: "50000" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    expect(screen.getByText("A token budget needs a goal.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Keep going until"), {
+      target: { value: "Every test passes" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    const document = changeConfig.mock.calls[0][0].document;
+    expect(document.tasks[0]).toEqual(
+      expect.objectContaining({
+        goal_objective_template: "Every test passes",
+        goal_token_budget: 50000,
+      }),
+    );
+    expect(document.triggers[0].concurrency).toBe("serial");
+  });
+
   it("asks when a blank automation runs instead of assuming, and drops the ask once answered", async () => {
     withFlags({ automations: true });
     const changeConfig = vi.fn().mockResolvedValue({});
