@@ -102,7 +102,10 @@ export function NodeSwitcher({
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-2.5">
                       <span className="relative shrink-0">
-                        <NodeAvatar name={name} className="size-6" />
+                        <NodeAvatar
+                          name={name}
+                          className={cn("size-6", !node.dialSucceeded && "opacity-50")}
+                        />
                         <span
                           aria-hidden
                           className={cn(
@@ -115,7 +118,8 @@ export function NodeSwitcher({
                       {node.dialSucceeded ? (
                         <NodeActivity nodeDid={node.nodeDid} className="ml-auto" />
                       ) : (
-                        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        // the item lights every child while highlighted; this stays quiet
+                        <span className="ml-auto shrink-0 text-xs text-muted-foreground!">
                           Offline
                         </span>
                       )}

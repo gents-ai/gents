@@ -55,7 +55,10 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
                 {/* in the slot a session's status takes, so every title in
                     the nav starts on one line */}
                 <span className="relative grid size-4 shrink-0 place-items-center">
-                  <NodeAvatar name={name} className="size-4" />
+                  <NodeAvatar
+                    name={name}
+                    className={cn("size-4", !node.dialSucceeded && "opacity-50")}
+                  />
                   <span
                     aria-hidden
                     className={cn(
@@ -68,7 +71,7 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
                 {node.dialSucceeded ? (
                   <NodeActivity nodeDid={node.nodeDid} />
                 ) : (
-                  <span className="shrink-0">Offline</span>
+                  <span className="shrink-0 text-muted-foreground">Offline</span>
                 )}
               </button>
             </li>
