@@ -25,9 +25,32 @@ const defaults: Preferences = {
   pinnedSessions: [],
   flags: {},
   navLayout: { order: [], shown: {} },
+  openOn: null,
+  hiddenNodes: [],
+  hiddenAgents: [],
 };
 
 describe("preferences read back from storage", () => {
+  it("keeps the node to open on and what is hidden, dropping what isn't a string", () => {
+    const back = restorePreferences(
+      {
+        openOn: "did:key:vega",
+        hiddenNodes: ["did:key:juno", 3],
+        hiddenAgents: ["did:key:vega ops"],
+      },
+      defaults,
+    );
+    expect(back.openOn).toBe("did:key:vega");
+    expect(back.hiddenNodes).toEqual(["did:key:juno"]);
+    expect(back.hiddenAgents).toEqual(["did:key:vega ops"]);
+    expect(restorePreferences({ openOn: 7, hiddenNodes: "x" }, defaults)).toMatchObject(
+      {
+        openOn: null,
+        hiddenNodes: [],
+      },
+    );
+  });
+
   it("keeps the defaults for values that are not preferences", () => {
     expect(restorePreferences({ theme: "sepia", nav: 3 }, defaults)).toEqual(defaults);
     expect(restorePreferences(null, defaults)).toEqual(defaults);
@@ -43,6 +66,9 @@ describe("preferences read back from storage", () => {
       pinnedSessions: [],
       flags: {},
       navLayout: { order: [], shown: {} },
+      openOn: null,
+      hiddenNodes: [],
+      hiddenAgents: [],
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",

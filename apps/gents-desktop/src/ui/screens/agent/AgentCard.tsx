@@ -19,6 +19,12 @@ import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { InferenceSummary, OnlineStatus, StateDot, counted } from "../NodeFacts";
+import { AgentInitials } from "../parts";
+import { agentName } from "../behavior";
+import { span, useMinute } from "../time";
+import { lastRunFailed } from "./automation";
+import { limitNote } from "./ProviderUsage";
+import { useProviderUsage } from "@/hooks/useProviders";
 import { ProviderLogo } from "../ProviderLogo";
 import { agentOf, backendOf } from "@/lib/agents";
 import { RunNodeButton } from "./LocalServer";
@@ -140,13 +146,70 @@ function PacksValue({ packs }: { packs: PacksRead }) {
   const outdated = packs.filter((p) => p.outdated).length;
   return (
     <span className="truncate">
-      {[
-        `${packs.length} installed`,
-        broken ? `${broken} with a problem` : null,
-        outdated ? `${outdated} to update` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")}
+      {packs.length} installed
+      {broken > 0 && <span className="text-warning"> · {broken} with a problem</span>}
+      {outdated > 0 && ` · ${outdated} to update`}
+    </span>
+  );
+}
+
+/* the agents a card shows marks for before the rest are counted as +n */
+const MARKS = 4;
+
+/** The node's agents: a few of their marks, then how many more, and how
+    many there are. */
+function AgentsValue({ deployment }: { deployment: NodeView }) {
+  const agents = deployment.agents;
+  if (agents.length === 0) return <span className="truncate">None</span>;
+  const more = agents.length - MARKS;
+  const mark = "-ml-1.5 size-6 text-[10px] ring-2 ring-background first:ml-0";
+  return (
+    <>
+      <span aria-hidden className="flex shrink-0 items-center">
+        {agents.slice(0, MARKS).map((a) => (
+          <AgentInitials
+            key={a.agentId}
+            name={agentName(a.agentId, deployment)}
+            className={mark}
+          />
+        ))}
+        {more > 0 && (
+          <span
+            className={`grid shrink-0 place-items-center rounded-full border border-border bg-raised font-medium text-muted-foreground ${mark}`}
+          >
+            +{more}
+          </span>
+        )}
+      </span>
+      <span className="truncate text-muted-foreground">
+        {counted(agents.length, "agent")}
+      </span>
+    </>
+  );
+}
+
+/** The node's automations: how many, when the next one runs, and how many
+    of those that are on failed last time. */
+function AutomationsValue({ deployment }: { deployment: NodeView }) {
+  const now = useMinute();
+  const tasks = deployment.tasks.length;
+  if (tasks === 0) return <span className="truncate">None</span>;
+  const on = deployment.triggers.filter((t) => t.config.enabled !== false);
+  const failed = on.filter(lastRunFailed).length;
+  const next = on
+    .flatMap((t) => (t.nextRunAt ? [Date.parse(t.nextRunAt)] : []))
+    .filter((at) => at > now)
+    .sort((a, b) => a - b)[0];
+  return (
+    <span className="truncate">
+      {counted(tasks, "automation")}
+      {next !== undefined && (
+        <span title={new Date(next).toLocaleString()}>
+          {" "}
+          · next in {span(next - now)}
+        </span>
+      )}
+      {failed > 0 && <span className="text-warning"> · {failed} failed</span>}
     </span>
   );
 }
@@ -207,6 +270,7 @@ export function AgentCard({
     };
   }, [fetchOperationsSnapshot, deployment.nodeDid, sessions]);
   const now = pulse(sessions, ops);
+  const limit = limitNote(useProviderUsage(deployment.nodeDid).usage, useMinute());
   const online = deployment.dialSucceeded;
   const backends = deployment.inferenceBackends;
   const section = (section: string): Route => ({
@@ -309,8 +373,14 @@ export function AgentCard({
             <Skeleton className="h-4 w-24 bg-foreground/10" />
           )}
         </Summary>
+        <Summary label="Agents" to={section("agents")}>
+          <AgentsValue deployment={deployment} />
+        </Summary>
+        <Summary label="Automations" to={section("tasks")}>
+          <AutomationsValue deployment={deployment} />
+        </Summary>
         <Summary label="Inference" to={section("inference")}>
-          <InferenceSummary backends={backends} />
+          <InferenceSummary backends={backends} limit={limit} />
         </Summary>
         <Summary label="Packs" to={section("packs")}>
           <PacksValue packs={packs} />

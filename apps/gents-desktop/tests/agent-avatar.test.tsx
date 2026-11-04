@@ -24,7 +24,7 @@ describe("a node avatar", () => {
     render(<NodeAvatar name="Forge" avatar="12" data-testid="avatar" />);
     expect(screen.getByTestId("avatar").querySelector("img")).toHaveAttribute(
       "src",
-      "/avatars/12.png",
+      "/avatars/12.webp",
     );
   });
 });
@@ -87,17 +87,17 @@ describe("rolling a node's avatar", () => {
     const railReel = reelOf("rail");
     expect(railReel.length).toBeGreaterThan(2);
     expect(railReel).toEqual(pageReel);
-    expect(railReel[0]).toBe("/avatars/3.png");
+    expect(railReel[0]).toBe("/avatars/3.webp");
     const landed = railReel[railReel.length - 1]!;
-    expect(landed).not.toBe("/avatars/3.png");
+    expect(landed).not.toBe("/avatars/3.webp");
     expect(onChange).toHaveBeenCalledWith(landed.replace(/\D/g, ""));
-    expect(reelOf("other")).toEqual(["/avatars/3.png"]);
+    expect(reelOf("other")).toEqual(["/avatars/3.webp"]);
 
     land();
     expect(reelOf("rail").at(-1)).toBe(landed);
 
     act(() => settleAvatar("did:roll:a"));
-    expect(reelOf("rail")).toEqual(["/avatars/3.png"]);
+    expect(reelOf("rail")).toEqual(["/avatars/3.webp"]);
   });
 
   it("rolls again mid-roll, from the one it was rolling to", async () => {
@@ -119,7 +119,7 @@ describe("rolling a node's avatar", () => {
       fireEvent.click(roll);
       await new Promise((settle) => setTimeout(settle, 0));
     });
-    expect(reelOf("rail")[0]).toBe(`/avatars/${first}.png`);
+    expect(reelOf("rail")[0]).toBe(`/avatars/${first}.webp`);
     expect(onChange.mock.calls.map(([avatar]) => avatar)).toEqual([first, landing()]);
   });
 });

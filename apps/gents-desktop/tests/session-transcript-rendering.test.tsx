@@ -83,7 +83,10 @@ describe("SessionScreen transcript render boundary", () => {
     const retry = vi.spyOn(app.actions, "retryMessage").mockResolvedValue(undefined);
     const props = { ...UNRELATED, inFlight: false, scroller: null, content: null };
     const view = renderIn(app, <TranscriptPanel {...props} session={failed} />);
-    expect(screen.getByText("The assistant could not finish this turn.")).toBeVisible();
+    expect(screen.getByText("This turn couldn't finish")).toBeVisible();
+    expect(
+      screen.getByText("The request failed before a response was available."),
+    ).toBeVisible();
     await act(async () =>
       fireEvent.click(screen.getByRole("button", { name: "Retry" })),
     );

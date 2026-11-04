@@ -108,6 +108,7 @@ pub(super) fn render_sync_diagnostics(
     render_inbound_budget(&mut families, status);
     render_broadcast_and_retry_markers(&mut families, status);
     render_peer_fetches(&mut families, status);
+    render_pending_dag_estimates(&mut families, status);
     render_peer_liveness(&mut families, status, now);
     families.flush(lines);
 }
@@ -281,6 +282,74 @@ fn render_pending_dag(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>) 
             "gents_p2p_next_pending_retry_seconds",
             &[],
             millis as f64 / 1_000.0,
+        );
+    }
+}
+
+/// An optional gauge: its name, help text and the snapshot field it samples.
+type OptionalFamily = (
+    &'static str,
+    &'static str,
+    fn(&P2pSyncStatusSnapshot) -> Option<f64>,
+);
+
+/// The pending map's arbitration estimates. DefraDB measures and exports them;
+/// nothing acts on them yet. Runs after `render_peer_fetches`, which declares
+/// `gents_p2p_peer_series_dropped`.
+fn render_pending_dag_estimates(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>) {
+    f.counter(
+        "gents_p2p_pending_dag_tie_reorders_total",
+        "Dispatch passes whose due order a 1 s tie-break on no-progress would have changed; measured only.",
+    );
+    let optional: [OptionalFamily; 3] = [
+        (
+            "gents_p2p_pending_dag_attempt_ewma_median_seconds",
+            "Median per-root estimate of a slow, unshed, incomplete fetch attempt; absent when no root has one.",
+            |s| s.pending_dag_attempt_ewma_median_ms.map(|ms| ms as f64 / 1_000.0),
+        ),
+        (
+            "gents_p2p_pending_dag_attempt_ewma_max_seconds",
+            "Largest per-root estimate of a slow, unshed, incomplete fetch attempt; absent when no root has one.",
+            |s| s.pending_dag_attempt_ewma_max_ms.map(|ms| ms as f64 / 1_000.0),
+        ),
+        (
+            "gents_p2p_pending_dag_no_progress_median_ppm",
+            "Median per-root estimate of fetch attempts that left the root as it was, in parts per million.",
+            |s| s.pending_dag_no_progress_median_ppm.map(|ppm| ppm as f64),
+        ),
+    ];
+    for (name, help, _) in &optional {
+        f.gauge(name, help);
+    }
+    f.gauge(
+        "gents_p2p_pending_dag_peer_held",
+        "Pending DAG entries one source peer holds now.",
+    );
+    f.gauge(
+        "gents_p2p_pending_dag_peer_occupancy",
+        "Pending DAG entries one source peer held, averaged with a ~177 s half-life.",
+    );
+    let Some(status) = status else {
+        return;
+    };
+    f.sample(
+        "gents_p2p_pending_dag_tie_reorders_total",
+        &[],
+        status.pending_dag_tie_reorders,
+    );
+    for (name, _, read) in &optional {
+        if let Some(value) = read(status) {
+            f.sample(name, &[], value);
+        }
+    }
+    push_peer_series_dropped(f, "pending_dag", status.pending_dag_peer_occupancy.len());
+    for row in bounded_peers(&status.pending_dag_peer_occupancy, |row| row.peer.as_str()) {
+        let labels = &peer_labels(&row.peer);
+        f.sample("gents_p2p_pending_dag_peer_held", labels, row.held);
+        f.sample(
+            "gents_p2p_pending_dag_peer_occupancy",
+            labels,
+            row.occupancy_q8 as f64 / 256.0,
         );
     }
 }
@@ -546,6 +615,31 @@ fn render_peer_fetches(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>)
             "Bytes currently in flight from one peer.",
             "gauge",
         ),
+        (
+            "gents_p2p_peer_fetch_success_latency_seconds",
+            "Duration of a useful fetch from one peer, averaged with a 60 s half-life; absent until measured.",
+            "gauge",
+        ),
+        (
+            "gents_p2p_peer_fetch_useful_ewma_ppm",
+            "Share of fetches from one peer that delivered blocks, averaged with a 60 s half-life, in parts per million.",
+            "gauge",
+        ),
+        (
+            "gents_p2p_peer_fetch_attempt_cost_seconds",
+            "Duration of any finished fetch from one peer, averaged with a 60 s half-life.",
+            "gauge",
+        ),
+        (
+            "gents_p2p_peer_fetch_expected_useful_seconds",
+            "Expected time to a useful fetch from one peer: attempt cost over the useful share, floored at 1/64.",
+            "gauge",
+        ),
+        (
+            "gents_p2p_peer_fetch_ewma_age_seconds",
+            "Seconds since a finished fetch last fed one peer's averages.",
+            "gauge",
+        ),
     ] {
         f.declare(name, help, kind);
     }
@@ -580,6 +674,33 @@ fn render_peer_fetches(f: &mut Families, status: Option<&P2pSyncStatusSnapshot>)
                 labels,
                 micros as f64 / 1_000_000.0,
             );
+        }
+        let seconds = |micros: Option<u64>| micros.map(|micros| micros as f64 / 1_000_000.0);
+        for (name, value) in [
+            (
+                "gents_p2p_peer_fetch_success_latency_seconds",
+                seconds(fetch.success_latency_micros),
+            ),
+            (
+                "gents_p2p_peer_fetch_useful_ewma_ppm",
+                fetch.useful_ewma_ppm.map(|ppm| ppm as f64),
+            ),
+            (
+                "gents_p2p_peer_fetch_attempt_cost_seconds",
+                seconds(fetch.attempt_cost_micros),
+            ),
+            (
+                "gents_p2p_peer_fetch_expected_useful_seconds",
+                seconds(fetch.expected_useful_micros),
+            ),
+            (
+                "gents_p2p_peer_fetch_ewma_age_seconds",
+                fetch.ewma_age_millis.map(|ms| ms as f64 / 1_000.0),
+            ),
+        ] {
+            if let Some(value) = value {
+                f.sample(name, labels, value);
+            }
         }
     }
 }

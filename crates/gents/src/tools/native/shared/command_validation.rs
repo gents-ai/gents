@@ -175,6 +175,7 @@ fn first_matching_prefix<'a>(
 }
 
 pub(super) fn policy_denial(policy: &CommandExecutionPolicy, reason: DenialReason) -> ToolError {
+    crate::tools::native::command_observability::policy_denied();
     ToolError::policy_denial(CommandPolicyDenial::new(
         reason,
         policy.mode,

@@ -479,7 +479,7 @@ export function SessionContext({
       <PopoverContent
         ref={popover.popupRef}
         /* focus the panel, not its first control: the ⓘ would open its tip */
-        initialFocus={popover.popupRef}
+        initialFocus={popover.popupFocusRef}
         aria-label="Session context details"
         align="start"
         className="max-h-[min(40rem,80dvh)] w-80 max-w-[calc(100vw-2rem)] gap-2.5 overflow-y-auto p-3"

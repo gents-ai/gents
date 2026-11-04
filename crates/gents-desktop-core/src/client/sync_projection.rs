@@ -1,6 +1,9 @@
 #[cfg(test)]
 use gents::P2pSyncStatusSnapshot;
 
+use gents::runtime::agent::p2p_reconcile::PairingDirection;
+use gents_protocol::client_protocol::PairingSignal;
+
 use super::core::{ClientSyncStateSnapshot, P2PHealthStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +111,27 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     })
 }
 
+/// The pairing signal of the selected-session delivery classification: the
+/// client-to-runtime leg to `node_did` replicates when a peer for that node
+/// dialed and its client-to-runtime route is applied and matches the live
+/// replicator. A node with no listed peer has no such leg.
+pub fn project_client_route(sync: &ClientSyncStateSnapshot, node_did: &str) -> PairingSignal {
+    let outbound = PairingDirection::ClientToRuntime.as_str();
+    let replicating = sync.peers.iter().any(|peer| {
+        peer.node_did == node_did
+            && peer.dial_succeeded
+            && peer
+                .routes
+                .iter()
+                .any(|route| route.direction == outbound && route.applied && route.live_match)
+    });
+    if replicating {
+        PairingSignal::Connected
+    } else {
+        PairingSignal::NotConnected
+    }
+}
+
 fn is_offline(
     transport_status: P2PHealthStatus,
     any_configured_peer: bool,
@@ -123,7 +147,9 @@ fn is_offline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::core::{ClientPeerStatus, P2PHealth, PairingCollectionStatus};
+    use crate::client::core::{
+        ClientPeerStatus, ClientRouteStatus, P2PHealth, PairingCollectionStatus,
+    };
     use crate::remote_admin::PairingErrorClass;
     use gents::P2pPushRetryMarkerSnapshot;
     use std::time::{Duration, SystemTime};
@@ -169,6 +195,81 @@ mod tests {
             directory: Vec::new(),
             peers,
         })
+    }
+
+    fn route(direction: PairingDirection, applied: bool, live_match: bool) -> ClientRouteStatus {
+        ClientRouteStatus {
+            route_id: format!("peer-1:{}", direction.as_str()),
+            direction: direction.as_str().into(),
+            directory_id: "peer-1".into(),
+            transport_peer_id: None,
+            address: None,
+            template: None,
+            desired: true,
+            applied,
+            live_match,
+            filter_summary: String::new(),
+            last_error: None,
+            retry_count: 0,
+            last_retry_at: None,
+            last_retry_error_class: None,
+        }
+    }
+
+    fn client_route(dial_succeeded: bool, routes: Vec<ClientRouteStatus>) -> PairingSignal {
+        let sync = ClientSyncStateSnapshot {
+            transport: transport(P2PHealthStatus::Healthy),
+            database_sync: None,
+            database_sync_error: None,
+            enrollment_activation_errors: Default::default(),
+            peer_schema_skew: Default::default(),
+            directory: Vec::new(),
+            peers: vec![ClientPeerStatus {
+                routes,
+                ..peer(dial_succeeded)
+            }],
+        };
+        project_client_route(&sync, "did:test:node")
+    }
+
+    #[test]
+    fn only_a_dialed_applied_live_client_to_runtime_route_is_connected() {
+        let outbound = PairingDirection::ClientToRuntime;
+        let inbound = PairingDirection::RuntimeToClient;
+        assert_eq!(
+            client_route(true, vec![route(outbound, true, true)]),
+            PairingSignal::Connected
+        );
+        for (dialed, routes) in [
+            (false, vec![route(outbound, true, true)]),
+            (true, vec![route(outbound, true, false)]),
+            (true, vec![route(outbound, false, true)]),
+            (true, vec![route(inbound, true, true)]),
+            (true, Vec::new()),
+        ] {
+            assert_eq!(
+                client_route(dialed, routes.clone()),
+                PairingSignal::NotConnected,
+                "dialed {dialed}, routes {routes:?}"
+            );
+        }
+        let sync = ClientSyncStateSnapshot {
+            transport: transport(P2PHealthStatus::Healthy),
+            database_sync: None,
+            database_sync_error: None,
+            enrollment_activation_errors: Default::default(),
+            peer_schema_skew: Default::default(),
+            directory: Vec::new(),
+            peers: vec![ClientPeerStatus {
+                routes: vec![route(outbound, true, true)],
+                ..peer(true)
+            }],
+        };
+        assert_eq!(
+            project_client_route(&sync, "did:test:other"),
+            PairingSignal::NotConnected,
+            "another node's route is not this node's pairing"
+        );
     }
 
     #[test]

@@ -157,12 +157,14 @@ describe("the search palette", () => {
   it("waits for the current overlay to acknowledge its exit before opening", async () => {
     const previous = renderHook(() => useExclusivePopover());
     act(() => previous.result.current.onOpenChange(true));
-    previous.result.current.popupRef.current = document.createElement("div");
+    act(() => previous.result.current.popupRef(document.createElement("div")));
     renderIn(testApp({ deployments: [node()] }), <SearchPalette />);
     act(() => openSearch());
     expect(previous.result.current.open).toBe(false);
     expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
     act(() => previous.result.current.onOpenChangeComplete(false));
+    expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
+    act(() => previous.result.current.popupRef(null));
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Search" })).toHaveFocus(),
     );

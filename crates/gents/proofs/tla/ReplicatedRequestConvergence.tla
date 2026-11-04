@@ -10,7 +10,11 @@ CONSTANTS
   TerminalKind,
   Cap,
   ReplayOnRecovery,
-  AllowPeerClaim
+  AllowPeerClaim,
+  Desktop,
+  ModelDelivery,
+  UntypedRead,
+  HealthRereads
 
 Node == {Owner} \cup ReplicaHolder
 
@@ -28,6 +32,10 @@ ASSUME TerminalKindDisjoint == TerminalKind \cap NonTerminal = {}
 ASSUME CapIsPositiveNat == Cap \in (Nat \ {0})
 ASSUME ReplayOnRecoveryIsBoolean == ReplayOnRecovery \in BOOLEAN
 ASSUME AllowPeerClaimIsBoolean == AllowPeerClaim \in BOOLEAN
+ASSUME DesktopIsARequestParty == Desktop \in ReplicaHolder
+ASSUME ModelDeliveryIsBoolean == ModelDelivery \in BOOLEAN
+ASSUME UntypedReadIsBoolean == UntypedRead \in BOOLEAN
+ASSUME HealthRereadsIsRule == HealthRereads \in {"never", "awaiting", "unresolved"}
 
 Delta == [
   id     : DeltaId,
@@ -46,7 +54,30 @@ VARIABLES
   peerOnline,
   replayPending,
   replayCount,
-  acked
+  acked,
+  \* The desktop's outbound leg, the return leg of the canonical AgentSession
+  \* row, and the desktop's selected-session projection (ModelDelivery).
+  ownerHolds,
+  pairingUp,
+  desktopWrote,
+  claimSeen,
+  rowSeen,
+  desktopView,
+  eventPending,
+  readInFlight,
+  readCapture
+
+deliveryVars == <<
+  ownerHolds,
+  pairingUp,
+  desktopWrote,
+  claimSeen,
+  rowSeen,
+  desktopView,
+  eventPending,
+  readInFlight,
+  readCapture
+>>
 
 vars == <<
   reqState,
@@ -59,12 +90,45 @@ vars == <<
   peerOnline,
   replayPending,
   replayCount,
-  acked
+  acked,
+  deliveryVars
 >>
 
 IsTerminal(s) == s \in TerminalKind
 
 AllDeltas == messages \cup pendingInbound
+
+\* The owner creates the canonical AgentSession row when it claims.
+OwnerClaimed == reqState[Owner] # "Pending"
+
+\* What the desktop's selected-session read may show: the four delivery
+\* states, `NoRequest` before anything was sent, and `Error`, the old
+\* untyped read failure.
+DesktopViews == {"NoRequest", "Delivering", "NotConnected", "Accepted", "Visible", "Error"}
+
+\* `deriveSessionDelivery` in Proofs/Client/Types.lean over the desktop's own
+\* copies of the four signals: its AgentRequest write, the pairing, the
+\* node's claim or later lifecycle as replicated back, and the row.
+Classify ==
+  IF rowSeen THEN "Visible"
+  ELSE IF ~desktopWrote THEN "NoRequest"
+  ELSE IF claimSeen \/ IsTerminal(reqState[Desktop]) THEN "Accepted"
+  ELSE IF pairingUp THEN "Delivering"
+  ELSE "NotConnected"
+
+\* The pre-fix read failed whenever the row was absent.
+ReadResult == IF UntypedRead /\ ~rowSeen THEN "Error" ELSE Classify
+
+\* Which events re-read the selected session. Every store event does. A
+\* pairing-health event does, under the shipped rule, while the desktop shows
+\* no session yet ("unresolved"); the first fix re-read only a delivery state
+\* already shown ("awaiting"), and the old code never re-read on health.
+StoreEvent == ModelDelivery
+PairingEvent ==
+  /\ ModelDelivery
+  /\ CASE HealthRereads = "unresolved" -> desktopView # "Visible"
+       [] HealthRereads = "awaiting" -> desktopView \in {"Delivering", "NotConnected", "Accepted"}
+       [] OTHER -> FALSE
 
 TypeOK ==
   /\ reqState        \in [Node -> LifecycleState]
@@ -78,6 +142,15 @@ TypeOK ==
   /\ replayPending   \in [ReplicaHolder -> BOOLEAN]
   /\ replayCount     \in [ReplicaHolder -> 0..1]
   /\ acked           \in [ReplicaHolder -> BOOLEAN]
+  /\ ownerHolds      \in BOOLEAN
+  /\ pairingUp       \in BOOLEAN
+  /\ desktopWrote    \in BOOLEAN
+  /\ claimSeen       \in BOOLEAN
+  /\ rowSeen         \in BOOLEAN
+  /\ desktopView     \in DesktopViews
+  /\ eventPending    \in BOOLEAN
+  /\ readInFlight    \in BOOLEAN
+  /\ readCapture     \in DesktopViews
 
 Init ==
   /\ reqState        = [n \in Node |-> "Pending"]
@@ -91,25 +164,38 @@ Init ==
   /\ replayPending   = [peer \in ReplicaHolder |-> FALSE]
   /\ replayCount     = [peer \in ReplicaHolder |-> 0]
   /\ acked           = [peer \in ReplicaHolder |-> FALSE]
+  /\ ownerHolds      = ~ModelDelivery
+  /\ pairingUp       \in IF ModelDelivery THEN BOOLEAN ELSE {TRUE}
+  /\ desktopWrote    = FALSE
+  /\ claimSeen       = FALSE
+  /\ rowSeen         = FALSE
+  /\ desktopView     = "NoRequest"
+  /\ eventPending    = FALSE
+  /\ readInFlight    = FALSE
+  /\ readCapture     = "NoRequest"
 
+\* Claiming also creates the canonical AgentSession row (`OwnerClaimed`).
 Claim ==
+  /\ ownerHolds
   /\ reqState[Owner] = "Pending"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Claimed"]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked, deliveryVars>>
 
 Process ==
   /\ reqState[Owner] = "Claimed"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Processing"]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked,
+                  deliveryVars>>
 
 Terminalize(k) ==
   /\ k \in TerminalKind
   /\ reqState[Owner] = "Processing"
   /\ reqState' = [reqState EXCEPT ![Owner] = k]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked,
+                  deliveryVars>>
 
 FreshDeltaIds(k) == Cardinality(DeltaId \ deltaIdsUsed) >= k
 
@@ -132,7 +218,8 @@ EmitTerminalDelta ==
         /\ emitCount'    = emitCount + 1
   /\ acked' = [peer \in ReplicaHolder |-> FALSE]
   /\ UNCHANGED <<reqState, pendingInbound, dropCount, crashCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount,
+                  deliveryVars>>
 
 DeliverDelta(d) ==
   /\ d \in messages
@@ -140,7 +227,8 @@ DeliverDelta(d) ==
   /\ messages'       = messages \ {d}
   /\ pendingInbound' = pendingInbound \cup {d}
   /\ UNCHANGED <<reqState, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked,
+                  deliveryVars>>
 
 DropDelta(d) ==
   /\ d \in messages
@@ -148,15 +236,19 @@ DropDelta(d) ==
   /\ messages'  = messages \ {d}
   /\ dropCount' = dropCount + 1
   /\ UNCHANGED <<reqState, pendingInbound, deltaIdsUsed, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked,
+                  deliveryVars>>
 
 PersistDeltaOnPeer(d) ==
   /\ d \in pendingInbound
   /\ pendingInbound' = pendingInbound \ {d}
   /\ reqState'       = [reqState EXCEPT ![d.target] = d.value]
   /\ acked'          = [acked EXCEPT ![d.target] = TRUE]
+  /\ eventPending'   = (eventPending \/ (StoreEvent /\ d.target = Desktop))
   /\ UNCHANGED <<messages, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, ownerHolds, pairingUp,
+                  desktopWrote, claimSeen, rowSeen, desktopView, readInFlight,
+                  readCapture>>
 
 RecoverPeer(peer) ==
   /\ ReplayOnRecovery
@@ -165,7 +257,8 @@ RecoverPeer(peer) ==
   /\ peerOnline'    = [peerOnline EXCEPT ![peer] = TRUE]
   /\ replayPending' = [replayPending EXCEPT ![peer] = TRUE]
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount,
-                  crashCount, emitCount, replayCount, acked>>
+                  crashCount, emitCount, replayCount, acked,
+                  deliveryVars>>
 
 \* DefraDB owns recovery of installed replication work. Gents ensures the same
 \* authorized configuration without deleting native retry or acknowledgement state.
@@ -180,8 +273,10 @@ ReplayTerminalSnapshot(peer) ==
   /\ replayPending' = [replayPending EXCEPT ![peer] = FALSE]
   /\ replayCount'   = [replayCount EXCEPT ![peer] = 1]
   /\ acked'         = [acked EXCEPT ![peer] = TRUE]
+  /\ eventPending'  = (eventPending \/ (StoreEvent /\ peer = Desktop))
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
-                  emitCount, peerOnline>>
+                  emitCount, peerOnline, ownerHolds, pairingUp, desktopWrote,
+                  claimSeen, rowSeen, desktopView, readInFlight, readCapture>>
 
 \* The native ensure operation preserves acknowledgements and retry markers;
 \* an already acknowledged peer needs no additional delivery.
@@ -192,7 +287,8 @@ SkipAcknowledgedReplay(peer) ==
   /\ acked[peer]
   /\ replayPending' = [replayPending EXCEPT ![peer] = FALSE]
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount,
-                  crashCount, emitCount, peerOnline, replayCount, acked>>
+                  crashCount, emitCount, peerOnline, replayCount, acked,
+                  deliveryVars>>
 
 CrashPeer(peer) ==
   /\ peer \in ReplicaHolder
@@ -200,13 +296,15 @@ CrashPeer(peer) ==
   /\ pendingInbound' = {d \in pendingInbound : d.target # peer}
   /\ crashCount'     = crashCount + 1
   /\ UNCHANGED <<reqState, messages, deltaIdsUsed, dropCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked,
+                  deliveryVars>>
 
 CrashOwner ==
   /\ crashCount < MaxCrashes
   /\ crashCount' = crashCount + 1
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked,
+                  deliveryVars>>
 
 PeerClaimsForeign(peer) ==
   /\ AllowPeerClaim
@@ -214,8 +312,97 @@ PeerClaimsForeign(peer) ==
   /\ reqState[peer] = "Pending"
   /\ reqState' = [reqState EXCEPT ![peer] = "Claimed"]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount, acked>>
+                  peerOnline, replayPending, replayCount, acked,
+                  deliveryVars>>
 
+----
+\* The desktop as request party (ModelDelivery). It writes its AgentRequest
+\* locally, which raises a store event, and the client-to-runtime pairing
+\* carries it to the owner. The pairing goes down and comes back any number
+\* of times; each change is a pairing-health event, which re-reads the
+\* selected session under the `HealthRereads` rule. The owner's claim and the
+\* canonical row return over the party replicator; each arrival is a store
+\* event. Events alone start reads: nothing reads on a timer. A read takes the
+\* signals when it starts and publishes them when it finishes, and an event
+\* raised meanwhile queues the next read, as the projection controller does.
+
+DesktopWrite ==
+  /\ ModelDelivery
+  /\ ~desktopWrote
+  /\ desktopWrote' = TRUE
+  /\ eventPending' = TRUE
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  ownerHolds, pairingUp, claimSeen, rowSeen, desktopView, readInFlight,
+                  readCapture>>
+
+DeliverRequest ==
+  /\ ModelDelivery
+  /\ desktopWrote
+  /\ pairingUp
+  /\ ~ownerHolds
+  /\ ownerHolds' = TRUE
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  pairingUp, desktopWrote, claimSeen, rowSeen, desktopView,
+                  eventPending, readInFlight, readCapture>>
+
+PairingChange ==
+  /\ ModelDelivery
+  /\ pairingUp'    = ~pairingUp
+  /\ eventPending' = (eventPending \/ PairingEvent)
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  ownerHolds, desktopWrote, claimSeen, rowSeen, desktopView,
+                  readInFlight, readCapture>>
+
+ReturnClaim ==
+  /\ ModelDelivery
+  /\ OwnerClaimed
+  /\ peerOnline[Desktop]
+  /\ ~claimSeen
+  /\ claimSeen'    = TRUE
+  /\ eventPending' = TRUE
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  ownerHolds, pairingUp, desktopWrote, rowSeen, desktopView,
+                  readInFlight, readCapture>>
+
+ReturnRow ==
+  /\ ModelDelivery
+  /\ OwnerClaimed
+  /\ peerOnline[Desktop]
+  /\ ~rowSeen
+  /\ rowSeen'      = TRUE
+  /\ eventPending' = TRUE
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  ownerHolds, pairingUp, desktopWrote, claimSeen, desktopView,
+                  readInFlight, readCapture>>
+
+\* A read consumes every event raised before it starts.
+DesktopReadStart ==
+  /\ ModelDelivery
+  /\ eventPending
+  /\ ~readInFlight
+  /\ readInFlight' = TRUE
+  /\ readCapture'  = ReadResult
+  /\ eventPending' = FALSE
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  ownerHolds, pairingUp, desktopWrote, claimSeen, rowSeen, desktopView>>
+
+DesktopReadFinish ==
+  /\ ModelDelivery
+  /\ readInFlight
+  /\ desktopView'  = readCapture
+  /\ readInFlight' = FALSE
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline, replayPending, replayCount, acked,
+                  ownerHolds, pairingUp, desktopWrote, claimSeen, rowSeen,
+                  eventPending, readCapture>>
+
+----
 SingleClaimer ==
   \A n \in ReplicaHolder :
     /\ reqState[n] \notin {"Claimed", "Processing"}
@@ -242,6 +429,16 @@ AckedImpliesConverged ==
 ReplayBound ==
   \A peer \in ReplicaHolder : replayCount[peer] <= 1
 
+\* No stale state: once the desktop has read every event and no read is in
+\* flight, its projection is the classification of the signals it now holds.
+ProjectionCurrent ==
+  (~eventPending /\ ~readInFlight) => desktopView = Classify
+
+\* A request the desktop wrote can still become visible until its row
+\* arrives, so the read never shows a terminal error meanwhile.
+NoTerminalErrorWhileDeliverable ==
+  (desktopWrote /\ ~rowSeen) => desktopView # "Error"
+
 Next ==
   \/ Claim
   \/ Process
@@ -256,6 +453,13 @@ Next ==
   \/ \E peer \in ReplicaHolder : PeerClaimsForeign(peer)
   \/ \E peer \in ReplicaHolder : CrashPeer(peer)
   \/ CrashOwner
+  \/ DesktopWrite
+  \/ DeliverRequest
+  \/ PairingChange
+  \/ ReturnClaim
+  \/ ReturnRow
+  \/ DesktopReadStart
+  \/ DesktopReadFinish
 
 Fairness ==
   /\ WF_vars(EmitTerminalDelta)
@@ -267,8 +471,24 @@ Fairness ==
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
+\* Delivery liveness assumes the owner eventually claims what it holds, the
+\* replicators eventually carry each leg, and every event is eventually read.
+\* The pairing is unconstrained; `DesktopEventuallyVisible` takes its eventual
+\* stability as a premise.
+DeliverySpec ==
+  /\ Spec
+  /\ WF_vars(DeliverRequest)
+  /\ WF_vars(Claim)
+  /\ WF_vars(ReturnClaim)
+  /\ WF_vars(ReturnRow)
+  /\ WF_vars(DesktopReadStart)
+  /\ WF_vars(DesktopReadFinish)
+
 TerminalConverges ==
   \A peer \in ReplicaHolder :
     IsTerminal(reqState[Owner]) ~> (reqState[peer] = reqState[Owner])
+
+DesktopEventuallyVisible ==
+  <>[]pairingUp => (desktopWrote ~> (desktopView = "Visible"))
 
 ====

@@ -378,10 +378,14 @@ describe("first-run local agent name", () => {
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
 
+    const error = await screen.findByTestId("startup-error");
     expect(
-      await screen.findByText(
-        "This computer already has a local node named Forge, so Scout was not created. Go back to continue with Forge.",
+      within(error).getByText(
+        "This computer already has a local node named Forge, so Scout was not created.",
       ),
+    ).toBeInTheDocument();
+    expect(
+      within(error).getByText("Go back to continue with Forge."),
     ).toBeInTheDocument();
     expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     expect(api.fetchDesktopSnapshot).toHaveBeenCalled();

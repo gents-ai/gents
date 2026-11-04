@@ -105,7 +105,7 @@ impl SelfConfigCore {
         let effective_network_mode = selection
             .as_ref()
             .and_then(|selection| selection.command_policy.as_ref())
-            .map(|policy| policy.network_mode)
+            .map(crate::tools::native::CommandExecutionPolicy::effective_network_mode)
             .unwrap_or(configured_network_mode);
         let network_enforcement = selection
             .as_ref()

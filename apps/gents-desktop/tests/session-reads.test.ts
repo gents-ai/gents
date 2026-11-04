@@ -141,6 +141,89 @@ describe("createSessionReads", () => {
     expect(reads.sessionStore.getState().load.error).toBeNull();
   });
 
+  it("shows a session its node has not returned as how far the message got, never as a failed read", async () => {
+    const delivery = (
+      code: "sessionDelivering" | "sessionNotConnected" | "sessionAccepted",
+    ) =>
+      new BridgeInvokeError({
+        code,
+        message: `${code} on Studio`,
+        retryable: true,
+        endpoint: "did:key:test",
+      });
+    const tip = session(["k1"], {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockRejectedValueOnce(delivery("sessionNotConnected"))
+      .mockRejectedValueOnce(delivery("sessionDelivering"))
+      .mockRejectedValueOnce(delivery("sessionAccepted"))
+      .mockResolvedValueOnce(tip);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    const status = () =>
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: readSession(reads.sessionStore),
+        sessionLoad: reads.sessionStore.getState().load,
+        operationalState: null,
+      });
+
+    await reads.refreshSession("session-1");
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "notConnected",
+      error: "sessionNotConnected on Studio",
+    });
+    expect(status()).toMatchObject({
+      phase: "blocked",
+      title: "Not connected to the node",
+      detail: "sessionNotConnected on Studio",
+      action: null,
+    });
+
+    const refresh = reads.refreshSession("session-1");
+    expect(reads.sessionStore.getState().load.phase).toBe("notConnected");
+    await refresh;
+    expect(status()).toMatchObject({ phase: "loading", title: "Sending message" });
+
+    await reads.refreshSession("session-1");
+    expect(status()).toMatchObject({ phase: "loading", title: "Message picked up" });
+
+    await reads.refreshSession("session-1");
+    expect(reads.sessionStore.getState().load.phase).toBe("loaded");
+    expect(status()).toBeNull();
+  });
+
+  it("owes an update it cannot read yet a full read instead of dropping it", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      let readMs = 400;
+      const fetchSessionSnapshot = vi.fn(async () => {
+        clock.mockReturnValue(clock.mock.results.length + readMs);
+        return null;
+      });
+      const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+      clock.mockReturnValue(0);
+      await reads.refreshSession("session-1");
+      readMs = 0;
+      const readAt = performance.now();
+      clock.mockReturnValue(readAt + 100);
+      const owed = await reads.readSessionUpdate();
+      expect(owed).toBeGreaterThan(0);
+      expect(owed).toBeLessThanOrEqual(400);
+      clock.mockReturnValue(readAt + 100 + (owed ?? 0));
+      expect(await reads.readSessionUpdate()).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("keeps a hydration failure across routine tip refreshes", async () => {
     const tip = session(["k1"], {
       totalItems: 2,
@@ -227,7 +310,7 @@ describe("createSessionReads", () => {
       setError,
     );
     await reads.refreshSession("session-1");
-    expect(await reads.refreshSessionLiveDelta()).toBe(false);
+    expect(await reads.readSessionUpdate()).toBe(0);
     await reads.refreshSession("session-1");
     expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
     expect(fetchSessionSnapshot).toHaveBeenCalledTimes(2);
@@ -382,18 +465,18 @@ describe("createSessionReads", () => {
       content: { mode: "replace", value: "old", byteLen: 3, hash: "bd2b9bd6" },
       reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
     };
-    let pending!: Promise<boolean>;
-    pending = reads.refreshSessionLiveDelta();
+    let pending!: Promise<number | null>;
+    pending = reads.readSessionUpdate();
     await reads.refreshSession("session-1");
     finish(stale);
-    expect(await pending).toBe(true);
+    expect(await pending).toBeNull();
     expect(readSession(reads.sessionStore)?.timelineItems[0]).toMatchObject({
       content: "hello",
     });
-    pending = reads.refreshSessionLiveDelta();
+    pending = reads.readSessionUpdate();
     reads.invalidateSessionReads();
     finish(stale);
-    expect(await pending).toBe(true);
+    expect(await pending).toBeNull();
   });
 
   it("requires history reconciliation even when every live read succeeds", async () => {
@@ -427,12 +510,15 @@ describe("createSessionReads", () => {
       } as unknown as DesktopApiAdapter);
       await reads.refreshSession("session-1");
       clock.mockReturnValue(250);
-      expect(await reads.refreshSessionLiveDelta()).toBe(true);
+      expect(
+        await reads.readSessionUpdate(),
+        "a live read covers the live text, not the update; the full read is owed",
+      ).toBe(1_250);
       clock.mockReturnValue(1_500);
-      expect(await reads.refreshSessionLiveDelta()).toBe(false);
+      expect(await reads.readSessionUpdate()).toBe(0);
       expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
       await reads.refreshSession("session-1");
-      expect(await reads.refreshSessionLiveDelta()).toBe(true);
+      expect(await reads.readSessionUpdate()).toBe(1_500);
     } finally {
       clock.mockRestore();
     }
@@ -440,7 +526,7 @@ describe("createSessionReads", () => {
 
   it("keeps applying live reads when periodic reconciliation is disabled", async () => {
     const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-    setTimingForTests({ activeSessionPollMs: null });
+    setTimingForTests({ sessionReadGapMs: null });
     try {
       const tip = session([], {
         totalItems: 0,
@@ -470,7 +556,7 @@ describe("createSessionReads", () => {
       } as unknown as DesktopApiAdapter);
       await reads.refreshSession("session-1");
       clock.mockReturnValue(60_000);
-      expect(await reads.refreshSessionLiveDelta()).toBe(true);
+      expect(await reads.readSessionUpdate()).toBeNull();
       expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
     } finally {
       setTimingForTests(null);
