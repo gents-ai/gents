@@ -15,7 +15,18 @@ export function startClientObservation(
   listenToUpdates: DesktopClientUpdatedListenerFactory,
 ): () => void {
   const selection = stores.selection;
-  const { refreshSession, refreshSessionLiveDelta, refreshSnapshot } = actions;
+  const { refreshSession, readSessionUpdate, refreshSnapshot } = actions;
+  /* the selected session shows no snapshot: it waits on its node, or its
+     read has not resolved yet */
+  const selectedSessionUnresolved = () => {
+    const { sessionId, nodeDid } = selection.getState();
+    const open = readSession(stores.session);
+    return !(
+      open &&
+      open.sessionId === sessionId &&
+      (!nodeDid || !open.nodeDid || open.nodeDid === nodeDid)
+    );
+  };
 
   function run() {
     let stopped = false;
@@ -30,9 +41,11 @@ export function startClientObservation(
       currentSessionId: () => selection.getState().sessionId,
       refreshSnapshot,
       refreshSession,
-      refreshSessionLiveDelta,
+      readSessionUpdate,
       onError: reportListenerError,
     });
+    /* Store and pairing-health events drive every read of a session whose
+       rows replicate here. */
     void listenToDesktopClientUpdates(
       async (event) => {
         if (stopped) return;
@@ -40,6 +53,7 @@ export function startClientObservation(
           event.reason,
           selection.getState().sessionId,
           trackedRequestId(),
+          selectedSessionUnresolved(),
         );
         await controller.request(scope);
       },
@@ -60,70 +74,77 @@ export function startClientObservation(
       });
     };
 
-    const pollMs = timingConfig().activeSessionPollMs;
-    let polled: string | null = null;
-    let pollTimer: ReturnType<typeof setTimeout> | undefined;
     const hidden = () => document.visibilityState === "hidden";
-    const nextPollMs = (interval: number) =>
-      readSession(stores.session)?.liveCursor
-        ? Math.min(250, interval)
-        : (actions.sessionReadGapMs() ?? interval);
-    /* a hidden window is not read on a timer; showing it reads it in full */
-    const schedulePoll = () => {
-      clearTimeout(pollTimer);
-      pollTimer = undefined;
-      const key = polled;
-      if (stopped || key === null || pollMs === null || hidden()) return;
-      pollTimer = setTimeout(async () => {
-        await controller.request("sessionDelta");
-        if (polled === key) schedulePoll();
-      }, nextPollMs(pollMs));
+
+    /* A session read through the node's operator access has no replica here,
+       so no store event reports its changes. While it has a request open and
+       the window shows it, it is read at the session read gap, live text
+       sooner, until the node's runtime gains an event source of its own. */
+    let operatorTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleOperatorRead = () => {
+      clearTimeout(operatorTimer);
+      operatorTimer = undefined;
+      const open = readSession(stores.session);
+      const gap = timingConfig().sessionReadGapMs;
+      if (stopped || hidden() || gap === null || !trackedRequestId()) return;
+      if (
+        !open?.readThroughOperator ||
+        open.sessionId !== selection.getState().sessionId
+      )
+        return;
+      operatorTimer = setTimeout(
+        async () => {
+          operatorTimer = undefined;
+          await controller.request("sessionDelta");
+          scheduleOperatorRead();
+        },
+        open.liveCursor ? Math.min(250, gap) : gap,
+      );
     };
-    const followPoll = () => {
-      const sessionId = selection.getState().sessionId;
-      const requestId = view.getState().trackedRequestId;
-      const key =
-        sessionId && requestId && pollMs !== null ? `${sessionId}\0${requestId}` : null;
-      if (key === polled) return;
-      polled = key;
-      schedulePoll();
-    };
+    const unsubscribeOperator = stores.session.subscribe((state, prev) => {
+      if (
+        state.session?.sessionId !== prev.session?.sessionId ||
+        state.session?.readThroughOperator !== prev.session?.readThroughOperator ||
+        (operatorTimer === undefined && state.session?.readThroughOperator)
+      )
+        scheduleOperatorRead();
+    });
 
     publishSelection();
     void controller.request("session");
-    followPoll();
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
       if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
         void controller.request("session");
-        followPoll();
+        scheduleOperatorRead();
       }
     });
     const unsubscribeTracked = view.subscribe((state, prev) => {
       if (state.trackedRequestId === prev.trackedRequestId) return;
       void controller.request("session");
-      followPoll();
+      scheduleOperatorRead();
     });
 
+    /* showing the window reads it in full */
     const refreshForegroundState = () => {
-      if (hidden()) return;
-      void controller.request("full").then(schedulePoll);
+      if (hidden()) {
+        scheduleOperatorRead();
+        return;
+      }
+      void controller.request("full").then(scheduleOperatorRead);
     };
-    const onVisibilityChange = () => {
-      if (hidden()) schedulePoll();
-      else refreshForegroundState();
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("visibilitychange", refreshForegroundState);
     window.addEventListener("focus", refreshForegroundState);
 
     return () => {
       stopped = true;
       controller.dispose();
       actions.invalidateSessionReads();
-      clearTimeout(pollTimer);
+      clearTimeout(operatorTimer);
+      unsubscribeOperator();
       unsubscribeSelection();
       unsubscribeTracked();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("visibilitychange", refreshForegroundState);
       window.removeEventListener("focus", refreshForegroundState);
       unlisten?.();
     };

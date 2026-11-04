@@ -814,6 +814,12 @@ pub struct DesktopSessionSnapshot {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub projection_revision: Option<SessionProjectionRevisionView>,
+    /// `true` when this client reads the session from the node's runtime and
+    /// holds no replica of its rows, so no store event reports their changes
+    /// and the client re-reads the session at the session read gap.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub read_through_operator: Option<bool>,
     #[allow(dead_code)]
     #[serde(skip_serializing)]
     #[ts(skip)]

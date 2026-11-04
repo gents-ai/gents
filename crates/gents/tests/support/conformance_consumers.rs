@@ -308,6 +308,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_ancestry_scope_cases_use_the_lean_composition",
         },
         ConformanceConsumer::RustTest {
+            id: "gents_protocol::client_protocol::tests::generated_session_delivery_cases_match_the_lean_classification",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/client_protocol/tests.rs",
+            module_path: "gents_protocol::client_protocol::tests",
+            function: "generated_session_delivery_cases_match_the_lean_classification",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",
             package: "gents-protocol",
             source_path: "crates/gents-protocol/src/database_error.rs",

@@ -13,6 +13,14 @@ pub enum BridgeErrorCode {
     StorageFull,
     /// The read could not publish against the current observation fence.
     ProjectionPending,
+    /// The selected session's node has not returned its canonical row; the
+    /// local request is written and the pairing to `endpoint` replicates.
+    SessionDelivering,
+    /// As `SessionDelivering`, but the pairing to `endpoint` is down.
+    SessionNotConnected,
+    /// The node at `endpoint` claimed the request; its session row has not
+    /// replicated back yet.
+    SessionAccepted,
     /// A verified runtime Goal-control rejection, never transport or message classification.
     GoalControlRejected,
     NotFound,
@@ -39,6 +47,9 @@ impl BridgeErrorCode {
             Self::RuntimeKeyAccess => "runtimeKeyAccess",
             Self::StorageFull => "storageFull",
             Self::ProjectionPending => "projectionPending",
+            Self::SessionDelivering => "sessionDelivering",
+            Self::SessionNotConnected => "sessionNotConnected",
+            Self::SessionAccepted => "sessionAccepted",
             Self::GoalControlRejected => "goalControlRejected",
             Self::NotFound => "notFound",
             Self::InvalidArgument => "invalidArgument",
@@ -59,6 +70,9 @@ impl BridgeErrorCode {
         matches!(
             self,
             Self::ProjectionPending
+                | Self::SessionDelivering
+                | Self::SessionNotConnected
+                | Self::SessionAccepted
                 | Self::ClientStartFailed
                 | Self::EndpointUnreachable
                 | Self::Backend

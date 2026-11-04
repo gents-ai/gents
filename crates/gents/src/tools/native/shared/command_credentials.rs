@@ -31,12 +31,23 @@ pub(super) struct CredentialProtection {
 }
 
 pub(super) async fn capture() -> Result<CredentialProtection> {
-    let runtime_home = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
-        .and_then(|context| context.runtime_home);
+    let context = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
+    let runtime_home = context
+        .as_ref()
+        .and_then(|context| context.runtime_home.clone());
+    let node_did = context.and_then(|context| context.node_did);
     let approval_home = crate::plugin::approval::workspace::command_context_home();
-    tokio::task::spawn_blocking(move || capture_native(runtime_home, approval_home))
+    let result = tokio::task::spawn_blocking(move || capture_native(runtime_home, approval_home))
         .await
-        .context("credential inspection worker failed")?
+        .context("credential inspection worker failed")
+        .and_then(|result| result);
+    report_capture_failure(result, node_did.as_deref())
+}
+
+fn report_capture_failure<T>(result: Result<T>, node_did: Option<&str>) -> Result<T> {
+    result.inspect_err(|_| {
+        crate::tools::native::command_observability::credential_inspection_failed(node_did)
+    })
 }
 
 fn capture_native(
@@ -165,7 +176,15 @@ impl CredentialProtection {
             Err(error) => return Err(error).context("inspecting credential exclusion"),
         };
         if metadata.is_symlink() {
-            let target = path.canonicalize().context("resolving credential link")?;
+            let target = match path.canonicalize() {
+                Ok(target) => target,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let parent = path.parent().context("credential link has no parent")?;
+                    let target = std::fs::read_link(path).context("reading credential link")?;
+                    resolve_missing(&parent.join(target))?
+                }
+                Err(error) => return Err(error).context("resolving credential link"),
+            };
             self.paths.insert(target.clone());
             self.inspect(&target, inspected, hard_links)?;
         } else if metadata.is_dir() {

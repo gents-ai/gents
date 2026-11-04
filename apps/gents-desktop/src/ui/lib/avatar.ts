@@ -1,4 +1,4 @@
-/** The node portraits, public/avatars/1.png to 89.png; a node's avatar names
+/** The node portraits, public/avatars/1.webp to 89.webp; a node's avatar names
     one by its number. */
 export const AVATARS = 89;
 
@@ -22,7 +22,7 @@ export const avatarKey = (seed: string) => String((hash(seed) % AVATARS) + 1);
 export const shownAvatar = (avatar: string | null | undefined, seed: string) =>
   known(avatar) ? avatar : avatarKey(seed);
 
-export const avatarSrc = (key: string) => `/avatars/${key}.png`;
+export const avatarSrc = (key: string) => `/avatars/${key}.webp`;
 
 export function avatarFor(name: string) {
   return avatarSrc(avatarKey(name));
