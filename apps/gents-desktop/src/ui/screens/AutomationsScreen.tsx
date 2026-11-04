@@ -23,7 +23,9 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { browserStorage } from "@/lib/storage";
 import { useSelectedNode } from "@/hooks/useClient";
+import { Hint } from "./Hint";
 import { NewAutomationDialog } from "./agent/NewAutomationDialog";
 import { AutomationDetail } from "./automations/AutomationDetail";
 import {
@@ -54,6 +56,7 @@ export function AutomationsScreen({ item }: { item?: string }) {
   const [query, setQuery] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [template, setTemplate] = useState<AutomationTemplate | null>(null);
+  const [templatesHidden, hideTemplates] = useTemplatesHidden();
   const start = (from: AutomationTemplate | null) => {
     setTemplate(from);
     setCreating(true);
@@ -183,8 +186,14 @@ export function AutomationsScreen({ item }: { item?: string }) {
                 </button>
               )}
             </header>
+            {node && all.length > 0 && !templatesHidden && (
+              <TemplateRow onUse={start} onHide={() => hideTemplates(true)} />
+            )}
             {all.length === 0 ? (
-              <Empty node={name} onNew={node ? () => start(null) : undefined} />
+              <>
+                <Empty node={name} onNew={node ? () => start(null) : undefined} />
+                {node && <Templates onUse={start} />}
+              </>
             ) : shown.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nothing matches.</p>
             ) : (
@@ -200,7 +209,15 @@ export function AutomationsScreen({ item }: { item?: string }) {
                 )}
               </>
             )}
-            {node && <Templates onUse={start} />}
+            {node && all.length > 0 && templatesHidden && (
+              <button
+                type="button"
+                onClick={() => hideTemplates(false)}
+                className="w-fit cursor-pointer text-xs text-muted-foreground hover:text-foreground"
+              >
+                Show templates
+              </button>
+            )}
           </>
         )}
       </div>
@@ -233,7 +250,7 @@ function statusOf(a: Automation, now: number): { text: string; warn: boolean } {
 
 function List({ automations, now }: { automations: Automation[]; now: number }) {
   return (
-    <ul className="grid divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
+    <ul className="divide-y divide-border/60">
       {automations.map((a) => (
         <li key={a.id}>
           <Row automation={a} now={now} />
@@ -243,26 +260,30 @@ function List({ automations, now }: { automations: Automation[]; now: number }) 
   );
 }
 
+/* drawn like a sessions row: a highlight that reaches past the column,
+   the name and a muted line under it, the status at the end */
 function Row({ automation: a, now }: { automation: Automation; now: number }) {
   const Icon = ICON[a.kind];
   const status = statusOf(a, now);
   return (
     <a
       href={href({ name: "automations", item: a.id })}
-      className="flex items-center gap-3 px-4 py-3 transition-colors outline-none hover:bg-accent/50 focus-visible:bg-accent/50"
+      className="-mx-3 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 rounded-lg px-3 py-3.5 transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <Icon className="size-4 shrink-0 text-muted-foreground" />
-      <span className="grid min-w-0 flex-1 gap-0.5">
-        <span className={cn("truncate text-sm", !a.on && "text-muted-foreground")}>
+      <Icon className="size-4 text-muted-foreground" />
+      <span className="min-w-0">
+        <span
+          className={cn("block truncate text-sm", !a.on && "text-muted-foreground")}
+        >
           {a.name}
         </span>
-        <span className="truncate text-xs text-muted-foreground">
+        <span className="block truncate text-xs text-muted-foreground">
           {a.when} · {a.does}
         </span>
       </span>
       <span
         className={cn(
-          "max-w-[40%] shrink-0 truncate text-right text-xs",
+          "max-w-48 truncate text-right text-sm",
           status.warn ? "text-warning" : "text-muted-foreground",
         )}
       >
@@ -298,7 +319,77 @@ function Empty({ node, onNew }: { node: string; onNew?: () => void }) {
   );
 }
 
-/* ready-made automations, each opening New automation filled in */
+const HIDE_TEMPLATES = "gents.automations.hideTemplates";
+const SHOWN = 4;
+/* the node summary cards' surface */
+const SURFACE =
+  "cursor-pointer rounded-xl bg-raised/50 text-left transition-colors outline-none hover:bg-raised focus-visible:bg-raised";
+
+/** Whether the templates row is hidden on this device. */
+function useTemplatesHidden() {
+  const [hidden, setHidden] = useState(
+    () => browserStorage.getItem(HIDE_TEMPLATES) === "1",
+  );
+  const hide = (next: boolean) => {
+    setHidden(next);
+    if (next) browserStorage.setItem(HIDE_TEMPLATES, "1");
+    else browserStorage.removeItem(HIDE_TEMPLATES);
+  };
+  return [hidden, hide] as const;
+}
+
+/* ready-made automations, each opening New automation filled in: a short
+   row of cards under the heading, with the rest a click away */
+function TemplateRow({
+  onUse,
+  onHide,
+}: {
+  onUse: (t: AutomationTemplate) => void;
+  onHide: () => void;
+}) {
+  const [more, setMore] = useState(false);
+  return (
+    <section aria-label="Templates" className="grid gap-2">
+      <div className="flex items-center gap-2">
+        <h2 className="flex-1 text-xs text-muted-foreground">Start from a template</h2>
+        {TEMPLATES.length > SHOWN && (
+          <button
+            type="button"
+            onClick={() => setMore(!more)}
+            className="cursor-pointer text-xs text-muted-foreground hover:text-foreground"
+          >
+            {more ? "Fewer" : `${TEMPLATES.length - SHOWN} more`}
+          </button>
+        )}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Hide templates"
+          className="text-muted-foreground"
+          onClick={onHide}
+        >
+          <X />
+        </Button>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {(more ? TEMPLATES : TEMPLATES.slice(0, SHOWN)).map((t) => (
+          <Hint key={t.id} label={t.blurb}>
+            <button
+              type="button"
+              onClick={() => onUse(t)}
+              className={cn(SURFACE, "flex min-w-0 items-center gap-2 px-3 py-2.5")}
+            >
+              <t.icon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="truncate text-sm">{t.name}</span>
+            </button>
+          </Hint>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* with no automations yet: every template, with what it does */
 function Templates({ onUse }: { onUse: (t: AutomationTemplate) => void }) {
   return (
     <section aria-labelledby="automation-templates" className="grid gap-3">
@@ -314,7 +405,7 @@ function Templates({ onUse }: { onUse: (t: AutomationTemplate) => void }) {
             key={t.id}
             type="button"
             onClick={() => onUse(t)}
-            className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/60 px-4 py-3.5 text-left transition-colors outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/50"
+            className={cn(SURFACE, "flex items-start gap-3 px-4 py-3.5")}
           >
             <t.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <span className="grid gap-1">
