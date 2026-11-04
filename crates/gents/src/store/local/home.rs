@@ -264,7 +264,8 @@ fn remembered_home_dir(config_dir: &Path) -> PathBuf {
 
 const REMEMBERED_HOME_FILE_NAME: &str = "home";
 
-/// Only the trailing newline is trimmed; any other whitespace belongs to the path.
+/// Only the trailing newline is trimmed; other whitespace belongs to the path. A
+/// further line break means this is not the one line `remember_home` writes.
 fn read_remembered_home(config_dir: &Path) -> Result<Option<PathBuf>> {
     let path = remembered_home_dir(config_dir).join(REMEMBERED_HOME_FILE_NAME);
     let contents = match std::fs::read_to_string(&path) {
@@ -272,11 +273,11 @@ fn read_remembered_home(config_dir: &Path) -> Result<Option<PathBuf>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(HomeError::RememberedHomeRead { path, source }),
     };
-    let home = Path::new(contents.strip_suffix('\n').unwrap_or(&contents));
-    if !home.is_absolute() {
+    let home = contents.strip_suffix('\n').unwrap_or(&contents);
+    if home.contains(['\n', '\r']) || !Path::new(home).is_absolute() {
         return Err(HomeError::RememberedHomeInvalid { path });
     }
-    Ok(Some(home.to_path_buf()))
+    Ok(Some(PathBuf::from(home)))
 }
 
 /// Makes `chosen` the default home for later commands, or forgets any earlier
@@ -310,12 +311,15 @@ fn write_remembered_home(
             _ => Ok(()),
         };
     }
-    let chosen = chosen.to_str().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "the home path is not UTF-8",
-        )
-    })?;
+    let chosen = chosen
+        .to_str()
+        .filter(|chosen| !chosen.contains(['\n', '\r']))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the home path must be UTF-8 with no line break",
+            )
+        })?;
     std::fs::create_dir_all(dir)?;
     let staged = tempfile::NamedTempFile::new_in(dir)?;
     use std::io::Write as _;

@@ -1993,6 +1993,61 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     Ok(())
 }
 
+#[cfg(unix)]
+fn readiness_of_a_fresh_home(client: Option<&str>, runtime_dir: &std::path::Path) -> Result<Value> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
+    if let Some(client) = client {
+        run_cli_text(&home_dir, &["config", "client", "set", client])?;
+    }
+    let (_serve, readiness) = spawn_server_with_ready_json(
+        &home_dir,
+        allocate_port()?,
+        &["--p2p-transport", "none"],
+        &[(
+            "XDG_RUNTIME_DIR",
+            runtime_dir.to_str().context("runtime dir is not UTF-8")?,
+        )],
+    )?;
+    Ok(readiness)
+}
+
+#[cfg(unix)]
+#[test]
+fn only_a_home_set_to_grok_serves_the_grok_socket() -> Result<()> {
+    // Under /tmp because a Unix socket path has a short length limit.
+    let runtime_dir = tempfile::Builder::new()
+        .prefix("gents-")
+        .tempdir_in("/tmp")
+        .context("creating runtime dir")?;
+
+    let grok = readiness_of_a_fresh_home(Some("grok"), runtime_dir.path())?;
+    assert_eq!(
+        grok.pointer("/grok_shim/bound").and_then(Value::as_bool),
+        Some(true),
+        "{grok}"
+    );
+    assert_eq!(
+        grok.pointer("/grok_shim/socket").and_then(Value::as_str),
+        runtime_dir.path().join("gents/grok.sock").to_str(),
+        "{grok}"
+    );
+
+    let unset = readiness_of_a_fresh_home(None, runtime_dir.path())?;
+    assert_eq!(unset.get("grok_shim"), Some(&Value::Null), "{unset}");
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

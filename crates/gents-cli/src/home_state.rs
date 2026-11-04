@@ -19,20 +19,17 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
         .unwrap_or_else(default_home_dir)
 }
 
-/// Exits on a bad remembered file: `resolve_home_dir`'s many callers hold no
-/// `Result`, and falling back would open the wrong data.
+/// Exits on any failure but an unresolved user home: `resolve_home_dir`'s many
+/// callers hold no `Result`, and falling back would open the wrong data.
 fn default_home_dir() -> PathBuf {
     use gents::store::local::home::HomeError;
     match gents::store::local::home::default_home_dir() {
         Ok(home) => home,
-        Err(
-            error
-            @ (HomeError::RememberedHomeRead { .. } | HomeError::RememberedHomeInvalid { .. }),
-        ) => {
+        Err(HomeError::HomeDirUnresolved) => PathBuf::from(".gents"),
+        Err(error) => {
             eprintln!("Error: {}", ErrorChain(&error));
             std::process::exit(1);
         }
-        Err(_) => PathBuf::from(".gents"),
     }
 }
 

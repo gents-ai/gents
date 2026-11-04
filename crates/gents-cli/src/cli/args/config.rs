@@ -80,12 +80,12 @@ pub(crate) enum ClientConfigCommand {
     Set {
         #[arg(value_enum)]
         client: InterfaceClient,
-        #[arg(long)]
+        #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
         home: Option<PathBuf>,
     },
     #[command(about = "Show the interface")]
     Show {
-        #[arg(long)]
+        #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
         home: Option<PathBuf>,
     },
 }
