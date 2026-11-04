@@ -150,7 +150,10 @@ impl EmbeddedHome {
         // Stopping the node closes its subscriptions and other node-owned
         // services; wait for their handles to be released before claiming an
         // exclusive durable-store reopen.
-        self.node.shutdown().await;
+        self.node
+            .shutdown()
+            .await
+            .context("shutting down trial node before reopening")?;
         let release_deadline = tokio::time::Instant::now() + NODE_RELEASE_TIMEOUT;
         while Arc::strong_count(&self.node) != 1 && tokio::time::Instant::now() < release_deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;

@@ -377,7 +377,9 @@ where
 }
 
 async fn close(home: EmbeddedHome) {
-    home.node.shutdown().await;
+    if let Err(error) = home.node.shutdown().await {
+        tracing::error!(%error, "failed to shut down trial node");
+    }
 }
 
 fn workspace_dir(trial_dir: &Path) -> PathBuf {

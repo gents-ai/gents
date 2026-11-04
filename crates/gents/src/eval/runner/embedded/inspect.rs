@@ -48,9 +48,20 @@ pub async fn inspect_retained_requests(
         let result = std::panic::AssertUnwindSafe(read_requests(&home))
             .catch_unwind()
             .await;
-        home.node.shutdown().await;
+        let shutdown = home
+            .node
+            .shutdown()
+            .await
+            .context("shutting down retained trial node");
+        if let Err(error) = &shutdown {
+            tracing::warn!(%error, "retained trial node shutdown failed");
+        }
         match result {
-            Ok(result) => result,
+            Ok(result) => {
+                let requests = result?;
+                shutdown?;
+                Ok(requests)
+            }
             Err(panic) => std::panic::resume_unwind(panic),
         }
     })
@@ -157,7 +168,7 @@ mod tests {
     }
 
     async fn close(home: EmbeddedHome) {
-        home.node.shutdown().await;
+        home.node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -177,8 +188,8 @@ mod tests {
                 .unwrap(),
         );
         let policy = node
-            .add_dac_policy(
-                &did,
+            .add_dac_policy_as(
+                &defra_core::RequestContext::default().with_identity(Some(did.clone())),
                 r#"
 name: Retained request reader test
 resources:
