@@ -890,6 +890,11 @@ fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSy
             status.gossip_direction_filtered_total,
         ),
         (
+            "gents_p2p_gossip_unfollowed_dropped_total",
+            "Document-topic gossip dropped because the document is no longer followed.",
+            status.gossip_unfollowed_dropped_total,
+        ),
+        (
             "gents_p2p_pending_dag_capacity_shed_total",
             "Inbound roots shed because the pending-DAG registry was at capacity.",
             status.pending_dag_capacity_shed,
@@ -2067,6 +2072,7 @@ mod tests {
                     broadcast_coalesced_total: 41,
                     push_updates_coalesced_total: 43,
                     gossip_direction_filtered_total: 47,
+                    gossip_unfollowed_dropped_total: 49,
                     pending_dags: 13,
                     pending_dag_capacity: 1_000,
                     persisted_pending_dags: 17,
@@ -2122,6 +2128,7 @@ mod tests {
         assert!(rendered.contains("gents_p2p_push_updates_coalesced_total 43"));
         assert!(rendered.contains("gents_p2p_missing_link_retries_total 23"));
         assert!(rendered.contains("gents_p2p_gossip_direction_filtered_total 47"));
+        assert!(rendered.contains("gents_p2p_gossip_unfollowed_dropped_total 49"));
         assert!(rendered.contains("gents_p2p_pending_dag_capacity_shed_total 59"));
         assert!(rendered.contains("gents_p2p_pending_dag_fetch_deferred_unavailable_total 69"));
         assert!(rendered.contains("gents_p2p_pending_dag_fetch_deferred_contention_total 68"));
