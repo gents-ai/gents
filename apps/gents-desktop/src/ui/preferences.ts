@@ -238,7 +238,7 @@ export const useFollowUp = () => usePreferences((p) => p.followUp);
 export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);
 export const useNavLayout = () => usePreferences((p) => p.navLayout);
 
-const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
+export const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
   const setting = flags[id];
   return setting === undefined
     ? FLAGS.find((f) => f.id === id)!.default

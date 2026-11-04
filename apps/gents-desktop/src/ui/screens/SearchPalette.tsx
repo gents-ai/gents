@@ -44,6 +44,8 @@ import {
   useKeysHint,
 } from "@/commands/commands";
 import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
+import { useFlag } from "@/preferences";
+import { automationsOf } from "./automations/model";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
@@ -156,6 +158,7 @@ function useEntries(): SearchEntry[] {
   const selected = useSelectedNodeDid();
   const sections = useAgentSections();
   const commands = useCommands();
+  const automationsOn = useFlag("automations");
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
@@ -206,6 +209,16 @@ function useEntries(): SearchEntry[] {
           current: n.nodeDid === selected,
           last: n.nodeDid === last,
         })),
+      /* the page shows the active node's, so search finds those */
+      automations:
+        automationsOn && nodeDid && fleet.nodes[nodeDid]
+          ? automationsOf(fleet.nodes[nodeDid]!).map((a) => ({
+              id: a.id,
+              name: a.name,
+              when: a.when,
+              icon: Workflow,
+            }))
+          : [],
       agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),
       nodeName,
       places: [
@@ -237,7 +250,7 @@ function useEntries(): SearchEntry[] {
           run: () => void c.run(0),
         })),
     });
-  }, [fleet, selected, sections, homeDid, commands]);
+  }, [fleet, selected, sections, homeDid, commands, automationsOn]);
 }
 
 function PaletteBody({

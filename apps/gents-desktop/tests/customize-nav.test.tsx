@@ -38,8 +38,9 @@ import { node, renderIn, testApp, withFlags } from "./app-fixture";
 afterEach(() => resetPreferences());
 
 /* the app's own items and its configuration pages, as the nav offers them */
+/* the rows a sidebar lists with every experimental feature off */
 const ROWS = [
-  ...APP_NAV_ROWS,
+  ...APP_NAV_ROWS.filter((row) => !row.flag),
   ...SECTIONS.filter(isListed).map((section) => configRow(section, true)),
 ];
 

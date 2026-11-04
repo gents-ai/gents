@@ -1,5 +1,6 @@
-import { Inbox, LayoutGrid, ListTree, Plus, Settings } from "lucide-react";
+import { Inbox, LayoutGrid, ListTree, Plus, Settings, Workflow } from "lucide-react";
 import { navigate } from "@/lib/router";
+import { flag } from "@/preferences";
 import { registerCommand } from "./commands";
 
 /* The pages every window can go to. Registered once, on load, so tooltips
@@ -22,6 +23,14 @@ registerCommand({
   desktopOnly: true,
   icon: ListTree,
   run: () => navigate({ name: "sessions" }),
+});
+registerCommand({
+  id: "page.automations",
+  title: "Go to automations",
+  group: "Pages",
+  icon: Workflow,
+  when: () => flag("automations"),
+  run: () => navigate({ name: "automations" }),
 });
 registerCommand({
   id: "page.mailbox",
