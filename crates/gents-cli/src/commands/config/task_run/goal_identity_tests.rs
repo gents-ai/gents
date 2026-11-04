@@ -235,7 +235,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             }
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     Ok(())
 }
 

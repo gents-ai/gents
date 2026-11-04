@@ -782,7 +782,7 @@ mod tests {
             .collect::<Vec<_>>();
         started.sort();
         assert_eq!(started, ["child-a", "child-b"]);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
@@ -913,7 +913,7 @@ mod tests {
             projection.updates[0].to_payload()["workflow_run_id"],
             "call-run"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -931,7 +931,7 @@ mod tests {
                 .get("workflow_run_id")
                 .is_none());
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -962,7 +962,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(spawned(&projection).workflow_run_id, None);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -973,7 +973,7 @@ mod tests {
         let projection = project(&node, &parent, &["call-run"]).await;
         assert_eq!(spawned(&projection).description, "Audit the repo");
         assert!(!finished(&projection).will_wake);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -991,7 +991,7 @@ mod tests {
         );
         assert!(finished(&projection).will_wake);
         assert_eq!(projection.updates.len(), 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1015,7 +1015,7 @@ mod tests {
             spawned(&projection).workflow_run_id.as_deref(),
             Some("call-run")
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1086,7 +1086,7 @@ mod tests {
                     expected.into_iter().map(|(session, _)| session).collect();
                 assert_eq!(cards, sessions, "{}: {cause}", case["name"]);
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
         }
     }
 }

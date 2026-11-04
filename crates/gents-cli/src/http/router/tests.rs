@@ -329,7 +329,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     assert_eq!(refused.disposition, RuntimeControlDisposition::BuildChanged);
     assert!(!admission.is_retiring().unwrap());
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let response = endpoint
         .authorize(client.post(format!("http://{addr}/runtime/operator/starting")))
         .unwrap()
@@ -547,7 +547,7 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         if receipt.reason == FileInventoryRefusalReason::Unavailable));
     drop(server);
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]

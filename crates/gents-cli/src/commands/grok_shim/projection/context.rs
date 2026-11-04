@@ -96,6 +96,6 @@ mod tests {
             }
             assert!(load(&node, &foreign).await.unwrap().is_none(), "{field}");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

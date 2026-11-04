@@ -490,7 +490,7 @@ mod tests {
         .unwrap();
         let mut observed = Vec::new();
         let result = scan_requests(&node, owner, None, |row| observed.push(row.request_id)).await;
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         result.unwrap();
         assert_eq!(observed.len(), PAGE_SIZE + 1);
         assert_eq!(observed.last().map(String::as_str), Some("d-public"));

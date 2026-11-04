@@ -698,6 +698,23 @@ pub(crate) fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a s
     Ok(trimmed)
 }
 
+pub(crate) async fn finish_node_operation<T>(
+    result: Result<T>,
+    node: Option<&gents::defra_node::Node>,
+) -> Result<T> {
+    let shutdown = match node {
+        Some(node) => node.shutdown().await.context("closing local node"),
+        None => Ok(()),
+    };
+    match (result, shutdown) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) | (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(shutdown_error)) => {
+            Err(error.context(format!("node shutdown also failed: {shutdown_error:#}")))
+        }
+    }
+}
+
 pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -915,14 +932,24 @@ mod tests {
             gents_protocol::error_chain::ErrorChain(&error)
         );
 
-        access.local_node().unwrap().shutdown().await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("shut down test node");
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
             .expect("a shut down and dropped access releases the store");
         assert_eq!(reopened.mode(), "local");
-        reopened.local_node().unwrap().shutdown().await;
+        reopened
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[tokio::test]

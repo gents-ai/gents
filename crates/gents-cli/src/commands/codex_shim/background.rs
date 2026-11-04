@@ -939,7 +939,7 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].tool_call_key, "codex-job:call-a");
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -962,7 +962,7 @@ mod tests {
         );
         let stopped = job_state(&state, "codex-job", "call-a").await;
         assert_eq!(stopped, JobState::Cancelled);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -983,7 +983,7 @@ mod tests {
         }
         let other = job_state(&state, "codex-other", "call-c").await;
         assert_eq!(other, JobState::Running);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1010,7 +1010,7 @@ mod tests {
         assert_eq!(ended, "completed");
         let still = job_state(&state, "codex-job", "call-a").await;
         assert_eq!(still, JobState::Completed);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1026,6 +1026,6 @@ mod tests {
             err.to_string(),
             "unknown GENTS background tool `codex-none:call-none`"
         );
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("shut down test node");
     }
 }

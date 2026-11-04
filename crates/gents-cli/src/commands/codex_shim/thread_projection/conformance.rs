@@ -175,7 +175,7 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
         let actual_model =
             load_bound_model_selection_id_for_state(&node, actual_owner, &case.actual_agent).await;
         let model = load_bound_model_selection_id_for_state(&node, selected_owner, &agent).await;
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
 
         if let Some(expected) = &case.resolved_model {
             assert_eq!(

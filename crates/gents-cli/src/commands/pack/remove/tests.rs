@@ -485,7 +485,7 @@ async fn demo_tools_rows(home: &Path) -> usize {
         .unwrap();
     let count = response["data"]["Tools"].as_array().unwrap().len();
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
     count
 }
@@ -596,7 +596,12 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
             .unwrap();
-        access.local_node().unwrap().shutdown().await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("shut down test node");
         drop(access);
         if !documents {
             let error = crate::request_helpers::capture_report(crate::commands::plugin::dispatch(
@@ -632,7 +637,12 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
             .unwrap();
-        access.local_node().unwrap().shutdown().await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("shut down test node");
         drop(access);
         remove_pkg(home.path(), "acme/tools").await.unwrap();
         assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
@@ -751,7 +761,12 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         .unwrap()
         .digest;
     assert_eq!(pin.as_deref(), Some(expected_digest.as_str()));
-    access.local_node().unwrap().shutdown().await;
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
@@ -804,7 +819,12 @@ async fn documents_pack_with_schema_patch_installs_after_schema_application() {
         .await
         .unwrap();
     assert_eq!(tools["data"]["Tools"].as_array().unwrap().len(), 1);
-    access.local_node().unwrap().shutdown().await;
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
@@ -957,7 +977,12 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
         .unwrap();
     assert_eq!(result.is_ok(), allowed, "{result:?}");
     assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
-    access.local_node().unwrap().shutdown().await;
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("shut down test node");
     drop(access);
     pause.release.notify_one();
     remover.await.unwrap().unwrap();
