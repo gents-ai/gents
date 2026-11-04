@@ -134,7 +134,11 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
 
     assert_eq!(
         identity,
-        json!({"node_did": node_did, "home": home_dir.join(".gents").to_string_lossy()})
+        json!({
+            "node_did": node_did,
+            "home": home_dir.join(".gents").to_string_lossy(),
+            "runnable_agents": null,
+        })
     );
     Ok(())
 }
@@ -238,7 +242,7 @@ async fn a_thread_starts_in_the_tool_root_when_the_runtime_runs_elsewhere() -> R
     Ok(())
 }
 
-fn assert_http_status(
+pub(super) fn assert_http_status(
     error: tokio_tungstenite::tungstenite::Error,
     expected: StatusCode,
 ) -> Result<()> {

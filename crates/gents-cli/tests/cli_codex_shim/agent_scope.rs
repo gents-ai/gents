@@ -260,3 +260,205 @@ async fn codex_shim_does_not_adopt_a_session_from_another_agent() -> Result<()> 
     );
     Ok(())
 }
+
+fn agent_route(agent: &str) -> String {
+    format!("/agents/{agent}")
+}
+
+/// One finished turn, so the thread is durable as well as in the sidecar.
+async fn thread_with_a_turn(ws: &mut ShimWebSocket, home_dir: &std::path::Path) -> Result<String> {
+    let thread = start_thread(ws, home_dir).await?;
+    send_turn(ws, &thread, &format!("hello {}", Uuid::new_v4())).await?;
+    read_turn_to_completion(ws).await?;
+    Ok(thread)
+}
+
+async fn assert_sees(ws: &mut ShimWebSocket, thread: &str, sees: bool) -> Result<()> {
+    let listed = listed_thread_ids(ws).await?;
+    let loaded = loaded_thread_ids(ws).await?;
+    assert_eq!(listed.iter().any(|id| id == thread), sees, "{listed:?}");
+    assert_eq!(loaded.iter().any(|id| id == thread), sees, "{loaded:?}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_agents_side_by_side_do_not_see_each_others_threads() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    let other = shim.add_agent("other").await?;
+    let mut a = shim.connect(&agent_route(&shim.default_agent)).await?;
+    let mut b = shim.connect(&agent_route(&other)).await?;
+
+    let a_thread = thread_with_a_turn(&mut a, &shim.home_dir).await?;
+    assert_sees(&mut b, &a_thread, false).await?;
+
+    let b_thread = thread_with_a_turn(&mut b, &shim.home_dir).await?;
+    assert_sees(&mut a, &b_thread, false).await?;
+    assert_sees(&mut a, &a_thread, true).await?;
+    assert_sees(&mut b, &b_thread, true).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_windows_on_one_agent_share_its_threads() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    let other = shim.add_agent("other").await?;
+    let route = agent_route(&other);
+    let mut first = shim.connect(&route).await?;
+    let mut second = shim.connect(&route).await?;
+
+    let thread = start_thread(&mut first, &shim.home_dir).await?;
+
+    assert_sees(&mut second, &thread, true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_percent_encoded_did_agent_id_connects() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    shim.wait_until_runnable(&shim.default_agent, None).await?;
+    let encoded = shim.default_agent.replace(':', "%3A");
+    assert_ne!(encoded, shim.default_agent);
+
+    let mut ws = shim.connect(&agent_route(&encoded)).await?;
+    let thread = thread_with_a_turn(&mut ws, &shim.home_dir).await?;
+
+    assert_sees(&mut ws, &thread, true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_default_agent_route_shares_the_root_routes_sidecar() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    shim.wait_until_runnable(&shim.default_agent, None).await?;
+    let mut root = shim.connect("/").await?;
+    let mut routed = shim.connect(&agent_route(&shim.default_agent)).await?;
+
+    let from_root = start_thread(&mut root, &shim.home_dir).await?;
+    assert_sees(&mut routed, &from_root, true).await?;
+
+    let from_route = start_thread(&mut routed, &shim.home_dir).await?;
+    assert_sees(&mut root, &from_route, true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_agents_get_404() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    shim.wait_until_runnable(&shim.default_agent, None).await?;
+
+    let refused = connect_async(shim.url(&agent_route("nosuch")))
+        .await
+        .expect_err("an agent outside the published set is refused");
+
+    super::server_lifecycle::assert_http_status(refused, StatusCode::NOT_FOUND)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_routes_need_the_same_bearer_token() -> Result<()> {
+    let shim = AgentShim::start(
+        |_| {
+            vec![
+                "--codex-shim-auth-token-env".to_string(),
+                "GENTS_SHIM_TEST_TOKEN".to_string(),
+            ]
+        },
+        &[("GENTS_SHIM_TEST_TOKEN", "correct-secret")],
+    )
+    .await?;
+    shim.wait_until_runnable(&shim.default_agent, Some("correct-secret"))
+        .await?;
+    let url = shim.url(&agent_route(&shim.default_agent));
+
+    let refused = connect_async(url.as_str())
+        .await
+        .expect_err("a missing token is refused");
+    super::server_lifecycle::assert_http_status(refused, StatusCode::UNAUTHORIZED)?;
+
+    let refused = connect_async(shim.url(&agent_route("nosuch")))
+        .await
+        .expect_err("a missing token learns nothing about which agents exist");
+    super::server_lifecycle::assert_http_status(refused, StatusCode::UNAUTHORIZED)?;
+
+    let mut request = url.into_client_request()?;
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer correct-secret"),
+    );
+    connect_async(request).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_agent_route_with_a_pinned_agent() -> Result<()> {
+    let shim = AgentShim::start(
+        |default_agent| {
+            vec![
+                "--codex-shim-agent-id".to_string(),
+                default_agent.to_string(),
+            ]
+        },
+        &[],
+    )
+    .await?;
+
+    let refused = connect_async(shim.url(&agent_route(&shim.default_agent)))
+        .await
+        .expect_err("a pinned shim serves one agent");
+
+    super::server_lifecycle::assert_http_status(refused, StatusCode::NOT_FOUND)?;
+    assert_eq!(
+        shim.runtime(None).await?.get("runnable_agents"),
+        Some(&Value::Null)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_agent_route_with_a_public_url() -> Result<()> {
+    let shim = AgentShim::start(
+        |_| {
+            vec![
+                "--codex-shim-auth-token-env".to_string(),
+                "GENTS_SHIM_TEST_TOKEN".to_string(),
+                "--codex-shim-public-url".to_string(),
+                "wss://shim.example:8443/".to_string(),
+            ]
+        },
+        &[("GENTS_SHIM_TEST_TOKEN", "correct-secret")],
+    )
+    .await?;
+    let mut request = shim
+        .url(&agent_route(&shim.default_agent))
+        .into_client_request()?;
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer correct-secret"),
+    );
+
+    let refused = connect_async(request)
+        .await
+        .expect_err("a token for a published endpoint reaches one agent");
+
+    super::server_lifecycle::assert_http_status(refused, StatusCode::NOT_FOUND)?;
+    assert_eq!(
+        shim.runtime(Some("correct-secret"))
+            .await?
+            .get("runnable_agents"),
+        Some(&Value::Null)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_root_route_is_unchanged() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    shim.add_agent("other").await?;
+    let mut root = shim.connect("/").await?;
+
+    let thread = start_thread(&mut root, &shim.home_dir).await?;
+    let prompt = format!("hello {}", Uuid::new_v4());
+    send_turn(&mut root, &thread, &prompt).await?;
+    read_turn_to_completion(&mut root).await?;
+
+    let (_, session, agent) = wait_for_request(&shim.graphql, &shim.node_did, &prompt).await?;
+    assert_eq!(session, thread);
+    assert_eq!(agent, shim.default_agent);
+    assert_sees(&mut root, &thread, true).await
+}

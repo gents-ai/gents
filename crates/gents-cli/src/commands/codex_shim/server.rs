@@ -1,4 +1,6 @@
 use super::*;
+use axum::extract::Path as RoutePath;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
@@ -15,6 +17,8 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) port: u16,
     pub(crate) timeout_secs: u64,
     pub(crate) poll_ms: u64,
+    pub(crate) runnable: watch::Receiver<Vec<String>>,
+    pub(crate) agent_routes: bool,
 }
 
 /// What `GET /runtime` answers, so `gents` can tell whether the runtime on the
@@ -23,12 +27,17 @@ pub(crate) struct CodexShimBindArgs {
 pub(crate) struct RuntimeIdentity {
     pub(crate) node_did: String,
     pub(crate) home: PathBuf,
+    /// The published runnable set, or `None` when `/agents/{agent_id}` is not mounted.
+    pub(crate) runnable_agents: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
 struct RuntimeRouteState {
-    auth_token: Option<Arc<str>>,
     identity: RuntimeIdentity,
+    shim: ShimState,
+    agent_routes: bool,
+    runnable: watch::Receiver<Vec<String>>,
+    sidecars: Arc<Mutex<RapidHashMap<String, Arc<Mutex<CodexSidecar>>>>>,
 }
 
 pub(crate) struct BoundCodexShim {
@@ -130,16 +139,12 @@ pub(crate) async fn bind_codex_shim(
         .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
         .map_err(CodexShimBindError::DependencyMissing)?;
 
-    let identity_route = Router::new()
-        .route("/runtime", get(runtime_identity))
-        .with_state(RuntimeRouteState {
-            auth_token: args.auth_token.as_deref().map(Arc::from),
-            identity: RuntimeIdentity {
-                node_did: args.node_did.clone(),
-                home: crate::absolutize(args.home.clone())
-                    .map_err(CodexShimBindError::HostResource)?,
-            },
-        });
+    let identity = RuntimeIdentity {
+        node_did: args.node_did.clone(),
+        home: crate::absolutize(args.home.clone()).map_err(CodexShimBindError::HostResource)?,
+        runnable_agents: None,
+    };
+    let agent_routes = args.agent_routes && args.bind_addr.is_loopback();
 
     let state = ShimState {
         usage_cache: args.usage_cache,
@@ -167,10 +172,24 @@ pub(crate) async fn bind_codex_shim(
         auth_token: args.auth_token.map(Arc::from),
     };
 
+    let mut sidecars = RapidHashMap::new();
+    sidecars.insert(bound_agent_id.clone(), state.sidecar.clone());
+    let mut runtime_routes = Router::new().route("/runtime", get(runtime_identity));
+    if agent_routes {
+        runtime_routes = runtime_routes.route("/agents/{agent_id}", get(agent_ws_upgrade));
+    }
+    let runtime_routes = runtime_routes.with_state(RuntimeRouteState {
+        identity,
+        shim: state.clone(),
+        agent_routes,
+        runnable: args.runnable,
+        sidecars: Arc::new(Mutex::new(sidecars)),
+    });
+
     let app = Router::new()
         .route("/", get(ws_upgrade))
-        .with_state(state.clone())
-        .merge(identity_route);
+        .with_state(state)
+        .merge(runtime_routes);
     let addr = SocketAddr::new(args.bind_addr, args.port);
     let listener = TcpListener::bind(addr)
         .await
@@ -233,11 +252,44 @@ async fn ws_upgrade(
         .into_response()
 }
 
-async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: HeaderMap) -> Response {
-    if !request_is_authorized(&headers, state.auth_token.as_deref()) {
+/// Each agent gets its own sidecar: listing walks a sidecar's threads with no
+/// agent filter, so a shared one would show one agent's threads to another.
+async fn agent_ws_upgrade(
+    ws: WebSocketUpgrade,
+    RoutePath(agent_id): RoutePath<String>,
+    State(routes): State<RuntimeRouteState>,
+    headers: HeaderMap,
+) -> Response {
+    if !request_is_authorized(&headers, routes.shim.auth_token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    Json(state.identity).into_response()
+    if !gents::codex_shim_binding::admits_connection(
+        &agent_id,
+        routes.runnable.borrow().iter().map(String::as_str),
+    ) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let sidecar = routes
+        .sidecars
+        .lock()
+        .await
+        .entry(agent_id.clone())
+        .or_default()
+        .clone();
+    let mut state = routes.shim;
+    state.agent_id = Arc::from(agent_id);
+    state.sidecar = sidecar;
+    ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
+}
+
+async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: HeaderMap) -> Response {
+    if !request_is_authorized(&headers, state.shim.auth_token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut identity = state.identity;
+    identity.runnable_agents = state.agent_routes.then(|| state.runnable.borrow().clone());
+    Json(identity).into_response()
 }
 
 pub(super) fn request_is_authorized(headers: &HeaderMap, expected: Option<&str>) -> bool {

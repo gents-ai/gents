@@ -970,6 +970,9 @@ async fn serve_foreground(
                 port: args.codex_shim_port,
                 timeout_secs: args.codex_shim_timeout_secs,
                 poll_ms: args.codex_shim_poll_ms,
+                runnable: runnable_rx.clone(),
+                agent_routes: args.codex_shim_agent_id.is_none()
+                    && args.codex_shim_public_url.is_none(),
             };
             let mut codex_shim_handle = if args.no_codex_shim {
                 None
