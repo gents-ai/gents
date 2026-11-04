@@ -153,11 +153,7 @@ async fn ensure_runtime(
     }
     if let Some(state) = read_runtime_state(home)? {
         if graphql_endpoint_available(&state.graphql).await {
-            bail!(
-                "this home's runtime is up with its {} off. Restart it with `gents service restart --home {}`, or restart whatever is running it, then run `gents` again.",
-                endpoint.describe(),
-                home.display()
-            );
+            return ensure_up_runtime_opens(home, expected_did, endpoint, ENDPOINT_WAIT).await;
         }
     }
     let hint = no_service_manager_message(home);
@@ -176,6 +172,25 @@ async fn ensure_runtime(
     .await?
     .map_err(|error| anyhow!("{error:#}\n{hint}"))?;
     wait_for_endpoint(endpoint, ENDPOINT_WAIT).await?;
+    endpoint.ensure_is_this_homes(home, expected_did).await
+}
+
+/// A runtime answers GraphQL before it opens its interface endpoints, so one still starting
+/// looks like one with them off until this wait ends. Saying so sooner sends a person to
+/// restart, and a restart starts the same window over.
+async fn ensure_up_runtime_opens(
+    home: &Path,
+    expected_did: &str,
+    endpoint: &InterfaceEndpoint,
+    timeout: Duration,
+) -> Result<()> {
+    if wait_for_endpoint(endpoint, timeout).await.is_err() {
+        bail!(
+            "this home's runtime is up with its {} off. Restart it with `gents service restart --home {}`, or restart whatever is running it, then run `gents` again.",
+            endpoint.describe(),
+            home.display()
+        );
+    }
     endpoint.ensure_is_this_homes(home, expected_did).await
 }
 
@@ -234,7 +249,7 @@ pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::codex::tests::{identity, runtime_answering};
+    use crate::commands::codex::tests::{identity, runtime_answering, runtime_answering_on};
 
     #[tokio::test]
     async fn wait_for_endpoint_gives_up_naming_gents_service_status() {
@@ -251,6 +266,83 @@ mod tests {
 
         assert!(
             error.to_string().contains("gents service status"),
+            "{error:#}"
+        );
+    }
+
+    /// An endpoint on a free port whose `/runtime` starts answering as `node_did` after a moment.
+    async fn endpoint_answering_late(node_did: &str) -> InterfaceEndpoint {
+        let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let authority = free.local_addr().unwrap();
+        drop(free);
+        let body = runtime_holding(node_did, None);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let listener = tokio::net::TcpListener::bind(authority).await.unwrap();
+            runtime_answering_on(listener, vec![body]);
+        });
+        InterfaceEndpoint::Codex {
+            remote: format!("ws://{authority}/"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_runtime_still_starting_is_waited_for_then_identified() {
+        let endpoint = endpoint_answering_late("mine").await;
+
+        ensure_up_runtime_opens(
+            Path::new("/srv/home"),
+            "mine",
+            &endpoint,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("the endpoint opens within the wait");
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_that_opens_late_still_has_to_be_this_homes() {
+        let endpoint = endpoint_answering_late("other").await;
+
+        let error = ensure_up_runtime_opens(
+            Path::new("/srv/home"),
+            "mine",
+            &endpoint,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect_err("another home's runtime answers");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not belong to this Gents home"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_that_stays_off_says_restart_after_the_wait() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let endpoint = InterfaceEndpoint::Codex {
+            remote: format!("ws://127.0.0.1:{port}/"),
+        };
+
+        let error = ensure_up_runtime_opens(
+            Path::new("/srv/home"),
+            "mine",
+            &endpoint,
+            Duration::from_millis(200),
+        )
+        .await
+        .expect_err("nothing ever answers");
+
+        assert!(
+            error
+                .to_string()
+                .contains("gents service restart --home /srv/home"),
             "{error:#}"
         );
     }

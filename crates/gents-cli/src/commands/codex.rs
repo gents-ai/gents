@@ -575,6 +575,14 @@ pub(crate) mod tests {
     pub(crate) async fn runtime_answering(bodies: Vec<serde_json::Value>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let authority = listener.local_addr().unwrap().to_string();
+        runtime_answering_on(listener, bodies);
+        authority
+    }
+
+    pub(crate) fn runtime_answering_on(
+        listener: tokio::net::TcpListener,
+        bodies: Vec<serde_json::Value>,
+    ) {
         tokio::spawn(async move {
             let mut bodies = bodies.into_iter().peekable();
             while let Ok((mut stream, _)) = listener.accept().await {
@@ -593,7 +601,6 @@ pub(crate) mod tests {
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
-        authority
     }
 
     fn published(agents: &[&str]) -> serde_json::Value {
