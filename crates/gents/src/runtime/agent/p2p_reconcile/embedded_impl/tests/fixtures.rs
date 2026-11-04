@@ -382,12 +382,7 @@ pub(super) async fn collection_values(
         .collect()
 }
 
-pub(super) async fn wait_for_value(
-    node: &Node,
-    collection: &str,
-    field: &str,
-    expected: &str,
-) {
+pub(super) async fn wait_for_value(node: &Node, collection: &str, field: &str, expected: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let last = collection_values(node, collection, field).await;

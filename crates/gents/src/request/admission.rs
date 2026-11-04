@@ -733,10 +733,7 @@ async fn request_hop_admitted(node: &Node, row: &AgentRequestRow) -> AdmissionRe
     ))
 }
 
-pub(crate) async fn max_request_hop(
-    node: &Node,
-    node_did: &str,
-) -> anyhow::Result<Option<u32>> {
+pub(crate) async fn max_request_hop(node: &Node, node_did: &str) -> anyhow::Result<Option<u32>> {
     Ok(crate::documents::load_node(node, node_did)
         .await?
         .and_then(|node_doc| node_doc.max_request_hop))
@@ -1186,10 +1183,7 @@ pub(crate) const SIGNED_REQUEST_RECEIPT_FIELDS: &str = signed_request_receipt_fi
 pub const SIGNED_REQUEST_FIELDS: &str =
     concat!("lifecycle_state ", signed_request_receipt_fields!());
 
-async fn load_signed_request(
-    node: &Node,
-    doc_id: &str,
-) -> AdmissionResult<AgentRequestRow> {
+async fn load_signed_request(node: &Node, doc_id: &str) -> AdmissionResult<AgentRequestRow> {
     let doc_id = escape_graphql_string(doc_id);
     let response = graphql_with_transaction_retry(
         node,

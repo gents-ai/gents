@@ -173,11 +173,7 @@ impl RequestExecutionLease {
         )))
     }
 
-    pub(crate) async fn owns_execution(
-        &self,
-        node: &Node,
-        request_doc_id: &str,
-    ) -> Result<bool> {
+    pub(crate) async fn owns_execution(&self, node: &Node, request_doc_id: &str) -> Result<bool> {
         Ok(self
             .decide_lease(node, request_doc_id, |observed, generation, now_ms| {
                 super::execution_policy::renewable_lifecycle(observed.request)

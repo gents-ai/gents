@@ -574,10 +574,7 @@ where
     }
 }
 
-async fn load_auxiliary_parent(
-    node: &Node,
-    request: &AgentRequest,
-) -> Result<AgentRequest> {
+async fn load_auxiliary_parent(node: &Node, request: &AgentRequest) -> Result<AgentRequest> {
     let parent_doc_id = request
         .caused_by_parent_request_doc_id
         .as_deref()

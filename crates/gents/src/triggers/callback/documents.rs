@@ -317,10 +317,7 @@ where
     .await
 }
 
-pub async fn list_enabled_bindings(
-    node: &Node,
-    owner: &str,
-) -> Result<Vec<CallbackBindingDoc>> {
+pub async fn list_enabled_bindings(node: &Node, owner: &str) -> Result<Vec<CallbackBindingDoc>> {
     let (fields, _) =
         crate::store::config_client::config_projection(crate::Collection::CallbackBinding, None)?;
     let query = format!(

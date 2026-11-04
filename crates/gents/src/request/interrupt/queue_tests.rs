@@ -71,9 +71,7 @@ async fn rows(node: &Node, session: &str) -> Vec<Value> {
         .clone()
 }
 
-async fn fixture(
-    case: &LeanInterruptQueueCase,
-) -> (Arc<Node>, tempfile::TempDir, AgentRequest) {
+async fn fixture(case: &LeanInterruptQueueCase) -> (Arc<Node>, tempfile::TempDir, AgentRequest) {
     fixture_with_http(case, None).await
 }
 

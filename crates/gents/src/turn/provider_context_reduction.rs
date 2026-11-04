@@ -704,10 +704,7 @@ pub fn rendered_capture_cites_reduction(
 
 const REDUCTION_FIELDS: &str = "_docID reduction_key node_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
 
-async fn load_by_key(
-    node: &Node,
-    reduction_key: &str,
-) -> Result<Vec<ProviderContextReduction>> {
+async fn load_by_key(node: &Node, reduction_key: &str) -> Result<Vec<ProviderContextReduction>> {
     let query = format!(
         r#"{{ ProviderContextReduction(filter: {{ reduction_key: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         escape_graphql_string(reduction_key),

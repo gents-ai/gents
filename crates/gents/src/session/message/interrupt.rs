@@ -40,10 +40,7 @@ pub async fn interrupt_refusal(
         .then(|| "only the session that started this session or a same-node agent for a Task-triggered session may interrupt it".to_owned()))
 }
 
-pub async fn interrupt_session(
-    node: &Arc<Node>,
-    target: &SessionScope,
-) -> Result<Option<String>> {
+pub async fn interrupt_session(node: &Arc<Node>, target: &SessionScope) -> Result<Option<String>> {
     if node.node_identity_did() == Some(target.node_did.as_str()) {
         let session_id = target.session_id.clone();
         let node_did = target.node_did.clone();

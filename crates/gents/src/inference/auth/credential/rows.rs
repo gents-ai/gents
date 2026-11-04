@@ -21,10 +21,7 @@ pub async fn lookup_oauth_credential_by_id(
         .transpose()
 }
 
-pub async fn list_oauth_credentials(
-    node: &Node,
-    node_did: &str,
-) -> Result<Vec<OAuthCredential>> {
+pub async fn list_oauth_credentials(node: &Node, node_did: &str) -> Result<Vec<OAuthCredential>> {
     let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &oauth_credentials_for_node_query(node_did),

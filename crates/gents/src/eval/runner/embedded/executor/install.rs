@@ -209,10 +209,7 @@ fn object<'a>(value: &'a mut Value, named: &str) -> Result<&'a mut serde_json::M
         .with_context(|| format!("the trial's {named} document is not an object"))
 }
 
-async fn install_workspace_root(
-    node: &std::sync::Arc<Node>,
-    workspace: &Path,
-) -> Result<()> {
+async fn install_workspace_root(node: &std::sync::Arc<Node>, workspace: &Path) -> Result<()> {
     let root = escape_graphql_string(
         workspace
             .to_str()

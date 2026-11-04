@@ -161,9 +161,7 @@ impl GentsBuilder {
             .identity
             .ok_or_else(|| anyhow!("Gents builder is missing identity"))?;
         if node.node_identity_did().is_none() {
-            anyhow::bail!(
-                "Gents runtime requires a Node configured with a node signing DID"
-            );
+            anyhow::bail!("Gents runtime requires a Node configured with a node signing DID");
         }
         if self.agents.is_empty() {
             anyhow::bail!("Gents builder requires at least one agent");

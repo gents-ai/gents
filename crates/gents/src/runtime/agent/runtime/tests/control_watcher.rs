@@ -863,11 +863,7 @@ async fn record_plugin_install(
     .unwrap();
 }
 
-async fn write_tools_naming_plugin(
-    node: &Arc<defra_node::Node>,
-    node_did: &str,
-    tools_id: &str,
-) {
+async fn write_tools_naming_plugin(node: &Arc<defra_node::Node>, node_did: &str, tools_id: &str) {
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": tools_id,
         "node_did": node_did,

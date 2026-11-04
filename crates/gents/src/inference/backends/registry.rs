@@ -332,9 +332,7 @@ async fn query_backend_records(
         .collect()
 }
 
-pub(crate) async fn list_backend_records(
-    node: &Node,
-) -> Result<Vec<(String, InferenceBackend)>> {
+pub(crate) async fn list_backend_records(node: &Node) -> Result<Vec<(String, InferenceBackend)>> {
     query_backend_records(node, "order: { backend_id: ASC }", true).await
 }
 

@@ -62,10 +62,7 @@ async fn claimed(
     lifecycle
 }
 
-async fn begin_writer(
-    lifecycle: &mut RequestLifecycle,
-    node: &Arc<Node>,
-) -> DefraStreamWriter {
+async fn begin_writer(lifecycle: &mut RequestLifecycle, node: &Arc<Node>) -> DefraStreamWriter {
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     writer

@@ -51,10 +51,7 @@ impl InventoryRequestRow {
 
 /// Local admission commits the immutable attempt before its filtered control
 /// route can publish it. Reload retries the exact key, never a new attempt.
-pub async fn admit_demand(
-    node: &Arc<Node>,
-    demand: &FileInventoryPageDemand,
-) -> Result<String> {
+pub async fn admit_demand(node: &Arc<Node>, demand: &FileInventoryPageDemand) -> Result<String> {
     demand.validate_reference()?;
     ensure!(
         node.node_identity_did() == Some(demand.admission.request.requester_did.as_str()),

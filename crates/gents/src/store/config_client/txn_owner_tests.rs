@@ -1566,13 +1566,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
         let home = tempfile::tempdir().unwrap();
         let data = home.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
-        let node = Arc::new(
-            Node::builder()
-                .data_path(&data)
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(Node::builder().data_path(&data).build().await.unwrap());
         let access = if scenario.initial_claimed {
             Some(
                 ConfigAccess::claimed_local(
@@ -2548,10 +2542,7 @@ fn transaction_handle(txn: &ConfigApplyTxn<'_>) -> query::TransactionHandle {
     handle.clone()
 }
 
-async fn assert_native_transaction_abandoned(
-    node: &Node,
-    handle: &query::TransactionHandle,
-) {
+async fn assert_native_transaction_abandoned(node: &Node, handle: &query::TransactionHandle) {
     let error = node
         .discard_transaction(handle)
         .await

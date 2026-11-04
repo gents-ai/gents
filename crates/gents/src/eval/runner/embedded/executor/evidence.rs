@@ -14,10 +14,7 @@ pub(super) struct SessionRequest {
     pub(super) lifecycle_state: String,
 }
 
-pub(super) async fn session_requests(
-    node: &Node,
-    session_id: &str,
-) -> Result<Vec<SessionRequest>> {
+pub(super) async fn session_requests(node: &Node, session_id: &str) -> Result<Vec<SessionRequest>> {
     let session_id = escape_graphql_string(session_id);
     let scope =
         crate::session::public_request_filter(&format!(r#"session_id: {{ _eq: "{session_id}" }}"#));

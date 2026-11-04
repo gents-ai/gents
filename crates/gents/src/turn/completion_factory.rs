@@ -268,10 +268,7 @@ struct PriorUsageRow {
     completion_tokens: Option<i64>,
 }
 
-async fn load_prior_charged_tokens(
-    node: &Node,
-    request_doc_id: &str,
-) -> anyhow::Result<u64> {
+async fn load_prior_charged_tokens(node: &Node, request_doc_id: &str) -> anyhow::Result<u64> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "budget rehydration requires the physical request document ID"

@@ -565,10 +565,7 @@ async fn load_docs(
     Ok(docs)
 }
 
-async fn load_receipts(
-    node: &Node,
-    workspace_id: &str,
-) -> Result<Vec<WorkspaceReceiptDoc>> {
+async fn load_receipts(node: &Node, workspace_id: &str) -> Result<Vec<WorkspaceReceiptDoc>> {
     let query = format!(
         r#"{{
             WorkspaceReceipt(

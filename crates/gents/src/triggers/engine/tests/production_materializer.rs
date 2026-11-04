@@ -1207,10 +1207,7 @@ async fn insert_ready_workspace(
     );
 }
 
-async fn workspace_requests(
-    node: &defra_node::Node,
-    workspace_id: &str,
-) -> Vec<serde_json::Value> {
+async fn workspace_requests(node: &defra_node::Node, workspace_id: &str) -> Vec<serde_json::Value> {
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ workspace_id: {{ _eq: "{id}" }} }}) {{

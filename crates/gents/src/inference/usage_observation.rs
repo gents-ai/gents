@@ -349,11 +349,7 @@ impl std::fmt::Debug for UsageReporter {
 }
 
 impl UsageReporter {
-    pub(crate) fn new(
-        cache: Arc<UsageCache>,
-        node: Arc<Node>,
-        account: UsageAccount,
-    ) -> Arc<Self> {
+    pub(crate) fn new(cache: Arc<UsageCache>, node: Arc<Node>, account: UsageAccount) -> Arc<Self> {
         Arc::new(Self {
             cache,
             node,
