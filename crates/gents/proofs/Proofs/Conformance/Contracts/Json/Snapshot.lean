@@ -698,6 +698,8 @@ def snapshotJson : String :=
       ++ codexShimTurnLifecycleCasesJson ++ ","
     ++ "\"codex_shim_binding_cases\":"
       ++ codexShimBindingCasesJson ++ ","
+    ++ "\"codex_shim_connection_admission_cases\":"
+      ++ codexShimConnectionAdmissionCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","

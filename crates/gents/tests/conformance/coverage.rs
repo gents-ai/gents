@@ -2035,6 +2035,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimBindingCases".to_string(),
         ));
     }
+    if !lean_codex_shim_connection_admission_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_connection_admission_cases".to_string(),
+            "CodexShimConnectionAdmissionCases".to_string(),
+        ));
+    }
     if !lean_plugin_reference_cases().is_empty() {
         emitted.insert((
             "plugin_reference_cases".to_string(),
