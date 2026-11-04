@@ -14,7 +14,17 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-document-{}", Uuid::new_v4().simple());
-    let init = run_init_json(&home_dir, &["--node-name", &agent_name])?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            &agent_name,
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let node_did = node_did_from_init(&init)?;
     let offline_fields = serde_json::json!({
         "goal_id": "offline-goal",
@@ -153,7 +163,17 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&other_dir)?;
     run_init_json(&other_dir, &["--node-name", "cli-document-other"])?;
-    let init = run_init_json(&home_dir, &["--node-name", "cli-document-served"])?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "cli-document-served",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
