@@ -13,11 +13,11 @@ from pathlib import Path
 
 data = json.loads(Path(sys.argv[1]).read_text())
 actual = data.get("app", {}).get("security", {}).get("capabilities", [])
-expected = {"default", "desktop-runtime-admin", "native-windows"}
+expected = {"default", "desktop-runtime-admin", "native-windows", "plugin-window"}
 if not isinstance(actual, list) or set(actual) != expected or len(actual) != len(expected):
     print(
         "error: production tauri.conf.json must enumerate exactly "
-        '["default", "desktop-runtime-admin", "native-windows"]'
+        '["default", "desktop-runtime-admin", "native-windows", "plugin-window"]'
     )
     sys.exit(1)
 if "native-e2e" in actual:
