@@ -35,6 +35,15 @@ async function openSwitcher(page: Page) {
 }
 
 test.describe("the hover panel and what opens from it", () => {
+  /* it sets its own 1440×900 window, so the laptop and narrow projects
+     would only repeat the desktop Chromium run */
+  test.beforeEach(({}, info) => {
+    test.skip(
+      info.project.name === "chromium-laptop" ||
+        info.project.name === "chromium-narrow",
+      "sets its own desktop window",
+    );
+  });
   test("stay open together while the pointer is on either, and close together", async ({
     page,
   }) => {
