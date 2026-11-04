@@ -1226,7 +1226,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
 }
 
 #[tokio::test]
-async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
+async fn output_obligation_accepts_count_fields_the_storage_can_hold() -> Result<()> {
     let node = obligation_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
@@ -1239,7 +1239,6 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
         ("float64-count", "amount"),
         ("json-count", "payload"),
         ("blob-count", "attachment"),
-        ("id-count", "marker"),
         ("non-null-int-count", "required_total"),
         ("non-null-string-count", "required_label"),
     ];
@@ -1269,6 +1268,19 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
         )],
     )
     .await?;
+
+    let error = apply(
+        &access,
+        vec![obligation_surface(
+            owner,
+            "id-count",
+            "ObligationOutcome",
+            "marker",
+        )],
+    )
+    .await
+    .expect_err("an ID field cannot store a canonical numeric count");
+    assert!(format!("{error:#}").contains("ID field"), "{error:#}");
 
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
@@ -1598,7 +1610,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
 }
 
 #[tokio::test]
-async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
+async fn event_source_accepts_count_fields_the_storage_can_hold() -> Result<()> {
     let node = event_source_node().await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
@@ -1613,7 +1625,6 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         ("float64-count", "amount"),
         ("json-count", "payload"),
         ("blob-count", "attachment"),
-        ("id-count", "marker"),
     ];
     for (id, count_field) in count_fields {
         if let Err(error) = apply(
@@ -1660,6 +1671,19 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         )],
     )
     .await?;
+
+    let error = apply(
+        &access,
+        vec![grouped_event_source(
+            owner,
+            "id-count",
+            "EventProbeSource",
+            "marker",
+        )],
+    )
+    .await
+    .expect_err("an ID field cannot store a canonical numeric count");
+    assert!(format!("{error:#}").contains("ID field"), "{error:#}");
 
     assert_eq!(
         published_event_sources(&node).await?.len(),
