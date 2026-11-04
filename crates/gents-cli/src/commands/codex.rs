@@ -259,12 +259,20 @@ async fn terminal_cd(endpoint: &RemoteEndpoint, bearer: Option<&str>) -> Option<
     else {
         return None;
     };
-    let identity = read_runtime_identity(authority, bearer).await?;
+    let mut identity = read_runtime_identity(authority, bearer).await?;
+    identity.tool_root = canonical_tool_root(identity.tool_root).await;
     let cwd = std::env::current_dir().ok()?;
     if let Some(notice) = outside_tool_root_notice(&cwd, &identity) {
         eprintln!("{notice}");
     }
     terminal_cd_arg(&cwd, identity.tool_root.as_deref())
+}
+
+/// `current_dir` is already physical, so a root recorded through a symlink would read a
+/// terminal really inside it as outside. A root that no longer resolves is compared as given.
+async fn canonical_tool_root(root: Option<PathBuf>) -> Option<PathBuf> {
+    let root = root?;
+    Some(tokio::fs::canonicalize(&root).await.unwrap_or(root))
 }
 
 /// Admission refuses a placement outside the tool root, so a directory outside it
@@ -497,20 +505,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn no_agent_means_no_relay() {
-        let cli = Cli::try_parse_from(["gents", "codex"]).expect("parse");
-        let Some(GentsCommand::Codex(args)) = cli.command else {
-            panic!("expected codex command");
-        };
-
-        assert_eq!(args.agent, None);
-        assert_eq!(
-            codex_command_args(&args, None)[..2],
-            ["--remote", crate::DEFAULT_CODEX_REMOTE]
-        );
-    }
-
-    #[test]
     fn agent_is_refused_for_wss_unix_and_non_loopback_ws() {
         for remote in [
             "wss://127.0.0.1:9292/",
@@ -738,6 +732,30 @@ pub(crate) mod tests {
         assert_eq!(terminal_cd_arg(Path::new("/srv/other"), Some(root)), None);
         assert_eq!(terminal_cd_arg(Path::new("/srv/root2"), Some(root)), None);
         assert_eq!(terminal_cd_arg(Path::new("/srv/root"), None), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_terminal_inside_a_symlinked_tool_root_is_inside() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(temp.path()).unwrap().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = real.with_file_name("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let inside = real.join("project");
+
+        let root = canonical_tool_root(Some(link)).await;
+
+        assert_eq!(
+            terminal_cd_arg(&inside, root.as_deref()),
+            Some(inside.clone())
+        );
+        let missing = PathBuf::from("/nonexistent/root");
+        assert_eq!(
+            canonical_tool_root(Some(missing.clone())).await,
+            Some(missing)
+        );
+        assert_eq!(canonical_tool_root(None).await, None);
     }
 
     #[test]

@@ -25,8 +25,9 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) grok_socket: Arc<OnceLock<PathBuf>>,
 }
 
-/// What `GET /runtime` answers, so `gents` can tell whether the runtime on the
-/// fixed endpoint serves the home it was asked to open.
+/// What `GET /runtime` answers: whose home this runtime serves, what it can run, where its
+/// threads may go and which Grok socket it holds. `gents` reads it because no endpoint can say
+/// whose it is by answering, and an interface cannot say why it failed to open.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RuntimeIdentity {
     pub(crate) node_did: String,
@@ -298,12 +299,20 @@ async fn agent_ws_upgrade(
         return refusal;
     }
     if !request_is_authorized(&headers, routes.shim.auth_token.as_deref()) {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected unauthorized app-server WebSocket handshake on an agent route"
+        );
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if !gents::codex_shim_binding::admits_connection(
         &agent_id,
         routes.runnable.borrow().iter().map(String::as_str),
     ) {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected app-server WebSocket handshake for an agent that cannot run"
+        );
         return StatusCode::NOT_FOUND.into_response();
     }
     let sidecar = routes

@@ -564,6 +564,11 @@ impl Drop for Terminal {
     /// started. Real Grok still running when its runtime stops starts a detached stock
     /// leader on the socket, so the interface must be gone before `LiveBox` stops it.
     fn drop(&mut self) {
+        // A reaped child's group may no longer be ours to signal. Until it is reaped, its
+        // PID and so its group stay reserved.
+        if !matches!(self.child.try_wait(), Ok(None)) {
+            return;
+        }
         if let Some(group) = self.child.process_id() {
             let _ = Command::new("/bin/kill")
                 .args(["-KILL", "--", &format!("-{group}")])

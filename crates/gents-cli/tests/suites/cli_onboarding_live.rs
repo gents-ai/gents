@@ -63,6 +63,10 @@ mod no_model {
             "{args}"
         );
         ensure!(
+            args.contains(&format!("127.0.0.1:{SHIM_PORT}")),
+            "with no --agent there is no relay: {args}"
+        );
+        ensure!(
             !terminal.transcript().contains(OUTSIDE_THE_ROOT_TEXT),
             "{}",
             terminal.transcript()
@@ -127,7 +131,7 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn the_first_open_after_a_start_waits_for_the_publish() -> Result<()> {
+    async fn the_first_open_after_a_start_finds_the_default_agent() -> Result<()> {
         let backend = answering_backend()?;
         let live = LiveBox::new()?;
         let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;

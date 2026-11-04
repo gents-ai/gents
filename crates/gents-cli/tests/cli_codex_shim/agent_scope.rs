@@ -325,6 +325,19 @@ async fn a_percent_encoded_did_agent_id_connects() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_id_is_decoded_only_once() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    shim.wait_until_runnable(&shim.default_agent, None).await?;
+    let twice_encoded = shim.default_agent.replace(':', "%253A");
+
+    let refused = connect_async(shim.url(&agent_route(&twice_encoded)))
+        .await
+        .expect_err("%253A decodes once to the literal %3A, which names no agent");
+
+    super::server_lifecycle::assert_http_status(refused, StatusCode::NOT_FOUND)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_default_agent_route_shares_the_root_routes_sidecar() -> Result<()> {
     let shim = AgentShim::start(|_| vec![], &[]).await?;
     shim.wait_until_runnable(&shim.default_agent, None).await?;
