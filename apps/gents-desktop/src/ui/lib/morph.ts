@@ -68,7 +68,10 @@ export function useMorphCard(): Morph {
   const morph = useCallback(
     (update: () => void, which: (key: string) => boolean = () => true) => {
       const doc = document as Document & {
-        startViewTransition?: (callback: () => void) => { finished?: Promise<unknown> };
+        startViewTransition?: (callback: () => void) => {
+          finished?: Promise<unknown>;
+          ready?: Promise<unknown>;
+        };
       };
       if (
         !doc.startViewTransition ||
@@ -94,6 +97,9 @@ export function useMorphCard(): Morph {
         flushSync(update);
         name();
       });
+      /* the browser skips a transition when another starts or the page
+         hides, rejecting `ready` though the update still applied */
+      transition?.ready?.catch(() => undefined);
       void Promise.resolve(transition?.finished).finally(() =>
         each((element) => {
           if (namedBy.get(element) !== token) return;

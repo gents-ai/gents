@@ -13,7 +13,8 @@ import {
 
 /* the names each transition saw, as it began */
 let named: string[][] = [];
-const start = vi.fn((update: () => void) => {
+type Started = { finished: Promise<unknown>; ready?: Promise<unknown> };
+const start = vi.fn((update: () => void): Started => {
   named.push(
     [...document.querySelectorAll<HTMLElement>("[data-testid]")]
       .filter((el) => el.style.getPropertyValue("view-transition-name"))
@@ -77,6 +78,20 @@ describe("the sidebar's mode changes", () => {
     act(() => sidebar.setMode("hidden"));
     act(() => sidebar.setMode("expanded"));
     expect(named).toEqual([["sidebar"], ["sidebar"]]);
+  });
+
+  it("still change when the browser skips the transition", async () => {
+    start.mockImplementationOnce((update: () => void) => {
+      update();
+      return {
+        finished: Promise.resolve(),
+        ready: Promise.reject(new DOMException("Transition was skipped", "AbortError")),
+      };
+    });
+    render(<Shell />);
+    act(() => sidebar.setMode("collapsed"));
+    await act(async () => {});
+    expect(sidebarMode()).toBe("collapsed");
   });
 
   it("are not morphed while the edge is dragged, nor when it lets go", () => {
