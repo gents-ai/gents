@@ -569,6 +569,42 @@ mod tests {
                 "{case}"
             );
         }
+        let query = format!(
+            "{{ Agent(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+            escape_graphql_string(integrator.did())
+        );
+        let agent_rows = owner.execute(&query).await?;
+        let agent_doc = agent_rows["data"]["Agent"][0]["_docID"]
+            .as_str()
+            .context("integrator physical ID missing")?
+            .to_owned();
+        owner
+            .transact_write("test.root.remove_agent", |txn| {
+                let agent_doc = &agent_doc;
+                Box::pin(async move { txn.delete_configuration_document("Agent", agent_doc).await })
+            })
+            .await?;
+        revoke_workspace_root_reader(&owner, &path, integrator.did()).await?;
+        let integrator_case = cases
+            .iter()
+            .find(|case| case["actor"] == "integrator" && case["permission"] == "read")
+            .context("missing modeled integrator read")?;
+        let allowed = node
+            .document_acp()
+            .check_doc_access(
+                &defra_node::AcpIdentity::Authenticated(integrator.did().parse()?),
+                defra_node::DocumentPermission::Read,
+                &policy,
+                "workspace_roots",
+                &root_doc,
+            )
+            .await?;
+        assert_eq!(
+            allowed,
+            integrator_case["after_integrator_revocation"]
+                .as_bool()
+                .unwrap()
+        );
         delete_workspace_root(&owner, &path).await?;
         assert!(root_row_in_access(&owner, &path).await?.is_empty());
         node.shutdown().await?;
