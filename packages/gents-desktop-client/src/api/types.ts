@@ -208,6 +208,7 @@ export type DesktopApiAdapter = {
   setSelectedNode: (nodeDid: string | null) => Promise<void>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
+  dismissEndedAccess: (nodeDid: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (peerId: string) => Promise<unknown>;
   requestStatusEnrollment: (
     serverAddress: string,

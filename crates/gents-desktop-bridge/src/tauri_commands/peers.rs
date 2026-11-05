@@ -106,6 +106,27 @@ where
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
+/// Forgets that this desktop's access to a joined node ended, once the person
+/// has seen it.
+#[tauri::command]
+pub async fn desktop_ended_access_dismiss<R>(
+    app: AppHandle<R>,
+    node_did: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+
+    core.dismiss_ended_access(&node_did)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    emit_config_update_and_snapshot(&app, &core, &state).await
+}
+
 #[tauri::command]
 pub async fn desktop_network_status(
     state: State<'_, DesktopAppState>,

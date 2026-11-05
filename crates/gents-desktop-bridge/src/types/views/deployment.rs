@@ -396,6 +396,12 @@ pub struct DeploymentView {
     pub graphql: Option<String>,
     pub dial_succeeded: bool,
     pub chat_safe: bool,
+    /// When this desktop's authorization on a joined node runs out; none for
+    /// a node this desktop reaches without enrollment.
+    pub lease_expires_at: Option<String>,
+    /// Whether this desktop can change the node's configuration directly,
+    /// which only its own runtime or a local node allows.
+    pub operator_access: bool,
     pub routes: Vec<ClientRouteStatusView>,
     #[serde(default)]
     pub pairing: Vec<PairingCollectionStatusView>,
@@ -447,6 +453,35 @@ pub struct DesktopRuntimeSnapshot {
     #[ts(optional)]
     pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
+    pub ended_access: Vec<EndedAccessView>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EndedAccessView {
+    pub node_did: String,
+    pub label: String,
+    /// "expired" when the lease ran out, "revoked" when the node withdrew it
+    /// before then.
+    pub reason: String,
+    pub ended_at: String,
+    pub lease_expires_at: String,
+}
+
+impl From<gents_desktop_core::client::EndedAccess> for EndedAccessView {
+    fn from(ended: gents_desktop_core::client::EndedAccess) -> Self {
+        Self {
+            node_did: ended.node_did,
+            label: ended.label,
+            reason: match ended.reason {
+                gents_desktop_core::client::EndedAccessReason::Expired => "expired",
+                gents_desktop_core::client::EndedAccessReason::Revoked => "revoked",
+            }
+            .to_owned(),
+            ended_at: ended.ended_at,
+            lease_expires_at: ended.lease_expires_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

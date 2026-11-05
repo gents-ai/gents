@@ -5,7 +5,13 @@ import { routeMoves } from "../ui/lib/router";
 import { openOnNode } from "../ui/preferences";
 import { rememberedNode, rememberNode } from "./activeNode";
 import type { DraftStore } from "./draftStore";
-import { firstNode, type FleetState, nodeOf, type NodeView } from "./fleetStore";
+import {
+  endedAccessOf,
+  firstNode,
+  type FleetState,
+  nodeOf,
+  type NodeView,
+} from "./fleetStore";
 import { selection } from "./selectionStore";
 import type { ShellStores } from "./shellProjection";
 
@@ -53,12 +59,15 @@ export function reconcileSelection(
   };
   const tell = (chosen: string, fleet: FleetState, openedOn: string) => {
     const node = nodeOf(fleet, chosen);
+    const ended = endedAccessOf(fleet, chosen);
     const here = nodeOf(fleet, openedOn);
     const where = here ? nameOf(here) : "another node";
     toast(
       node
         ? `${nameOf(node)} isn't reachable, so the app opened on ${where}`
-        : `The startup node isn't listed, so the app opened on ${where}`,
+        : ended
+          ? `Your access to ${ended.label} ended, so the app opened on ${where}`
+          : `The startup node isn't listed, so the app opened on ${where}`,
     );
   };
   /* the person has begun: moved, picked a node or typed a draft; the app
@@ -101,6 +110,8 @@ export function reconcileSelection(
       selectNode(start.nodeDid);
       if (!chosen || start.nodeDid === chosen) return;
       if (node && reachOf(node) === "failed") return tell(chosen, fleet, start.nodeDid);
+      if (!node && endedAccessOf(fleet, chosen))
+        return tell(chosen, fleet, start.nodeDid);
       /* not listed yet, or not dialled yet: it may still come */
       waiting = { chosen, openedOn: start.nodeDid, moves: routeMoves() };
       timer = setTimeout(() => {
@@ -112,7 +123,15 @@ export function reconcileSelection(
       return;
     }
     const node = nodeOf(fleet, nodeDid);
-    if (!node) return;
+    if (!node) {
+      /* the node in use was one this app joined, and its access ended: move
+         off it, since nothing there can be used; the notice says why */
+      if (!endedAccessOf(fleet, nodeDid)) return;
+      const home = stores.client?.getState().snapshot?.bootstrap?.initNodeDid;
+      const next = fallback(fleet, home, nodeDid);
+      if (next) selectNode(next.nodeDid);
+      return;
+    }
     if (composingFor === node.nodeDid) return;
     selection.settleAgent(store, selectedAgentIdForDeployment(node, agentId));
   };

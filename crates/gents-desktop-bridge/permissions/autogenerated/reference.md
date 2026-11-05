@@ -700,6 +700,32 @@ Denies the desktop_default_agent_set command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-ended-access-dismiss`
+
+</td>
+<td>
+
+Enables the desktop_ended_access_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ended-access-dismiss`
+
+</td>
+<td>
+
+Denies the desktop_ended_access_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-event-source-delete`
 
 </td>
@@ -4020,7 +4046,7 @@ Allow, change and remove plugin folders, and answer a plugin question
 </td>
 <td>
 
-Authenticated peer enrollment, removal/rename, and P2P repair
+Authenticated peer enrollment, removal/rename, ended access, and P2P repair
 
 </td>
 </tr>

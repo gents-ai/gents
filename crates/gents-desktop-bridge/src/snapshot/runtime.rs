@@ -315,6 +315,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
 
             let chat_safe = peer.is_chat_ready_at(Utc::now());
+            let lease_expires_at = peer
+                .is_enrollment()
+                .then(|| peer.enrollment_authorization_expires_at.clone())
+                .flatten();
+            let operator_access = peer.operator_graphql().is_some();
             let node_readiness = project_node_readiness(
                 store.node_readiness(&peer.node_did),
                 &peer.node_did,
@@ -331,6 +336,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
                 chat_safe,
+                lease_expires_at,
+                operator_access,
                 routes: status
                     .map(|status| {
                         status
@@ -444,6 +451,12 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             (!dids.is_empty()).then_some(dids)
         },
         deployments,
+        ended_access: core
+            .ended_access()
+            .await
+            .into_iter()
+            .map(Into::into)
+            .collect(),
     }
 }
 

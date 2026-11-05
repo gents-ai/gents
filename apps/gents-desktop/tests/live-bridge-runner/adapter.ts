@@ -59,6 +59,7 @@ export function createBridgeHttpAdapter(
     requestAttachments: unsupported("requestAttachments"),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
+    dismissEndedAccess: unsupported("dismissEndedAccess"),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),

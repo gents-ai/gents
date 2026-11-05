@@ -171,10 +171,63 @@ impl RetiredEnrollment {
     }
 }
 
+const MAX_ENDED_ACCESS: usize = 32;
+
+/// Why this desktop stopped being able to use a node it joined.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EndedAccessReason {
+    /// The lease had run out when the authorization stopped being current.
+    Expired,
+    /// The authorization stopped being current before its lease ran out.
+    /// Enrollment authority ends a fresh grant only by a signed revocation;
+    /// a newer grant for the same node replaces this record instead.
+    Revoked,
+}
+
+/// A joined node whose authorization reconciliation withdrew, kept so the
+/// person learns their access ended rather than seeing the node vanish.
+/// Joining the node again, or dismissing it, removes the record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EndedAccess {
+    pub node_did: String,
+    pub label: String,
+    pub reason: EndedAccessReason,
+    pub ended_at: String,
+    pub lease_expires_at: String,
+}
+
+impl EndedAccess {
+    fn from_record(record: &PeerRecord, now: DateTime<Utc>) -> Option<Self> {
+        if !record.is_enrollment() {
+            return None;
+        }
+        let lease_expires_at = record.enrollment_authorization_expires_at.clone()?;
+        let reason = if authorization_lease_is_fresh_at(&lease_expires_at, now) {
+            EndedAccessReason::Revoked
+        } else {
+            EndedAccessReason::Expired
+        };
+        Some(Self {
+            node_did: record.node_did.clone(),
+            label: record.label.clone(),
+            reason,
+            ended_at: now.to_rfc3339(),
+            lease_expires_at,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::client) enum RemovalCause {
     Operator,
+    /// Reconciliation tore the route down while the node's authority over
+    /// this desktop still reads as current, such as a route receipt not yet
+    /// observed; the route returns with the receipt.
     Reconciliation,
+    /// Reconciliation found no current authority for the node any more: it
+    /// was revoked or its lease ran out.
+    AuthorityEnded,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -186,6 +239,8 @@ struct StoredPeerDirectory {
     pending_removals: Vec<PeerRecord>,
     #[serde(default)]
     retired_enrollments: Vec<RetiredEnrollment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ended_access: Vec<EndedAccess>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +249,7 @@ pub(crate) struct PeerDirectory {
     peers: Vec<PeerRecord>,
     pending_removals: Vec<PeerRecord>,
     retired_enrollments: Vec<RetiredEnrollment>,
+    ended_access: Vec<EndedAccess>,
     enrollment_endpoints: Vec<EnrollmentEndpoint>,
     _lease: Arc<PeerDirectoryLease>,
     #[cfg(test)]
@@ -243,6 +299,7 @@ impl PeerDirectory {
                     peers: stored.peers,
                     pending_removals: stored.pending_removals,
                     retired_enrollments: stored.retired_enrollments,
+                    ended_access: stored.ended_access,
                     enrollment_endpoints: stored.enrollment_endpoints,
                     _lease: lease,
                     #[cfg(test)]
@@ -495,9 +552,13 @@ impl PeerDirectory {
                 .peers
                 .retain(|candidate| candidate.peer_id != existing.peer_id);
         }
+        candidate
+            .ended_access
+            .retain(|ended| ended.node_did != node_did);
 
         if existing.as_ref() == Some(&record)
             && candidate.enrollment_endpoints == self.enrollment_endpoints
+            && candidate.ended_access == self.ended_access
         {
             return Ok(record);
         }
@@ -594,9 +655,39 @@ impl PeerDirectory {
                 .retain(|existing| existing.request_digest != retired.request_digest);
             candidate.retired_enrollments.push(retired);
         }
+        if let Some(ended) = EndedAccess::from_record(&removed, Utc::now())
+            .filter(|_| cause == RemovalCause::AuthorityEnded)
+        {
+            candidate
+                .ended_access
+                .retain(|existing| existing.node_did != ended.node_did);
+            candidate.ended_access.push(ended);
+            let overflow = candidate
+                .ended_access
+                .len()
+                .saturating_sub(MAX_ENDED_ACCESS);
+            candidate.ended_access.drain(..overflow);
+        }
         candidate.sort_records();
         self.commit(candidate).await?;
         Ok(Some(removed))
+    }
+
+    pub(in crate::client) fn ended_access(&self) -> &[EndedAccess] {
+        &self.ended_access
+    }
+
+    pub(in crate::client) async fn dismiss_ended_access(&mut self, node_did: &str) -> Result<bool> {
+        let mut candidate = self.clone();
+        let before = candidate.ended_access.len();
+        candidate
+            .ended_access
+            .retain(|ended| ended.node_did != node_did);
+        if candidate.ended_access.len() == before {
+            return Ok(false);
+        }
+        self.commit(candidate).await?;
+        Ok(true)
     }
 
     pub(in crate::client) async fn complete_removal_if_matches(
@@ -655,6 +746,7 @@ impl PeerDirectory {
             peers: self.peers.clone(),
             pending_removals: self.pending_removals.clone(),
             retired_enrollments: self.retired_enrollments.clone(),
+            ended_access: self.ended_access.clone(),
             enrollment_endpoints: self.enrollment_endpoints.clone(),
         })?;
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
@@ -761,6 +853,7 @@ mod tests {
             enrollment_endpoints: Vec::new(),
             pending_removals: Vec::new(),
             retired_enrollments: Vec::new(),
+            ended_access: Vec::new(),
         })
         .is_err());
     }
@@ -839,6 +932,97 @@ mod tests {
         assert!(reloaded.contains(&original));
         assert!(reloaded.contains(&later));
         assert!(!reloaded.contains(&failed));
+    }
+
+    async fn joined(directory: &mut PeerDirectory, digest: &str, expires_at: &str) -> PeerRecord {
+        directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Harbor",
+                "iroh://ticket",
+                "did:key:harbor",
+                "network-a",
+                &format!("request-{digest}"),
+                digest,
+                "did:key:admin",
+                1,
+                expires_at,
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_withdrawn_joined_node_is_remembered_with_why_its_access_ended() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+
+        let fresh = joined(&mut directory, "digest-a", "2099-01-01T00:00:00Z").await;
+        directory
+            .queue_removal(&fresh, RemovalCause::AuthorityEnded)
+            .await
+            .unwrap()
+            .expect("the withdrawn grant's record is removed");
+        let ended = directory.ended_access().to_vec();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].node_did, "did:key:harbor");
+        assert_eq!(ended[0].label, "Harbor");
+        assert_eq!(
+            ended[0].reason,
+            EndedAccessReason::Revoked,
+            "a grant withdrawn before its lease ran out was revoked"
+        );
+
+        let lapsed = joined(&mut directory, "digest-b", "2001-01-01T00:00:00Z").await;
+        assert!(
+            directory.ended_access().is_empty(),
+            "joining the node again forgets that its access ended"
+        );
+        directory
+            .queue_removal(&lapsed, RemovalCause::AuthorityEnded)
+            .await
+            .unwrap()
+            .expect("the lapsed grant's record is removed");
+        assert_eq!(
+            directory
+                .ended_access()
+                .iter()
+                .map(|ended| ended.reason)
+                .collect::<Vec<_>>(),
+            vec![EndedAccessReason::Expired],
+            "one record per node, saying its lease ran out"
+        );
+
+        drop(directory);
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        assert_eq!(directory.ended_access().len(), 1, "it survives a restart");
+        assert!(directory
+            .dismiss_ended_access("did:key:harbor")
+            .await
+            .unwrap());
+        assert!(!directory
+            .dismiss_ended_access("did:key:harbor")
+            .await
+            .unwrap());
+        drop(directory);
+        let directory = PeerDirectory::load(&path).await.unwrap();
+        assert!(directory.ended_access().is_empty(), "a dismissal persists");
+    }
+
+    #[tokio::test]
+    async fn removing_a_joined_node_yourself_is_not_an_ended_access() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let mut directory = PeerDirectory::load(tempdir.path().join("peers.json"))
+            .await
+            .unwrap();
+        let record = joined(&mut directory, "digest-a", "2099-01-01T00:00:00Z").await;
+        directory
+            .queue_removal(&record, RemovalCause::Operator)
+            .await
+            .unwrap()
+            .expect("the record is removed");
+        assert!(directory.ended_access().is_empty());
     }
 
     #[tokio::test]

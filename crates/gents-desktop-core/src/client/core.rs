@@ -34,7 +34,7 @@ use tokio::task::JoinHandle;
 
 use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
-use super::peer_directory::PeerRecord;
+use super::peer_directory::{EndedAccess, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
 use super::query::{
     load_full_snapshot_with_peer_records, load_node_scoped_snapshot_with_peer_records,
@@ -540,6 +540,14 @@ impl ClientCore {
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
         self.sync_state.records()
+    }
+
+    pub async fn ended_access(&self) -> Vec<EndedAccess> {
+        self.sync_state.ended_access().await
+    }
+
+    pub async fn dismiss_ended_access(&self, node_did: &str) -> Result<bool> {
+        self.sync_state.dismiss_ended_access(node_did).await
     }
 
     pub fn store(&self) -> &Arc<ObservedStore> {

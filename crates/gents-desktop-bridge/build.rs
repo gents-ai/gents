@@ -49,6 +49,7 @@ const COMMANDS: &[&str] = &[
     "desktop_plugin_approval_unsubscribe",
     "desktop_peer_remove",
     "desktop_peer_rename",
+    "desktop_ended_access_dismiss",
     "desktop_peer_status_fetch",
     "desktop_peer_enroll_status",
     "desktop_p2p_repair",

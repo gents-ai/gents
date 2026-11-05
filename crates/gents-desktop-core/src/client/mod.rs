@@ -33,7 +33,9 @@ pub use observe::{
 };
 pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 pub(crate) use peer_directory::PeerDirectory;
-pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
+pub use peer_directory::{
+    initialize_local_standard_peer, load_peer_records, EndedAccess, EndedAccessReason, PeerRecord,
+};
 pub use principal_identity::PrincipalIdentity;
 pub(crate) use query::load_request_documents_on;
 pub use query::{
