@@ -1,7 +1,6 @@
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  forgetRefusal,
   refusedWhileRunning,
   WirePackDialog,
 } from "../src/ui/screens/agent/WirePackDialog";
@@ -12,7 +11,6 @@ const REFUSAL =
   "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents pack wire demo/hello_plugin --agent did:key:z6Mk:default --home <node-home>` without --graphql";
 
 describe("enabling a pack's plugin for an agent", () => {
-  afterEach(forgetRefusal);
   it("reads the running node's refusal for its command", () => {
     expect(refusedWhileRunning(REFUSAL)).toBe(
       "gents pack wire demo/hello_plugin --agent did:key:z6Mk:default --home <node-home>",
@@ -35,7 +33,7 @@ describe("enabling a pack's plugin for an agent", () => {
       <WirePackDialog
         plugin="demo/hello_plugin"
         agents={deployment.agents}
-        targetsFrom={[]}
+        targetsFrom={["demo/targets"]}
         onClose={() => {}}
       />,
     );
@@ -49,11 +47,13 @@ describe("enabling a pack's plugin for an agent", () => {
         /can’t be enabled from the app while this node is running/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/gents pack wire demo\/hello_plugin/)).toBeInTheDocument();
+    expect(screen.getByText(/gents pack wire 'demo\/hello_plugin'/)).toHaveTextContent(
+      "--targets-from 'demo/targets'",
+    );
     expect(screen.queryByText(/through GraphQL/)).toBeNull();
   });
 
-  it("says why before anyone tries, once the node has refused this run", async () => {
+  it("allows a new dialog to try after an earlier refusal", async () => {
     const refusing = vi.fn(async ({ preview }: { preview: boolean }) => {
       if (preview)
         return {
@@ -91,9 +91,11 @@ describe("enabling a pack's plugin for an agent", () => {
       />,
     );
     expect(
-      screen.getByText(/can’t be enabled from the app while this node is running/),
-    ).toBeInTheDocument();
+      screen.queryByText(/can’t be enabled from the app while this node is running/),
+    ).toBeNull();
     await vi.waitFor(() => expect(wirePack).toHaveBeenCalled());
-    expect(screen.getByRole("button", { name: "Enable" })).toBeDisabled();
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Enable" })).toBeEnabled(),
+    );
   });
 });
