@@ -547,7 +547,12 @@ function NodeResult({ entry: e }: { entry: Extract<SearchEntry, { kind: "node" }
   const lastKeys = useKeysHint("node.last");
   return (
     <>
-      <NodeAvatar name={e.name} className="size-4 shrink-0" />
+      <NodeAvatar
+        name={e.name}
+        avatar={e.avatar}
+        rollId={e.nodeDid}
+        className="size-4 shrink-0"
+      />
       <span className="min-w-0 flex-1 truncate">
         {e.title}
         {e.subtitle && <span className="ml-2 text-muted-foreground">{e.subtitle}</span>}
