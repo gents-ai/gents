@@ -623,6 +623,8 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default, rename = "tool_grantor_cases")]
     pub(crate) _tool_grantor_cases: Vec<serde_json::Value>,
     #[serde(default)]
+    pub(crate) tool_operation_cases: Vec<serde_json::Value>,
+    #[serde(default)]
     pub(crate) projection_binding_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) callback_configuration_cases: Vec<serde_json::Value>,

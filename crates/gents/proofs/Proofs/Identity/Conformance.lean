@@ -10,6 +10,7 @@ import Proofs.Identity.McpService
 import Proofs.Identity.Operations
 import Proofs.Configuration.Affected
 import Proofs.Conformance.ContractCases
+import Proofs.ToolPolicy.Cases
 
 namespace Identity.Conformance
 open Lean
@@ -1304,6 +1305,41 @@ def toolGrantorCaseJson (grantor : String) (committed : Bool) : Json :=
     ("expected_enabled", toJson (result.enabled.map toolSourceJson)),
     ("expected_grants", toJson (result.grants.map toolSourceJson))]
 
+def toolOperationCaseJson (name : String) (schema history goal create selfConfig pack : Bool) (category : String) : Json :=
+  let surface : ToolPolicy.Surface :=
+    { ToolPolicy.ContractCases.secureMinimal with
+      schemaManagement := schema
+      sessionHistory := history
+      goalTools := goal
+      goalCreate := create
+      selfConfig := selfConfig
+      selfConfigCategories := if category == "all" then .all else if category == "none" then .none
+        else .only {category} (fun _ => ()) }
+  Json.mkObj [("name", toJson name), ("schema", toJson schema), ("history", toJson history),
+    ("goal", toJson goal), ("create", toJson create), ("self_config", toJson selfConfig),
+    ("category", toJson category), ("pack", toJson pack),
+    ("sources", toJson ((Configuration.toolOperationSources surface pack).map fun (purpose, permission) =>
+      Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
+
+def toolOperationCases : List Json :=
+  [toolOperationCaseJson "none" false false false false false false "none",
+   toolOperationCaseJson "schema" true false false false false false "none",
+   toolOperationCaseJson "session-history" false true false false false false "none",
+   toolOperationCaseJson "goal" false false true false false false "none",
+   toolOperationCaseJson "goal-create-without-goal" false false false true false false "none",
+   toolOperationCaseJson "goal-and-create" false false true true false false "none",
+   toolOperationCaseJson "self-config-without-categories" false false false false true true "none",
+   toolOperationCaseJson "self-config-all" false false false false true false "all",
+   toolOperationCaseJson "self-config-agent" false false false false true false "agent",
+   toolOperationCaseJson "self-config-node" false false false false true false "node",
+   toolOperationCaseJson "self-config-tools" false false false false true false "tools",
+   toolOperationCaseJson "self-config-profile" false false false false true false "profile",
+   toolOperationCaseJson "self-config-backend" false false false false true false "backend",
+   toolOperationCaseJson "self-config-automation" false false false false true false "automation",
+   toolOperationCaseJson "pack-independent" false false false false true true "backend",
+   toolOperationCaseJson "schema-and-pack-overlap" true false false false true true "all",
+   toolOperationCaseJson "all" true true true true true true "all"]
+
 theorem tools_writer_cannot_grant_itself_schema_authority :
     let initial : Configuration.ToolGrantProjection := { admins := [userDid] }
     (Household.allowed 5 toolGrantorHousehold agentDid "configuration" "tools-doc" "update" ∧
@@ -1505,6 +1541,7 @@ def json : Json := Json.mkObj
       sessionToolCaseJson "foreign" false true false])),
    ("tool_grantor_cases", toJson ([toolGrantorCaseJson userDid true,
       toolGrantorCaseJson agentDid true, toolGrantorCaseJson userDid false])),
+   ("tool_operation_cases", toJson toolOperationCases),
    ("policy_yaml", toJson policyYaml),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson ([] : List String)),
