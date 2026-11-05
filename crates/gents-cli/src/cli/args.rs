@@ -63,6 +63,12 @@ fn parse_env_var_name(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+fn parse_agent_id(value: &str) -> Result<String, String> {
+    crate::require_non_empty("agent", value)
+        .map(str::to_string)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Parser)]
 #[command(
     name = "gents",
@@ -76,6 +82,12 @@ pub(crate) struct Cli {
     /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
+    /// Agent to open instead of the node's default. See `gents config agent list`.
+    #[arg(long, value_name = "AGENT_ID", value_parser = parse_agent_id)]
+    pub(crate) agent: Option<String>,
+    /// As on `init`: tests pass `file` so they never write login-keychain items.
+    #[arg(long, value_enum, hide = true)]
+    pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
 }
 
 #[derive(Subcommand)]
@@ -148,7 +160,7 @@ pub(crate) enum Command {
     },
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
-    #[command(about = "Query, write, export and create application documents and schemas")]
+    #[command(about = "Query, write and export application documents and schemas")]
     Data {
         #[command(subcommand)]
         command: DataCommand,
@@ -183,9 +195,7 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    #[command(
-        about = "Inspect low-level requests, responses, traces, background calls and fleet slots"
-    )]
+    #[command(about = "Inspect requests, responses, traces, background calls and slots")]
     Debug {
         #[command(subcommand)]
         command: DebugCommand,

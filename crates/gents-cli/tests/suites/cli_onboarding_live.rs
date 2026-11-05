@@ -1,511 +1,260 @@
 //! Bare `gents` in a real PTY against real launchd, with a temporary `HOME` and
 //! no copied credentials. The label and ports are fixed, so tests run one at a
 //! time, through `make live-onboarding`.
-#![allow(dead_code)]
+
+#[path = "cli_onboarding_live/harness.rs"]
+mod harness;
+
+use harness::*;
 
 use crate::support::*;
 
-use std::fs::{self, File};
-use std::io::{Read as _, Write as _};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
-use anyhow::{bail, ensure, Context, Result};
-use futures_util::{SinkExt, StreamExt};
-use portable_pty::{CommandBuilder, MasterPty, PtySize};
-use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio_tungstenite::tungstenite::Message;
-
-const HTTP_PORT: u16 = 21919;
-const SHIM_PORT: u16 = 21929;
-const NO_MODEL_ENDPOINT: &str = "http://127.0.0.1:9/v1";
-const NO_MODEL_NAME: &str = "no-model";
-const MISSING_BIN: &str = "/nonexistent/gents-live-interface";
-const INSTALL_MESSAGE: &str = "Codex was not found";
-/// Longer than the 60 s `gents` itself waits for the endpoint.
-const RUNTIME_UP: Duration = Duration::from_secs(90);
-const EXIT: Duration = Duration::from_secs(10);
-
-/// One test's temporary user. Owns the launchd job from the moment it exists,
-/// and every refusal happens before that, so `Drop` never removes a job this
-/// run did not load.
-struct LiveBox {
-    _temp: tempfile::TempDir,
-    root: PathBuf,
-    label: String,
-    domain: String,
-    homes: Mutex<Vec<PathBuf>>,
-}
-
-struct InitializedHome {
-    home: PathBuf,
-    node_did: String,
-    default_agent_id: String,
-}
-
-fn job_loaded(target: &str) -> Result<bool> {
-    Ok(Command::new("/bin/launchctl")
-        .args(["print", target])
-        .output()
-        .context("running launchctl print")?
-        .status
-        .success())
-}
-
-impl LiveBox {
-    /// The label check is the safety boundary: this binary built without
-    /// `native-e2e` addresses the user's daily service, so nothing may reach
-    /// launchd until the build has reported its own label.
-    fn new() -> Result<Self> {
-        let temp = tempfile::tempdir().context("creating the temporary HOME")?;
-        let root = fs::canonicalize(temp.path())?;
-        let output = Command::new(cli_bin())
-            .env("HOME", &root)
-            .args(["service", "update-check"])
-            .output()
-            .context("running gents service update-check")?;
-        ensure!(
-            output.status.success(),
-            "gents service update-check failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let metadata: Value = serde_json::from_slice(&output.stdout)?;
-        let os = metadata["os"].as_str().unwrap_or_default();
-        ensure!(
-            os == "macos",
-            "this suite drives launchd; refusing on {os:?}"
-        );
-        let label = metadata["service_label"].as_str().unwrap_or_default();
-        ensure!(
-            label.ends_with(".native-e2e"),
-            "refusing to address the daily runtime {label:?}; run through `make live-onboarding`"
-        );
-
-        let uid = Command::new("/usr/bin/id").arg("-u").output()?;
-        ensure!(uid.status.success(), "could not identify the user domain");
-        let domain = format!("gui/{}", String::from_utf8(uid.stdout)?.trim());
-        let target = format!("{domain}/{label}");
-        ensure!(
-            !job_loaded(&target)?,
-            "{label} is already loaded; run `launchctl bootout {target}`"
-        );
-        for port in [HTTP_PORT, SHIM_PORT] {
-            ensure!(
-                std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
-                "port {port} is in use; if a killed run left it, run `launchctl bootout {target}`"
-            );
-        }
-
-        let codex_home = root.join("codex-home");
-        fs::create_dir_all(&codex_home)?;
-        fs::write(
-            codex_home.join("config.toml"),
-            "# Existing user Codex config should remain client-side.\n",
-        )?;
-        Ok(Self {
-            _temp: temp,
-            root,
-            label: label.to_string(),
-            domain,
-            homes: Mutex::new(Vec::new()),
-        })
-    }
-
-    fn target(&self) -> String {
-        format!("{}/{}", self.domain, self.label)
-    }
-
-    fn gents(&self) -> Command {
-        let mut command = Command::new(cli_bin());
-        command
-            .current_dir(&self.root)
-            .env("HOME", &self.root)
-            .env("CODEX_HOME", self.root.join("codex-home"))
-            .env("TERM", "xterm-256color")
-            .env("RUST_LOG", "error")
-            .env_remove("GENTS_HOME")
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("GENTS_CODEX_BIN")
-            .env_remove("GENTS_GROK_BIN")
-            .env_remove("INFERENCE_ENDPOINT");
-        command
-    }
-
-    /// A folder under the temporary `HOME` whose service `Drop` uninstalls.
-    fn folder(&self, name: &str) -> PathBuf {
-        let folder = self.root.join(name);
-        self.homes.lock().expect("homes lock").push(folder.clone());
-        folder
-    }
-
-    fn log(&self, name: &str) -> PathBuf {
-        self.root.join(format!("{name}.terminal.log"))
-    }
-
-    fn init_home(&self, name: &str, endpoint: &str, model: &str) -> Result<InitializedHome> {
-        let home = self.folder(name);
-        let output = self
-            .gents()
-            .args(["init", "--store-key-custody", "file", "--home"])
-            .arg(&home)
-            .args(["--inference-url", endpoint, "--model-name", model])
-            .output()
-            .context("running gents init")?;
-        ensure!(
-            output.status.success(),
-            "gents init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let init: Value = serde_json::from_slice(&output.stdout)?;
-        Ok(InitializedHome {
-            home,
-            node_did: node_did_from_init(&init)?,
-            default_agent_id: init["default_agent_id"]
-                .as_str()
-                .context("init reports a default agent")?
-                .to_string(),
-        })
-    }
-
-    /// `gents --home <home>`, opening `interface` as its Codex binary.
-    fn bare_gents(&self, interface: &str, home: &Path) -> Command {
-        let mut command = self.gents();
-        command
-            .env("GENTS_CODEX_BIN", interface)
-            .arg("--home")
-            .arg(home);
-        command
-    }
-
-    /// Brings up `home`'s service through bare `gents`, which then stops at the
-    /// missing interface.
-    async fn bring_up(&self, home: &Path) -> Result<()> {
-        let mut terminal =
-            Terminal::spawn(&self.bare_gents(MISSING_BIN, home), &self.log("bring-up"))?;
-        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
-        terminal.expect_exit(1).await
-    }
-
-    fn gents_ok(&self, args: &[&str]) -> Result<()> {
-        let output = self
-            .gents()
-            .args(args)
-            .output()
-            .with_context(|| format!("running gents {args:?}"))?;
-        ensure!(
-            output.status.success(),
-            "gents {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Ok(())
-    }
-
-    fn service_pid(&self) -> Option<u32> {
-        let output = Command::new("/bin/launchctl")
-            .args(["print", &self.target()])
-            .output()
-            .ok()?;
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("pid = ")?.parse().ok())
-    }
-
-    fn plist(&self) -> PathBuf {
-        self.root
-            .join("Library/LaunchAgents")
-            .join(format!("{}.plist", self.label))
-    }
-
-    fn plist_mtime(&self) -> Result<SystemTime> {
-        Ok(fs::metadata(self.plist())?.modified()?)
-    }
-
-    fn label_disabled(&self) -> Result<bool> {
-        let output = Command::new("/bin/launchctl")
-            .args(["print-disabled", &self.domain])
-            .output()
-            .context("running launchctl print-disabled")?;
-        ensure!(output.status.success(), "launchctl print-disabled failed");
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.split_once("=>"))
-            .any(|(label, value)| {
-                label.trim().trim_matches('"') == self.label
-                    && matches!(value.trim(), "disabled" | "true")
-            }))
-    }
-}
-
-impl Drop for LiveBox {
-    fn drop(&mut self) {
-        for home in self.homes.lock().expect("homes lock").iter() {
-            let _ = self
-                .gents()
-                .args(["service", "uninstall", "--home"])
-                .arg(home)
-                .output();
-        }
-        let target = self.target();
-        if job_loaded(&target).unwrap_or(true) {
-            let _ = Command::new("/bin/launchctl")
-                .args(["bootout", &target])
-                .output();
-        }
-    }
-}
-
-/// The five queries `write_expect_smoke` answers for Codex's terminal startup.
-const TERMINAL_QUERIES: [(&[u8], &[u8]); 5] = [
-    (b"\x1b[6n", b"\x1b[24;1R"),
-    (b"\x1b[?u", b"\x1b[?0u"),
-    (b"\x1b[c", b"\x1b[?1;2c"),
-    (b"\x1b]10;?\x1b\\", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
-    (b"\x1b]11;?\x1b\\", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
-];
-
-/// A child on a private 40 by 120 PTY, with everything it writes kept in order.
-struct Terminal {
-    child: Box<dyn portable_pty::Child + Send + Sync>,
-    input: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
-    transcript: Arc<Mutex<Vec<u8>>>,
-    drained: Arc<AtomicBool>,
-    cursor: usize,
-    _master: Box<dyn MasterPty + Send>,
-}
-
-impl Terminal {
-    fn spawn(command: &Command, log: &Path) -> Result<Self> {
-        let mut builder = CommandBuilder::new(command.get_program());
-        builder.args(command.get_args());
-        if let Some(directory) = command.get_current_dir() {
-            builder.cwd(directory.as_os_str());
-        }
-        for (key, value) in command.get_envs() {
-            match value {
-                Some(value) => builder.env(key, value),
-                None => builder.env_remove(key),
-            }
-        }
-        let mut log = File::create(log)?;
-        let pair = portable_pty::native_pty_system().openpty(PtySize {
-            rows: 40,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-        let mut reader = pair.master.try_clone_reader()?;
-        let input = Arc::new(Mutex::new(pair.master.take_writer()?));
-        let transcript = Arc::new(Mutex::new(Vec::new()));
-        let drained = Arc::new(AtomicBool::new(false));
-        let replies = Arc::downgrade(&input);
-        let output = transcript.clone();
-        let finished = drained.clone();
-        std::thread::Builder::new()
-            .name("live-onboarding-terminal".into())
-            .spawn(move || {
-                let mut matched = [0_usize; TERMINAL_QUERIES.len()];
-                let mut buffer = [0_u8; 8192];
-                loop {
-                    let read = match reader.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(read) => read,
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
-                    };
-                    let _ = log.write_all(&buffer[..read]);
-                    output
-                        .lock()
-                        .expect("transcript lock")
-                        .extend_from_slice(&buffer[..read]);
-                    for &byte in &buffer[..read] {
-                        for (index, (query, reply)) in TERMINAL_QUERIES.iter().enumerate() {
-                            if byte != query[matched[index]] {
-                                matched[index] = usize::from(byte == query[0]);
-                                continue;
-                            }
-                            matched[index] += 1;
-                            if matched[index] == query.len() {
-                                matched[index] = 0;
-                                if let Some(input) = replies.upgrade() {
-                                    let mut input = input.lock().expect("terminal input lock");
-                                    let _ = input.write_all(reply);
-                                    let _ = input.flush();
-                                }
-                            }
-                        }
-                    }
-                }
-                finished.store(true, Ordering::SeqCst);
-            })?;
-        let child = pair
-            .slave
-            .spawn_command(builder)
-            .context("starting the terminal's child")?;
-        drop(pair.slave);
-        Ok(Self {
-            child,
-            input,
-            transcript,
-            drained,
-            cursor: 0,
-            _master: pair.master,
-        })
-    }
-
-    fn transcript(&self) -> String {
-        String::from_utf8_lossy(&self.transcript.lock().expect("transcript lock")).into_owned()
-    }
-
-    /// Waits for `needle` after the previous match, so a run of calls asserts order.
-    async fn expect(&mut self, needle: &str, timeout: Duration) -> Result<()> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let found = {
-                let transcript = self.transcript.lock().expect("transcript lock");
-                transcript[self.cursor..]
-                    .windows(needle.len())
-                    .position(|window| window == needle.as_bytes())
-            };
-            if let Some(position) = found {
-                self.cursor += position + needle.len();
-                return Ok(());
-            }
-            if self.drained.load(Ordering::SeqCst) {
-                bail!(
-                    "the terminal closed before {needle:?}; transcript:\n{}",
-                    self.transcript()
-                );
-            }
-            if Instant::now() >= deadline {
-                bail!(
-                    "timed out after {timeout:?} waiting for {needle:?}; transcript:\n{}",
-                    self.transcript()
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
-    fn send(&mut self, text: &str) -> Result<()> {
-        let mut input = self.input.lock().expect("terminal input lock");
-        input.write_all(text.as_bytes())?;
-        input.flush()?;
-        Ok(())
-    }
-
-    /// Returns once the child exited and its output reached the transcript.
-    async fn wait_exit(&mut self, timeout: Duration) -> Result<u32> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(status) = self.child.try_wait()? {
-                while !self.drained.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                return Ok(status.exit_code());
-            }
-            if Instant::now() >= deadline {
-                bail!(
-                    "the child did not exit within {timeout:?}; transcript:\n{}",
-                    self.transcript()
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
-    async fn expect_exit(&mut self, code: u32) -> Result<()> {
-        let actual = self.wait_exit(EXIT).await?;
-        ensure!(
-            actual == code,
-            "expected exit {code}, got {actual}; transcript:\n{}",
-            self.transcript()
-        );
-        Ok(())
-    }
-}
-
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        if !matches!(self.child.try_wait(), Ok(Some(_))) {
-            let _ = self.child.kill();
-        }
-    }
-}
-
-/// A new connection each call, as a client that just started would make.
-async fn shim_call(route: &str, method: &str, params: Value) -> Result<Value> {
-    let url = format!("ws://127.0.0.1:{SHIM_PORT}{route}");
-    let (mut socket, _) = tokio_tungstenite::connect_async(url.as_str())
-        .await
-        .with_context(|| format!("connecting to {url}"))?;
-    for message in [
-        json!({
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "clientInfo": {"name": "cli-onboarding-live", "title": null, "version": "0"},
-                "capabilities": null,
-            },
-        }),
-        json!({"method": "initialized"}),
-        json!({"id": 2, "method": method, "params": params}),
-    ] {
-        socket
-            .send(Message::Text(message.to_string().into()))
-            .await?;
-    }
-    while let Some(message) = socket.next().await {
-        let Message::Text(text) = message? else {
-            continue;
-        };
-        let reply: Value = serde_json::from_str(&text)?;
-        if reply["id"] == json!(2) {
-            ensure!(reply.get("error").is_none(), "{method} failed: {reply}");
-            return Ok(reply["result"].clone());
-        }
-    }
-    bail!("the shim closed before answering {method}")
-}
-
-/// Holds the shim port for a test, as something that is not a Gents runtime would.
-struct HeldShimPort(tokio::task::JoinHandle<()>);
-
-impl HeldShimPort {
-    /// With an empty `reply`, each connection is closed as soon as it arrives.
-    async fn serving(reply: &'static [u8]) -> Result<Self> {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", SHIM_PORT)).await?;
-        Ok(Self(tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
-                if reply.is_empty() {
-                    continue;
-                }
-                let mut request = [0_u8; 4096];
-                let _ = stream.read(&mut request).await;
-                let _ = stream.write_all(reply).await;
-                let _ = stream.shutdown().await;
-            }
-        })))
-    }
-
-    async fn release(self) {
-        self.0.abort();
-        let _ = self.0.await;
-    }
-}
+use anyhow::{ensure, Context, Result};
+use serde_json::json;
 
 mod no_model {
     use super::*;
 
+    /// A home whose backend is down publishes no runnable agent, so `--agent` needs
+    /// one that answers. It runs no turn here and needs no model server.
+    fn answering_backend() -> Result<MockChatEndpoint> {
+        MockChatEndpoint::start(NO_MODEL_NAME, "unused")
+    }
+
+    /// A stand-in interface that writes its arguments to `args` and exits 0.
+    fn recording_interface(live: &LiveBox) -> Result<(PathBuf, PathBuf)> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let script = live.root.join("recording-interface");
+        let args = live.root.join("recorded-args");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", args.display()),
+        )?;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))?;
+        Ok((script, args))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn codex_opens_in_the_terminal_directory_only_inside_the_tool_root() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        let (interface, recorded) = recording_interface(&live)?;
+        let project = live.root.join("project");
+        fs::create_dir(&project)?;
+        let open = |directory: &Path, extra: &[&str], log: &str| {
+            let mut command = live.bare_gents(&interface.to_string_lossy(), &home.home);
+            command.current_dir(directory).args(extra);
+            Terminal::spawn(&command, &live.log(log))
+        };
+
+        let mut terminal = open(&project, &[], "inside")?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(
+            args.contains(&format!("--cd\n{}\n", project.display())),
+            "{args}"
+        );
+        ensure!(
+            args.contains(&format!("127.0.0.1:{SHIM_PORT}")),
+            "with no --agent there is no relay: {args}"
+        );
+        ensure!(
+            !terminal.transcript().contains(OUTSIDE_THE_ROOT_TEXT),
+            "{}",
+            terminal.transcript()
+        );
+
+        let mut terminal = open(Path::new("/"), &[], "outside")?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(!args.contains("--cd"), "{args}");
+        ensure!(
+            terminal
+                .transcript()
+                .matches(&format!("{OUTSIDE_THE_ROOT_TEXT} {}", live.root.display()))
+                .count()
+                == 2,
+            "the notice comes before the interface and again after it: {}",
+            terminal.transcript()
+        );
+
+        let mut never_opens = live.bare_gents(MISSING_BIN, &home.home);
+        never_opens.current_dir("/");
+        let mut terminal = Terminal::spawn(&never_opens, &live.log("outside-never-opens"))?;
+        terminal.expect_exit(1).await?;
+        ensure!(
+            terminal.transcript().matches(OUTSIDE_THE_ROOT_TEXT).count() == 1,
+            "with no interface nothing took the screen, so the notice is not repeated: {}",
+            terminal.transcript()
+        );
+
+        let mut terminal = open(&project, &["--agent", &home.default_agent_id], "agent")?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(
+            args.contains(&format!("--cd\n{}\n", project.display())),
+            "{args}"
+        );
+        ensure!(
+            !args.contains(&format!("127.0.0.1:{SHIM_PORT}")),
+            "--agent must connect through the relay: {args}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_listener_on_the_grok_socket_that_is_not_this_runtime_is_refused() -> Result<()> {
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home_arg = home.home.to_string_lossy();
+        live.gents_ok(&["config", "client", "set", "grok", "--home", &home_arg])?;
+        let (interface, recorded) = recording_interface(&live)?;
+        // Under /tmp because a Unix socket path has a short length limit.
+        let runtime_dir = tempfile::Builder::new()
+            .prefix("gents-")
+            .tempdir_in("/tmp")?;
+        let socket = runtime_dir.path().join("gents/grok.sock");
+        fs::create_dir_all(socket.parent().context("the socket has a parent")?)?;
+        let _stock_leader = std::os::unix::net::UnixListener::bind(&socket)?;
+        let mut command = live.bare_gents_grok(&interface.to_string_lossy(), &home.home);
+        command.env("XDG_RUNTIME_DIR", runtime_dir.path());
+
+        let mut terminal = Terminal::spawn(&command, &live.log("stock-leader"))?;
+
+        terminal
+            .expect(&socket.to_string_lossy(), RUNTIME_UP)
+            .await?;
+        terminal.expect_exit(1).await?;
+        ensure!(!recorded.exists(), "nothing may open");
+        ensure!(!live.plist().exists(), "nothing may be installed");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn grok_opens_on_the_socket_the_service_holds_whatever_the_terminal_expects() -> Result<()>
+    {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        live.gents_ok(&[
+            "config",
+            "client",
+            "set",
+            "grok",
+            "--home",
+            &home.home.to_string_lossy(),
+        ])?;
+        let (interface, recorded) = recording_interface(&live)?;
+        let terminal_dir = tempfile::Builder::new()
+            .prefix("gents-")
+            .tempdir_in("/tmp")?;
+        let mut command = live.bare_gents_grok(&interface.to_string_lossy(), &home.home);
+        command.env("XDG_RUNTIME_DIR", terminal_dir.path());
+
+        let mut terminal = Terminal::spawn(&command, &live.log("other-runtime-dir"))?;
+
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let runtime: serde_json::Value =
+            reqwest::get(format!("http://127.0.0.1:{SHIM_PORT}/runtime"))
+                .await?
+                .json()
+                .await?;
+        let held = runtime["grok_socket"]
+            .as_str()
+            .context("the service holds a socket")?;
+        ensure!(
+            !Path::new(held).starts_with(terminal_dir.path()),
+            "the service must not share the terminal's directory: {held}"
+        );
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(
+            args.contains(&format!("--leader-socket\n{held}\n")),
+            "{args}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn the_first_open_after_a_start_finds_the_default_agent() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        live.bring_up(&home.home).await?;
+        live.gents_ok(&["service", "stop", "--home", &home.home.to_string_lossy()])?;
+
+        let mut command = live.bare_gents("/usr/bin/true", &home.home);
+        command.args(["--agent", &home.default_agent_id]);
+        let mut terminal = Terminal::spawn(&command, &live.log("first-open"))?;
+
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        ensure!(
+            !terminal.transcript().contains("unknown agent"),
+            "{}",
+            terminal.transcript()
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn an_unknown_agent_names_gents_config_agent_list() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        let mut command = live.bare_gents("/usr/bin/true", &home.home);
+        command.args(["--agent", "nosuch"]);
+
+        let mut terminal = Terminal::spawn(&command, &live.log("unknown"))?;
+
+        terminal.expect("unknown agent", RUNTIME_UP).await?;
+        terminal.expect("gents config agent list", EXIT).await?;
+        terminal.expect_exit(1).await
+    }
+
+    #[test]
+    #[ignore = "ignored only so `make live-onboarding` runs it; touches nothing"]
+    fn only_an_isolated_build_on_macos_passes_the_label_check() {
+        for (os, label) in [
+            ("macos", "ai.gents.runtime"),
+            ("macos", ""),
+            ("macos", "ai.gents.runtime.native-e2e.other"),
+            ("linux", "ai.gents.runtime.native-e2e"),
+        ] {
+            let metadata = json!({"os": os, "service_label": label});
+            assert!(
+                isolated_label(&metadata).is_err(),
+                "{os} {label} must be refused"
+            );
+        }
+        assert!(isolated_label(&json!({})).is_err());
+        assert_eq!(
+            isolated_label(&json!({"os": "macos", "service_label": "ai.gents.runtime.native-e2e"}))
+                .unwrap(),
+            "ai.gents.runtime.native-e2e"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn a_stopped_home_starts_its_service_and_reports_the_missing_interface() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
-        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
 
         let mut terminal = Terminal::spawn(
             &live.bare_gents(MISSING_BIN, &home.home),
@@ -526,9 +275,39 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn a_running_runtime_is_left_alone() -> Result<()> {
+    async fn a_home_with_no_runnable_agent_says_so_and_opens_nothing() -> Result<()> {
         let live = LiveBox::new()?;
         let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home_arg = home.home.to_string_lossy();
+        let (interface, recorded) = recording_interface(&live)?;
+        let interface = interface.to_string_lossy();
+
+        for (client, command) in [
+            ("codex", live.bare_gents(&interface, &home.home)),
+            ("grok", live.bare_gents_grok(&interface, &home.home)),
+        ] {
+            live.gents_ok(&["config", "client", "set", client, "--home", &home_arg])?;
+            if client == "grok" {
+                live.gents_ok(&["service", "restart", "--home", &home_arg])?;
+            }
+
+            let mut terminal = Terminal::spawn(&command, &live.log(client))?;
+
+            terminal.expect("no agent can run", RUNTIME_UP).await?;
+            terminal.expect("gents status", EXIT).await?;
+            terminal.expect("gents config backend set", EXIT).await?;
+            terminal.expect_exit(1).await?;
+            ensure!(!recorded.exists(), "{client}: nothing may open");
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_running_runtime_is_left_alone() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         live.bring_up(&home.home).await?;
         let pid = live.service_pid().context("the service runs")?;
         let mtime = live.plist_mtime()?;
@@ -548,8 +327,9 @@ mod no_model {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn a_stopped_service_is_started_without_reinstalling() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
-        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         live.bring_up(&home.home).await?;
         let pid = live.service_pid().context("the service runs")?;
         let mtime = live.plist_mtime()?;
@@ -566,8 +346,9 @@ mod no_model {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn another_homes_runtime_is_refused_and_named() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
-        let a = live.init_home("home-a", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let a = live.init_home("home-a", backend.endpoint(), NO_MODEL_NAME)?;
         let b = live.init_home("home-b", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
         live.bring_up(&a.home).await?;
         let pid = live.service_pid().context("home A's service runs")?;
@@ -645,7 +426,11 @@ mod no_model {
             &live.log("endpoint-off"),
         )?;
 
-        terminal.expect("gents service restart", RUNTIME_UP).await?;
+        terminal
+            .expect("Waiting for this home's runtime", PROMPT)
+            .await?;
+        terminal.expect("gents status", RUNTIME_UP).await?;
+        terminal.expect("gents service restart", EXIT).await?;
         terminal.expect("whatever is running it", EXIT).await?;
         terminal.expect_exit(1).await?;
         ensure!(
@@ -653,6 +438,921 @@ mod no_model {
             "the foreground server must still be running"
         );
         ensure!(!live.plist().exists(), "nothing may be installed");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn first_run_sets_up_and_leaves_the_runtime_up() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let folder = live.folder("my data");
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("first-run"))?;
+
+        terminal.expect("██", PROMPT).await?;
+        terminal.expect(INSTALL_MESSAGE, PROMPT).await?;
+        terminal
+            .answer(FOLDER_QUESTION, &folder.to_string_lossy())
+            .await?;
+        terminal
+            .answer_scanned_inference(backend.endpoint(), NO_MODEL_NAME)
+            .await?;
+        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
+        terminal.expect("gents chat", EXIT).await?;
+        terminal.expect_exit(1).await?;
+
+        let init = read_json_file(&folder.join("init.json"))?;
+        assert_eq!(init["tool_package"], json!("Yolo"));
+        assert_eq!(init["tool_ceiling"], json!("Readwrite"));
+        assert_eq!(
+            init["tool_root"],
+            json!(live.root.join(WORK_FOLDER).to_string_lossy())
+        );
+        ensure!(
+            terminal.transcript().contains("not a sandbox")
+                && !terminal.transcript().contains("--yolo"),
+            "setup says what agents can do, and names no flag nobody typed: {}",
+            terminal.transcript()
+        );
+        let transcript = terminal.transcript();
+        let questions = [
+            FOLDER_QUESTION,
+            ROOT_QUESTION,
+            INFERENCE_QUESTION,
+            "Server base URL",
+            "Model",
+        ];
+        for screen in transcript.split(CLEAR_SCREEN) {
+            let asked = questions
+                .iter()
+                .filter(|question| screen.contains(**question));
+            ensure!(asked.count() <= 1, "more than one question on: {screen}");
+        }
+        ensure!(
+            transcript.starts_with(CLEAR_SCREEN),
+            "setup starts on a clear screen: {transcript}"
+        );
+        let first_screen = transcript
+            .split(CLEAR_SCREEN)
+            .nth(1)
+            .context("setup prints a first screen")?;
+        let lines: Vec<&str> = first_screen.split("\r\n").collect();
+        let in_logo = |line: &str| line.contains(['█', '▀', '▄']);
+        let above = lines
+            .iter()
+            .position(|line| in_logo(line))
+            .context("the logo is on the first screen")?;
+        let logo: Vec<&str> = lines[above..]
+            .iter()
+            .copied()
+            .take_while(|line| in_logo(line))
+            .collect();
+        let left = logo
+            .iter()
+            .map(|line| line.chars().take_while(|mark| *mark == ' ').count())
+            .min()
+            .context("the logo has rows")?;
+        let logo_width = logo[0].chars().count() - left;
+        assert_eq!(above, (usize::from(PTY_ROWS) - logo.len()) / 2);
+        assert_eq!(left, (usize::from(PTY_COLUMNS) - logo_width) / 2);
+        let agents = live
+            .gents()
+            .args(["config", "agent", "list", "--home"])
+            .arg(&folder)
+            .output()?;
+        let agents = String::from_utf8_lossy(&agents.stdout);
+        ensure!(
+            agents.contains("The Engineer"),
+            "setup seeds the Engineer: {agents}"
+        );
+        assert_eq!(
+            fs::read_to_string(live.remembered_home())?.trim_end_matches('\n'),
+            folder.to_string_lossy()
+        );
+        ensure!(
+            !terminal.transcript().contains(NO_MODEL_TEXT),
+            "a model that answers gets no warning: {}",
+            terminal.transcript()
+        );
+        ensure!(
+            !terminal.transcript().contains(r#""status":"initialized""#)
+                && !terminal.transcript().contains(r#""status": "initialized""#),
+            "setup must not print init's JSON: {}",
+            terminal.transcript()
+        );
+        ensure!(live.plist().is_file(), "the service was not installed");
+        shim_call("/", "thread/loaded/list", json!({})).await?;
+
+        let pid = live.service_pid().context("the service runs")?;
+        let mut no_flags = live.gents();
+        no_flags.env("GENTS_CODEX_BIN", MISSING_BIN);
+        let mut second = Terminal::spawn(&no_flags, &live.log("second-run"))?;
+        second.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
+        second.expect_exit(1).await?;
+        ensure!(
+            !second.transcript().contains(FOLDER_QUESTION)
+                && !second.transcript().contains(INFERENCE_QUESTION),
+            "a set up home asks nothing: {}",
+            second.transcript()
+        );
+        ensure!(
+            !second.transcript().contains(CLEAR_SCREEN),
+            "only setup clears the screen: {}",
+            second.transcript()
+        );
+        assert_eq!(live.service_pid(), Some(pid));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_failed_setup_remembers_nothing() -> Result<()> {
+        let live = LiveBox::new()?;
+        let file = live.root.join("a-file");
+        fs::write(&file, "not a folder")?;
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("failed"))?;
+        terminal
+            .answer(FOLDER_QUESTION, &file.join("sub").to_string_lossy())
+            .await?;
+        terminal.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
+        let code = terminal.wait_exit(PROMPT).await?;
+
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(
+            terminal.transcript().contains("creating data directory"),
+            "this must fail inside init_home: {}",
+            terminal.transcript()
+        );
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        ensure!(!live.plist().exists(), "nothing is installed");
+        assert_eq!(fs::read_to_string(&file)?, "not a folder");
+
+        let mut rerun = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("rerun"))?;
+        rerun
+            .answer(FOLDER_QUESTION, &file.to_string_lossy())
+            .await?;
+        rerun.expect("is not a folder", PROMPT).await?;
+        rerun.expect_exit(1).await?;
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        Ok(())
+    }
+
+    /// Bare `gents --home <folder>`, which stops at the refusal once setup finishes.
+    fn setup_of(live: &LiveBox, folder: &Path, log: &str) -> Result<Terminal> {
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(folder);
+        Terminal::spawn(&command, &live.log(log))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_setup_that_stopped_midway_asks_again() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+        // A file where the store needs a folder stops init after it records key custody.
+        let blocker = folder.join("data/wal");
+        fs::create_dir_all(blocker.parent().context("the blocker has a parent")?)?;
+        fs::write(&blocker, "")?;
+
+        let mut terminal = setup_of(&live, &folder, "midway")?;
+        terminal.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(
+            terminal
+                .transcript()
+                .contains("embedded DefraDB node for init"),
+            "this must fail after init records its key custody: {}",
+            terminal.transcript()
+        );
+        ensure!(folder.join("init.json").is_file(), "custody is recorded");
+        ensure!(!live.plist().exists(), "nothing is installed");
+        fs::remove_file(&blocker)?;
+
+        let mut rerun = setup_of(&live, &folder, "midway-rerun")?;
+        rerun
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        rerun.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        rerun.expect_exit(1).await?;
+
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_asks_again_until_the_work_folder_is_usable() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let file = live.root.join("a-file");
+        fs::write(&file, "not a folder")?;
+
+        let folder = live.folder("data");
+        let mut terminal = setup_of(&live, &folder, "refused")?;
+        terminal.answer(ROOT_QUESTION, "missing").await?;
+        terminal.expect("is not an existing folder", PROMPT).await?;
+        terminal
+            .answer(ROOT_QUESTION, &file.to_string_lossy())
+            .await?;
+        terminal.expect("is not an existing folder", PROMPT).await?;
+        terminal.answer(ROOT_QUESTION, "/").await?;
+        terminal.expect("too broad", PROMPT).await?;
+        terminal.answer(ROOT_QUESTION, "~").await?;
+        terminal.expect("your whole home folder", PROMPT).await?;
+        terminal.answer("Use it?", "n").await?;
+        ensure!(
+            terminal.transcript().split(CLEAR_SCREEN).any(|screen| {
+                screen.contains("is not an existing folder")
+                    && screen.contains("too broad")
+                    && screen.matches(ROOT_QUESTION).count() > 1
+            }),
+            "a refused answer stays on screen with the question: {}",
+            terminal.transcript()
+        );
+        terminal
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        assert_eq!(
+            read_json_file(&folder.join("init.json"))?["tool_root"],
+            json!(live.root.join(WORK_FOLDER).to_string_lossy())
+        );
+
+        let folder = live.folder("data-home");
+        let mut terminal = setup_of(&live, &folder, "home")?;
+        terminal.answer(ROOT_QUESTION, "").await?;
+        terminal.expect("your whole home folder", PROMPT).await?;
+        terminal.answer("Use it?", "y").await?;
+        terminal
+            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        assert_eq!(
+            read_json_file(&folder.join("init.json"))?["tool_root"],
+            json!(live.root.to_string_lossy())
+        );
+
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_asks_again_after_a_garbage_provider_answer_without_repeating_it() -> Result<()> {
+        const PASTED: &str = "sk-pasted-at-the-wrong-prompt";
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "garbage")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, PASTED).await?;
+        terminal.answer("Answer 1 to 5", LOCAL_PROVIDER).await?;
+        terminal
+            .answer("Server base URL", NO_MODEL_ENDPOINT)
+            .await?;
+        terminal.answer("Model", NO_MODEL_NAME).await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        // The terminal itself echoes typing once; anything more came from `gents`.
+        ensure!(
+            terminal.transcript().matches(PASTED).count() <= 1,
+            "{}",
+            terminal.transcript()
+        );
+        ensure!(folder.join("init.json").is_file(), "setup kept going");
+        held.release().await;
+        Ok(())
+    }
+
+    /// `command` under a shell that outlives it on the same terminal and prints that
+    /// terminal's flags afterward, as the shell a person returns to would find them.
+    fn reporting_terminal_flags(command: &Command) -> Command {
+        let mut shell = Command::new("/bin/sh");
+        shell
+            .args([
+                "-c",
+                r#"trap : INT; "$@"; code=$?; stty -a; exit $code"#,
+                "sh",
+            ])
+            .arg(command.get_program())
+            .args(command.get_args());
+        if let Some(directory) = command.get_current_dir() {
+            shell.current_dir(directory);
+        }
+        for (key, value) in command.get_envs() {
+            match value {
+                Some(value) => shell.env(key, value),
+                None => shell.env_remove(key),
+            };
+        }
+        shell
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_c_at_the_hidden_key_prompt_restores_the_terminal() -> Result<()> {
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&folder);
+
+        let mut terminal =
+            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("key-prompt"))?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "2").await?;
+        terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
+        // Echo goes off just after the prompt prints, and the interrupt has to find it off.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal.send("\x03")?;
+        terminal.expect_exit(130).await?;
+
+        let transcript = terminal.transcript();
+        let flag = |name| transcript.split_whitespace().any(|word| word == name);
+        ensure!(flag("echo") && !flag("-echo"), "{transcript}");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_c_still_stops_setup_after_the_key_prompt() -> Result<()> {
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&folder);
+
+        let mut terminal =
+            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("after-key"))?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "2").await?;
+        terminal
+            .answer("OpenAI API key (hidden)", "sk-not-a-real-key")
+            .await?;
+        terminal.expect("Model [", PROMPT).await?;
+        terminal.send("\x03")?;
+        terminal.expect_exit(130).await?;
+
+        let transcript = terminal.transcript();
+        let flag = |name| transcript.split_whitespace().any(|word| word == name);
+        ensure!(flag("echo") && !flag("-echo"), "{transcript}");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_d_at_a_question_stops_setup_and_changes_nothing() -> Result<()> {
+        let live = LiveBox::new()?;
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("ctrl-d"))?;
+        terminal.expect(FOLDER_QUESTION, PROMPT).await?;
+        terminal.send("\x04")?;
+        let code = terminal.wait_exit(EXIT).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(
+            !terminal.transcript().contains(ROOT_QUESTION),
+            "end of input is not an empty answer: {}",
+            terminal.transcript()
+        );
+
+        let folder = live.folder("data");
+        let mut terminal = setup_of(&live, &folder, "ctrl-d-menu")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.expect(INFERENCE_QUESTION, PROMPT).await?;
+        terminal.send("\x04")?;
+        let code = terminal.wait_exit(EXIT).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(!folder.join("init.json").exists(), "nothing is set up");
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        ensure!(!live.plist().exists(), "nothing is installed");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_d_at_the_hidden_key_prompt_restores_the_terminal() -> Result<()> {
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&folder);
+
+        let mut terminal =
+            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("ctrl-d-key"))?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "2").await?;
+        terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
+        // Echo goes off just after the prompt prints, and the end of input has to find it off.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal.send("\x04")?;
+        let code = terminal.wait_exit(EXIT).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+
+        let transcript = terminal.transcript();
+        let flag = |name| transcript.split_whitespace().any(|word| word == name);
+        ensure!(flag("echo") && !flag("-echo"), "{transcript}");
+        ensure!(!folder.join("init.json").exists(), "nothing is set up");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_d_at_a_yes_by_default_question_declines() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "ctrl-d-sign-in")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "").await?;
+        terminal.expect("Log in to ChatGPT now", PROMPT).await?;
+        terminal.send("\x04")?;
+        terminal
+            .expect(
+                &format!("gents auth login codex --home {}", folder.display()),
+                PROMPT,
+            )
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_lists_the_servers_models_and_asks_each_value_with_its_default() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "scan")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
+        terminal
+            .answer("Server base URL", backend.endpoint())
+            .await?;
+        terminal
+            .expect("Choose a model for Local (1 found)", PROMPT)
+            .await?;
+        terminal.answer("part of a name", "not-listed").await?;
+        terminal.expect("No model matches that", PROMPT).await?;
+        terminal.answer("part of a name", "").await?;
+        terminal
+            .expect("Temperature (0 to 2) [0.7]", PROMPT)
+            .await?;
+        terminal.send("9\r")?;
+        terminal.expect("Answer a number, 0 to 2", PROMPT).await?;
+        terminal.answer("Temperature (0 to 2) [0.7]", "0.2").await?;
+        terminal.answer("Top-p (0 to 1) [1]", "").await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        let read = |collection: &str, fields: &[&str]| -> Result<String> {
+            let mut command = live.gents();
+            command.args(["data", "query", "find", "--collection", collection]);
+            for field in fields {
+                command.args(["--field", field]);
+            }
+            let output = command.arg("--home").arg(&folder).output()?;
+            ensure!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let sampling = read("InferenceSampling", &["temperature", "top_p"])?;
+        ensure!(sampling.contains("0.2"), "the changed value: {sampling}");
+        let profile = read("InferenceProfile", &["model_name", "sampling_id"])?;
+        ensure!(
+            profile.contains(NO_MODEL_NAME) && profile.contains("-sampling"),
+            "the profile uses the chosen model and its values: {profile}"
+        );
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_warns_about_a_model_that_does_not_answer_and_keeps_going() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "dead-model")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
+        terminal
+            .answer("Server base URL", NO_MODEL_ENDPOINT)
+            .await?;
+        terminal.expect("Looking for models", PROMPT).await?;
+        terminal.expect(NO_MODEL_TEXT, PROMPT).await?;
+        terminal.expect("gents config backend set", PROMPT).await?;
+        terminal.answer("Model name:", NO_MODEL_NAME).await?;
+        ensure!(
+            terminal
+                .transcript()
+                .split(CLEAR_SCREEN)
+                .any(|screen| screen.contains(NO_MODEL_TEXT) && screen.contains("Model name:")),
+            "the warning stays on screen with the next question: {}",
+            terminal.transcript()
+        );
+        terminal
+            .expect("gents config backend set --file", PROMPT)
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        ensure!(folder.join("init.json").is_file(), "setup kept going");
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_prints_the_next_step_after_a_declined_sign_in() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "declined")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "").await?;
+        terminal.answer("Log in to ChatGPT now", "n").await?;
+
+        terminal
+            .expect(
+                &format!("gents auth login codex --home {}", folder.display()),
+                PROMPT,
+            )
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn an_initialized_folder_skips_the_remaining_questions() -> Result<()> {
+        let live = LiveBox::new()?;
+        let home = live.init_home("existing", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let held = HeldShimPort::serving(b"").await?;
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("existing"))?;
+        terminal
+            .answer(FOLDER_QUESTION, &home.home.to_string_lossy())
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        ensure!(
+            !terminal.transcript().contains(INFERENCE_QUESTION)
+                && !terminal.transcript().contains(ROOT_QUESTION),
+            "an initialized folder asks nothing more: {}",
+            terminal.transcript()
+        );
+        assert_eq!(
+            fs::read_to_string(live.remembered_home())?.trim_end_matches('\n'),
+            home.home.to_string_lossy()
+        );
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_given_home_is_not_asked_and_not_remembered() -> Result<()> {
+        let live = LiveBox::new()?;
+        let home = live.folder("given");
+        let held = HeldShimPort::serving(b"").await?;
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&home);
+
+        let mut terminal = Terminal::spawn(&command, &live.log("given"))?;
+        terminal
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        ensure!(
+            !terminal.transcript().contains(FOLDER_QUESTION),
+            "a given home is not asked for: {}",
+            terminal.transcript()
+        );
+        ensure!(home.join("init.json").is_file(), "the given home is set up");
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_vanished_remembered_folder_is_the_suggested_answer() -> Result<()> {
+        let live = LiveBox::new()?;
+        let vanished = live.root.join("vanished folder");
+        let remembered = live.remembered_home();
+        fs::create_dir_all(remembered.parent().context("the file has a parent")?)?;
+        fs::write(&remembered, format!("{}\n", vanished.display()))?;
+
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("vanished"))?;
+        terminal
+            .expect(&format!("{FOLDER_QUESTION}{}]", vanished.display()), PROMPT)
+            .await?;
+        terminal.send("\x03")?;
+        terminal.wait_exit(EXIT).await?;
+        Ok(())
+    }
+}
+
+mod with_model {
+    use super::*;
+
+    fn unique_prompt() -> String {
+        format!("Reply with exactly this token: {}", uuid::Uuid::new_v4())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
+    async fn two_real_codex_windows_keep_agents_apart() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(codex) = real_interface("codex") else {
+            return Ok(());
+        };
+        let codex = codex.to_string_lossy();
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", &endpoint, &model)?;
+        live.bring_up(&home.home).await?;
+        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        let pid = live.service_pid().context("the service runs")?;
+        let a = home.default_agent_id.clone();
+        let b = live.clone_agent(&home, "other").await?;
+        let (route_a, route_b) = (agent_route(&a), agent_route(&b));
+        let (prompt_a, prompt_b) = (unique_prompt(), unique_prompt());
+
+        let window = |agent: &str, prompt: &str, log: &str| {
+            let mut command = live.gents();
+            command.env("GENTS_CODEX_BIN", &*codex).args([
+                "codex",
+                "--agent",
+                agent,
+                "--no-alt-screen",
+                prompt,
+            ]);
+            Terminal::spawn(&command, &live.log(log))
+        };
+        let window_a = window(&a, &prompt_a, "window-a")?;
+        let window_b = window(&b, &prompt_b, "window-b")?;
+
+        wait_for_loaded_thread(&window_a, &route_a, &[]).await?;
+        wait_for_loaded_thread(&window_b, &route_b, &[]).await?;
+        let graphql = graphql_url(HTTP_PORT);
+        let turns: Result<_> = async {
+            let (request_a, session_a, agent_a) =
+                wait_for_request(&graphql, &home.node_did, &prompt_a).await?;
+            let (request_b, session_b, agent_b) =
+                wait_for_request(&graphql, &home.node_did, &prompt_b).await?;
+            assert_eq!(agent_a, a);
+            assert_eq!(agent_b, b);
+            assert_ne!(session_a, session_b);
+            wait_for_request_lifecycle_state(&graphql, &request_a, &["completed"], TURN).await?;
+            wait_for_request_lifecycle_state(&graphql, &request_b, &["completed"], TURN).await?;
+            Ok((session_a, session_b))
+        }
+        .await;
+        let (session_a, session_b) = turns.with_context(|| {
+            format!(
+                "window A:\n{}\nwindow B:\n{}",
+                window_a.transcript(),
+                window_b.transcript()
+            )
+        })?;
+
+        for (route, own, other) in [
+            (&route_a, &session_a, &session_b),
+            (&route_b, &session_b, &session_a),
+        ] {
+            let listed = shim_call(route, "thread/list", json!({})).await?;
+            let listed = listed["data"].as_array().context("thread/list has data")?;
+            let has = |id: &String| listed.iter().any(|thread| &thread["id"] == id);
+            ensure!(has(own) && !has(other), "{route} lists {listed:?}");
+            let loaded = loaded_threads(route).await?;
+            ensure!(
+                loaded.contains(own) && !loaded.contains(other),
+                "{route} loads {loaded:?}"
+            );
+        }
+
+        let project = live.root.join("project");
+        fs::create_dir(&project)?;
+        let known = loaded_threads(&route_b).await?;
+        let mut from_project = live.bare_gents(&codex, &home.home);
+        from_project.current_dir(&project).args(["--agent", &b]);
+        let window_project = Terminal::spawn(&from_project, &live.log("window-project"))?;
+        let thread = wait_for_loaded_thread(&window_project, &route_b, &known).await?;
+        let listed = shim_call(&route_b, "thread/list", json!({})).await?;
+        let started = listed["data"]
+            .as_array()
+            .and_then(|threads| {
+                threads
+                    .iter()
+                    .find(|listed| listed["id"] == thread.as_str())
+            })
+            .with_context(|| format!("{thread} is not listed: {listed}"))?;
+        assert_eq!(started["cwd"], json!(project.to_string_lossy()));
+
+        assert_eq!(live.service_pid(), Some(pid));
+        Ok(())
+    }
+
+    /// Opens Grok through `command`, submits a prompt, and returns the request's agent
+    /// once it completes.
+    async fn turn_in_grok(
+        live: &LiveBox,
+        home: &InitializedHome,
+        command: &Command,
+        log: &str,
+    ) -> Result<String> {
+        let mut terminal = Terminal::spawn(command, &live.log(log))?;
+        terminal.settle().await;
+        let prompt = unique_prompt();
+        terminal.send(&prompt)?;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        terminal.send("\r")?;
+
+        let graphql = graphql_url(HTTP_PORT);
+        let result: Result<String> = async {
+            let (request, _, agent) = wait_for_request(&graphql, &home.node_did, &prompt).await?;
+            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+            Ok(agent)
+        }
+        .await;
+        result.with_context(|| format!("Grok transcript:\n{}", terminal.transcript()))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Grok; run through `make live-onboarding`"]
+    async fn real_grok_opens_by_setting_and_by_agent() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(grok) = real_interface("grok") else {
+            return Ok(());
+        };
+        let grok = grok.to_string_lossy();
+        let socket = Path::new("/tmp/gents-grok.sock");
+        ensure!(
+            !socket.exists(),
+            "{} exists, so another runtime holds Grok's socket",
+            socket.display()
+        );
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", &endpoint, &model)?;
+        let home_arg = home.home.to_string_lossy();
+        live.bring_up(&home.home).await?;
+        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        let b = live.clone_agent(&home, "other").await?;
+        let pid = live.service_pid().context("the service runs")?;
+
+        live.gents_ok(&["config", "client", "set", "grok", "--home", &home_arg])?;
+        let mut refused = Terminal::spawn(
+            &live.bare_gents_grok(&grok, &home.home),
+            &live.log("grok-socket-off"),
+        )?;
+        refused.expect("gents service restart", RUNTIME_UP).await?;
+        refused.expect_exit(1).await?;
+        assert_eq!(live.service_pid(), Some(pid));
+
+        live.gents_ok(&["service", "restart", "--home", &home_arg])?;
+        let agent = turn_in_grok(
+            &live,
+            &home,
+            &live.bare_gents_grok(&grok, &home.home),
+            "grok-default",
+        )
+        .await?;
+        assert_eq!(agent, home.default_agent_id);
+
+        let mut by_agent = live.bare_gents_grok(&grok, &home.home);
+        by_agent.args(["--agent", &b]);
+        let agent = turn_in_grok(&live, &home, &by_agent, "grok-agent").await?;
+        assert_eq!(agent, b);
+
+        drop(live);
+        ensure!(
+            !socket.exists(),
+            "{} outlived the runtime; `lsof` names what holds it",
+            socket.display()
+        );
+        Ok(())
+    }
+
+    /// Runs first-run setup into `folder` against the model, up to opening the interface.
+    async fn set_up(
+        live: &LiveBox,
+        interface: &str,
+        folder: &Path,
+        endpoint: &str,
+        model: &str,
+    ) -> Result<Terminal> {
+        let mut terminal = Terminal::spawn(&live.first_run(interface), &live.log("first-run"))?;
+        terminal
+            .answer(FOLDER_QUESTION, &folder.to_string_lossy())
+            .await?;
+        terminal.answer_scanned_inference(endpoint, model).await?;
+        Ok(terminal)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model and real launchd; run through `make live-onboarding`"]
+    async fn first_run_then_chat_completes_a_turn() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+
+        let mut terminal = set_up(&live, MISSING_BIN, &folder, &endpoint, &model).await?;
+        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        crate::support::graphql::register_served_home(&folder, HTTP_PORT)?;
+
+        let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
+        let mut chat = live.gents();
+        chat.args(["chat", "--home"])
+            .arg(&folder)
+            .args(["--output", "json", &prompt]);
+        let output = tokio::time::timeout(
+            TURN,
+            tokio::process::Command::from(chat)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .context("gents chat did not finish")??;
+        ensure!(
+            output.status.success(),
+            "gents chat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let graphql = graphql_url(HTTP_PORT);
+        let (request, _, _) = wait_for_request(&graphql, &node_did_of(&folder)?, &prompt).await?;
+        wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
+    async fn first_run_opens_real_codex_and_a_turn_completes() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(codex) = real_interface("codex") else {
+            return Ok(());
+        };
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let codex = codex.to_string_lossy();
+
+        let mut terminal = set_up(&live, &codex, &folder, &endpoint, &model).await?;
+        let result = turn_in_codex(&live, &mut terminal, &folder).await;
+        result.with_context(|| format!("Codex transcript:\n{}", terminal.transcript()))
+    }
+
+    async fn turn_in_codex(live: &LiveBox, terminal: &mut Terminal, folder: &Path) -> Result<()> {
+        wait_for_loaded_thread(terminal, "/", &[]).await?;
+        let pid = live.service_pid().context("the service runs")?;
+        crate::support::graphql::register_served_home(folder, HTTP_PORT)?;
+
+        let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
+        terminal.send(&prompt)?;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        terminal.send("\r")?;
+
+        let graphql = graphql_url(HTTP_PORT);
+        let (request, _, _) = wait_for_request(&graphql, &node_did_of(folder)?, &prompt).await?;
+        wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+
+        // The request completes before the shim's next stream poll tells Codex, and until
+        // then Ctrl-C interrupts the turn Codex still counts as running instead of exiting.
+        terminal.settle().await;
+        terminal.send("\x03")?;
+        terminal.wait_exit(PROMPT).await.with_context(|| {
+            let events = folder.join("codex-ui/log/codex-shim-events.jsonl");
+            format!(
+                "what the shim last received:\n{}",
+                fs::read_to_string(events).unwrap_or_default()
+            )
+        })?;
+        assert_eq!(live.service_pid(), Some(pid));
+        shim_call("/", "thread/loaded/list", json!({})).await?;
         Ok(())
     }
 }

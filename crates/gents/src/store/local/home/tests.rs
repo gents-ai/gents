@@ -717,7 +717,7 @@ fn a_directory_at_the_file_path_is_a_read_error() {
 #[test]
 fn empty_or_relative_contents_are_invalid() {
     let user = tempfile::tempdir().unwrap();
-    for contents in ["", "\n", "relative/home\n"] {
+    for contents in ["", "\n", "relative/home\n", "/a\n/b\n", "/a\r\n"] {
         let config = tempfile::tempdir().unwrap();
         let remembered = plant_remembered(config.path(), contents);
 
@@ -769,6 +769,22 @@ fn remember_writes_the_absolute_path_at_gents_slash_home() {
             std::env::current_dir().unwrap().join("relative").display()
         )
     );
+}
+
+#[test]
+fn remember_refuses_a_path_with_a_line_break() {
+    let config = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    for chosen in ["/srv/a\nb", "/srv/a\rb", "/srv/a\n"] {
+        let error =
+            super::remember_home_in(config.path(), user.path(), std::path::Path::new(chosen))
+                .unwrap_err();
+        assert!(
+            matches!(error, super::HomeError::RememberedHomeWrite { .. }),
+            "{chosen:?}: {error:?}"
+        );
+    }
+    assert!(!config.path().join("gents/home").exists());
 }
 
 #[test]

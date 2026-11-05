@@ -131,11 +131,52 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
         .error_for_status()?
         .json::<Value>()
         .await?;
+    let tool_root = fs::canonicalize(&home_dir)?;
 
     assert_eq!(
         identity,
-        json!({"node_did": node_did, "home": home_dir.join(".gents").to_string_lossy()})
+        json!({
+            "node_did": node_did,
+            "home": home_dir.join(".gents").to_string_lossy(),
+            "bound_agent": default_agent_id,
+            "runnable_agents": null,
+            "tool_root": tool_root,
+            "default_thread_cwd": tool_root,
+            "grok_socket": null,
+        })
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_identity_names_only_a_grok_socket_it_holds() -> Result<()> {
+    // Under /tmp because a Unix socket path has a short length limit.
+    let dir = tempfile::Builder::new()
+        .prefix("gents-")
+        .tempdir_in("/tmp")
+        .context("creating socket dir")?;
+    let dir = fs::canonicalize(dir.path())?;
+    let socket = dir.join("grok.sock");
+    let socket_arg = socket.to_string_lossy().into_owned();
+    let grok_args = |socket: String| {
+        move |_: &str| {
+            vec![
+                "--grok-shim".to_string(),
+                "--grok-shim-socket-path".to_string(),
+                socket,
+            ]
+        }
+    };
+
+    let holder = AgentShim::start(grok_args(socket_arg.clone()), &[]).await?;
+    assert_eq!(
+        holder.runtime(None).await?["grok_socket"],
+        json!(socket_arg)
+    );
+
+    let loser = AgentShim::start(grok_args(socket_arg), &[]).await?;
+    assert_eq!(loser.runtime(None).await?["grok_socket"], json!(null));
     Ok(())
 }
 
@@ -238,7 +279,7 @@ async fn a_thread_starts_in_the_tool_root_when_the_runtime_runs_elsewhere() -> R
     Ok(())
 }
 
-fn assert_http_status(
+pub(super) fn assert_http_status(
     error: tokio_tungstenite::tungstenite::Error,
     expected: StatusCode,
 ) -> Result<()> {

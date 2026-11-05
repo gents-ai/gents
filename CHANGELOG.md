@@ -56,6 +56,33 @@ source consistency checks, not a separate runtime compatibility version.
   | `init` | hidden, still works |
   | `prepare-runtime` | hidden, still works |
 
+- `gents` with no command sets up a home on first run, brings up its runtime
+  through the native service without enabling it at login, and opens the
+  configured interface. Setup seeds The Engineer with the desktop's default
+  authority (the `yolo` tool package; commands run as you and the tool root is
+  not a sandbox) and asks for a provider, then its connection method, from the
+  desktop's catalog. After sign-in it lists the provider's models and asks each
+  value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
+  subcommand did. `gents` refuses a Codex endpoint that does not identify
+  itself as this home's, and the shim answers that question at `GET /runtime`.
+- `gents --agent ID` and `gents codex --agent ID` open any runnable agent side by
+  side with no restart, with no saved agent setting. For Codex this needs a local
+  runtime with no pinned agent, and `--agent` is refused for any other endpoint.
+- When `gents` opens Codex from a directory inside the tool root, the thread starts
+  there. From outside it, `gents` prints the directory the thread will use, before
+  Codex opens and again after it exits. Threads default to the tool root.
+- First-run setup asks which folder agents should work in.
+  It refuses the filesystem root and anything above the person's home, as the desktop
+  does, and asks for confirmation before using the whole home.
+- `gents config client set codex|grok` chooses the interface a home opens, and
+  `config client show` reads it. A home set to Grok serves the Grok socket. `gents`
+  opens the socket the runtime reports and refuses one its runtime does not hold.
+- `gents` remembers the home setup chose. This also moves the desktop's default home.
+- The shim answers `config/read` for a directory inside the tool root as trusted, so
+  Codex does not ask about it on every open. Outside the tool root Codex still asks.
+- The shim refuses a WebSocket handshake carrying `Origin`. With a loopback bind and no
+  public URL, `GET /runtime` answers only a loopback `Host`.
+
 ## 1.0.0-rc1 - 2026-11-03
 
 - P2P DAG fetches rank providers by measured health, rotate past a provider

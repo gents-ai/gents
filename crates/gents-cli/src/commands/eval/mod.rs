@@ -404,6 +404,7 @@ mod batch;
 mod checks;
 mod compare;
 mod frame;
+pub(crate) use frame::terminal_size;
 pub(crate) mod init;
 mod inspect;
 pub(crate) mod manage;

@@ -11,12 +11,16 @@ fn top_level_help_is_sectioned() -> Result<()> {
 
     let output = run_cli_text(&home_dir, &["--help"])?;
     assert!(
-        output.contains("Start               chat  codex  status"),
+        output.contains("Start\n  chat "),
         "expected the Start section in help output, got:\n{output}"
     );
     assert!(
-        output.contains("Data and debugging  data  debug"),
+        output.contains("Data and debugging\n  data "),
         "expected the Data and debugging section in help output, got:\n{output}"
+    );
+    assert!(
+        !output.contains('\x1b'),
+        "help sent to a pipe carries no styling, got:\n{output}"
     );
     assert!(
         !output.contains("Quick start"),

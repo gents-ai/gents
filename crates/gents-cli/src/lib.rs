@@ -105,18 +105,44 @@ const ROOT_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
 
-Start               chat  codex  status
-Work                session  goal  task  job  mailbox
-Accounts            auth  cloud
-Configure           config  tools  mcp  pack
-Runtime             server  service  provision  reset  diagnose  p2p  desktop
-Data and debugging  data  debug
-Measure             eval  optimization
-                    version
+\x1b[1;4mStart\x1b[0m
+  chat          Chat with the selected or default agent in the terminal
+  codex         Open the Codex terminal UI against the local Node runtime
+  status        Show the current local runtime status
+\x1b[1;4mWork\x1b[0m
+  session       Manage and fork sessions
+  goal          Inspect and control durable session goals
+  task          Trigger configured Task documents on demand
+  job           Inspect and control plugin jobs
+  mailbox       List and resolve human-attention mailbox items
+\x1b[1;4mAccounts\x1b[0m
+  auth          Sign in, check credentials and manage subscription accounts
+  cloud         Sign in to and work with a gents cloud
+\x1b[1;4mConfigure\x1b[0m
+  config        Inspect and write runtime configuration documents
+  tools         Explain resolved agent tool surfaces
+  mcp           Probe registered MCP service health
+  pack          List, inspect, build, publish, install and exercise packs
+\x1b[1;4mRuntime\x1b[0m
+  server        Run the local gents runtime from an initialized home
+  service       Install and control the per-user native Gents runtime service
+  provision     Provision a local node home from a portable manifest root
+  reset         Clear persisted local runtime state
+  diagnose      Run local configuration and runtime diagnostics
+  p2p           Inspect and control live P2P runtime connectivity
+  desktop       Manage local desktop state
+  version       Print build and release metadata
+\x1b[1;4mData and debugging\x1b[0m
+  data          Query, write and export application documents and schemas
+  debug         Inspect requests, responses, traces, background calls and slots
+\x1b[1;4mMeasure\x1b[0m
+  eval          Run, inspect, compare and clean up evals
+  optimization  Run, inspect, promote and revert configuration optimization jobs
 
+Run `gents` with no command to set up a home and open a conversation.
 Run `gents <command> --help` for details.
 
-Options:
+\x1b[1;4mOptions:\x1b[0m
 {options}";
 const INIT_AFTER_HELP: &str = "\
 Bootstrap a local home directory with one default backend, one default agent, and a safe read-only Tools document.
@@ -166,9 +192,7 @@ const SERVER_AFTER_HELP: &str = "\
 `server` reads the initialized home directory, starts the embedded DefraDB runtime, serves GraphQL locally, and starts IROH P2P for desktop pairing.
 
 Common flow:
-  gents init
-  gents server
-  gents codex
+  gents
 
 The server runs the Codex TUI endpoint by default (loopback only); disable it
 with --no-codex-shim. `gents codex` in another terminal connects to it.
@@ -199,6 +223,11 @@ Examples:
   gents codex
   gents codex \"what is in this directory?\"
   gents codex --remote ws://127.0.0.1:9292/
+  gents codex --agent ID
+  gents --agent ID
+
+`--agent` opens that agent instead of the node's default, in as many terminals
+as you like, with no restart. `gents config agent list` shows the agents.
 
 Requires a running `gents server` in another terminal and `codex` on PATH.
 Set GENTS_CODEX_BIN to use a different Codex executable.";
@@ -310,7 +339,7 @@ Examples:
   gents config validate --root infra/agents/default --home /path/to/home --bind-node-did home
   gents config diff --root infra/agents/default --home /path/to/home
   gents config apply --root infra/agents/default --home /path/to/home --bind-node-did home
-  gents config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
+  gents config backend set --graphql URL --file backend.json
   gents config backend discover-models --backend-preset openrouter
   gents config agent set --graphql URL --node-did <NODE_DID> --context-id <context-id> --inference-profile-id <profile-id>
   gents config tools set --graphql URL --file tools.json";
@@ -424,7 +453,7 @@ pub fn run_cli() -> Result<()> {
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
-        None => return commands::start::run(cli.home).await,
+        None => return commands::start::run(cli.home, cli.store_key_custody, cli.agent).await,
         Some(Command::NativeFsRunner(args)) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
@@ -613,6 +642,13 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
             .context("resolving current directory")?
             .join(path))
     }
+}
+
+/// A path as one shell word, for a command printed for a person to paste. Only an
+/// interior NUL cannot be quoted, and no path has one.
+pub(crate) fn shell_word(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    shlex::try_quote(&path).map_or_else(|_| path.to_string(), |quoted| quoted.into_owned())
 }
 
 pub(crate) async fn http_get_json<T>(request: reqwest::RequestBuilder) -> Result<T>
@@ -827,7 +863,7 @@ pub(crate) async fn persistent_node_builder_with_stored_identity(
 ) -> Result<NodeBuilder> {
     let config = read_init_config(home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "gents home {} is not initialized; run `gents init --home {}` first",
+            "gents home {} is not initialized; run `gents --home {}` first",
             home_dir.display(),
             home_dir.display()
         )
@@ -927,9 +963,10 @@ fn remove_tree_except(dir: &Path, keep: &Path) -> Result<()> {
 
 pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
     format!(
-        "Next:\n  1. For the default local backend, run `llama-server -hf {DEFAULT_INIT_MODEL_NAME}` and make sure it is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 2`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `gents reset --home {}`",
+        "Next:\n  1. For the default local backend, run `llama-server -hf {DEFAULT_INIT_MODEL_NAME}` and make sure it is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere: save the output of `gents config backend show <ID> --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}` (`gents config backend list --home {home}` names the backend)\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `gents reset --home {}`",
         init_config_path(home_dir).display(),
-        home_dir.display()
+        home_dir.display(),
+        home = shell_word(home_dir),
     )
 }
 
@@ -1133,7 +1170,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("run `gents init --home"));
+        assert!(error.to_string().contains("run `gents --home"));
     }
 
     #[test]
