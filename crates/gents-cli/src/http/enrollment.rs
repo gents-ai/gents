@@ -408,6 +408,35 @@ mod tests {
         DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
     };
 
+    /// `query_is_unknown_to_runtime` rests on this: a query name the runtime's
+    /// enum doesn't have is refused by the extractor as unprocessable.
+    #[tokio::test]
+    async fn a_query_the_runtime_does_not_know_is_refused_as_unprocessable() {
+        use axum::extract::FromRequest;
+
+        let body = serde_json::json!({
+            "protocol_version": ENROLLMENT_PROTOCOL_VERSION,
+            "query": "added_by_a_later_runtime",
+            "admin_did": "did:key:operator",
+            "issued_at": "2026-11-05T00:00:00Z",
+            "nonce": "nonce",
+            "admin_sig": [],
+        });
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let rejection = axum::Json::<EnrollmentOperatorQueryCommand>::from_request(request, &())
+            .await
+            .err()
+            .expect("unknown query");
+        assert_eq!(
+            rejection.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
     #[tokio::test]
     async fn operator_command_requires_the_live_admin_identity_and_exact_signature() {
         let temp = tempfile::tempdir().unwrap();
