@@ -86,12 +86,15 @@ export interface UxDataSurfaceDecl {
     The shell fills the plugin and the node; the plugin names a surface, a
     tool and the tool's arguments. */
 export interface UxData {
+  /** The host can reject calls when the selected runtime has changed. */
+  readonly supportsExpectedNode?: boolean;
   /** run one declared tool: `args` are the tool's own (`fields`, `limit`,
       filter values, `field_page` for a long string; a create's field values) */
   call: (
     surface: string,
     tool: string,
     args?: Record<string, unknown>,
+    expectedNodeDid?: string,
   ) => Promise<UxDataCallResult>;
   /** the declarations behind the plugin's surfaces, for typing a page */
   surfaces: () => Promise<UxDataSurfaceDecl[]>;
