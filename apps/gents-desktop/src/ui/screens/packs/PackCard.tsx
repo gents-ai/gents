@@ -36,8 +36,11 @@ export function Chips({ items }: { items: readonly string[] }) {
   );
 }
 
-export const CARD =
-  "group/row relative -mx-3 flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring/50";
+/* the row is as wide as the page's heading and its text starts where the
+   heading's does; only its hover reaches past the edges, so it has room */
+export const HOVER_OUT =
+  "isolate before:pointer-events-none before:absolute before:inset-y-0 before:-inset-x-3 before:-z-10 before:rounded-lg before:transition-colors";
+export const CARD = `group/row relative flex min-w-0 items-center gap-3 py-2.5 text-left ${HOVER_OUT} hover:before:bg-accent has-[a:focus-visible]:before:ring-2 has-[a:focus-visible]:before:ring-ring/50`;
 
 /** Rows shaped like packs while the list is read, so it doesn't jump when
     they arrive. */
@@ -109,7 +112,7 @@ export function MoreRow({
     <button
       type="button"
       onClick={onClick}
-      className="-mx-3 flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      className={`relative flex cursor-pointer items-center gap-1.5 py-2.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:text-foreground ${HOVER_OUT} hover:before:bg-accent focus-visible:before:ring-2 focus-visible:before:ring-ring/50`}
     >
       {children}
       <ChevronDown aria-hidden className="size-3.5" />
