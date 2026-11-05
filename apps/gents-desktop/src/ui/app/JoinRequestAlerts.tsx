@@ -5,12 +5,16 @@ import { useHomeDid } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
 import { useSharingActions } from "@/hooks/useSharing";
 import { SHARING_SECTION } from "@/lib/joinInvite";
-import type { Route } from "@/lib/router";
+import { navigate, type Route } from "@/lib/router";
 import { useFlag } from "@/preferences";
 import type { JoinRequest } from "../../hooks/sharing";
 import { NodeAvatar } from "@/screens/AgentAvatar";
-import { reviewJoinRequest } from "@/screens/sharing/JoinRequestDialog";
+import { noteWaiting, reviewJoinRequest } from "@/screens/sharing/JoinRequestDialog";
+import { inNativeShell, windowLabel } from "../../lib/nativeShell";
 import { partyName, scopeInSentence } from "@/screens/sharing/parts";
+
+const MANY = 3;
+const MANY_ID = "join:many";
 
 /** Tells the person when someone asks to join this desktop's own node,
     wherever they are in the app: the Sharing section is out of the way, and
@@ -36,23 +40,42 @@ export function JoinRequestAlerts({ route }: { route: Route }) {
   nameRef.current = name;
 
   useEffect(() => {
-    if (!on || !homeDid) return;
+    /* every window runs the app; only the main one speaks for it */
+    if (!on || !homeDid || (inNativeShell() && windowLabel() !== "main")) return;
     let live = true;
+    const review: Route = { name: "agent", nodeDid: homeDid, section: SHARING_SECTION };
     const check = () => {
       sharing.read(homeDid).then(
         (state) => {
           if (!live || !state) return;
+          noteWaiting(homeDid, state.requests);
           const waiting = new Set(state.requests.map((r) => r.requestId));
           for (const id of told.current)
             if (!waiting.has(id)) {
               told.current.delete(id);
               toast.dismiss(`join:${id}`);
             }
+          if (lookingRef.current) {
+            for (const r of state.requests) told.current.add(r.requestId);
+            return;
+          }
+          const nodeName = nameRef.current ?? "this node";
+          /* past a couple, one notice counts them rather than stacking */
+          if (state.requests.length >= MANY) {
+            for (const id of told.current) toast.dismiss(`join:${id}`);
+            for (const r of state.requests) told.current.add(r.requestId);
+            toast(`${state.requests.length} requests to join ${nodeName}`, {
+              id: MANY_ID,
+              description: "Each lasts only a few minutes.",
+              duration: Infinity,
+              action: { label: "Review", onClick: () => navigate(review) },
+            });
+            return;
+          }
+          toast.dismiss(MANY_ID);
           for (const request of state.requests) {
             if (told.current.has(request.requestId)) continue;
             told.current.add(request.requestId);
-            if (lookingRef.current) continue;
-            const nodeName = nameRef.current ?? "this node";
             toast.custom(
               (id) => (
                 <JoinRequestNotice
@@ -85,6 +108,7 @@ export function JoinRequestAlerts({ route }: { route: Route }) {
   useEffect(() => {
     if (!looking) return;
     for (const id of told.current) toast.dismiss(`join:${id}`);
+    toast.dismiss(MANY_ID);
   }, [looking]);
 
   return null;
