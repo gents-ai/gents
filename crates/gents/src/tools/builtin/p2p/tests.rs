@@ -48,6 +48,19 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     )
     .await;
     assert!(preview["outcome"]["current"].is_null());
+    assert!(
+        preview["outcome"]["local_schema"]["DeploymentNote"]["version_id"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty())
+    );
+    assert_eq!(
+        preview["outcome"]["local_schema"]["DeploymentNote"]["branchable"],
+        true
+    );
+    assert_eq!(
+        preview["outcome"]["peer_schema_compatibility"],
+        "not_checked"
+    );
     let wrong_did = Tool::call(&tool, serde_json::from_value(json!({"argv":["pairings","apply"],"options":{"peer_id":peer_id,"peer_did":identity.did(),"collections":["DeploymentNote"]}})).unwrap()).await.unwrap_err();
     assert!(wrong_did.to_string().contains("signed enrollment"));
     assert!(tool.overlay(&peer_id).await.unwrap().is_none());
@@ -87,6 +100,14 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     )
     .await;
     assert_eq!(applied["outcome"]["unchanged"], false);
+    assert_eq!(
+        applied["outcome"]["local_schema"],
+        preview["outcome"]["local_schema"]
+    );
+    assert_eq!(
+        applied["outcome"]["peer_schema_compatibility"],
+        "not_checked"
+    );
     let retried = call(
         &tool,
         json!({"argv":["pairings","apply"],"options":options}),
