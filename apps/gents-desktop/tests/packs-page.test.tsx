@@ -112,7 +112,12 @@ function show(item?: string, api: Record<string, unknown> = {}) {
       searchPacks: async () => ({
         packs: [
           { namespace: "demo", name: "research", description: "Research" },
-          { namespace: "acme", name: "docs", description: "A documents page" },
+          {
+            namespace: "acme",
+            name: "docs",
+            description: "A documents page",
+            latest: "1.0.0",
+          },
         ],
         has_more: false,
       }),
@@ -329,6 +334,19 @@ describe("the Packs page", () => {
     );
   });
 
+  it("says a registry pack has no version yet, in place of Install", async () => {
+    show(undefined, {
+      searchPacks: async () => ({
+        packs: [{ namespace: "acme", name: "draft" }],
+        has_more: false,
+      }),
+    });
+    fireEvent.click(await screen.findByRole("tab", { name: "Registry" }));
+    const registry = await screen.findByRole("list", { name: "Registry packs" });
+    expect(await within(registry).findByText("No version")).toBeInTheDocument();
+    expect(within(registry).queryByRole("button", { name: "Install" })).toBeNull();
+  });
+
   it("returns to the list and search it left, while the app runs", async () => {
     const app = show();
     fireEvent.click(await screen.findByRole("tab", { name: "Registry" }));
@@ -462,7 +480,7 @@ describe("the Packs page", () => {
       api: {
         listInstalledPacks,
         searchPacks: async () => ({
-          packs: [{ namespace: "acme", name: "docs" }],
+          packs: [{ namespace: "acme", name: "docs", latest: "1.0.0" }],
           has_more: false,
         }),
       },
