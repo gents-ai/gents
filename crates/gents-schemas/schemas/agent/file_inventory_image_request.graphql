@@ -1,7 +1,7 @@
 # One selected capture bound to a signed source inventory page and its reader.
 # Enrollment, current membership, session ownership and document access remain
 # with the session-hydration owners; payload fields do not grant access.
-type FileInventoryImageRequest @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "configuration") {
+type FileInventoryImageRequest @policy(id: "ccd6eb63ec1545f3ce27fb3f33f687e74895848180e87b064d1ca9ac331f1cd8", resource: "configuration") {
     request_key: String @index(unique: true) @immutable
     peer_id: String @immutable
     requester_did: String @index @immutable

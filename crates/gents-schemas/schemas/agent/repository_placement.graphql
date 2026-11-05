@@ -1,6 +1,6 @@
 # Maps a logical repository_id to this host's checkout. Local-only (NOT
 # @branchable): never derive repository_id from a credential-bearing remote.
-type RepositoryPlacement @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "configuration") @index(fields: ["node_did", "repository_id"], unique: true) {
+type RepositoryPlacement @policy(id: "ccd6eb63ec1545f3ce27fb3f33f687e74895848180e87b064d1ca9ac331f1cd8", resource: "configuration") @index(fields: ["node_did", "repository_id"], unique: true) {
     repository_id: String @index
     node_did: String @index
     host_path: String

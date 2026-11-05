@@ -59,6 +59,19 @@ resources:
         expr: writer + parent->update
       - name: delete
         expr: parent->delete
+  - name: workspace_roots
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+        expr: parent->update
+      - name: delete
+        expr: parent->delete
   - name: secret_configuration
     relations:
       - name: parent
@@ -78,6 +91,8 @@ resources:
         types: [nodes]
       - name: reader
         types: [actor]
+      - name: workspace_selected_by
+        types: [configuration->reader, agents->executor]
       - name: session_writer
         types: [actor]
       - name: administrator
@@ -89,7 +104,7 @@ resources:
         types: [actor]
     permissions:
       - name: read
-        expr: reader + session_writer + administrator + executor + config_writer + parent->read
+        expr: reader + workspace_selected_by + session_writer + administrator + executor + config_writer + parent->read
       - name: update
         expr: administrator + config_writer + parent->update
       - name: delete
@@ -167,6 +182,34 @@ resources:
         expr: parent->session_admin
       - name: delete
         expr: parent->session_admin
+  - name: workspaces
+    relations:
+      - name: parent
+        types: [agents]
+      - name: reader
+        types: [actor]
+      - name: writer
+        types: [actor]
+      - name: integrator
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + writer + integrator + parent->session_read
+      - name: update
+        expr: writer + integrator + parent->session_admin
+      - name: delete
+        expr: parent->session_admin
+  - name: workspace_children
+    relations:
+      - name: parent
+        types: [workspaces]
+    permissions:
+      - name: read
+        expr: parent->read
+      - name: update
+        expr: parent->update
+      - name: delete
+        expr: parent->delete
   - name: children
     relations:
       - name: parent
