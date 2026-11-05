@@ -32,7 +32,7 @@ def main():
             assert result.returncode == 0, result.stderr
             return json.loads(result.stdout)
 
-        run("pack", "build", pack, "--out", archive, restricted=False)
+        run("config", "pack", "build", pack, "--out", archive, restricted=False)
         run(
             "init",
             "--home",
@@ -47,11 +47,12 @@ def main():
             "minimal",
             restricted=False,
         )
-        run("pack", "install", archive, "--home", home, "--grant-authority")
+        run("config", "pack", "install", archive, "--home", home, "--grant-authority")
         assert not (home / "plugin-services").exists()
 
         def call(tool, data):
             return run(
+                "config",
                 "pack",
                 "plugin",
                 "run",

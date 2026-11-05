@@ -158,6 +158,7 @@ def main():
         subprocess.run(
             [
                 gents,
+                "utils",
                 "debug",
                 "trace",
                 "export",
@@ -251,7 +252,7 @@ print(json.dumps(observations))
         with open(root / "build.log", "w") as log:
             if not args.pack_archive:
                 subprocess.run(
-                    [gents, "pack", "build", str(pack), "--out", str(archive)],
+                    [gents, "config", "pack", "build", str(pack), "--out", str(archive)],
                     check=True,
                     stdout=log,
                     stderr=log,
@@ -298,6 +299,7 @@ print(json.dumps(observations))
         run(
             [
                 gents,
+                "config",
                 "pack",
                 "install",
                 str(archive),

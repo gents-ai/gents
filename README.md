@@ -15,8 +15,8 @@ Build from this checkout, then install and bind its inference slot to an
 existing profile (replace `PROFILE_ID` below):
 
 ```sh
-gents pack build ./packs/gents/web --out gents.web.pack
-gents pack install ./gents.web.pack --grant-authority --inference-slot web_researcher=PROFILE_ID
+gents config pack build ./packs/gents/web --out gents.web.pack
+gents config pack install ./gents.web.pack --grant-authority --inference-slot web_researcher=PROFILE_ID
 gents chat --agent-id web-researcher "Find the current official guidance on ..."
 ```
 
@@ -82,8 +82,8 @@ affects the answer.
 For a direct call after install:
 
 ```sh
-gents pack plugin run gents/web_search --input '{"query":"official HTTP status code reference","intent":"web","max_results":5}'
-gents pack plugin run gents/web_fetch --input '{"url":"https://www.rfc-editor.org/rfc/rfc9110","mode":"read","max_chars":4000}'
+gents config pack plugin run gents/web_search --input '{"query":"official HTTP status code reference","intent":"web","max_results":5}'
+gents config pack plugin run gents/web_fetch --input '{"url":"https://www.rfc-editor.org/rfc/rfc9110","mode":"read","max_chars":4000}'
 ```
 
 The three HTTP research plugins declare `OutboundHttp` through the host. The guest rejects local

@@ -5,7 +5,7 @@ installable native Gents documents pack containing `browser-use-core`.
 `subject/` supplies the browser-only agent and the `browser` inference slot.
 
 The definitions are authored and pack-validated. They have **not yet been run by
-native `gents eval`**. Trial provisioning still needs to install the browser plugin,
+native `gents utils eval`**. Trial provisioning still needs to install the browser plugin,
 start/reset the fixture server, supply a session name, and publish trusted
 observations before stage capture. Gents now owns worker startup and supplies its
 connection internally when the installed pack has its child-process grant.
@@ -61,7 +61,7 @@ and observation bridge. Do not pre-seed passing rows or downgrade these checks t
 make a run appear green. Browser execution has host Python authority, so these
 fixtures test cooperative behavior, not adversarial isolation.
 
-After that bridge exists, install this definition pack and use `gents eval run
+After that bridge exists, install this definition pack and use `gents utils eval run
 browser-use-core --cell browser=./subject:browser --profile browser=<profile-id>
 --trials 3 --concurrency 1`. The profile should point at the desired inference
 server, such as `http://workstation-1:8000/v1`. This command is a target invocation,
@@ -72,7 +72,7 @@ not a currently complete setup recipe.
 From the repository root:
 
 ```sh
-/path/to/gents pack check packs/gents/web/evals \
+/path/to/gents config pack check packs/gents/web/evals \
   packs/gents/web/evals/subject packs/gents/web
 python3 -m unittest discover -s packs/gents/web/evals -p 'test_*.py'
 ```

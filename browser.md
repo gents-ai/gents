@@ -61,8 +61,8 @@ uv run --locked --project worker python worker/browser_worker.py setup \
   --state ~/.local/share/gents-browser --allow-host-execution --gents-home ~/.gents
 uv run --locked --project worker python worker/browser_worker.py doctor \
   --state ~/.local/share/gents-browser
-gents pack build .
-gents pack install . --grant-authority --inference-slot web_researcher=PROFILE_ID
+gents config pack build .
+gents config pack install . --grant-authority --inference-slot web_researcher=PROFILE_ID
 ```
 
 Registry users install `gents/web --grant-authority` and run setup from
@@ -152,8 +152,8 @@ uv run --locked --project worker python worker/tests/live_browser.py
 uv run --locked --project worker python worker/tests/live_regressions.py
 python3 worker/tests/live_fallback.py --gents /path/to/current/gents
 uv run --locked --project worker python worker/tests/live_gents.py --gents /path/to/current/gents
-gents pack check .
-gents pack test .
+gents config pack check .
+gents config pack test .
 ```
 
 The live tests use a temporary managed browser and a local fixture site, never
@@ -212,7 +212,7 @@ Chrome's running-browser connection uses its documented
 
 The pack ships its own [native eval suite](evals/README.md) under `evals/`, with
 six acceptance cases, a browser-only subject agent, and independent fixture-state
-oracles. Both nested packs can be checked with `gents pack check`. Native trial
+oracles. Both nested packs can be checked with `gents config pack check`. Native trial
 provisioning and publishing oracle observations still need a runner bridge; these
 native definitions have not yet been executed. The live model runner above remains
 the working end-to-end integration test.

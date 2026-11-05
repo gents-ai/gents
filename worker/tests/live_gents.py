@@ -61,6 +61,7 @@ def main():
             run(
                 [
                     args.gents,
+                    "config",
                     "pack",
                     "install",
                     str(pack),
@@ -71,6 +72,7 @@ def main():
             )
             command = [
                 args.gents,
+                "config",
                 "pack",
                 "plugin",
                 "run",
@@ -123,7 +125,7 @@ def main():
                 ]["status"]
                 == "closed"
             )
-            run([args.gents, "pack", "remove", "gents/web", "--home", str(home)])
+            run([args.gents, "config", "pack", "remove", "gents/web", "--home", str(home)])
             print(
                 "ok: idempotent setup, installed WASM, bound connection, host HTTP, Chromium, image output, close and removal"
             )

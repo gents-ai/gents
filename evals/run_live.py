@@ -28,7 +28,7 @@ def main():
     pack = Path(__file__).resolve().parents[1]
     with (root / "build.log").open("w") as log:
         subprocess.run(
-            [args.gents, "pack", "build", str(pack), "--out", str(root / "base.pack")],
+            [args.gents, "config", "pack", "build", str(pack), "--out", str(root / "base.pack")],
             stdout=log,
             stderr=log,
             check=True,
@@ -95,6 +95,7 @@ def main():
             subprocess.run(
                 [
                     args.gents,
+                    "config",
                     "pack",
                     "build",
                     str(root / "packs" / trial["name"]),
