@@ -302,4 +302,23 @@ def networkProtocolCasesJson : String :=
   (toJson (collections.map fun name => Json.mkObj [
     ("collection", toJson name), ("resource", toJson (networkProtocolResource name))])).compress
 
+def replicaGrantCasesJson : String :=
+  let before := privateReplicaFixture
+  let pending := replicaGrant before "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true false false
+  let linked := replicaLinkPending pending "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true
+  let revoked := apply linked (.revoke ⟨"enrollment_records", "remote", "parent", .object "nodes" "local-node"⟩)
+  let repaired := replicaLinkPending revoked "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true
+  let cases : List (String × State) := [("before", before), ("pending", pending),
+    ("linked", linked), ("revoked", revoked), ("after-repair", repaired)]
+  (toJson (cases.map fun (name, state) => Json.mkObj [("name", toJson name),
+    ("runtime_read", toJson (allowed 5 state "runtime" "enrollment_records" "remote" "read")),
+    ("user_read", toJson (allowed 5 state "user" "enrollment_records" "remote" "read")),
+    ("user_write", toJson (allowed 5 state "user" "enrollment_records" "remote" "update")),
+    ("agent_read", toJson (allowed 5 state "agent" "enrollment_records" "remote" "read")),
+    ("app_read", toJson (allowed 5 state "runtime" "children" "application" "read")),
+    ("pending", toJson (state.relations.contains ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩))])).compress
+
 end Identity.OperationsConformance

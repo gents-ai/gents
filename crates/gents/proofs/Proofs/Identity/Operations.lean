@@ -205,6 +205,73 @@ theorem public_discovery_does_not_publish_enrollment :
      allowed 5 publicDiscoveryFixture "outsider" "enrollment_records" "request" "read") =
       (true, false, false) := by native_decide
 
+/-- Native node-administrator publication is local to the receiving store. Its
+actor is the configured Node, and native NAC bypass plus relation-add authority,
+the bound schema and a verified registered document must all hold in the same
+transaction. These grants are specific to the document and do not grant access
+on application records or follow merely from peer admission. The local marker
+is an ACP relationship, not a replicated document field. -/
+def replicaGrant (state : State) (resource id runtime node user : String)
+    (authorized registered committed nodeExists publicRegistry : Bool) : State :=
+  let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
+  if !(authorized && registered && committed) || state.relations.contains marker then state
+  else
+    let marked := apply state (.grant marker)
+    let reader := apply marked (.grant ⟨resource, id, "reader", .actor runtime⟩)
+    let visible := if publicRegistry && resource == "discovery" then
+      apply reader (.grant ⟨resource, id, "reader", .wildcard⟩) else reader
+    if nodeExists then
+      let linked := apply visible (.grant ⟨resource, id, "parent", .object "nodes" node⟩)
+      apply linked (.grant ⟨resource, id, "reader_manager", .actor user⟩)
+    else apply visible (.grant ⟨resource, id, "pending_parent", .actor runtime⟩)
+
+/-- The pending marker is consumed with the Node parent and reader manager in
+the same native transaction. Once consumed, reconciliation cannot restore a
+relation that was later revoked. -/
+def replicaLinkPending (state : State) (resource id runtime node user : String)
+    (authorized nodeExists committed : Bool) : State :=
+  let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
+  let pending : Relation := ⟨resource, id, "pending_parent", .actor runtime⟩
+  if authorized && nodeExists && committed && state.relations.contains marker &&
+      state.relations.contains pending then
+    let linked := apply state (.grant ⟨resource, id, "parent", .object "nodes" node⟩)
+    let managed := apply linked (.grant ⟨resource, id, "reader_manager", .actor user⟩)
+    apply managed (.revoke pending)
+  else state
+
+def privateReplicaFixture : State :=
+  { objects := [⟨"nodes", "local-node", "user"⟩,
+      ⟨"enrollment_records", "remote", "foreign"⟩,
+      ⟨"children", "application", "foreign"⟩], relations := [], enrolled := [] }
+
+theorem native_local_replica_grant_is_narrow :
+    let state := replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true true false
+    (allowed 5 state "runtime" "enrollment_records" "remote" "read",
+     allowed 5 state "user" "enrollment_records" "remote" "read",
+     allowed 5 state "user" "enrollment_records" "remote" "update",
+     allowed 5 state "agent" "enrollment_records" "remote" "read",
+     allowed 5 state "runtime" "children" "application" "read") =
+      (true, true, false, false, false) := by native_decide
+
+theorem replica_parent_repair_does_not_restore_revocation :
+    let pending := replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true false false
+    let linked := replicaLinkPending pending "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true
+    let revoked := apply linked (.revoke ⟨"enrollment_records", "remote", "parent",
+      .object "nodes" "local-node"⟩)
+    allowed 5 (replicaLinkPending revoked "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true) "user" "enrollment_records" "remote" "read" = false := by
+  native_decide
+
+theorem native_replica_requires_authority_and_registration :
+    (replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" false true true true false,
+     replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+      "local-node" "user" true false true true false) =
+      (privateReplicaFixture, privateReplicaFixture) := by simp [replicaGrant]
+
 /-- Document creation and all requested native grants commit together. The
 recipient DID must come from the authenticated protocol; naming an enrolled
 peer alone neither creates nor restores a reader grant. -/

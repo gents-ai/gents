@@ -65,16 +65,21 @@ def policy : List ResourceDefinition :=
       permissions := [permission "read" ["route_reader", "tool_reader"] [("parent", "read")],
         permission "update" [] [], permission "delete" [] []] }
   , { name := "discovery"
-      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩]
+      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+        ⟨"reader_manager", ["actor"], ["reader"]⟩,
+        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
       permissions := [permission "read" ["reader"] [("parent", "read")],
         permission "update" [] [], permission "delete" [] []] }
   , { name := "scoped_discovery"
-      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩]
+      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+        ⟨"reader_manager", ["actor"], ["reader"]⟩,
+        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
       permissions := [permission "read" ["reader"] [("parent", "read")],
         permission "update" [] [], permission "delete" [] []] }
   , { name := "enrollment_records"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
-        ⟨"reader_manager", ["actor"], ["reader"]⟩]
+        ⟨"reader_manager", ["actor"], ["reader"]⟩,
+        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
       permissions := [permission "read" ["reader"] [("parent", "read")],
         permission "update" [] [], permission "delete" [] []] }
   , { name := "configuration"
