@@ -1,6 +1,6 @@
 //! Runs every plugin case file natively and compares it with its recorded
 //! output. The same files run through the WebAssembly host under
-//! `gents pack test`, so a difference between the two is a bug in one of them.
+//! `gents config pack test`, so a difference between the two is a bug in one of them.
 
 use std::path::{Path, PathBuf};
 

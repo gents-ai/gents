@@ -32,7 +32,7 @@ charts to read `<path>`?". Saving files asks for write access to the folder the
 first time (see Authority). The same agent runs from a terminal:
 
 ```sh
-gents pack install gents/charts --inference-slot chart_maker=<profile>
+gents config pack install gents/charts --inference-slot chart_maker=<profile>
 gents chat --agent-id chart-maker "Chart sales.csv: revenue by month, one line per region"
 ```
 
@@ -64,7 +64,7 @@ no model is needed: create a `ChartRequest` document and a
 `ChartResult` appears.
 
 ```sh
-gents server --home <home> --http-port 8080 &   # started in the folder holding your files
+gents runtime server --home <home> --http-port 8080 &   # started in the folder holding your files
 gql() { curl -fsS http://127.0.0.1:8080/api/v0/graphql -H 'content-type: application/json' -d "$(jq -cn --arg q "$1" '{query: $q}')"; }
 gql 'mutation { create_ChartRequest(input: {run_id: "c1", chart: "bar", title: "Revenue", x: "month", y: ["revenue"], path: "reports", file: "sales.csv"}) { _docID } }'
 gql '{ ChartResult(filter: {run_id: {_eq: "c1"}}) { chart width height alt png_base64 warnings error } }'
@@ -102,7 +102,7 @@ non-null `save`, even an empty one, as a write.
 | `error` | the one-sentence reason when nothing could be drawn; the record still exists, so a run never stalls on a bad chart |
 
 A path in a callback request must be inside the server's working folder or an
-allowed folder (`gents pack plugin dirs add <folder>`; `--access read_write` for a
+allowed folder (`gents config pack plugin dirs add <folder>`; `--access read_write` for a
 request that sets `save`): a callback node asks nobody and is refused with that
 command otherwise. Unset fields are ignored; an empty `x_label`, `y_label` or
 `y2_label` still removes that label. The record carries the full-size PNG,
@@ -111,8 +111,8 @@ not the 1568-pixel image a tool call shows.
 ## Use it from the CLI
 
 ```sh
-gents pack install gents/charts --home <home> --inference-slot chart_maker=<profile>
-gents pack plugin run charts --home <home> --bind-dir ./reports \
+gents config pack install gents/charts --home <home> --inference-slot chart_maker=<profile>
+gents config pack plugin run charts --home <home> --bind-dir ./reports \
   --input '{"chart": "bar", "file": "sales.csv", "x": "month", "y": ["revenue"], "title": "Revenue"}' \
   > chart.json
 jq -r '.parts[0].data' chart.json | base64 -d > chart.png
@@ -123,14 +123,14 @@ jq -r '.response.alt' chart.json
 only when it sets `save`, which writes the full-size files into that folder:
 
 ```sh
-gents pack plugin run charts --home <home> --bind-dir ./reports \
+gents config pack plugin run charts --home <home> --bind-dir ./reports \
   --input '{"chart": "bar", "file": "sales.csv", "x": "month", "y": ["revenue"], "save": "revenue"}'
 ls reports   # revenue.svg  revenue.png  sales.csv
 ```
 
 ## Installation
 
-`gents pack install gents/charts` installs the Chart maker agent, its Tools
+`gents config pack install gents/charts` installs the Chart maker agent, its Tools
 document, the two callback nodes and the plugin, and binds the `chart_maker` inference slot to a
 profile (any capable one; a profile that accepts images also checks the
 picture). Nothing else needs configuring: there is no network, key or model
@@ -151,7 +151,7 @@ headless run (see the OCR pack's Authority section for the full model).
 A call that sets `save` asks for write access and needs a folder (not a file)
 the operator allowed to be written: the working folder is read-only by
 default, so the first save asks, and a headless run is refused with
-`gents pack plugin dirs add <folder> --access read_write`. The host, not the plugin,
+`gents config pack plugin dirs add <folder> --access read_write`. The host, not the plugin,
 decides the access from `save`. Files are named inside that folder only: `..`,
 absolute paths, backslashes and symbolic links are refused before anything is
 written, and each file is written whole under a temporary name and renamed.
@@ -218,8 +218,8 @@ or could not draw is in `warnings`.
 ## Validation
 
 ```sh
-gents pack check ./packs/gents/charts
-gents pack test ./packs/gents/charts
+gents config pack check ./packs/gents/charts
+gents config pack test ./packs/gents/charts
 GENTS=gents scripts/test-pack.sh packs/gents/charts
 cargo test --manifest-path packs/gents/charts/plugins/charts/Cargo.toml
 ```
@@ -264,7 +264,7 @@ same bytes (the pack's CI runs the cases on all three).
 ## Performance
 
 Not benchmarked. One sanity check was run once through the host on Linux
-x86_64: a 29 MB CSV of 2 000 000 rows drawn as a line chart (`gents pack plugin run
+x86_64: a 29 MB CSV of 2 000 000 rows drawn as a line chart (`gents config pack plugin run
 charts --bind-dir ...`) finished in 3.2 s wall clock with a 298 MiB peak
 resident set for the whole gents process, inside the plugin's declared limits
 (1024 MiB, 300 s). The line was drawn from 1501 of those points. Everything
@@ -307,7 +307,7 @@ tar xzf lib.tgz && shasum -a 256 liberation-fonts-ttf-2.1.5/LiberationSans-{Regu
   every fixture and every request with a fixed seed.
 - `plugins/charts/tests/*.json` are plugin cases with exact expected output (every chart type, every input
   format, inline and bound modes, callback records, and the failures that come
-  back as records), run through the real WebAssembly host by `gents pack test`
+  back as records), run through the real WebAssembly host by `gents config pack test`
   and natively by `cargo test`. The case format cannot expect a failed call, so
   failures of the tool itself are pinned by `cargo test`.
 - `tests/install.json` (install, reinstall, remove), `tests/content.json`

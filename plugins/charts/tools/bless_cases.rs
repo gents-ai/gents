@@ -2,7 +2,7 @@
 //! A case is {"input": ..., "bind": "<folder>", "expect": ...}; this fills in
 //! `expect` where it is missing (or everywhere with --all). Review what it
 //! writes before committing: look at the pictures and read the SVG, then let
-//! `gents pack test` reproduce it through the real WebAssembly host.
+//! `gents config pack test` reproduce it through the real WebAssembly host.
 //!
 //! Usage: cargo run --release --example bless_cases -- [--all] <tests-folder>...
 
