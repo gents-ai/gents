@@ -1,5 +1,7 @@
+import Lean
 import Proofs.Identity.Household
 import Proofs.Request.CrossActorAuthorization
+import Proofs.Request.ClientSignedEditHandoff
 
 namespace Identity.SessionInputEdit
 
@@ -61,6 +63,12 @@ def shouldSweep (notification resync tick : Bool) : Bool := notification || resy
 
 theorem tick_recovers_a_missed_notification : shouldSweep false false true = true := by rfl
 
+def discoveryCasesJson : String :=
+  (Lean.toJson (["agent", "other"].map fun actor => Lean.Json.mkObj
+    [("actor", Lean.toJson actor),
+     ("visible", Lean.toJson (!(discover fixture [actor] "edit-doc").isEmpty)),
+     ("selected", Lean.toJson (!(selectedForEffect (discover fixture [actor] "edit-doc") "agent").isEmpty))])).compress
+
 inductive Outcome where
   | pending | applied | rejected
   deriving BEq, DecidableEq, Repr
@@ -119,5 +127,25 @@ theorem missing_selected_request_observation_stays_pending :
 theorem empty_selection_cannot_apply :
     apply .pending Request.CrossActorAuthorization.exampleIntent
       Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ (some []) (some []) = .rejected := by decide
+
+def claimCasesJson : String :=
+  (Lean.toJson ([("allowed", true), ("selected-denied", false)].map fun (name, selected) =>
+    Lean.Json.mkObj [("name", Lean.toJson name), ("selectedAllowed", Lean.toJson selected),
+      ("rollbackReplacement", Lean.toJson ((Request.ClientSignedEditHandoff.stage
+        Request.CrossActorAuthorization.exampleIntent
+        ⟨"user", "session-doc", "agent-doc", "input", "evidence", true⟩
+        "input" "evidence" ⟨true, true, false⟩).replacement)),
+      ("rollbackReceipt", Lean.toJson ((Request.ClientSignedEditHandoff.stage
+        Request.CrossActorAuthorization.exampleIntent
+        ⟨"user", "session-doc", "agent-doc", "input", "evidence", true⟩
+        "input" "evidence" ⟨true, true, false⟩).receipt)),
+      ("tamperedAccepted", Lean.toJson ((Request.ClientSignedEditHandoff.stage
+        Request.CrossActorAuthorization.exampleIntent
+        ⟨"user", "session-doc", "agent-doc", "input", "evidence", true⟩
+        "input" "changed" ⟨true, true, true⟩).replacement)),
+      ("noRegrant", Lean.toJson (Request.ClientSignedEditHandoff.recover true ⟨true, true, true⟩ == ⟨false, false, false⟩)),
+      ("applied", Lean.toJson (apply .pending Request.CrossActorAuthorization.exampleIntent
+        Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩
+        (some [selected]) (some [selected]) == .applied))])).compress
 
 end Identity.SessionInputEdit
