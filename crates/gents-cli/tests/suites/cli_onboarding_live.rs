@@ -87,6 +87,16 @@ mod no_model {
             terminal.transcript()
         );
 
+        let mut never_opens = live.bare_gents(MISSING_BIN, &home.home);
+        never_opens.current_dir("/");
+        let mut terminal = Terminal::spawn(&never_opens, &live.log("outside-never-opens"))?;
+        terminal.expect_exit(1).await?;
+        ensure!(
+            terminal.transcript().matches(OUTSIDE_THE_ROOT_TEXT).count() == 1,
+            "with no interface nothing took the screen, so the notice is not repeated: {}",
+            terminal.transcript()
+        );
+
         let mut terminal = open(&project, &["--agent", &home.default_agent_id], "agent")?;
         let code = terminal.wait_exit(RUNTIME_UP).await?;
         ensure!(code == 0, "{}", terminal.transcript());
@@ -710,6 +720,32 @@ mod no_model {
         terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
         // Echo goes off just after the prompt prints, and the interrupt has to find it off.
         tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal.send("\x03")?;
+        terminal.expect_exit(130).await?;
+
+        let transcript = terminal.transcript();
+        let flag = |name| transcript.split_whitespace().any(|word| word == name);
+        ensure!(flag("echo") && !flag("-echo"), "{transcript}");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_c_still_stops_setup_after_the_key_prompt() -> Result<()> {
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&folder);
+
+        let mut terminal =
+            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("after-key"))?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal
+            .answer("OpenAI API key (hidden)", "sk-not-a-real-key")
+            .await?;
+        terminal.answer("Model", "").await?;
+        terminal.answer(TOOLS_QUESTION, "").await?;
+        terminal.expect(ROOT_QUESTION, PROMPT).await?;
         terminal.send("\x03")?;
         terminal.expect_exit(130).await?;
 

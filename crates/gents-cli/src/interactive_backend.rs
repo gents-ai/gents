@@ -236,7 +236,7 @@ async fn prompt_secret(text: &str) -> Result<String> {
     let _ = std::io::stderr().flush();
     // `biased` installs the handler on the first poll, before echo goes off, so no
     // interrupt can land while the terminal is hidden with nothing to restore it.
-    tokio::select! {
+    let line = tokio::select! {
         biased;
         Ok(()) = tokio::signal::ctrl_c() => {
             set_terminal_echo(true);
@@ -244,7 +244,16 @@ async fn prompt_secret(text: &str) -> Result<String> {
             std::process::exit(130);
         }
         line = read_hidden_line() => line,
-    }
+    };
+    // Tokio never removes the handler, so without a listener Ctrl-C would do nothing for the
+    // rest of the process. An interface in raw mode reads it as a key and no signal is raised.
+    tokio::spawn(async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!();
+            std::process::exit(130);
+        }
+    });
+    line
 }
 
 async fn read_hidden_line() -> Result<String> {

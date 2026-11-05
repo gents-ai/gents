@@ -64,18 +64,15 @@ pub(crate) async fn open_codex(mut args: CodexArgs) -> Result<()> {
     if let Some(notice) = &outside_notice {
         eprintln!("{notice}");
     }
-    let opened = launch_interface(
+    // Codex takes the screen right after the first notice, which hides it until Codex exits.
+    launch_interface(
         "Codex",
         &interface_bin(CODEX_BIN_ENV, "codex"),
         &codex_command_args(&args, cd.as_deref()),
         &interface_install_message(InterfaceClient::Codex),
+        outside_notice.as_deref(),
     )
-    .await;
-    // Codex takes the screen right after the first notice, which hides it until now.
-    if let Some(notice) = &outside_notice {
-        eprintln!("{notice}");
-    }
-    opened
+    .await
 }
 
 pub(crate) fn interface_bin(env_name: &str, default: &str) -> String {
@@ -91,12 +88,16 @@ pub(crate) async fn launch_interface(
     bin: &str,
     args: &[String],
     install_hint: &str,
+    notice_after_exit: Option<&str>,
 ) -> Result<()> {
     let status = tokio::process::Command::new(bin)
         .args(args)
         .status()
         .await
         .with_context(|| format!("launching `{bin}`: {install_hint}"))?;
+    if let Some(notice) = notice_after_exit {
+        eprintln!("{notice}");
+    }
     if status.success() {
         Ok(())
     } else {

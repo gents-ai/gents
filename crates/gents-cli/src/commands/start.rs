@@ -122,6 +122,7 @@ impl InterfaceEndpoint {
                     &interface_bin(GROK_BIN_ENV, "grok"),
                     &grok_command_args(&socket, agent.as_deref()),
                     &interface_install_message(InterfaceClient::Grok),
+                    None,
                 )
                 .await
             }
