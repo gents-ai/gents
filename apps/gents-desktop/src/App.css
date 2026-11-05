@@ -2,6 +2,7 @@
 @import "@gents/ui/styles.css";
 @import "./ui/app/window-bar.css";
 @import "./ui/lib/morph.css";
+@import "./ui/screens/session/find.css";
 @source "./**/*.{ts,tsx}";
 @source inline("max-h-[calc(100dvh-2rem)]");
 
