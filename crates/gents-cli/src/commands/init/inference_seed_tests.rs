@@ -183,7 +183,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{case:?}",
             );
             drop(runtime);
-            let steps = init_next_steps(&summary, false, false, false);
+            let steps = init_next_steps(&summary, Path::new("/srv/home"), false, false, false);
             assert!(
                 !steps
                     .iter()

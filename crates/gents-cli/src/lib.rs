@@ -582,6 +582,13 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
+/// A path as one shell word, for a command printed for a person to paste. Only an
+/// interior NUL cannot be quoted, and no path has one.
+pub(crate) fn shell_word(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    shlex::try_quote(&path).map_or_else(|_| path.to_string(), |quoted| quoted.into_owned())
+}
+
 pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {
     let values = values
         .iter()

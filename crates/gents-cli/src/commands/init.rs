@@ -29,7 +29,6 @@ use crate::{
     clear_runtime_state, dangerously_overwrite_home, default_data_dir, default_key_path,
     format_tool_ceiling, format_tool_package, normalize_optional_string, print_json,
     read_init_config, resolve_home_dir, write_init_config, BackendResolutionMode,
-    DEFAULT_HTTP_PORT,
 };
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
@@ -338,6 +337,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
                 .map(crate::commands::claude_login::claude_login_result_json),
             "next_steps": init_next_steps(
                 &summary,
+                &home_dir,
                 codex_login.is_authenticated(),
                 grok_login.is_authenticated(),
                 claude_login.is_authenticated(),
@@ -1395,6 +1395,7 @@ fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
 
 fn init_next_steps(
     summary: &InitSummary,
+    home: &Path,
     codex_logged_in: bool,
     grok_logged_in: bool,
     claude_logged_in: bool,
@@ -1422,9 +1423,10 @@ fn init_next_steps(
     }
     steps.push("gents server".to_string());
     steps.push("gents codex".to_string());
+    let home = crate::shell_word(home);
     steps.push(format!(
-        "gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL>",
-        summary.backend_id, summary.backend_name
+        "To change the model's address, save the output of `gents config backend show {} --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}`.",
+        summary.backend_id
     ));
     steps
 }

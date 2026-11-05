@@ -222,25 +222,55 @@ async fn preflight_agent(
     }
 }
 
+/// Plain `gents` opens the bound agent, so that one has to be runnable. An agent named with
+/// `--agent` gets its own check when it opens, so here only an empty set stops it.
+fn can_open(identity: &RuntimeIdentity, agent_given: bool) -> bool {
+    identity.runnable_agents.as_ref().is_none_or(|runnable| {
+        if agent_given {
+            !runnable.is_empty()
+        } else {
+            admits_connection(&identity.bound_agent, runnable.iter().map(String::as_str))
+        }
+    })
+}
+
+fn cannot_open_refusal(identity: &RuntimeIdentity, home: &Path) -> String {
+    let home = crate::shell_word(home);
+    let what = if identity.runnable_agents.as_ref().is_some_and(Vec::is_empty) {
+        "no agent can run yet on this home's runtime".to_string()
+    } else {
+        format!(
+            "this home's default agent {:?} cannot run yet, though `gents --agent <id>` can open another (see `gents config agent list`)",
+            identity.bound_agent
+        )
+    };
+    format!(
+        "{what}. Check `gents status --home {home}`. If its model cannot be reached, start the model, or change its address with `gents config backend set --file <backend.json> --home {home}` (`gents config backend list --home {home}` names the backend to `show`)."
+    )
+}
+
 /// With nothing runnable an interface only fails in its own words, as Codex does with
 /// `model/list returned no models for TUI bootstrap`. No cross-process notification of a
-/// publish exists, so an empty set is looked at again until the wait ends. A pinned runtime
+/// publish exists, so the set is looked at again until the wait ends. A pinned runtime
 /// publishes no set, and a runtime that cannot say is left for the interface to report.
 pub(crate) async fn ensure_an_agent_can_run(
     remote: &str,
     home: &Path,
+    agent_given: bool,
     publish_wait: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + publish_wait;
     loop {
-        let identity = runtime_identity_at(remote).await;
-        if !identity.is_some_and(|identity| identity.runnable_agents == Some(Vec::new())) {
+        let Some(identity) = runtime_identity_at(remote).await else {
+            return Ok(());
+        };
+        if can_open(&identity, agent_given) {
             return Ok(());
         }
         ensure!(
             Instant::now() < deadline,
-            "no agent can run yet on this home's runtime. Check `gents status --home {}`.",
-            home.display()
+            "{}",
+            cannot_open_refusal(&identity, home)
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -419,6 +449,7 @@ pub(crate) mod tests {
         RuntimeIdentity {
             node_did: "did:key:z".to_string(),
             home: PathBuf::from("/srv/home"),
+            bound_agent: "a".to_string(),
             runnable_agents: runnable_agents
                 .map(|agents| agents.iter().map(|agent| agent.to_string()).collect()),
             tool_root: Some(PathBuf::from("/srv/root")),
@@ -681,16 +712,54 @@ pub(crate) mod tests {
         let error = ensure_an_agent_can_run(
             &format!("ws://{authority}/"),
             Path::new("/srv/home"),
+            false,
+            Duration::from_millis(250),
+        )
+        .await
+        .expect_err("nothing is ever published");
+
+        let error = error.to_string();
+        assert!(error.contains("no agent can run"), "{error}");
+        let status = error.find("gents status --home /srv/home").expect(&error);
+        let backend = error
+            .find("gents config backend set --file <backend.json> --home /srv/home")
+            .expect(&error);
+        assert!(status < backend, "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_default_agent_has_to_be_runnable_when_no_agent_is_named() {
+        let authority = runtime_answering(vec![published(&["other"])]).await;
+        let remote = format!("ws://{authority}/");
+        let home = Path::new("/srv/home");
+
+        let error = ensure_an_agent_can_run(&remote, home, false, Duration::from_millis(250))
+            .await
+            .expect_err("only another agent can run");
+
+        let error = error.to_string();
+        assert!(error.contains(r#"default agent "a""#), "{error}");
+        assert!(error.contains("gents --agent"), "{error}");
+        assert!(error.contains("gents status --home /srv/home"), "{error}");
+        ensure_an_agent_can_run(&remote, home, true, Duration::from_secs(600))
+            .await
+            .expect("a named agent gets its own check when it opens");
+    }
+
+    #[tokio::test]
+    async fn a_named_agent_still_needs_something_runnable() {
+        let authority = runtime_answering(vec![published(&[])]).await;
+
+        let error = ensure_an_agent_can_run(
+            &format!("ws://{authority}/"),
+            Path::new("/srv/home"),
+            true,
             Duration::from_millis(250),
         )
         .await
         .expect_err("nothing is ever published");
 
         assert!(error.to_string().contains("no agent can run"), "{error:#}");
-        assert!(
-            error.to_string().contains("gents status --home /srv/home"),
-            "{error:#}"
-        );
     }
 
     #[tokio::test]
@@ -701,6 +770,7 @@ pub(crate) mod tests {
         ensure_an_agent_can_run(
             &format!("ws://{authority}/"),
             Path::new("/srv/home"),
+            false,
             Duration::from_secs(30),
         )
         .await
@@ -715,6 +785,7 @@ pub(crate) mod tests {
         ensure_an_agent_can_run(
             &format!("ws://{authority}/"),
             Path::new("/srv/home"),
+            false,
             Duration::from_secs(600),
         )
         .await

@@ -96,7 +96,7 @@ async fn pick_backend() -> Result<BackendSelection> {
                 None => {
                     let url =
                         prompt_line_default("Local server base URL", OLLAMA_DEFAULT_URL).await?;
-                    let detected = probe_models(&url).await.unwrap_or_default();
+                    let detected = probe_or_warn(&url).await.unwrap_or_default();
                     (url, detected)
                 }
             };
@@ -122,6 +122,7 @@ async fn pick_backend() -> Result<BackendSelection> {
             if url.is_empty() {
                 bail!("no URL entered");
             }
+            probe_or_warn(&url).await;
             let model = prompt_line("Model name: ").await?.trim().to_string();
             if model.is_empty() {
                 bail!("no model name entered");
@@ -168,11 +169,23 @@ async fn detect_local_server() -> Option<(String, String)> {
     None
 }
 
+/// A model that does not answer yet is no reason to stop setup, but a mistyped address
+/// would otherwise show only when the first window fails to open.
+async fn probe_or_warn(url: &str) -> Option<String> {
+    let model = probe_models(url).await;
+    if model.is_none() {
+        eprintln!(
+            "No model answered at {url}. Setup will continue, but agents cannot run until one does: start it, or change the address later with `gents config backend set`."
+        );
+    }
+    model
+}
+
 /// Discovery probes optional local endpoints before prompting; an absent or
 /// unresponsive endpoint must not hold the interactive setup indefinitely.
 async fn probe_models(base: &str) -> Option<String> {
     let response = reqwest::Client::new()
-        .get(format!("{base}/models"))
+        .get(format!("{}/models", base.trim_end_matches('/')))
         .timeout(Duration::from_millis(700))
         .send()
         .await

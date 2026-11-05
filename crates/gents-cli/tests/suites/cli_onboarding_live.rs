@@ -239,6 +239,7 @@ mod no_model {
 
             terminal.expect("no agent can run", RUNTIME_UP).await?;
             terminal.expect("gents status", EXIT).await?;
+            terminal.expect("gents config backend set", EXIT).await?;
             terminal.expect_exit(1).await?;
             ensure!(!recorded.exists(), "{client}: nothing may open");
         }
@@ -418,6 +419,11 @@ mod no_model {
         assert_eq!(
             fs::read_to_string(live.remembered_home())?.trim_end_matches('\n'),
             folder.to_string_lossy()
+        );
+        ensure!(
+            !terminal.transcript().contains(NO_MODEL_TEXT),
+            "a model that answers gets no warning: {}",
+            terminal.transcript()
         );
         ensure!(
             !terminal.transcript().contains(r#""status":"initialized""#)
@@ -612,6 +618,34 @@ mod no_model {
             read_json_file(&folder.join("init.json"))?["tool_ceiling"],
             json!("Readonly")
         );
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_warns_about_a_model_that_does_not_answer_and_keeps_going() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "dead-model")?;
+        terminal.answer(INFERENCE_QUESTION, "3").await?;
+        terminal
+            .answer("Backend base URL", NO_MODEL_ENDPOINT)
+            .await?;
+        terminal.expect(NO_MODEL_TEXT, PROMPT).await?;
+        terminal.expect("gents config backend set", PROMPT).await?;
+        terminal.answer("Model name:", NO_MODEL_NAME).await?;
+        terminal.answer(TOOLS_QUESTION, "").await?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal
+            .expect("gents config backend set --file", PROMPT)
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        ensure!(folder.join("init.json").is_file(), "setup kept going");
         held.release().await;
         Ok(())
     }

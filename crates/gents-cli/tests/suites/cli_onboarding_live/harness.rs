@@ -29,6 +29,7 @@ pub(super) const TURN: Duration = Duration::from_secs(240);
 pub(super) const FOLDER_QUESTION: &str = "Data folder [";
 pub(super) const INFERENCE_QUESTION: &str = "How do you want to run inference?";
 pub(super) const TOOLS_QUESTION: &str = "What may agents do?";
+pub(super) const NO_MODEL_TEXT: &str = "No model answered at";
 pub(super) const ROOT_QUESTION: &str = "Which folder may agents work in?";
 /// A relative answer to `ROOT_QUESTION`, because every test's terminal starts in its
 /// temporary `HOME`. `LiveBox::new` creates it.

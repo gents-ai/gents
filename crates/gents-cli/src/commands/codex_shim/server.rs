@@ -32,6 +32,8 @@ pub(crate) struct CodexShimBindArgs {
 pub(crate) struct RuntimeIdentity {
     pub(crate) node_did: String,
     pub(crate) home: PathBuf,
+    /// The agent a client gets on `/`, which is the one plain `gents` opens.
+    pub(crate) bound_agent: String,
     /// The published runnable set, or `None` when `/agents/{agent_id}` is not mounted.
     pub(crate) runnable_agents: Option<Vec<String>>,
     /// Admission refuses a placement outside this.
@@ -161,6 +163,7 @@ pub(crate) async fn bind_codex_shim(
     let identity = RuntimeIdentity {
         node_did: args.node_did.clone(),
         home: crate::absolutize(args.home.clone()).map_err(CodexShimBindError::HostResource)?,
+        bound_agent: bound_agent_id.clone(),
         runnable_agents: None,
         tool_root: args.fs_root.clone(),
         default_thread_cwd: thread_cwd.clone(),

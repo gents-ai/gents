@@ -161,8 +161,8 @@ pub(super) async fn setup(
     args.tool_root = chosen.tool_root;
 
     let initialized = init_home(args).await?;
-    for step in sign_in_steps(&initialized) {
-        eprintln!("Sign in later with `{step} --home {}`.", home.display());
+    for line in next_step_lines(&initialized, &home) {
+        eprintln!("{line}");
     }
     if folder_asked {
         remember_home(&home)?;
@@ -212,14 +212,24 @@ async fn ask_tool_root(cwd: &Path, user_home: &Path) -> Result<PathBuf> {
     }
 }
 
-/// A sign-in declined during setup leaves its step only in what `init_home` returns.
-fn sign_in_steps(initialized: &serde_json::Value) -> Vec<&str> {
+/// `init_home` lists steps for someone working by hand. Setup starts the server and the
+/// interface itself right after this, so only what it cannot do is left to say.
+fn next_step_lines(initialized: &serde_json::Value, home: &Path) -> Vec<String> {
     initialized["next_steps"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
-        .filter(|step| step.starts_with("gents auth login"))
+        .filter(|step| !matches!(*step, "gents server" | "gents codex"))
+        .map(|step| {
+            if step.starts_with("gents auth login") {
+                format!("Sign in later with `{step} --home {}`.", home.display())
+            } else if step.starts_with("ollama ") || step.starts_with("llama-server ") {
+                format!("If your model is not running yet, start it with `{step}`.")
+            } else {
+                step.to_string()
+            }
+        })
         .collect()
 }
 
@@ -255,12 +265,26 @@ mod tests {
     }
 
     #[test]
-    fn only_sign_in_steps_are_printed() {
+    fn only_steps_setup_does_not_take_itself_are_printed() {
         let initialized = serde_json::json!({
-            "next_steps": ["gents auth login codex", "gents server", "gents codex"],
+            "next_steps": [
+                "gents auth login codex",
+                "llama-server -hf m",
+                "gents server",
+                "gents codex",
+                "To change the model's address, do this.",
+            ],
         });
-        assert_eq!(sign_in_steps(&initialized), ["gents auth login codex"]);
-        assert!(sign_in_steps(&serde_json::json!({})).is_empty());
+        let home = Path::new("/srv/home");
+        assert_eq!(
+            next_step_lines(&initialized, home),
+            [
+                "Sign in later with `gents auth login codex --home /srv/home`.",
+                "If your model is not running yet, start it with `llama-server -hf m`.",
+                "To change the model's address, do this.",
+            ]
+        );
+        assert!(next_step_lines(&serde_json::json!({}), home).is_empty());
     }
 
     #[test]

@@ -140,7 +140,13 @@ pub(crate) async fn run(
     };
     let endpoint = InterfaceEndpoint::for_client(ClientSettings::read(&home)?.client)?;
     ensure_runtime(&home, &config.node_did, &endpoint).await?;
-    ensure_an_agent_can_run(crate::DEFAULT_CODEX_REMOTE, &home, PUBLISH_WAIT).await?;
+    ensure_an_agent_can_run(
+        crate::DEFAULT_CODEX_REMOTE,
+        &home,
+        agent.is_some(),
+        PUBLISH_WAIT,
+    )
+    .await?;
     endpoint.open(agent).await
 }
 

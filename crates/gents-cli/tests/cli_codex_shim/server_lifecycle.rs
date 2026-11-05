@@ -138,6 +138,7 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
         json!({
             "node_did": node_did,
             "home": home_dir.join(".gents").to_string_lossy(),
+            "bound_agent": default_agent_id,
             "runnable_agents": null,
             "tool_root": tool_root,
             "default_thread_cwd": tool_root,
