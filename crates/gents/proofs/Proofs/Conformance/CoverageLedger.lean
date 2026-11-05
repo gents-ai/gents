@@ -1521,6 +1521,12 @@ def caseCoverage : List CoverageEntry :=
       "client_journal_isolation::private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
+      "workspace_completion_access_cases"
+      "WorkspaceCompletionAccessCases"
+      "tools::workspace::tests::capability_runtime::workspace_completion_reads_keep_selected_agent_visibility"
+      "Exercises selected-Agent reads using a test-only native binding; product workspace relationships and remaining readers require separate coverage.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_completion_actor_cases"
       "WorkspaceCompletionActorCases"
       "tools::workspace::tests::capability_runtime::workspace_completion_requires_selected_managed_agent"

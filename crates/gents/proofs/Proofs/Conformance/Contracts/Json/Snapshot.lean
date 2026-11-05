@@ -619,6 +619,7 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
     ++ "\"workspace_root_completeness_cases\":" ++ Identity.WorkspaceAndFileRequests.rootCompletenessCasesJson ++ ","
     ++ "\"workspace_completion_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.completionActorCasesJson ++ ","
+    ++ "\"workspace_completion_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCompletionAccessCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
     ++ "\"node_file_request_access_cases\":" ++ Identity.NodeFileRequests.requestAccessCasesJson ++ ","
     ++ "\"callback_workspace_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackActorCasesJson ++ ","

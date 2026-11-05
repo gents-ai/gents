@@ -83,6 +83,11 @@ theorem workspace_parent_supplies_user_read_without_unrelated_access :
     Household.allowed 5 workspaceFixture "agent" "agent_children" "workspace" "update" = true ∧
     Household.allowed 5 workspaceFixture "other" "agent_children" "workspace" "read" = false := by native_decide
 
+def workspaceCompletionAccessCasesJson : String :=
+  (Lean.toJson (["agent", "other"].map fun actor => Lean.Json.mkObj
+    [("actor", Lean.toJson actor),
+     ("read", Lean.toJson (Household.allowed 5 workspaceFixture actor "agent_children" "workspace" "read"))])).compress
+
 /-- The callback workspace owner retains the selected held Agent access for
 both reads and writes. Matching this execution context is not a substitute for
 the native document permission check performed by DefraDB. -/

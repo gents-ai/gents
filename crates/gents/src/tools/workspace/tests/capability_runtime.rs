@@ -35,6 +35,161 @@ async fn workspace_completion_requires_selected_managed_agent() {
     node.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime.key"), None)?;
+    let selected_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let other_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let selected = crate::store::identity::resolve_agent_identity(&runtime, &selected_binding)?;
+    let other = crate::store::identity::resolve_agent_identity(&runtime, &other_binding)?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .build()
+            .await?,
+    );
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+    let repository_policy = node.add_dac_policy_as(&context, "name: WorkspaceCompletionReads\nresources:\n  - name: facts\n    permissions:\n      - name: read\n      - name: update\n      - name: delete\n").await?;
+    for (name, schema) in [
+        (
+            "IsolatedWorkspace",
+            gents_protocol::schemas::ISOLATED_WORKSPACE,
+        ),
+        (
+            "WorkspacePlacement",
+            gents_protocol::schemas::WORKSPACE_PLACEMENT,
+        ),
+        (
+            "WorkspaceBinding",
+            gents_protocol::schemas::WORKSPACE_BINDING,
+        ),
+        (
+            "WorkspaceReceipt",
+            gents_protocol::schemas::WORKSPACE_RECEIPT,
+        ),
+        (
+            "RepositoryPlacement",
+            gents_protocol::schemas::REPOSITORY_PLACEMENT,
+        ),
+    ] {
+        let (id, resource) = if name == "RepositoryPlacement" {
+            (&repository_policy, "facts")
+        } else {
+            (&policy, "agent_children")
+        };
+        let schema = schema.replacen(
+            &format!("type {name}"),
+            &format!("type {name} @policy(id: \"{id}\", resource: \"{resource}\")"),
+            1,
+        );
+        node.add_collection_as(&context, &schema).await?;
+    }
+    let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
+    for actor in [selected.did(), other.did()] {
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::DocumentUpdate,
+            crate::store::config_client::NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&actor.parse()?, permission)
+                .await?;
+        }
+    }
+    let access = |identity: &dyn NodeIdentity| {
+        crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity.did().parse().unwrap(),
+            identity,
+        )
+        .unwrap()
+    };
+    let selected_access = access(selected.as_ref());
+    let other_access = access(other.as_ref());
+    let doc = IsolatedWorkspaceDoc {
+        path_capability: WorkspacePathCapability::exact_paths(Vec::new())?,
+        workspace_id: "workspace".into(),
+        work_unit_id: "unit".into(),
+        repository_id: "repository".into(),
+        base_sha: "base".into(),
+        branch: "branch".into(),
+        creation_policy: "git_worktree_diff".into(),
+        adapter: "git_worktree".into(),
+        owner_node_did: runtime.did().into(),
+        writer_principal: runtime.did().into(),
+        integrator_principal: runtime.did().into(),
+        instruction_manifest: "{}".into(),
+        seal_hash: None,
+        lifecycle_state: "ready".into(),
+        caused_by_invocation_id: "invocation".into(),
+        caused_by_correlation: "correlation".into(),
+    };
+    selected_access
+        .write(
+            "test.workspace.private",
+            &isolated_workspace_upsert_mutation(&doc),
+        )
+        .await?;
+    let repository = RepositoryPlacementRef {
+        repository_id: "repository".into(),
+        owner_node_did: runtime.did().into(),
+        host_path: directory.path().to_owned(),
+        enabled: true,
+    };
+    selected_access
+        .write(
+            "test.workspace.repository",
+            &repository_placement_upsert_mutation(&repository, "2026-11-05T00:00:00Z")?,
+        )
+        .await?;
+    let selected_docs =
+        super::super::runtime::load_docs_with_access(&selected_access, "workspace", runtime.did())
+            .await?;
+    let other_docs =
+        super::super::runtime::load_docs_with_access(&other_access, "workspace", runtime.did())
+            .await?;
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_completion_access_cases
+    {
+        let docs = match case["actor"].as_str().unwrap() {
+            "agent" => &selected_docs,
+            "other" => &other_docs,
+            actor => panic!("unknown modeled actor {actor}"),
+        };
+        assert_eq!(
+            docs.load_isolated_workspace("workspace")?.is_some(),
+            case["read"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    assert!(super::super::runtime::load_repository_with_access(
+        &selected_access,
+        "repository",
+        runtime.did()
+    )
+    .await
+    .is_ok());
+    assert!(super::super::runtime::load_repository_with_access(
+        &other_access,
+        "repository",
+        runtime.did()
+    )
+    .await
+    .is_err());
+    node.shutdown().await?;
+    Ok(())
+}
+
 async fn query(node: &defra_node::Node, document: &str) -> serde_json::Value {
     let response = node.execute(document).await;
     assert!(!response.has_errors(), "{document}: {:?}", response.errors);

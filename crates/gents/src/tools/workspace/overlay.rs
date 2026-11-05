@@ -586,9 +586,32 @@ pub(super) async fn load_workspace_bindings_for(
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Vec<WorkspaceBindingDoc>> {
+    let query = workspace_bindings_query(workspace_id, node_did);
+    let response = graphql_with_transaction_retry(node, &query, "load WorkspaceBinding").await?;
+    validate_workspace_bindings(
+        rows::<WorkspaceBindingDoc>(&response, "WorkspaceBinding")?,
+        workspace_id,
+    )
+}
+
+pub(super) async fn load_workspace_bindings_for_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<Vec<WorkspaceBindingDoc>> {
+    let response = access
+        .execute(&workspace_bindings_query(workspace_id, node_did))
+        .await?;
+    let rows = response
+        .pointer("/data/WorkspaceBinding")
+        .context("workspace binding query omitted rows")?;
+    validate_workspace_bindings(serde_json::from_value(rows.clone())?, workspace_id)
+}
+
+fn workspace_bindings_query(workspace_id: &str, node_did: &str) -> String {
     let owner = escape_graphql_string(node_did);
     let escaped = escape_graphql_string(workspace_id);
-    let query = format!(
+    format!(
         r#"{{
             WorkspaceBinding(
                 filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_node_did: {{ _eq: "{owner}" }} }}
@@ -603,9 +626,13 @@ pub(super) async fn load_workspace_bindings_for(
                 lifecycle_state
             }}
         }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "load WorkspaceBinding").await?;
-    let bindings = rows::<WorkspaceBindingDoc>(&response, "WorkspaceBinding")?;
+    )
+}
+
+fn validate_workspace_bindings(
+    bindings: Vec<WorkspaceBindingDoc>,
+    workspace_id: &str,
+) -> Result<Vec<WorkspaceBindingDoc>> {
     anyhow::ensure!(
         bindings
             .iter()

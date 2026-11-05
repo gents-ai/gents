@@ -185,8 +185,8 @@ pub async fn seal_on_writer_success(
     }
     let access = completion_access(node, agent_identity, &request.agent_did)?;
 
-    let mut docs = load_docs(
-        node,
+    let mut docs = load_docs_with_access(
+        &access,
         workspace_id,
         super::overlay::request_workspace_owner(request)?,
     )
@@ -201,7 +201,8 @@ pub async fn seal_on_writer_success(
     docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
     let repository =
-        load_repository(node, &workspace.repository_id, &workspace.owner_node_did).await?;
+        load_repository_with_access(&access, &workspace.repository_id, &workspace.owner_node_did)
+            .await?;
 
     let plan = emit_seal_workspace_plan(SealWorkspaceAction {
         workspace_id: workspace_id.to_string(),
@@ -247,8 +248,8 @@ pub async fn integrate_on_integrator_success(
     }
     let access = completion_access(node, agent_identity, &request.agent_did)?;
 
-    let mut docs = load_docs(
-        node,
+    let mut docs = load_docs_with_access(
+        &access,
         workspace_id,
         super::overlay::request_workspace_owner(request)?,
     )
@@ -263,7 +264,8 @@ pub async fn integrate_on_integrator_success(
     docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
     let repository =
-        load_repository(node, &workspace.repository_id, &workspace.owner_node_did).await?;
+        load_repository_with_access(&access, &workspace.repository_id, &workspace.owner_node_did)
+            .await?;
 
     let plan = emit_integrate_workspace_plan(IntegrateWorkspaceAction {
         workspace_id: workspace_id.to_string(),
@@ -594,11 +596,72 @@ async fn load_docs(
     Ok(docs)
 }
 
+pub(super) async fn load_docs_with_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<MemoryWorkspaceDocuments> {
+    let mut docs = MemoryWorkspaceDocuments::default();
+    let query = isolated_workspace_doc_query(workspace_id, node_did);
+    let response = access.execute(&query).await?;
+    let mut workspaces: Vec<IsolatedWorkspaceDoc> =
+        decode_access_rows(&response, "IsolatedWorkspace")?;
+    anyhow::ensure!(
+        workspaces.len() <= 1,
+        "ambiguous node-scoped IsolatedWorkspace"
+    );
+    if let Some(workspace) = workspaces.pop() {
+        docs.write_isolated_workspace(workspace)?;
+    }
+    let response = access
+        .execute(&placement_doc_query(workspace_id, node_did))
+        .await?;
+    let mut placements: Vec<WorkspacePlacementDoc> =
+        decode_access_rows(&response, "WorkspacePlacement")?;
+    anyhow::ensure!(
+        placements.len() <= 1,
+        "ambiguous node-scoped WorkspacePlacement"
+    );
+    if let Some(placement) = placements.pop() {
+        docs.write_placement(placement)?;
+    }
+    for binding in
+        super::overlay::load_workspace_bindings_for_access(access, workspace_id, node_did).await?
+    {
+        docs.write_binding(binding)?;
+    }
+    let response = access
+        .execute(&workspace_receipts_query(workspace_id))
+        .await?;
+    for receipt in decode_access_rows::<WorkspaceReceiptDoc>(&response, "WorkspaceReceipt")? {
+        docs.write_receipt(receipt)?;
+    }
+    Ok(docs)
+}
+
+fn decode_access_rows<T>(response: &serde_json::Value, collection: &str) -> Result<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let values = response
+        .get("data")
+        .and_then(|data| data.get(collection))
+        .with_context(|| format!("{collection} query omitted rows"))?;
+    Ok(serde_json::from_value(values.clone())?)
+}
+
 async fn load_receipts(
     node: &EmbeddedNode,
     workspace_id: &str,
 ) -> Result<Vec<WorkspaceReceiptDoc>> {
-    let query = format!(
+    let query = workspace_receipts_query(workspace_id);
+    let response =
+        graphql_with_transaction_retry(node, &query, "load WorkspaceReceipt for seal").await?;
+    Ok(crate::store::graphql::rows(&response, "WorkspaceReceipt")?)
+}
+
+fn workspace_receipts_query(workspace_id: &str) -> String {
+    format!(
         r#"{{
             WorkspaceReceipt(
                 filter: {{ workspace_id: {{ _eq: "{id}" }} }}
@@ -619,10 +682,7 @@ async fn load_receipts(
             }}
         }}"#,
         id = escape_graphql_string(workspace_id),
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load WorkspaceReceipt for seal").await?;
-    Ok(crate::store::graphql::rows(&response, "WorkspaceReceipt")?)
+    )
 }
 
 async fn load_isolated_workspace_doc(
@@ -630,7 +690,17 @@ async fn load_isolated_workspace_doc(
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
-    let query = format!(
+    let query = isolated_workspace_doc_query(workspace_id, node_did);
+    let response =
+        graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace for seal").await?;
+    let mut found =
+        crate::store::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
+    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped IsolatedWorkspace");
+    Ok(found.pop())
+}
+
+fn isolated_workspace_doc_query(workspace_id: &str, node_did: &str) -> String {
+    format!(
         r#"{{
             IsolatedWorkspace(
                 filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
@@ -639,15 +709,7 @@ async fn load_isolated_workspace_doc(
         }}"#,
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(node_did),
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace for seal").await?;
-    {
-        let mut found =
-            crate::store::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
-        anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped IsolatedWorkspace");
-        Ok(found.pop())
-    }
+    )
 }
 
 async fn load_placement_doc(
@@ -655,7 +717,17 @@ async fn load_placement_doc(
     workspace_id: &str,
     node_did: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
-    let query = format!(
+    let query = placement_doc_query(workspace_id, node_did);
+    let response =
+        graphql_with_transaction_retry(node, &query, "load WorkspacePlacement for seal").await?;
+    let mut found =
+        crate::store::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
+    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped WorkspacePlacement");
+    Ok(found.pop())
+}
+
+fn placement_doc_query(workspace_id: &str, node_did: &str) -> String {
+    format!(
         r#"{{
             WorkspacePlacement(
                 filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
@@ -664,15 +736,7 @@ async fn load_placement_doc(
         }}"#,
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(node_did),
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load WorkspacePlacement for seal").await?;
-    {
-        let mut found =
-            crate::store::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
-        anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped WorkspacePlacement");
-        Ok(found.pop())
-    }
+    )
 }
 
 async fn load_repository(
@@ -680,13 +744,41 @@ async fn load_repository(
     repository_id: &str,
     node_did: &str,
 ) -> Result<RepositoryPlacementRef> {
-    let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ RepositoryPlacement(filter: {{repository_id: {{_eq:"{}"}},node_did: {{_eq:"{}"}}}},limit:2) {{repository_id node_did host_path enabled}} }}"#,
-        escape_graphql_string(repository_id), escape_graphql_string(node_did)), "load scoped RepositoryPlacement").await?;
-    let mut found = crate::store::graphql::rows::<crate::documents::RepositoryPlacement>(
+    let response = graphql_with_transaction_retry(
+        node,
+        &repository_query(repository_id, node_did),
+        "load scoped RepositoryPlacement",
+    )
+    .await?;
+    let found = crate::store::graphql::rows::<crate::documents::RepositoryPlacement>(
         &response,
         "RepositoryPlacement",
     )?;
+    selected_repository(found)
+}
+
+pub(super) async fn load_repository_with_access(
+    access: &crate::ConfigAccess,
+    repository_id: &str,
+    node_did: &str,
+) -> Result<RepositoryPlacementRef> {
+    let response = access
+        .execute(&repository_query(repository_id, node_did))
+        .await?;
+    selected_repository(decode_access_rows(&response, "RepositoryPlacement")?)
+}
+
+fn repository_query(repository_id: &str, node_did: &str) -> String {
+    format!(
+        r#"{{ RepositoryPlacement(filter: {{repository_id: {{_eq:"{}"}},node_did: {{_eq:"{}"}}}},limit:2) {{repository_id node_did host_path enabled}} }}"#,
+        escape_graphql_string(repository_id),
+        escape_graphql_string(node_did)
+    )
+}
+
+fn selected_repository(
+    mut found: Vec<crate::documents::RepositoryPlacement>,
+) -> Result<RepositoryPlacementRef> {
     anyhow::ensure!(
         found.len() == 1,
         "repository placement missing or ambiguous for node"
