@@ -160,6 +160,7 @@ pub fn new_binding(
     seal_hash: Option<&str>,
 ) -> WorkspaceBindingDoc {
     WorkspaceBindingDoc {
+        workspace_doc_id: None,
         binding_id: binding_id_for(workspace_id, request_id),
         workspace_id: workspace_id.to_string(),
         request_id: request_id.to_string(),

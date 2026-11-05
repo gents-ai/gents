@@ -518,6 +518,7 @@ pub(super) async fn previous_exclusive_is_stale(
     .await?)
 }
 
+#[cfg(test)]
 pub(super) async fn previous_exclusive_is_stale_with_access(
     access: &crate::ConfigAccess,
     workspace_id: &str,
@@ -547,7 +548,7 @@ pub(super) async fn previous_exclusive_is_stale_with_access(
     )?)
 }
 
-fn previous_exclusive_binding<'a>(
+pub(super) fn previous_exclusive_binding<'a>(
     workspace_id: &str,
     existing: &'a [WorkspaceBindingDoc],
     request_id: &str,
@@ -596,7 +597,7 @@ async fn request_is_live(
     validate_request_liveness(row, request_id, workspace_id, node_did)
 }
 
-fn request_liveness_query(request_doc_id: &str) -> Result<String> {
+pub(super) fn request_liveness_query(request_doc_id: &str) -> Result<String> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "workspace binding lacks physical request ID"
@@ -614,7 +615,7 @@ fn request_liveness_query(request_doc_id: &str) -> Result<String> {
     ))
 }
 
-fn validate_request_liveness(
+pub(super) fn validate_request_liveness(
     row: AgentRequestRow,
     request_id: &str,
     workspace_id: &str,
@@ -664,7 +665,7 @@ pub(super) async fn load_workspace_bindings_for_access(
     validate_workspace_bindings(serde_json::from_value(rows.clone())?, workspace_id)
 }
 
-fn workspace_bindings_query(workspace_id: &str, node_did: &str) -> String {
+pub(super) fn workspace_bindings_query(workspace_id: &str, node_did: &str) -> String {
     let owner = escape_graphql_string(node_did);
     let escaped = escape_graphql_string(workspace_id);
     format!(
@@ -674,6 +675,7 @@ fn workspace_bindings_query(workspace_id: &str, node_did: &str) -> String {
             ) {{
                 binding_id
                 workspace_id
+                workspace_doc_id
                 request_id
                 request_doc_id
                 authority
@@ -685,7 +687,14 @@ fn workspace_bindings_query(workspace_id: &str, node_did: &str) -> String {
     )
 }
 
-fn validate_workspace_bindings(
+pub(super) fn workspace_bindings_for_parent_query(workspace_doc_id: &str) -> String {
+    format!(
+        r#"{{ WorkspaceBinding(filter: {{ workspace_doc_id: {{ _eq: "{}" }} }}) {{ binding_id workspace_id workspace_doc_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
+        escape_graphql_string(workspace_doc_id)
+    )
+}
+
+pub(super) fn validate_workspace_bindings(
     bindings: Vec<WorkspaceBindingDoc>,
     workspace_id: &str,
 ) -> Result<Vec<WorkspaceBindingDoc>> {
@@ -748,7 +757,7 @@ pub(super) async fn persist_workspace_binding_docs_with_access(
 }
 
 #[derive(Deserialize)]
-struct IsolatedWorkspaceRow {
+pub(super) struct IsolatedWorkspaceRow {
     workspace_id: Option<String>,
     work_unit_id: Option<String>,
     caused_by_invocation_id: Option<String>,
@@ -777,6 +786,7 @@ pub(crate) fn isolated_workspace_record_query(workspace_id: &str, node_did: &str
                 filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{
+                _docID
                 workspace_id
                 work_unit_id
                 caused_by_invocation_id
@@ -791,7 +801,9 @@ pub(crate) fn isolated_workspace_record_query(workspace_id: &str, node_did: &str
     )
 }
 
-fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<IsolatedWorkspaceRecord> {
+pub(super) fn decode_isolated_workspace_record(
+    row: IsolatedWorkspaceRow,
+) -> Result<IsolatedWorkspaceRecord> {
     let workspace_id = optional_id(row.workspace_id.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace is missing workspace_id"))?
         .to_string();

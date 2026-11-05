@@ -88,6 +88,67 @@ def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal
 
 theorem invisible_request_does_not_release_binding : mayReleaseExclusive false true = false := by rfl
 
+/-- Workspace publication attaches its physical Agent parent and the selected
+writer and integrator in the same transaction. Every admitted child is linked
+to this workspace; a child outside that publication is not a binding in the
+workspace's authoritative inventory. ACP1 does not require native direct-create
+operations to attach that parent. This publication contract assumes the native
+node admission boundary limits writers to the canonical publisher; arbitrary
+authorized raw creates can produce orphans and are outside this guarantee. -/
+structure WorkspacePublication where
+  document : Bool := false
+  agentParent : Bool := false
+  writer : Bool := false
+  integrator : Bool := false
+  deriving BEq, DecidableEq, Repr
+
+def publishWorkspace (commit : Bool) : WorkspacePublication :=
+  if commit then ⟨true, true, true, true⟩ else ⟨false, false, false, false⟩
+
+def revokeWorkspaceWriter (p : WorkspacePublication) : WorkspacePublication := { p with writer := false }
+def reuseWorkspace (p : WorkspacePublication) : WorkspacePublication := p
+
+theorem failed_workspace_publication_is_empty : publishWorkspace false = ⟨false, false, false, false⟩ := by rfl
+theorem workspace_reuse_does_not_restore_revocation :
+    reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true)) = ⟨true, true, false, true⟩ := by rfl
+
+def workspacePublicationFixture : Household.State :=
+  { objects := [⟨"agents", "agent-doc", "user"⟩,
+      ⟨"workspaces", "workspace", "creator"⟩,
+      ⟨"workspace_children", "binding", "writer"⟩],
+    relations := [⟨"workspaces", "workspace", "parent", .object "agents" "agent-doc"⟩,
+      ⟨"workspaces", "workspace", "writer", .actor "writer"⟩,
+      ⟨"workspaces", "workspace", "integrator", .actor "integrator"⟩,
+      ⟨"workspace_children", "binding", "parent", .object "workspaces" "workspace"⟩],
+    enrolled := [] }
+
+def workspaceChildPermission (actor permission : String) : Bool :=
+  Household.allowed 8 workspacePublicationFixture actor "workspace_children" "binding" permission
+
+theorem selected_agents_see_the_same_binding :
+    workspaceChildPermission "writer" "read" = true ∧
+    workspaceChildPermission "integrator" "read" = true ∧
+    workspaceChildPermission "other" "read" = false := by native_decide
+
+def workspaceChildCasesJson : String :=
+  (Lean.toJson (["user", "creator", "writer", "integrator", "other"].flatMap fun actor =>
+    ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
+      [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
+       ("expected", Lean.toJson (workspaceChildPermission actor permission))])).compress
+
+/-- Exclusive admission reads the complete published-child set and commits a
+new child together with a write to the shared workspace revision. The shared
+write makes two decisions from the same prior snapshot conflict. -/
+def admitExclusive (complete occupied : Bool) : Bool := complete && !occupied
+
+theorem incomplete_inventory_cannot_admit : admitExclusive false false = false := by rfl
+theorem occupied_inventory_cannot_admit : admitExclusive true true = false := by rfl
+
+def workspaceAdmissionCasesJson : String :=
+  (Lean.toJson ([false, true].map fun occupied =>
+    Lean.Json.mkObj [("complete", Lean.toJson true), ("occupied", Lean.toJson occupied),
+      ("admitted", Lean.toJson (admitExclusive true occupied))])).compress
+
 def workspaceLivenessCasesJson : String :=
   (Lean.toJson ([false, true].flatMap fun visible => [false, true].map fun terminal =>
     Lean.Json.mkObj [("visible", Lean.toJson visible), ("terminal", Lean.toJson terminal),

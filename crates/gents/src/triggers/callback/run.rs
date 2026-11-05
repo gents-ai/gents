@@ -767,9 +767,9 @@ async fn execute_running_invocation(
         }) => {
             if let Some(outcome) = outcome {
                 let written = memory_from_outcome(&outcome);
-                flush_workspace_docs(access, &written, &invocation.agent_did).await?;
+                flush_workspace_docs(access, &written, &invocation.agent_did, &action).await?;
             } else {
-                flush_workspace_docs(access, &docs, &invocation.agent_did).await?;
+                flush_workspace_docs(access, &docs, &invocation.agent_did, &action).await?;
             }
             persist_journal(
                 node,
@@ -785,7 +785,7 @@ async fn execute_running_invocation(
     };
 
     let written = memory_from_outcome(&outcome);
-    flush_workspace_docs(access, &written, &invocation.agent_did).await?;
+    flush_workspace_docs(access, &written, &invocation.agent_did, &action).await?;
     persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     succeed_then_emit_result(
         node,

@@ -515,6 +515,7 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
         let response = second_access.write("test.workspace.foreign_request", &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{request_id}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{}", session_id: "session", content: "work", created_at: "2026-11-05T00:00:00Z", workspace_id: "workspace", workspace_owner_node_did: "{}", lifecycle_state: "{state}"}}) {{_docID}} }}"#, runtime.did(), runtime.did(), second.did(), runtime.did())).await?;
         let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
         let binding = WorkspaceBindingDoc {
+            workspace_doc_id: None,
             binding_id: "binding".into(),
             workspace_id: "workspace".into(),
             request_id,
@@ -544,6 +545,250 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
             assert_eq!(case["may_release"], false);
         }
     }
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let user = crate::KeyIdentity::load_or_create(dir.path().join("user.key"), None)?;
+    let creator_key = crate::store::identity::provision_agent_identity(&user)?;
+    let writer_key = crate::store::identity::provision_agent_identity(&user)?;
+    let integrator_key = crate::store::identity::provision_agent_identity(&user)?;
+    let other_key = crate::store::identity::provision_agent_identity(&user)?;
+    let creator = crate::store::identity::resolve_agent_identity(&user, &creator_key)?;
+    let writer = crate::store::identity::resolve_agent_identity(&user, &writer_key)?;
+    let integrator = crate::store::identity::resolve_agent_identity(&user, &integrator_key)?;
+    let other = crate::store::identity::resolve_agent_identity(&user, &other_key)?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(user.did())
+            .build()
+            .await?,
+    );
+    let ctx = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
+        .await?;
+    for (name, schema, resource) in [
+        ("Agent", gents_protocol::schemas::AGENT, "agents"),
+        (
+            "AgentRequest",
+            gents_protocol::schemas::AGENT_REQUEST,
+            "delivered_requests",
+        ),
+        (
+            "IsolatedWorkspace",
+            gents_protocol::schemas::ISOLATED_WORKSPACE,
+            "workspaces",
+        ),
+        (
+            "WorkspacePlacement",
+            gents_protocol::schemas::WORKSPACE_PLACEMENT,
+            "workspace_children",
+        ),
+        (
+            "WorkspaceBinding",
+            gents_protocol::schemas::WORKSPACE_BINDING,
+            "workspace_children",
+        ),
+    ] {
+        let schema = if schema.contains("@policy(") {
+            schema.replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy)
+        } else {
+            schema.replacen(
+                &format!("type {name}"),
+                &format!("type {name} @policy(id: \"{policy}\", resource: \"{resource}\")"),
+                1,
+            )
+        };
+        node.add_collection_as(&ctx, &schema).await?;
+    }
+    let admin = crate::ConfigAccess::local_as(node.clone(), user.did().parse()?);
+    for actor in [creator.did(), writer.did(), integrator.did(), other.did()] {
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::DocumentUpdate,
+            crate::store::config_client::NodePermission::DocumentDelete,
+            crate::store::config_client::NodePermission::CollectionGet,
+            crate::store::config_client::NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&actor.parse()?, permission)
+                .await?;
+        }
+    }
+    let mut agent_docs = Vec::new();
+    for binding in [&creator_key, &writer_key, &integrator_key] {
+        let response = admin.write("test.workspace.agent", &format!(r#"mutation {{create_Agent(input: {{node_did: "{}", agent_did: "{}", creation_nonce: "{}", enabled: true}}) {{_docID}}}}"#, user.did(), binding.agent_did, binding.creation_nonce)).await?;
+        let doc = crate::store::graphql::created_doc_id(&response, "Agent")?;
+        admin
+            .add_actor_relationship("Agent", &doc, "reader", &creator.did().parse()?)
+            .await?;
+        agent_docs.push(doc);
+    }
+    let creator_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        creator.did().parse()?,
+        creator.as_ref(),
+    )?;
+    let writer_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        writer.did().parse()?,
+        writer.as_ref(),
+    )?;
+    let action = CreateWorkspaceAction {
+        workspace_id: "workspace".into(),
+        work_unit_id: "unit".into(),
+        repository_id: "repository".into(),
+        base_sha: "base".into(),
+        branch: "branch".into(),
+        creation_policy: CreationPolicy::GitWorktreeDiff,
+        adapter: WorkspaceAdapterKind::GitWorktree,
+        clone_artifacts: None,
+        path_capability: WorkspacePathCapability::exact_paths(Vec::new())?,
+        writer_agent_did: Some(writer.did().into()),
+        writer_agent_doc_id: Some(agent_docs[1].clone()),
+        integrator_agent_did: Some(integrator.did().into()),
+        integrator_agent_doc_id: Some(agent_docs[2].clone()),
+    };
+    let workspace = IsolatedWorkspaceDoc {
+        path_capability: action.path_capability.clone(),
+        workspace_id: "workspace".into(),
+        work_unit_id: "unit".into(),
+        repository_id: "repository".into(),
+        base_sha: "base".into(),
+        branch: "branch".into(),
+        creation_policy: "git_worktree_diff".into(),
+        adapter: "git_worktree".into(),
+        owner_node_did: user.did().into(),
+        writer_principal: writer.did().into(),
+        integrator_principal: integrator.did().into(),
+        instruction_manifest: "{}".into(),
+        seal_hash: None,
+        lifecycle_state: "ready".into(),
+        caused_by_invocation_id: "invocation".into(),
+        caused_by_correlation: "correlation".into(),
+    };
+    let placement = WorkspacePlacementDoc {
+        workspace_id: "workspace".into(),
+        owner_node_did: user.did().into(),
+        host_path: "/tmp/workspace".into(),
+        repository_placement_id: "repository".into(),
+        adapter: "git_worktree".into(),
+        adapter_version: "1".into(),
+        dirty_base: false,
+        dirty_base_summary: "".into(),
+        provisioning_state: "ready".into(),
+        observed_tree_hash: "tree".into(),
+    };
+    let mut docs = MemoryWorkspaceDocuments::default();
+    docs.write_isolated_workspace(workspace)?;
+    docs.write_placement(placement)?;
+    crate::triggers::callback::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+        .await?;
+    let workspace_rows = writer_access
+        .execute("{ IsolatedWorkspace { _docID } }")
+        .await?;
+    let workspace_doc = workspace_rows["data"]["IsolatedWorkspace"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut requests = Vec::new();
+    for name in ["one", "two"] {
+        let response = writer_access.write("test.workspace.request", &format!(r#"mutation {{create_AgentRequest(input: {{request_id: "{name}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{}", session_id: "session", content: "work", created_at: "2026-11-05T00:00:00Z", workspace_id: "workspace", workspace_owner_node_did: "{}", workspace_authority: "readWrite", lifecycle_state: "pending"}}) {{_docID}}}}"#, user.did(), user.did(), writer.did(), user.did())).await?;
+        requests.push(crate::store::graphql::created_doc_id(
+            &response,
+            "AgentRequest",
+        )?);
+    }
+    let lineage = WorkspaceLineage {
+        workspace_id: Some("workspace".into()),
+        workspace_owner_node_did: Some(user.did().into()),
+        workspace_authority: Some("readWrite".into()),
+        workspace_seal_hash: None,
+    };
+    let (first, second) = tokio::join!(
+        materialize_workspace_binding(&node, "one", &requests[0], writer.as_ref(), &lineage),
+        materialize_workspace_binding(&node, "two", &requests[1], writer.as_ref(), &lineage)
+    );
+    assert_ne!(
+        first.is_ok(),
+        second.is_ok(),
+        "only one concurrent exclusive admission may commit"
+    );
+    let result = writer_access
+        .execute(&super::super::overlay::workspace_bindings_for_parent_query(
+            &workspace_doc,
+        ))
+        .await?;
+    let rows = result["data"]["WorkspaceBinding"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let result = writer_access
+        .execute("{ WorkspaceBinding { _docID } }")
+        .await?;
+    let binding_doc = result["data"]["WorkspaceBinding"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_child_cases {
+        let actor = match case["actor"].as_str().unwrap() {
+            "user" => user.did(),
+            "creator" => creator.did(),
+            "writer" => writer.did(),
+            "integrator" => integrator.did(),
+            "other" => other.did(),
+            name => panic!("unknown actor {name}"),
+        };
+        let permission = case["permission"].as_str().unwrap();
+        let node_permission = match permission {
+            "read" => acp::nac::NodePermission::DocumentRead,
+            "update" => acp::nac::NodePermission::DocumentUpdate,
+            "delete" => acp::nac::NodePermission::DocumentDelete,
+            other => panic!("unknown permission {other}"),
+        };
+        let subject = actor.parse()?;
+        let decisions = admin
+            .transact_readonly("test.workspace.access", |txn| {
+                let subject = &subject;
+                let doc = binding_doc.clone();
+                Box::pin(async move {
+                    txn.observe_document_access(
+                        subject,
+                        "WorkspaceBinding",
+                        &[doc],
+                        defra_node::DocumentAccessMode::Named {
+                            permission: permission.into(),
+                            node_permission,
+                        },
+                    )
+                    .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            decisions == [defra_node::DocumentAccessDecision::Allowed],
+            case["expected"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_admission_cases;
+    assert_eq!(
+        cases
+            .iter()
+            .find(|case| case["complete"] == true && case["occupied"] == false)
+            .unwrap()["admitted"],
+        true
+    );
+    assert_eq!(
+        cases
+            .iter()
+            .find(|case| case["complete"] == true && case["occupied"] == true)
+            .unwrap()["admitted"],
+        false
+    );
     node.shutdown().await?;
     Ok(())
 }

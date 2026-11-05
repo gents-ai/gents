@@ -1,6 +1,7 @@
 type WorkspaceBinding @index(fields: ["owner_node_did", "binding_id"], unique: true) {
     binding_id: String @index @immutable
     workspace_id: String @index @immutable
+    workspace_doc_id: String @index @immutable
     request_id: String @index @immutable
     request_doc_id: String @index @immutable
     authority: String @immutable

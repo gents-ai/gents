@@ -1533,6 +1533,18 @@ def caseCoverage : List CoverageEntry :=
       "Checks explicit workflow selection and action-plan replay; native workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "workspace_child_cases"
+      "WorkspaceChildCases"
+      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerWithFollowUp
+      "workspace_admission_cases"
+      "WorkspaceAdmissionCases"
+      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "Exercises competing canonical exclusive admissions; native conflict fencing needs central validation.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_completion_access_cases"
       "WorkspaceCompletionAccessCases"
       "tools::workspace::tests::capability_runtime::workspace_completion_reads_keep_selected_agent_visibility"

@@ -434,77 +434,72 @@ pub async fn materialize_workspace_binding(
         Some(value) if !value.is_empty() => WorkspaceAuthority::parse(value)?,
         _ => anyhow::bail!("workspace-bound request {workspace_id} is missing workspace_authority"),
     };
-    let response = access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id agent_did node_did workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash}} }}"#,
-        escape_graphql_string(request_doc_id))).await?;
-    let values = response
-        .pointer("/data/AgentRequest")
-        .context("workspace binding query omitted rows")?;
-    let mut found: Vec<gents_protocol::row::AgentRequestRow> =
-        serde_json::from_value(values.clone())?;
-    anyhow::ensure!(
-        found.len() == 1,
-        "workspace binding request unavailable or ambiguous"
-    );
-    let actual = found.remove(0);
-    anyhow::ensure!(
-        actual.request_id == request_id
-            && actual.agent_did.as_deref() == Some(principal_did)
-            && node
-                .node_identity_did()
-                .is_some_and(|did| actual.node_did.as_deref() == Some(did))
+    access.transact_write("workspace.admit_binding", |txn| Box::pin(async move {
+        let response = txn.execute(&format!(
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id agent_did node_did workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash}} }}"#,
+            escape_graphql_string(request_doc_id))).await?;
+        let values = response.pointer("/data/AgentRequest").context("workspace binding query omitted rows")?;
+        let mut found: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(values.clone())?;
+        anyhow::ensure!(found.len() == 1, "workspace binding request unavailable or ambiguous");
+        let actual = found.remove(0);
+        anyhow::ensure!(actual.request_id == request_id && actual.agent_did.as_deref() == Some(principal_did)
+            && node.node_identity_did().is_some_and(|did| actual.node_did.as_deref() == Some(did))
             && actual.workspace_id.as_deref() == Some(workspace_id)
             && actual.workspace_owner_node_did == lineage.workspace_owner_node_did
             && actual.workspace_authority.as_deref() == Some(authority.as_str())
             && actual.workspace_seal_hash == lineage.workspace_seal_hash,
-        "workspace binding must match the exact physical request Agent and lineage"
-    );
-    let workspace = super::overlay::load_isolated_workspace_record_with_access(
-        &access,
-        workspace_id,
-        workspace_owner,
-    )
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
-    super::overlay::require_workspace_principal(&workspace, principal_did, authority)?;
-    let existing =
-        super::overlay::load_workspace_bindings_for_access(&access, workspace_id, workspace_owner)
-            .await?;
-    let candidate = new_binding(
-        workspace_id,
-        request_id,
-        request_doc_id,
-        authority,
-        workspace_owner,
-        optional_id(lineage.workspace_seal_hash.as_deref())
-            .or(optional_id(workspace.seal_hash.as_deref())),
-    );
-    let release_previous = matches!(
-        authority,
-        WorkspaceAuthority::ReadWrite | WorkspaceAuthority::Integrate
-    ) && super::overlay::previous_exclusive_is_stale_with_access(
-        &access,
-        workspace_id,
-        &existing,
-        request_id,
-        matches!(authority, WorkspaceAuthority::Integrate),
-    )
-    .await?;
-    match admit_workspace_binding(
-        workspace_id,
-        &workspace.lifecycle_state,
-        optional_id(workspace.seal_hash.as_deref()),
-        &existing,
-        candidate,
-        release_previous,
-    )? {
-        AdmitBinding::Reuse(_) => Ok(()),
-        AdmitBinding::Create { binding, release } => {
-            let mut docs = release;
-            docs.push(binding);
-            super::overlay::persist_workspace_binding_docs_with_access(&access, &docs).await
+            "workspace binding must match the exact physical request Agent and lineage");
+        let response = txn.execute(&super::overlay::isolated_workspace_record_query(workspace_id, workspace_owner)).await?;
+        let rows = response.pointer("/data/IsolatedWorkspace").and_then(serde_json::Value::as_array).context("workspace query omitted rows")?;
+        let [row] = rows.as_slice() else { anyhow::bail!("workspace is unavailable or ambiguous") };
+        let workspace_doc = row["_docID"].as_str().filter(|id| !id.is_empty()).context("workspace physical ID missing")?;
+        let workspace = super::overlay::decode_isolated_workspace_record(serde_json::from_value(row.clone())?)?;
+        super::overlay::require_workspace_principal(&workspace, principal_did, authority)?;
+        let response = txn.execute(&super::overlay::workspace_bindings_for_parent_query(workspace_doc)).await?;
+        let values = response.pointer("/data/WorkspaceBinding").context("workspace binding query omitted rows")?;
+        let existing = super::overlay::validate_workspace_bindings(serde_json::from_value(values.clone())?, workspace_id)?;
+        anyhow::ensure!(existing.iter().all(|binding| binding.workspace_doc_id.as_deref() == Some(workspace_doc)
+            && binding.owner_node_did == workspace_owner), "workspace binding has a different physical parent");
+        let mut candidate = new_binding(workspace_id, request_id, request_doc_id, authority, workspace_owner,
+            optional_id(lineage.workspace_seal_hash.as_deref()).or(optional_id(workspace.seal_hash.as_deref())));
+        candidate.workspace_doc_id = Some(workspace_doc.to_owned());
+        let release_previous = if matches!(authority, WorkspaceAuthority::ReadWrite | WorkspaceAuthority::Integrate) {
+            let prior = super::overlay::previous_exclusive_binding(workspace_id, &existing, request_id,
+                matches!(authority, WorkspaceAuthority::Integrate))?;
+            if let Some(prior) = prior {
+                let response = txn.execute(&super::overlay::request_liveness_query(&prior.request_doc_id)?).await?;
+                let values = response.pointer("/data/AgentRequest").context("workspace request query omitted rows")?;
+                let mut rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(values.clone())?;
+                anyhow::ensure!(rows.len() == 1, "workspace binding request is unavailable or ambiguous");
+                !super::overlay::validate_request_liveness(rows.remove(0), &prior.request_id, workspace_id, workspace_owner)?
+            } else { false }
+        } else { false };
+        match admit_workspace_binding(workspace_id, &workspace.lifecycle_state,
+            optional_id(workspace.seal_hash.as_deref()), &existing, candidate, release_previous)? {
+            AdmitBinding::Reuse(_) => Ok(()),
+            AdmitBinding::Create { binding, release } => {
+                if matches!(authority, WorkspaceAuthority::ReadWrite | WorkspaceAuthority::Integrate) {
+                    let revision = uuid::Uuid::new_v4().to_string();
+                    let fence = format!(r#"mutation {{ update_IsolatedWorkspace(docID: "{}", input: {{binding_revision: "{}"}}) {{_docID}} }}"#,
+                        escape_graphql_string(workspace_doc), revision);
+                    let response = txn.execute(&fence).await?;
+                    anyhow::ensure!(crate::store::graphql::mutation_documents(&response, "update_IsolatedWorkspace")?.is_some_and(|rows| rows.len() == 1), "workspace admission fence unavailable");
+                }
+                for released in &release {
+                    txn.execute(&super::documents::workspace_binding_upsert_mutation(released)).await?;
+                }
+                let already_exists = existing.iter().any(|old| old.binding_id == binding.binding_id);
+                let response = txn.execute(&super::documents::workspace_binding_upsert_mutation(&binding)).await?;
+                let rows = crate::store::graphql::mutation_documents(&response, "upsert_WorkspaceBinding")?.context("workspace binding write omitted rows")?;
+                let [row] = rows else { anyhow::bail!("workspace binding write did not affect exactly one row") };
+                let doc = row["_docID"].as_str().filter(|id| !id.is_empty()).context("workspace binding physical ID missing")?;
+                if !already_exists {
+                    txn.add_resource_relationship("WorkspaceBinding", doc, "parent", "workspaces", workspace_doc).await?;
+                }
+                Ok(())
+            }
         }
-    }
+    })).await
 }
 
 pub async fn release_writer_binding(
@@ -821,8 +816,7 @@ async fn flush_seal_outcome(
         &outcome.receipt,
         &now,
     );
-    access
-        .write("workspace.seal_documents", &mutation)
+    write_workspace_receipt(access, &mutation, &outcome.workspace, &outcome.receipt)
         .await
         .with_context(|| {
             format!(
@@ -838,8 +832,7 @@ async fn flush_integrate_outcome(
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
-    access
-        .write("workspace.integrate_documents", &mutation)
+    write_workspace_receipt(access, &mutation, &outcome.workspace, &outcome.receipt)
         .await
         .with_context(|| {
             format!(
@@ -870,8 +863,7 @@ async fn release_integrate_binding(
         return Ok(());
     }
     let mutation = workspace_integrate_docs_mutation(&released, &outcome.receipt);
-    access
-        .write("workspace.release_integrate_binding", &mutation)
+    write_workspace_receipt(access, &mutation, &outcome.workspace, &outcome.receipt)
         .await
         .with_context(|| {
             format!(
@@ -880,6 +872,42 @@ async fn release_integrate_binding(
             )
         })?;
     Ok(())
+}
+
+async fn write_workspace_receipt(
+    access: &crate::ConfigAccess,
+    mutation: &str,
+    workspace: &IsolatedWorkspaceDoc,
+    receipt: &WorkspaceReceiptDoc,
+) -> Result<()> {
+    anyhow::ensure!(
+        receipt.workspace_id == workspace.workspace_id,
+        "receipt workspace mismatch"
+    );
+    access.transact_write("workspace.publish_receipt", |txn| Box::pin(async move {
+        let response = txn.execute(&super::overlay::isolated_workspace_record_query(&workspace.workspace_id, &workspace.owner_node_did)).await?;
+        let rows = response["data"]["IsolatedWorkspace"].as_array().context("workspace parent query omitted rows")?;
+        let [parent] = rows.as_slice() else { anyhow::bail!("workspace receipt parent unavailable or ambiguous") };
+        let parent = parent["_docID"].as_str().filter(|id| !id.is_empty()).context("workspace parent lacks physical ID")?;
+        let query = format!(r#"{{ WorkspaceReceipt(filter: {{receipt_id: {{_eq: "{}"}}}}, limit: 2) {{_docID workspace_id}} }}"#, escape_graphql_string(&receipt.receipt_id));
+        let response = txn.execute(&query).await?;
+        let rows = response["data"]["WorkspaceReceipt"].as_array().context("workspace receipt query omitted rows")?;
+        anyhow::ensure!(rows.len() <= 1, "workspace receipt is ambiguous");
+        let existing = rows.first().map(|row| {
+            anyhow::ensure!(row["workspace_id"] == workspace.workspace_id, "workspace receipt belongs to another workspace");
+            Ok::<_, anyhow::Error>(row["_docID"].as_str().filter(|id| !id.is_empty()).context("workspace receipt physical ID missing")?.to_owned())
+        }).transpose()?;
+        let response = txn.execute(mutation).await?;
+        let rows = crate::store::graphql::mutation_documents(&response, "receipt")?.context("workspace receipt write omitted rows")?;
+        let [row] = rows else { anyhow::bail!("workspace receipt write did not affect exactly one row") };
+        let doc = row["_docID"].as_str().filter(|id| !id.is_empty()).context("workspace receipt physical ID missing")?;
+        if let Some(existing) = existing {
+            anyhow::ensure!(existing == doc, "workspace receipt changed physical identity");
+        } else {
+            txn.add_resource_relationship("WorkspaceReceipt", doc, "parent", "workspaces", parent).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })).await
 }
 
 async fn flush_cleanup_outcome(

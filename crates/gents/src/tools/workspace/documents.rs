@@ -86,6 +86,8 @@ impl ProvisioningObservation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceBindingDoc {
+    #[serde(default)]
+    pub workspace_doc_id: Option<String>,
     pub binding_id: String,
     pub workspace_id: String,
     pub request_id: String,
@@ -431,6 +433,7 @@ fn workspace_binding_upsert_field(alias: &str, doc: &WorkspaceBindingDoc) -> Str
                 add: {{
                     binding_id: "{binding_id}",
                     workspace_id: "{workspace_id}",
+                    workspace_doc_id: {workspace_doc_id},
                     request_id: "{request_id}",
                     request_doc_id: "{request_doc_id}",
                     authority: "{authority}",
@@ -444,6 +447,7 @@ fn workspace_binding_upsert_field(alias: &str, doc: &WorkspaceBindingDoc) -> Str
             ) {{ _docID }}"#,
         binding_id = escape_graphql_string(&doc.binding_id),
         workspace_id = escape_graphql_string(&doc.workspace_id),
+        workspace_doc_id = graphql_nullable_string(doc.workspace_doc_id.as_deref()),
         request_id = escape_graphql_string(&doc.request_id),
         request_doc_id = escape_graphql_string(&doc.request_doc_id),
         authority = escape_graphql_string(&doc.authority),

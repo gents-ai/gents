@@ -115,6 +115,17 @@ def policy : List ResourceDefinition :=
       permissions := [permission "read" [] [("parent", "session_read")],
         permission "update" [] [("parent", "session_admin")],
         permission "delete" [] [("parent", "session_admin")]] }
+  , { name := "workspaces"
+      relations := [⟨"parent", ["agents"], []⟩, ⟨"reader", ["actor"], []⟩, ⟨"writer", ["actor"], []⟩,
+        ⟨"integrator", ["actor"], []⟩]
+      permissions := [permission "read" ["reader", "writer", "integrator"] [("parent", "session_read")],
+        permission "update" ["writer", "integrator"] [("parent", "session_admin")],
+        permission "delete" [] [("parent", "session_admin")]] }
+  , { name := "workspace_children"
+      relations := [⟨"parent", ["workspaces"], []⟩]
+      permissions := [permission "read" [] [("parent", "read")],
+        permission "update" [] [("parent", "update")],
+        permission "delete" [] [("parent", "delete")]] }
   , { name := "children"
       relations := [⟨"parent", ["sessions"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"working_agent", ["actor"], []⟩]

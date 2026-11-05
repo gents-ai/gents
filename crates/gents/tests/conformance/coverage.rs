@@ -486,6 +486,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     for (present, key, class) in [
         (!snapshot.node_file_request_access_cases.is_empty(), "node_file_request_access_cases", "NodeFileRequestAccessCases"),
         (
+            !snapshot.workspace_child_cases.is_empty(),
+            "workspace_child_cases",
+            "WorkspaceChildCases",
+        ),
+        (
+            !snapshot.workspace_admission_cases.is_empty(),
+            "workspace_admission_cases",
+            "WorkspaceAdmissionCases",
+        ),
+        (
             !snapshot.workspace_liveness_cases.is_empty(),
             "workspace_liveness_cases",
             "WorkspaceLivenessCases",

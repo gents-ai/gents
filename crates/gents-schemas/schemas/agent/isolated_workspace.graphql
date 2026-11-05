@@ -15,6 +15,7 @@ type IsolatedWorkspace @index(fields: ["owner_node_did", "workspace_id"], unique
     instruction_manifest: String @immutable
     seal_hash: String
     lifecycle_state: String @index
+    binding_revision: String
     caused_by_invocation_id: String @index @immutable
     caused_by_correlation: String @index @immutable
 }

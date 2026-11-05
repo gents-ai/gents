@@ -1294,27 +1294,101 @@ pub async fn flush_workspace_docs(
     access: &crate::ConfigAccess,
     docs: &MemoryWorkspaceDocuments,
     agent_did: &str,
+    action: &crate::tools::workspace::CreateWorkspaceAction,
 ) -> Result<()> {
     anyhow::ensure!(
         !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    for workspace in docs.workspaces.values() {
-        let mutation = isolated_workspace_upsert_mutation(workspace);
-        access
-            .write("callback.upsert_isolated_workspace", &mutation)
-            .await
-            .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
-    }
-    for placement in docs.placements.values() {
-        let mutation = workspace_placement_upsert_mutation(placement, &now);
-        access
-            .write("callback.upsert_workspace_placement", &mutation)
-            .await
-            .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
-    }
-    Ok(())
+    access.transact_write("callback.publish_workspace", |txn| Box::pin(async move {
+        let mut published = None;
+        for workspace in docs.workspaces.values() {
+            anyhow::ensure!(workspace.workspace_id == action.workspace_id
+                && Some(workspace.writer_principal.as_str()) == action.writer_agent_did.as_deref()
+                && Some(workspace.integrator_principal.as_str()) == action.integrator_agent_did.as_deref(),
+                "workspace publication differs from the frozen Agent selection");
+            let existing = workspace_document_id_in_txn(txn, "IsolatedWorkspace", &workspace.workspace_id, &workspace.owner_node_did).await?;
+            let parent = if existing.is_none() {
+                for (did, doc) in [(&action.writer_agent_did, &action.writer_agent_doc_id), (&action.integrator_agent_did, &action.integrator_agent_doc_id)] {
+                    let did = did.as_deref().context("workspace Agent DID missing")?;
+                    let doc = doc.as_deref().context("workspace Agent document missing")?;
+                    let query = format!(r#"{{ Agent(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did }} }}"#, escape_graphql_string(doc));
+                    let response = txn.execute(&query).await?;
+                    let rows = response["data"]["Agent"].as_array().context("workspace Agent query omitted rows")?;
+                    anyhow::ensure!(matches!(rows.as_slice(), [row] if row["_docID"] == doc && row["node_did"] == workspace.owner_node_did && row["agent_did"] == did), "frozen workspace Agent is unavailable or changed");
+                }
+                Some(callback_agent_parent_in_txn(txn, &workspace.owner_node_did, agent_did).await?)
+            } else { None };
+            let response = txn.execute(&isolated_workspace_upsert_mutation(workspace)).await?;
+            let id = workspace_mutation_document_id(&response, "upsert_IsolatedWorkspace")?;
+            if let Some(parent) = parent {
+                txn.add_resource_relationship("IsolatedWorkspace", &id, "parent", "agents", &parent).await?;
+                txn.add_actor_relationship("IsolatedWorkspace", &id, "writer", &workspace.writer_principal.parse()?).await?;
+                txn.add_actor_relationship("IsolatedWorkspace", &id, "integrator", &workspace.integrator_principal.parse()?).await?;
+            } else {
+                anyhow::ensure!(existing.as_deref() == Some(id.as_str()), "workspace upsert changed physical identity");
+            }
+            published = Some(id);
+        }
+        for placement in docs.placements.values() {
+            anyhow::ensure!(placement.workspace_id == action.workspace_id, "workspace placement differs from frozen plan");
+            let parent = match &published { Some(id) => id.clone(), None => workspace_document_id_in_txn(txn, "IsolatedWorkspace", &placement.workspace_id, &placement.owner_node_did).await?.context("workspace parent unavailable")? };
+            let existing = workspace_document_id_in_txn(txn, "WorkspacePlacement", &placement.workspace_id, &placement.owner_node_did).await?;
+            let response = txn.execute(&workspace_placement_upsert_mutation(placement, &now)).await?;
+            let id = workspace_mutation_document_id(&response, "upsert_WorkspacePlacement")?;
+            if existing.is_none() {
+                txn.add_resource_relationship("WorkspacePlacement", &id, "parent", "workspaces", &parent).await?;
+            } else {
+                anyhow::ensure!(existing.as_deref() == Some(id.as_str()), "placement upsert changed physical identity");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })).await
+}
+
+async fn workspace_document_id_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    collection: &str,
+    workspace: &str,
+    owner: &str,
+) -> Result<Option<String>> {
+    anyhow::ensure!(
+        matches!(collection, "IsolatedWorkspace" | "WorkspacePlacement"),
+        "invalid workspace publication collection"
+    );
+    let query = format!(
+        r#"{{ {collection}(filter: {{workspace_id: {{_eq: "{}"}}, owner_node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+        escape_graphql_string(workspace),
+        escape_graphql_string(owner)
+    );
+    let response = txn.execute(&query).await?;
+    let rows = response["data"][collection]
+        .as_array()
+        .context("workspace publication query omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "workspace publication is ambiguous");
+    rows.first()
+        .map(|row| {
+            row["_docID"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .context("workspace document ID missing")
+        })
+        .transpose()
+}
+
+fn workspace_mutation_document_id(response: &serde_json::Value, field: &str) -> Result<String> {
+    let rows = crate::store::graphql::mutation_documents(response, field)?
+        .context("workspace publication mutation omitted rows")?;
+    let [row] = rows else {
+        anyhow::bail!("workspace publication mutation did not affect exactly one row")
+    };
+    Ok(row["_docID"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("workspace document ID missing")?
+        .to_owned())
 }
 
 pub(crate) async fn load_isolated_workspace(
