@@ -40,6 +40,8 @@ impl ToolPermissionProjection {
         prefix
     }
 
+    /// The source namespace relies on SHA-256 collision resistance to keep
+    /// independent Node, document, Agent, and purpose paths distinct.
     fn source(&self, tools: &str, context: &str, agent: &str, purpose: &str) -> String {
         let mut digest = Sha256::new();
         for part in [tools, context, agent, purpose] {
