@@ -8,7 +8,7 @@ use crate::jump::{self, Target};
 use crate::keys::{Action, Dir, KeyCtx};
 pub use crate::layout::LayerKind;
 use crate::layout::{keys_rows_area, layer_rect, sessions_can_dock, sidebar_can_dock};
-use crate::sample::{menu, AgentRow, AGENTS, KEY_ROWS};
+use crate::sample::{menu, AgentRow, RowAction, AGENTS, KEY_ROWS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layer {
@@ -109,7 +109,7 @@ impl App {
         }
     }
 
-    fn submit_layer(&mut self) {
+    pub(super) fn submit_layer(&mut self) {
         let Some(top) = self.layers.last() else {
             return;
         };
@@ -120,7 +120,10 @@ impl App {
                     self.open_tab_with_agent(agent.name);
                 }
             }
-            LayerKind::Menu(_) => self.not_wired(),
+            LayerKind::Menu(id) => match menu(id).0[top.selected].action {
+                RowAction::OpenMenu(next) => self.push_layer(LayerKind::Menu(next)),
+                _ => self.not_wired(),
+            },
             LayerKind::Sessions => self.activate_session_row(),
             LayerKind::Sidebar => self.activate_view_row(),
             LayerKind::Jump => self.submit_jump(top.selected),
@@ -144,12 +147,12 @@ impl App {
         }
     }
 
-    fn jump_items(&self) -> Vec<jump::JumpItem> {
+    pub(super) fn jump_items(&self) -> Vec<jump::JumpItem> {
         let query = self.layers.last().map_or("", |top| top.filter.text());
         jump::items(self, query)
     }
 
-    fn step_layer(&mut self, forward: bool) {
+    pub(super) fn step_layer(&mut self, forward: bool) {
         let rect = self.top_layer_rect();
         let Some(top) = self.layers.last_mut() else {
             return;
@@ -186,7 +189,7 @@ mod tests {
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{MenuId, View, SESSIONS};
-    use crate::testing::{buffer, find, kinds, press, screen, type_text};
+    use crate::testing::{buffer, find, kinds, press, screen, type_text, with_right_pane};
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::Event;
     use ratatui::Terminal;
@@ -198,26 +201,130 @@ mod tests {
         app.layers.last().expect("a layer").kind
     }
 
+    const NODE: LayerKind = LayerKind::Menu(MenuId::NodeSettings);
+
+    fn row_named(id: MenuId, name: &str) -> usize {
+        menu(id)
+            .0
+            .iter()
+            .position(|row| row.text.trim() == name)
+            .expect(name)
+    }
+
+    #[test]
+    fn the_bar_opens_both_settings_menus() {
+        let mut app = App::new(Vim, 132, 36);
+        press(&mut app, "ctrl-p enter");
+        assert_eq!(top(&app), NODE);
+        press(&mut app, "esc ctrl-n enter");
+        assert_eq!(top(&app), LayerKind::Menu(MenuId::AppSettings));
+    }
+
+    #[test]
+    fn node_settings_lists_every_desktop_section() {
+        let mut app = App::new(Vim, 132, 36);
+        app.push_layer(NODE);
+        let s = screen(&app);
+        for text in [
+            " CONFIGURE ",
+            " Node ",
+            " Agents ",
+            " Skills ",
+            " Providers ",
+            " AUTOMATION ",
+            " Tasks ",
+            " Triggers ",
+            " Schedules ",
+            " Event sources ",
+            " Workflows ",
+            " TOOLS ",
+            " Tools ",
+            " Remote Tools ",
+            " Allowed folders ",
+            " PACKS ",
+            " Packs ",
+            " UX Plugins ",
+        ] {
+            assert!(find(&s, text).is_some(), "{text}");
+        }
+    }
+
+    #[test]
+    fn app_settings_lists_its_three_sections() {
+        let mut app = App::new(Vim, 132, 36);
+        app.push_layer(LayerKind::Menu(MenuId::AppSettings));
+        let s = screen(&app);
+        for text in ["General", "Developer", "Experimental features"] {
+            assert!(find(&s, text).is_some(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_section_with_a_menu_stacks_it() {
+        for (name, opens) in [
+            ("Agents", MenuId::Agents),
+            ("Providers", MenuId::Accounts),
+            ("Tasks", MenuId::Tasks),
+            ("Tools", MenuId::Tools),
+        ] {
+            let mut app = App::new(Vim, 132, 36);
+            app.push_layer(NODE);
+            app.layers[0].selected = row_named(MenuId::NodeSettings, name);
+            press(&mut app, "enter");
+            assert_eq!(kinds(&app), [NODE, LayerKind::Menu(opens)]);
+            press(&mut app, "esc");
+            assert_eq!(kinds(&app), [NODE]);
+        }
+    }
+
+    #[test]
+    fn other_sections_say_not_wired() {
+        for name in ["Node", "Skills", "Triggers", "Packs", "UX Plugins"] {
+            let mut app = App::new(Vim, 132, 36);
+            app.push_layer(NODE);
+            app.layers[0].selected = row_named(MenuId::NodeSettings, name);
+            press(&mut app, "enter");
+            assert_eq!(app.notice.as_deref(), Some("not wired yet"), "{name}");
+            assert_eq!(kinds(&app), [NODE]);
+        }
+    }
+
+    #[test]
+    fn every_settings_row_can_be_reached_at_60_by_16() {
+        let mut app = App::new(Vim, 60, 16);
+        app.push_layer(NODE);
+        let rows = menu(MenuId::NodeSettings).0;
+        for row in rows.iter().filter(|row| row.selectable()) {
+            assert!(
+                find(&screen(&app), row.text.trim()).is_some(),
+                "{}",
+                row.text
+            );
+            press(&mut app, "j");
+        }
+        assert_eq!(app.layers[0].selected, rows.len() - 1);
+    }
+
     #[test]
     fn undocked_toggle_opens_a_layer_and_leaves_wanted() {
-        let mut app = App::new(Vim, 70, 24);
+        let mut app = with_right_pane(App::new(Vim, 70, 24));
         press(&mut app, "esc ctrl-w [");
         assert_eq!(top(&app), LayerKind::Sessions);
-        assert!(app.wanted.sessions);
+        assert!(app.wanted().sessions);
         let s = screen(&app);
         assert!(find(&s, "Sessions").is_some());
         assert_eq!(find(&s, "MENU"), Some((23, 1)));
         press(&mut app, "esc");
         assert!(app.layers.is_empty());
 
-        let mut app = App::new(Vim, 104, 30);
+        let mut app = with_right_pane(App::new(Vim, 104, 30));
         press(&mut app, "esc ctrl-w ]");
         assert_eq!(top(&app), LayerKind::Sidebar);
-        assert!(app.wanted.sidebar);
+        assert!(app.wanted().sidebar);
         press(&mut app, "ctrl-w ]");
         assert!(app.layers.is_empty());
 
-        let mut app = App::new(Emacs, 70, 24);
+        let mut app = with_right_pane(App::new(Emacs, 70, 24));
         press(&mut app, "ctrl-x ]");
         assert_eq!(top(&app), LayerKind::Sidebar);
         press(&mut app, "ctrl-x ]");
@@ -226,36 +333,36 @@ mod tests {
 
     #[test]
     fn a_wanted_flag_set_off_still_opens_the_layer() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w ]");
         app.handle(Event::Resize(104, 30));
         press(&mut app, "ctrl-w ]");
         assert_eq!(top(&app), LayerKind::Sidebar);
-        assert!(!app.wanted.sidebar);
+        assert!(!app.wanted().sidebar);
     }
 
     #[test]
     fn ctrl_w_with_nothing_on_that_side_opens_the_layer() {
-        let mut app = App::new(Vim, 70, 24);
+        let mut app = with_right_pane(App::new(Vim, 70, 24));
         press(&mut app, "esc ctrl-w h");
         assert_eq!(top(&app), LayerKind::Sessions);
         assert_eq!(app.focus, Pane::Agent);
 
-        let mut app = App::new(Vim, 70, 24);
+        let mut app = with_right_pane(App::new(Vim, 70, 24));
         press(&mut app, "esc ctrl-w l");
         assert_eq!(top(&app), LayerKind::Sidebar);
 
-        let mut app = App::new(Vim, 104, 30);
+        let mut app = with_right_pane(App::new(Vim, 104, 30));
         press(&mut app, "esc ctrl-w l");
         assert_eq!(top(&app), LayerKind::Sidebar);
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w ]");
         press(&mut app, "ctrl-w l");
         assert!(app.layers.is_empty());
         assert_eq!(app.focus, Pane::Agent);
 
-        let mut app = App::new(Vim, 104, 30);
+        let mut app = with_right_pane(App::new(Vim, 104, 30));
         press(&mut app, "esc ctrl-w [");
         press(&mut app, "ctrl-w h");
         assert!(app.layers.is_empty());
@@ -339,10 +446,10 @@ mod tests {
 
     #[test]
     fn toggles_at_a_docking_width_wait_while_a_layer_is_open() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         app.push_layer(ACCOUNTS);
         press(&mut app, "ctrl-w ]");
-        assert!(app.wanted.sidebar);
+        assert!(app.wanted().sidebar);
         assert_eq!(kinds(&app), [ACCOUNTS]);
     }
 
@@ -503,8 +610,8 @@ mod tests {
         app.tabs[0].lines = crate::app::sample_chat("Engineer");
         press(&mut app, "esc ?");
         let s = screen(&app);
-        assert_eq!(find(&s, "Group the sign-in"), None);
-        assert!(find(&s, "you").is_some());
+        assert_eq!(find(&s, "Moving them"), None);
+        assert!(find(&s, "Group the sign-in").is_some());
     }
 
     #[test]
@@ -927,7 +1034,7 @@ mod tests {
 
     #[test]
     fn back_order_with_nothing_above_a_docked_diff() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
         app.push_layer(ACCOUNTS);
         press(&mut app, "esc");

@@ -27,7 +27,7 @@ pub fn draw(app: &App, frame: &mut Frame) {
     let area = frame.area();
     let buf = frame.buffer_mut();
     buf.set_style(area, Style::new().fg(theme::FG).bg(theme::BG));
-    let Screen::Shell(panes) = layout(area.width, area.height, app.wanted) else {
+    let Screen::Shell(panes) = layout(area.width, area.height, app.wanted()) else {
         Paragraph::new(TOO_SMALL)
             .wrap(Wrap { trim: true })
             .render(area, buf);
@@ -199,7 +199,7 @@ mod tests {
     use crate::app::{sample_chat, Mode};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{note, MenuId, View};
-    use crate::testing::{buffer, find, press, rows, screen, type_text};
+    use crate::testing::{buffer, find, press, rows, screen, type_text, with_right_pane};
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::crossterm::event::Event;
@@ -208,24 +208,24 @@ mod tests {
 
     #[test]
     fn panes_at_each_width() {
-        let s = screen(&App::new(Vim, 168, 48));
+        let s = screen(&with_right_pane(App::new(Vim, 168, 48)));
         assert_eq!(find(&s, "Sessions"), Some((0, 3)));
         assert_eq!(find(&s, "Changes"), Some((1, 127)));
         assert_eq!(find(&s, "sample data"), Some((47, 156)));
-        let s = screen(&App::new(Vim, 132, 36));
+        let s = screen(&with_right_pane(App::new(Vim, 132, 36)));
         assert_eq!(find(&s, "Changes"), Some((1, 101)));
         assert_eq!(find(&s, "M cli/args.rs"), Some((5, 100)));
         assert_eq!(find(&s, "cli ux redesign"), Some((4, 4)));
         assert_eq!(find(&s, "INPUT"), Some((35, 1)));
         assert_eq!(find(&s, "sample data"), Some((35, 120)));
-        let s = screen(&App::new(Vim, 104, 30));
+        let s = screen(&with_right_pane(App::new(Vim, 104, 30)));
         assert_eq!(find(&s, "+58"), Some((3, 99)));
         assert_eq!(find(&s, "Workflows"), None);
-        let s = screen(&App::new(Vim, 70, 24));
+        let s = screen(&with_right_pane(App::new(Vim, 70, 24)));
         assert_eq!(find(&s, "Sessions"), None);
         assert_eq!(find(&s, "Changes"), None);
         assert_eq!(find(&s, "sample data"), Some((23, 58)));
-        let s = screen(&App::new(Vim, 40, 24));
+        let s = screen(&with_right_pane(App::new(Vim, 40, 24)));
         assert!(find(&s, "Window too small: need at least 60 by 16").is_some());
         assert_eq!(find(&s, "sample data"), None);
     }
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn each_view_shows_its_rows() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         app.view = View::Workflows;
         assert!(find(&screen(&app), "2 running").is_some());
         app.view = View::Agents;
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn selected_rows_fill_their_width() {
-        let buf = buffer(&App::new(Vim, 132, 36));
+        let buf = buffer(&with_right_pane(App::new(Vim, 132, 36)));
         for x in 1..27 {
             assert_eq!(buf[(x, 4)].bg, theme::SEL_BG, "sessions col {x}");
         }
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn active_view_has_its_own_chip_colour() {
-        let buf = buffer(&App::new(Vim, 132, 36));
+        let buf = buffer(&with_right_pane(App::new(Vim, 132, 36)));
         assert_eq!(buf[(101, 1)].bg, theme::SEL_BG);
         assert_eq!(buf[(111, 1)].bg, theme::TAB_BG);
     }
@@ -333,7 +333,7 @@ mod tests {
         app.mode = Mode::Normal;
         let s = screen(&app);
         assert_eq!(find(&s, "NORMAL"), Some((35, 1)));
-        assert!(find(&s, "ctrl-w h/j/k/l move · : jump · ? keys").is_some());
+        assert!(find(&s, "h/l move · [ ] sidebars · : jump · ? keys").is_some());
 
         let s = screen(&App::new(Emacs, 132, 36));
         assert_eq!(find(&s, "EMACS"), Some((35, 1)));
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn the_sidebar_header_fits_at_every_docked_width() {
         for width in 120..=132 {
-            let buf = buffer(&App::new(Vim, width, 30));
+            let buf = buffer(&with_right_pane(App::new(Vim, width, 30)));
             let header = &rows(&buf)[1];
             for chip in [" Changes ", " Workflows ", " Agents "] {
                 assert!(header.contains(chip), "{width}: {header}");

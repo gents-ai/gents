@@ -50,7 +50,7 @@ pub const COMMANDS: &[Command] = &[
     command(Some("help"), "/help", &[], "show the keys", Effect::OpenKeys),
     command(Some("quit"), "Quit", &["q", "q!", "qa", "wq"], "quit", Effect::Quit),
     command(None, "Switch key set", &["vim", "emacs", "keys"], "vim to emacs or back", Effect::SwitchKeys),
-    command(None, "Sidebar: Changes", &["changes"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Changes)),
-    command(None, "Sidebar: Workflows", &["workflows"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Workflows)),
+    command(Some("changes"), "Sidebar: Changes", &["changes", "diff"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Changes)),
+    command(Some("workflows"), "Sidebar: Workflows", &["workflows"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Workflows)),
     command(None, "Sidebar: Background agents", &["background"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Agents)),
 ];

@@ -6,10 +6,17 @@ pub enum Tone {
     Warn,
     Add,
     Del,
+    /// The asker's message: right-aligned on a tinted block.
+    You,
+    /// An agent's prose: a highlighted row, like a selected one.
+    Reply,
+    /// A changed file in the conversation, which opens that file's diff.
+    File(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowAction {
+    OpenMenu(MenuId),
     None,
     NewSession,
     OpenSession {
@@ -51,6 +58,8 @@ pub enum MenuId {
     Tasks,
     Mailbox,
     Status,
+    NodeSettings,
+    AppSettings,
 }
 
 impl MenuId {
@@ -62,6 +71,8 @@ impl MenuId {
             MenuId::Tasks => "Tasks",
             MenuId::Mailbox => "Mailbox",
             MenuId::Status => "Status",
+            MenuId::NodeSettings => "Node settings",
+            MenuId::AppSettings => "App settings",
         }
     }
 }
@@ -198,15 +209,13 @@ pub const RAIL: &[SidebarRow] = &[
 pub const PROMPT_ROW: &str = "  y yes   n no   a always";
 
 pub const CHAT: &[(&str, Tone)] = &[
-    ("you", Tone::Accent),
-    ("Group the sign-in commands under one parent.", Tone::Plain),
+    ("Group the sign-in commands under one parent.", Tone::You),
     ("", Tone::Plain),
-    ("Engineer", Tone::Accent),
     (
-        "Moving them under `gents auth`, one subcommand per provider,",
-        Tone::Plain,
+        " Moving them under `gents auth`, one subcommand per provider,",
+        Tone::Reply,
     ),
-    ("and folding the probes in beside them.", Tone::Plain),
+    (" and folding the probes in beside them.", Tone::Reply),
     ("", Tone::Plain),
     ("  ✓ read  crates/gents-cli/src/cli/args.rs", Tone::Label),
     (
@@ -215,12 +224,108 @@ pub const CHAT: &[(&str, Tone)] = &[
     ),
     ("  … run   cargo check -p gents-cli", Tone::Warn),
     ("", Tone::Plain),
+    ("  3 files changed   +58 -12", Tone::Label),
+    ("  M cli/args.rs      +42 -7", Tone::File(0)),
+    ("  M cli/mod.rs       +11 -5", Tone::File(1)),
+    ("  A shell/mod.rs      +5", Tone::File(2)),
+    ("", Tone::Plain),
     (
         "! Allow Engineer to run `cargo test -p gents-cli`?",
         Tone::Warn,
     ),
     (PROMPT_ROW, Tone::Label),
     ("", Tone::Plain),
+];
+
+/// Marks a subagent's reply. Its row in the running list uses the same glyph.
+pub const SUBAGENT_MARK: &str = " ◆";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    Working,
+    Done,
+}
+
+/// What `enter` on a running row reaches: a subagent's conversation, or a row of the Workflows view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opens {
+    Agent(&'static [(&'static str, Tone)]),
+    Workflow(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Running {
+    pub name: &'static str,
+    pub job: &'static str,
+    pub status: &'static str,
+    pub state: RunState,
+    pub opens: Opens,
+}
+
+pub const RUNNING: &[Running] = &[
+    Running {
+        name: "Reviewer",
+        job: "auth grouping",
+        status: "reading crates/gents-cli",
+        state: RunState::Working,
+        opens: Opens::Agent(&[
+            (
+                "Review the `gents auth` grouping and report only real problems.",
+                Tone::You,
+            ),
+            ("", Tone::Plain),
+            (
+                " ◆ Checking the new subcommands against the old login flags.",
+                Tone::Reply,
+            ),
+            ("", Tone::Plain),
+            ("  ✓ read  crates/gents-cli/src/cli/args.rs", Tone::Label),
+            ("  … read  crates/gents-cli/src/cli/mod.rs", Tone::Warn),
+            ("", Tone::Plain),
+        ]),
+    },
+    Running {
+        name: "Researcher",
+        job: "registry login",
+        status: "running for 4m",
+        state: RunState::Working,
+        opens: Opens::Agent(&[
+            (
+                "Find out how the pack registry expects clients to sign in.",
+                Tone::You,
+            ),
+            ("", Tone::Plain),
+            (
+                " ◆ Reading the registry client and its token handling.",
+                Tone::Reply,
+            ),
+            ("", Tone::Plain),
+            ("  … search  registry token refresh", Tone::Warn),
+            ("", Tone::Plain),
+        ]),
+    },
+    Running {
+        name: "Triage",
+        job: "inbox",
+        status: "finished 2m ago",
+        state: RunState::Done,
+        opens: Opens::Agent(&[
+            ("Sort the new issues by area.", Tone::You),
+            ("", Tone::Plain),
+            (
+                " ◆ Done: 4 for the CLI, 2 for packs, 1 for desktop.",
+                Tone::Reply,
+            ),
+            ("", Tone::Plain),
+        ]),
+    },
+    Running {
+        name: "change unit",
+        job: "cli ux",
+        status: "build · step 3 of 5",
+        state: RunState::Working,
+        opens: Opens::Workflow(2),
+    },
 ];
 
 pub const AGENTS: &[AgentRow] = &[
@@ -267,6 +372,40 @@ const ACCOUNTS: &[SidebarRow] = &[
     item(" ○ Cloud     not signed in", Tone::Label),
 ];
 
+/// The sections of the desktop app's Node page, in its order. Four open the menu the shell
+/// already has for them; the rest are not wired.
+const NODE_SETTINGS: &[SidebarRow] = &[
+    note(" CONFIGURE", Tone::Label),
+    item(" Node", Tone::Plain),
+    row(" Agents", Tone::Plain, RowAction::OpenMenu(MenuId::Agents)),
+    item(" Skills", Tone::Plain),
+    row(
+        " Providers",
+        Tone::Plain,
+        RowAction::OpenMenu(MenuId::Accounts),
+    ),
+    note(" AUTOMATION", Tone::Label),
+    row(" Tasks", Tone::Plain, RowAction::OpenMenu(MenuId::Tasks)),
+    item(" Triggers", Tone::Plain),
+    item(" Schedules", Tone::Plain),
+    item(" Event sources", Tone::Plain),
+    item(" Workflows", Tone::Plain),
+    note(" TOOLS", Tone::Label),
+    row(" Tools", Tone::Plain, RowAction::OpenMenu(MenuId::Tools)),
+    item(" Remote Tools", Tone::Plain),
+    item(" Allowed folders", Tone::Plain),
+    note(" PACKS", Tone::Label),
+    item(" Packs", Tone::Plain),
+    item(" UX Plugins", Tone::Plain),
+];
+
+/// The sections of the desktop app's Settings page.
+const APP_SETTINGS: &[SidebarRow] = &[
+    item(" General", Tone::Plain),
+    item(" Developer", Tone::Plain),
+    item(" Experimental features", Tone::Plain),
+];
+
 const AGENTS_MENU: &[SidebarRow] = &[
     item(" Engineer", Tone::Plain),
     item(" Reviewer", Tone::Plain),
@@ -307,24 +446,30 @@ pub fn menu(id: MenuId) -> (&'static [SidebarRow], &'static str) {
         MenuId::Tasks => (TASKS, " enter open · esc back"),
         MenuId::Mailbox => (MAILBOX, " enter open   d dismiss"),
         MenuId::Status => (STATUS, " sample data: nothing here is wired"),
+        MenuId::NodeSettings => (NODE_SETTINGS, " enter open · esc back"),
+        MenuId::AppSettings => (APP_SETTINGS, " enter open · esc back"),
     }
 }
 
 pub const KEY_ROWS: &[(&str, &str, &str)] = &[
     ("Normal and input modes", "i / esc", "always typing"),
-    ("Move between panes", "ctrl-w h/j/k/l", "ctrl-x o"),
+    ("Move between panes", "h / l, ctrl-w h/j/k/l", "ctrl-x o"),
     ("Next or previous tab", "gt / gT", "ctrl-x n / ctrl-x p"),
     ("Open a tab", ":tabnew", "ctrl-x t"),
     ("Close the pane or tab", "ctrl-w q", "ctrl-x 0"),
-    ("Toggle the sessions sidebar", "ctrl-w [", "ctrl-x ["),
-    ("Toggle the right sidebar", "ctrl-w ]", "ctrl-x ]"),
+    ("Toggle the sessions sidebar", "[ or ctrl-w [", "ctrl-x ["),
+    ("Toggle the right sidebar", "] or ctrl-w ]", "ctrl-x ]"),
     ("Next sidebar view", "ctrl-w }", "ctrl-x }"),
-    ("Quick-jump bar", ":", "alt-x / ctrl-x x"),
+    ("Quick-jump bar", ": / ctrl-p", "alt-x / ctrl-x x"),
     ("Slash commands", "/ while writing", "/"),
     ("Search the focused pane", "/ in normal mode", "ctrl-s"),
     ("Back one layer", "esc", "ctrl-g"),
     ("Keys overlay", "?", "ctrl-x ?"),
-    ("Scroll the focused pane", "j / k", "ctrl-n / ctrl-p"),
+    (
+        "Scroll the focused pane",
+        "j/k · pgup/pgdn",
+        "ctrl-n/p · pgup/pgdn",
+    ),
     ("Send", "enter", "enter"),
     ("Quit", ":q then enter", "ctrl-x ctrl-c"),
     ("ctrl-c", "clears, or says how to quit", ""),

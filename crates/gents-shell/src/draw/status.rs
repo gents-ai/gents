@@ -39,6 +39,19 @@ fn hints(app: &App) -> &'static str {
             (KeySet::Emacs, _) => "ctrl-s next · ctrl-r previous · enter end · ctrl-g cancel",
         };
     }
+    if app.in_running() {
+        return match app.keymap.set() {
+            KeySet::Vim => "enter open · j/k move · esc back",
+            KeySet::Emacs => "enter open · ctrl-n/ctrl-p move · ctrl-g back",
+        };
+    }
+    let stepped_in = app.tabs[app.active].parent.is_some();
+    if stepped_in && (app.mode == Mode::Normal || app.keymap.set() == KeySet::Emacs) {
+        return match app.keymap.set() {
+            KeySet::Vim => "esc step out · i message this agent · : jump · ? keys",
+            KeySet::Emacs => "ctrl-g step out · ctrl-x x jump · ctrl-x ? keys",
+        };
+    }
     if app.slash.is_some() {
         return match app.keymap.set() {
             KeySet::Vim => "/ at the start of a message opens commands · esc closes the list",
@@ -47,7 +60,7 @@ fn hints(app: &App) -> &'static str {
     }
     match (app.keymap.set(), app.mode) {
         (KeySet::Vim, Mode::Input) => "esc normal mode · / commands · enter send",
-        (KeySet::Vim, Mode::Normal) => "ctrl-w h/j/k/l move · : jump · ? keys",
+        (KeySet::Vim, Mode::Normal) => "h/l move · [ ] sidebars · : jump · ? keys",
         (KeySet::Emacs, _) => "ctrl-x o next pane · ctrl-x x jump · ctrl-x ? keys",
     }
 }

@@ -25,6 +25,27 @@ fn resize_through_too_small(s: &Shell) {
     s.wait_for_all(&["Sessions", "sample data"]);
 }
 
+/// Real SGR presses, past crossterm's parser and into the app.
+#[test]
+fn clicks_reach_the_app() {
+    let click = |s: &Shell, row: u16, column: u16| {
+        let (row, column) = (row + 1, column + 1);
+        s.send(&format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m"));
+    };
+    let s = Shell::start(&[], 36, 132);
+    s.wait_for_all(&["sample data", "Sessions"]);
+    click(&s, 6, 5);
+    s.wait_for_all(&["Reviewer · auth", "Triage · inbox", "NORMAL"]);
+    click(&s, 29, 40);
+    s.wait_for_all(&["Message Triage", "packs · Engineer › Triage"]);
+    click(&s, 1, 35);
+    s.wait_for_all(&["Message Engineer", "AGENTS"]);
+    s.send("\x1b");
+    s.wait_for_all(&["NORMAL"]);
+    s.send(":q\r");
+    assert_restored(&s.finish());
+}
+
 #[test]
 fn vim_flow() {
     let s = Shell::start(&[], 36, 132);
@@ -34,7 +55,7 @@ fn vim_flow() {
     s.wait_for_all(&["hello"]);
     s.wait_until("cursor after hello", cursor_at(32, 39));
     s.send("\r");
-    s.wait_for_all(&["sample reply", "you"]);
+    s.wait_for_all(&["sample reply"]);
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
     s.wait_until("cursor hidden in normal mode", cursor_hidden());
@@ -91,7 +112,7 @@ fn vim_flow() {
     s.wait_for_all(&["> /clear"]);
     s.send("\r");
     s.wait_gone("Commands");
-    s.wait_for_all(&["g e n t s"]);
+    s.wait_gone("Group the sign-in commands");
 
     s.send(&format!("{}\r", "x".repeat(300)));
     s.wait_for_all(&["sample reply", "Message Reviewer"]);
@@ -125,7 +146,7 @@ fn emacs_flow() {
     s.wait_until("cursor at the line's end", cursor_at(32, 39));
     s.send("\r");
     s.wait_for_all(&["sample reply"]);
-    s.send("\x18o\x18o");
+    s.send("\x18o");
     wait_sessions_focused(&s);
     s.send("\x0e\r");
     s.wait_for_all(&["2 flaky · Reviewer", "Group the sign-in commands"]);
@@ -171,7 +192,7 @@ fn emacs_flow() {
     s.send("/");
     s.wait_for_all(&["Commands", "/agent"]);
     s.send("cl\t\r");
-    s.wait_for_all(&["g e n t s"]);
+    s.wait_gone("Group the sign-in commands");
 
     resize_through_too_small(&s);
     s.send("\x18\x03");
@@ -240,10 +261,12 @@ fn capture_screens_for_review() {
     }
 
     let s = Shell::start(&[], 36, 138);
-    s.wait_for_all(&["3 files"]);
-    shot(&s, "15-sidebar-changes");
+    s.wait_for_all(&["INPUT"]);
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
+    s.send("]");
+    s.wait_for_all(&["3 files"]);
+    shot(&s, "15-sidebar-changes");
     s.send("\x17}");
     s.wait_for_all(&["2 running"]);
     shot(&s, "15-sidebar-workflows");
@@ -273,6 +296,25 @@ fn capture_screens_for_review() {
         text_on_background("1 cli ux · Engineer", "#283f2d"),
     );
     shot(&s, "02-working");
+
+    s.send("j");
+    s.wait_for_all(&["AGENTS"]);
+    shot(&s, "16-running-selected");
+    s.send("\r");
+    s.wait_for_all(&["Engineer › Reviewer", "Message Reviewer"]);
+    shot(&s, "17-subagent");
+    s.send("\x1b");
+    s.wait_for_all(&["AGENTS"]);
+    s.send("\x1b");
+    s.wait_for_all(&["NORMAL"]);
+
+    s.send("\x10\r");
+    s.wait_for_all(&["Node settings", "UX Plugins"]);
+    shot(&s, "18-node-settings");
+    s.send("\x1b");
+    s.wait_gone("UX Plugins");
+    s.send("\x1b");
+    s.wait_for_all(&["NORMAL"]);
 
     s.send(":acc\r");
     s.wait_for_all(&["signed in", MENU]);
@@ -310,6 +352,8 @@ fn capture_screens_for_review() {
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
 
+    s.send("]");
+    s.wait_for_all(&["3 files"]);
     s.send("\x17l\r");
     s.wait_for_all(&["esc back to files"]);
     shot(&s, "09-changes-one-file");

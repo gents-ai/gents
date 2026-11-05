@@ -41,6 +41,22 @@ pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     }
 }
 
+/// The view whose header chip covers column `x`, following the positions `draw` uses.
+pub fn view_at(area: Rect, x: u16) -> Option<View> {
+    let inner = area.inner(Margin::new(1, 1));
+    let chips: u16 = HEADER.iter().map(|(_, name)| name.len() as u16 + 2).sum();
+    let gap = u16::from(inner.width > chips + 2);
+    let mut left = area.x + 2;
+    for (view, name) in HEADER {
+        let right = left + name.len() as u16 + 2;
+        if (left..right).contains(&x) {
+            return Some(view);
+        }
+        left = right + gap;
+    }
+    None
+}
+
 pub fn first_diff_row(scroll: usize, total: usize, height: u16) -> usize {
     scroll.min(total.saturating_sub(usize::from(height)))
 }

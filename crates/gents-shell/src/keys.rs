@@ -56,10 +56,14 @@ pub enum Action {
     ToggleSidebar,
     NextView,
     OpenBar,
+    /// `ctrl-p` in vim outside lists: the jump bar, or up while the slash list is open.
+    Palette,
     OpenKeys,
     OpenSearch,
     Next,
     Prev,
+    PageUp,
+    PageDown,
     SearchNext,
     SearchPrev,
     Complete,
@@ -116,6 +120,8 @@ impl Keymap {
             KeyCode::Enter => Action::Submit,
             KeyCode::Down => Action::Next,
             KeyCode::Up => Action::Prev,
+            KeyCode::PageUp if matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::PageUp,
+            KeyCode::PageDown if matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::PageDown,
             KeyCode::Char(c) => self.character(ctx, c),
             KeyCode::Tab if ctx == KeyCtx::Input => Action::Complete,
             code if matches!(ctx, KeyCtx::Input | KeyCtx::Filter | KeyCtx::SearchLine) => {
@@ -183,6 +189,7 @@ impl Keymap {
             'c' => Action::Interrupt,
             'g' => Action::Back,
             'n' => Action::Next,
+            'p' if !emacs && matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::Palette,
             'p' => Action::Prev,
             'a' if emacs && line => Action::Home,
             'e' if emacs && line => Action::End,
@@ -202,7 +209,16 @@ impl Keymap {
         match (ctx, c) {
             (KeyCtx::Input | KeyCtx::Filter | KeyCtx::SearchLine, _) => Action::Insert(c),
             (KeyCtx::Normal, 'i') => Action::EnterInput,
+            (KeyCtx::Menu, 'i') if self.set == KeySet::Vim => Action::EnterInput,
             (KeyCtx::Normal, 'g') => self.wait_for(Prefix::G),
+            (KeyCtx::Normal, 'h') => Action::MoveFocus(Dir::Left),
+            (KeyCtx::Normal, 'l') => Action::MoveFocus(Dir::Right),
+            (KeyCtx::Normal | KeyCtx::Menu, '[') if self.set == KeySet::Vim => {
+                Action::ToggleSessions
+            }
+            (KeyCtx::Normal | KeyCtx::Menu, ']') if self.set == KeySet::Vim => {
+                Action::ToggleSidebar
+            }
             (KeyCtx::Normal, '/') => Action::OpenSearch,
             (KeyCtx::Normal, '?') => Action::OpenKeys,
             (KeyCtx::Normal, 'n') => Action::SearchNext,
@@ -248,7 +264,11 @@ mod tests {
         (Normal, "ctrl-w k", A::MoveFocus(Dir::Up)), (Normal, "ctrl-w l", A::MoveFocus(Dir::Right)), (Normal, "g t", A::NextTab), (Normal, "g T", A::PrevTab),
         (Normal, "ctrl-w q", A::ClosePane), (Normal, "ctrl-w [", A::ToggleSessions), (Normal, "ctrl-w ]", A::ToggleSidebar), (Normal, "ctrl-w }", A::NextView),
         (Normal, ":", A::OpenBar), (Normal, "/", A::OpenSearch), (Normal, "?", A::OpenKeys),
-        (Normal, "j", A::Next), (Normal, "k", A::Prev), (Normal, "ctrl-n", A::Next), (Normal, "ctrl-p", A::Prev), (Normal, "down", A::Next), (Normal, "up", A::Prev),
+        (Normal, "j", A::Next), (Normal, "k", A::Prev), (Normal, "ctrl-n", A::Next), (Normal, "ctrl-p", A::Palette), (Normal, "down", A::Next), (Normal, "up", A::Prev),
+        (Normal, "h", A::MoveFocus(Dir::Left)), (Normal, "l", A::MoveFocus(Dir::Right)),
+        (Normal, "[", A::ToggleSessions), (Normal, "]", A::ToggleSidebar), (Menu, "[", A::ToggleSessions), (Menu, "]", A::ToggleSidebar),
+        (Input, "ctrl-p", A::Palette), (Input, "h", A::Insert('h')), (Input, "[", A::Insert('[')), (Filter, "]", A::Insert(']')),
+        (Menu, "ctrl-p", A::Prev), (Filter, "ctrl-p", A::Prev), (SearchLine, "ctrl-p", A::Prev),
         (Normal, "enter", A::Submit), (Normal, "esc", A::Back), (Normal, "ctrl-g", A::Back), (Normal, "ctrl-c", A::Interrupt),
         (Normal, "n", A::SearchNext), (Normal, "N", A::SearchPrev), (Normal, "y", A::NotWired), (Normal, "a", A::NotWired),
         (Input, "x", A::Insert('x')), (Input, "T", A::Insert('T')), (Input, "/", A::Insert('/')), (Input, "bs", A::Backspace), (Input, "enter", A::Submit), (Input, "esc", A::Back),

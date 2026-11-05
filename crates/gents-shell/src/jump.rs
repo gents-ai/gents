@@ -5,6 +5,7 @@ use crate::sample::{MenuId, AGENTS, MENUS, SESSIONS, TOOLS_PACK};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
+    Settings,
     Tabs,
     Sessions,
     Agents,
@@ -15,6 +16,7 @@ pub enum Group {
 impl Group {
     pub fn header(self) -> &'static str {
         match self {
+            Group::Settings => "SETTINGS",
             Group::Tabs => "TABS",
             Group::Sessions => "SESSIONS",
             Group::Agents => "AGENTS",
@@ -56,6 +58,20 @@ pub fn items(app: &App, query: &str) -> Vec<JumpItem> {
             });
         }
     };
+    for (id, meta) in [
+        (MenuId::NodeSettings, "this node's configuration"),
+        (MenuId::AppSettings, "this computer"),
+    ] {
+        let name = id.name();
+        let matched = rank(query, name, &[]);
+        add(
+            Group::Settings,
+            name.to_string(),
+            meta,
+            Target::Menu(id),
+            matched,
+        );
+    }
     for (index, tab) in app.tabs.iter().enumerate() {
         let name = format!("{} · {}", tab.name, tab.agent);
         let matched = rank(query, &name, &[]);
@@ -130,7 +146,9 @@ mod tests {
     use crate::draw::theme;
     use crate::keys::KeySet::{self, Emacs, Vim};
     use crate::sample::View;
-    use crate::testing::{buffer, find, kinds, press, screen, session_row, type_text};
+    use crate::testing::{
+        buffer, find, kinds, press, screen, session_row, type_text, with_right_pane,
+    };
 
     const ACCOUNTS: LayerKind = LayerKind::Menu(MenuId::Accounts);
 
@@ -185,6 +203,20 @@ mod tests {
     }
 
     #[test]
+    fn the_bar_lists_settings_first() {
+        let app = App::new(Vim, 132, 36);
+        let found = items(&app, "");
+        assert_eq!(found[0].label, "Node settings");
+        assert_eq!(found[0].meta, "this node's configuration");
+        assert_eq!(found[0].target, Target::Menu(MenuId::NodeSettings));
+        assert_eq!(found[1].label, "App settings");
+        assert_eq!(found[1].meta, "this computer");
+        assert_eq!(found[1].target, Target::Menu(MenuId::AppSettings));
+        assert_eq!(found[0].group, Group::Settings);
+        assert_eq!(items(&app, "node set")[0].label, "Node settings");
+    }
+
+    #[test]
     fn an_empty_query_lists_every_group_in_order() {
         let found = items(&with_tabs(Vim, 132, 36), "");
         let mut groups: Vec<Group> = found.iter().map(|item| item.group).collect();
@@ -192,6 +224,7 @@ mod tests {
         assert_eq!(
             groups,
             [
+                Group::Settings,
                 Group::Tabs,
                 Group::Sessions,
                 Group::Agents,
@@ -520,7 +553,7 @@ mod tests {
 
     #[test]
     fn sidebar_views_from_the_bar() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l enter :");
         assert_eq!(app.diff, Some(0));
         type_text(&mut app, "work");
@@ -529,15 +562,15 @@ mod tests {
         assert_eq!(app.diff, None);
         assert!(app.layers.is_empty());
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w ] esc :");
-        assert!(!app.wanted.sidebar);
+        assert!(!app.wanted().sidebar);
         type_text(&mut app, "background");
         press(&mut app, "enter");
         assert_eq!(app.view, View::Agents);
-        assert!(app.wanted.sidebar);
+        assert!(app.wanted().sidebar);
 
-        let mut app = App::new(Vim, 70, 24);
+        let mut app = with_right_pane(App::new(Vim, 70, 24));
         press(&mut app, "esc :");
         type_text(&mut app, "work");
         press(&mut app, "enter");

@@ -13,10 +13,11 @@ pub struct TerminalGuard {
 
 pub fn enter() -> io::Result<TerminalGuard> {
     let terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
+    execute!(stdout(), event::EnableMouseCapture).inspect_err(|_| ratatui::restore())?;
     // Runs before the hook `try_init` installed, which leaves the alternate screen.
     let restore_and_report = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(stdout(), cursor::Show);
+        let _ = execute!(stdout(), event::DisableMouseCapture, cursor::Show);
         restore_and_report(info);
     }));
     Ok(TerminalGuard {
@@ -42,7 +43,7 @@ impl Drop for TerminalGuard {
         // `Terminal`'s own Drop may write show-cursor; leaving the alternate screen must be
         // the last thing written.
         drop(self.terminal.take());
-        let _ = execute!(stdout(), cursor::Show);
+        let _ = execute!(stdout(), event::DisableMouseCapture, cursor::Show);
         ratatui::restore();
     }
 }

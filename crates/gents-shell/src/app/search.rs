@@ -3,7 +3,7 @@ use ratatui::layout::{Margin, Rect};
 use super::input::LineInput;
 use super::{App, Pane};
 use crate::keys::{Action, KeySet};
-use crate::layout::{conversation_area, sidebar_rows_area, Right};
+use crate::layout::{sidebar_rows_area, Right};
 use crate::sample::{view_rows, SidebarRow, Tone, SESSIONS};
 
 /// `start` and `end` count characters, not bytes or columns.
@@ -175,7 +175,7 @@ impl App {
     pub fn pane_rows(&self, pane: Pane) -> Option<Rect> {
         let panes = self.panes()?;
         match (pane, panes.right) {
-            (Pane::Agent, _) => Some(conversation_area(panes.agent)),
+            (Pane::Agent, _) => Some(self.conversation_rect(panes.agent)),
             (Pane::Sessions, _) => Some(panes.sessions?.inner(Margin::new(1, 1))),
             (Pane::Sidebar, Right::Sidebar(rect)) => Some(sidebar_rows_area(rect)),
             (Pane::Sidebar, _) => None,
@@ -202,7 +202,9 @@ mod tests {
     use crate::keys::KeyCtx;
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::View;
-    use crate::testing::{buffer, find, numbered, press, screen, session_row, type_text};
+    use crate::testing::{
+        buffer, find, numbered, press, screen, session_row, type_text, with_right_pane,
+    };
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::Event;
     use ratatui::Terminal;
@@ -241,7 +243,7 @@ mod tests {
 
     #[test]
     fn vim_search_commits_then_n_moves() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         session_tab(&mut app);
         assert_eq!(app.mode, Mode::Normal);
         press(&mut app, "/");
@@ -257,7 +259,7 @@ mod tests {
         assert_ne!(cell_bg(&app, "src/cli/args", 7), theme::MATCH);
         assert_ne!(cell_bg(&app, "M cli/args.rs", 6), theme::MATCH);
 
-        for (key, current) in [("n", 1), ("n", 0), ("N", 1), ("N", 0)] {
+        for (key, current) in [("n", 1), ("n", 2), ("n", 0), ("N", 2), ("N", 1)] {
             press(&mut app, key);
             assert_eq!(app.search.as_ref().unwrap().current, current, "{key}");
         }
@@ -280,11 +282,11 @@ mod tests {
             let (_, column) = find(&screen(app)[row..], "args").expect("a match");
             buffer(app)[(column, row as u16)].modifier
         };
-        let (first, second) = (modifier(&app, 11), modifier(&app, 12));
+        let (first, second) = (modifier(&app, 9), modifier(&app, 10));
         assert_ne!(first, second);
         press(&mut app, "n");
-        assert_eq!(modifier(&app, 11), second);
-        assert_eq!(modifier(&app, 12), first);
+        assert_eq!(modifier(&app, 9), second);
+        assert_eq!(modifier(&app, 10), first);
     }
 
     #[test]
@@ -321,7 +323,7 @@ mod tests {
             (Emacs, "ctrl-s", "ctrl-g"),
             (Emacs, "ctrl-s", "esc"),
         ] {
-            let mut app = App::new(set, 132, 36);
+            let mut app = with_right_pane(App::new(set, 132, 36));
             app.tabs[0].lines = numbered(40);
             app.tabs[0].scroll = 2;
             press(&mut app, open);
@@ -332,7 +334,7 @@ mod tests {
             assert_eq!(app.tabs[0].scroll, 2, "{cancel}");
         }
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w h /");
         let before = app.sessions_sel;
         type_text(&mut app, "weekly");
@@ -340,7 +342,7 @@ mod tests {
         press(&mut app, "esc");
         assert_eq!(app.sessions_sel, before);
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l /");
         let before = app.view_sel[View::Changes as usize];
         type_text(&mut app, "shell");
@@ -384,14 +386,14 @@ mod tests {
 
     #[test]
     fn search_covers_only_the_focused_pane() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         session_tab(&mut app);
         press(&mut app, "ctrl-w h /");
         type_text(&mut app, "flaky");
         assert_eq!(cell_bg(&app, "○ flaky", 2), theme::MATCH);
         assert_ne!(cell_bg(&app, "1 flaky", 2), theme::MATCH);
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w h /");
         type_text(&mut app, "pack");
         assert_eq!(app.sessions_sel, session_row("pack registry"));
@@ -400,7 +402,7 @@ mod tests {
         press(&mut app, "n");
         assert_eq!(app.sessions_sel, session_row("pack registry"));
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l /");
         type_text(&mut app, "cli/");
         assert_eq!(cell_bg(&app, "M cli/args.rs", 2), theme::MATCH);
@@ -411,12 +413,12 @@ mod tests {
 
     #[test]
     fn a_match_on_a_header_selects_the_next_row_that_can_be_selected() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w h /");
         type_text(&mut app, "yesterday");
         assert_eq!(app.sessions_sel, session_row("eval baseline"));
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l j /");
         let before = app.view_sel[View::Changes as usize];
         type_text(&mut app, "@@");
@@ -426,7 +428,7 @@ mod tests {
 
     #[test]
     fn a_diff_scrolls_to_its_matches() {
-        let mut app = App::new(Vim, 132, 16);
+        let mut app = with_right_pane(App::new(Vim, 132, 16));
         press(&mut app, "esc ctrl-w l ctrl-w l enter /");
         type_text(&mut app, "back to");
         let s = screen(&app);
@@ -434,7 +436,7 @@ mod tests {
         assert_eq!(find(&s, "search: back to").map(|(row, _)| row), Some(13));
         assert_eq!(cell_bg(&app, "esc back to files", 4), theme::MATCH);
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "ctrl-x o enter ctrl-s");
         type_text(&mut app, "ctrl-g");
         assert_eq!(cell_bg(&app, "ctrl-g back to files", 0), theme::MATCH);
@@ -442,7 +444,7 @@ mod tests {
 
     #[test]
     fn changing_focus_ends_the_search() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         session_tab(&mut app);
         press(&mut app, "/");
         type_text(&mut app, "args");
@@ -450,12 +452,12 @@ mod tests {
         assert_eq!(app.search, None);
         assert_eq!(app.focus, Pane::Sidebar);
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "ctrl-s ctrl-x o");
         assert_eq!(app.search, None);
         assert_eq!(app.ctx(), KeyCtx::Input);
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l /");
         app.handle(ratatui::crossterm::event::Event::Resize(104, 30));
         assert_eq!(app.focus, Pane::Agent);
@@ -464,7 +466,7 @@ mod tests {
 
     #[test]
     fn leaving_the_rows_ends_the_search() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         session_tab(&mut app);
         app.tabs.push(Tab::new_session());
         press(&mut app, "/");
@@ -472,7 +474,7 @@ mod tests {
         press(&mut app, "enter g t");
         assert_eq!(app.search, None);
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         session_tab(&mut app);
         press(&mut app, "/");
         type_text(&mut app, "args");
@@ -480,14 +482,14 @@ mod tests {
         assert_eq!(app.search, None);
         assert_eq!(app.ctx(), KeyCtx::Input);
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         app.view = View::Agents;
         app.view_sel[View::Agents as usize] = 8;
         press(&mut app, "ctrl-x o ctrl-s ctrl-x }");
         assert_eq!(app.search, None);
         assert_eq!(app.view, View::Changes);
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "ctrl-s ctrl-x }");
         assert!(app.search.is_some());
     }
@@ -511,7 +513,7 @@ mod tests {
 
     #[test]
     fn opening_a_diff_ends_the_search() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l /");
         type_text(&mut app, "args");
         press(&mut app, "enter enter");
@@ -576,7 +578,7 @@ mod tests {
         press(&mut app, "enter n N");
         assert_eq!(
             find(&screen(&app), "search: zzz (no match)"),
-            Some((30, 30))
+            Some((26, 30))
         );
 
         let mut app = App::new(Vim, 60, 16);
@@ -602,17 +604,17 @@ mod tests {
 
     #[test]
     fn the_line_sits_where_each_pane_keeps_it() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc /");
         type_text(&mut app, "q");
         assert_eq!(find(&screen(&app), "search: q"), Some((30, 30)));
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w h /");
         type_text(&mut app, "q");
         assert_eq!(find(&screen(&app), "search: q"), Some((33, 1)));
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l /");
         type_text(&mut app, "q");
         assert_eq!(find(&screen(&app), "search: q"), Some((33, 99)));

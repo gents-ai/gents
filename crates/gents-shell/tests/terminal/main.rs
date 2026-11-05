@@ -7,7 +7,19 @@ use pty::{Exit, Shell};
 
 const WITH_STTY: &str = r#""$0" "$@"; echo rc=$?; stty -a"#;
 
+fn assert_mouse_off(e: &Exit) {
+    for mode in [
+        r"\u001b[?1000l",
+        r"\u001b[?1002l",
+        r"\u001b[?1003l",
+        r"\u001b[?1006l",
+    ] {
+        assert!(e.raw.contains(mode), "{mode}: {}", e.raw);
+    }
+}
+
 fn assert_restored(e: &Exit) {
+    assert_mouse_off(e);
     assert!(!e.alternate_screen);
     assert!(e.cursor_visible);
     assert!(
@@ -118,6 +130,7 @@ fn panic_restores_the_terminal() {
     let e = s.finish();
     assert!(e.text.contains("rc=101"), "{}", e.text);
     assert!(e.text.contains("panicked"), "{}", e.text);
+    assert_mouse_off(&e);
     assert_cooked(&e);
     assert!(!e.alternate_screen);
     assert!(e.cursor_visible);

@@ -1,5 +1,6 @@
 pub mod input;
 pub mod layers;
+mod mouse;
 pub mod search;
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -15,14 +16,15 @@ use crate::layout::{
     Right, Screen, Wanted,
 };
 use crate::sample::{
-    diff, view_rows, RowAction, SidebarRow, Tone, View, CHAT, DIFF_BACK_ROW, PROMPT_ROW, SESSIONS,
-    START_SESSION,
+    diff, view_rows, Opens, RowAction, Running, SidebarRow, Tone, View, CHAT, DIFF_BACK_ROW,
+    PROMPT_ROW, RUNNING, SESSIONS, START_SESSION,
 };
 use input::LineInput;
 use layers::{Layer, LayerKind};
 use search::Search;
 
-const SAMPLE_REPLY: &str = "sample reply: nothing is wired to an agent yet.";
+const SAMPLE_REPLY: &str = " sample reply: nothing is wired to an agent yet.";
+const SAMPLE_SUBAGENT_REPLY: &str = " ◆ sample reply: nothing is wired to an agent yet.";
 const NOT_WIRED: &str = "not wired yet";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +56,13 @@ pub struct Tab {
     pub scroll: usize,
     pub input: LineInput,
     pub agent_picked: bool,
+    pub running: &'static [Running],
+    /// The selected running row, while those rows have the keys.
+    pub running_sel: Option<usize>,
+    /// Whether the right pane is wanted while this tab shows. Not saved across runs.
+    pub sidebar: bool,
+    /// The tab to step back out to. Stepping in swaps the subagent's tab into this slot.
+    pub parent: Option<Box<Tab>>,
 }
 
 impl Tab {
@@ -66,36 +75,80 @@ impl Tab {
             scroll: 0,
             input: LineInput::default(),
             agent_picked: false,
+            running: &[],
+            running_sel: None,
+            sidebar: false,
+            parent: None,
         }
     }
 
     pub fn wrapped_rows(&self, width: u16) -> Vec<(String, Tone)> {
+        let width = usize::from(width);
         self.lines
             .iter()
             .flat_map(|line| {
-                wrap(&line.text, usize::from(width))
-                    .into_iter()
-                    .map(|row| (row, line.tone))
+                let rows = if line.tone == Tone::You {
+                    bubble(&line.text, width)
+                } else {
+                    wrap(&line.text, width)
+                };
+                rows.into_iter().map(|row| (row, line.tone))
             })
             .collect()
     }
 }
 
-/// Breaks between grapheme clusters, the units `Buffer` draws, so a cluster stays whole.
+/// Breaks at the last space that fits, dropping the spaces there, and inside a word only when the row holds no
+/// space past its indent. Breaks fall between grapheme clusters, the units `Buffer` draws.
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut rows = Vec::new();
-    let (mut row, mut used) = (String::new(), 0);
+    let (mut row, mut used, mut broke) = (String::new(), 0, false);
     for grapheme in Span::raw(text).styled_graphemes(Style::new()) {
         let cell = Span::raw(grapheme.symbol).width();
+        if broke && row.is_empty() && grapheme.symbol == " " {
+            continue;
+        }
         if used + cell > width && used > 0 {
-            rows.push(std::mem::take(&mut row));
-            used = 0;
+            broke = true;
+            if grapheme.symbol == " " {
+                rows.push(std::mem::take(&mut row).trim_end().to_string());
+                used = 0;
+                continue;
+            }
+            let space = row.rfind(' ').filter(|&at| !row[..at].trim().is_empty());
+            let rest = space.map_or(String::new(), |at| {
+                row.split_off(at).trim_start().to_string()
+            });
+            rows.push(std::mem::replace(&mut row, rest).trim_end().to_string());
+            used = Span::raw(row.as_str()).width();
         }
         row.push_str(grapheme.symbol);
         used += cell;
     }
     rows.push(row);
     rows
+}
+
+/// Padded on the left so one block of text sits against the right edge, leaving a cell of tint
+/// on each side. Padding in the text keeps search columns right.
+fn bubble(text: &str, width: usize) -> Vec<String> {
+    let room = (width * 3 / 4).min(width.saturating_sub(2)).max(1);
+    let rows = wrap(text, room);
+    let rows: Vec<&str> = rows.iter().map(|row| row.trim_start()).collect();
+    let widest = rows.iter().map(|row| Span::raw(*row).width()).max();
+    let left = width.saturating_sub(widest.unwrap_or(0) + 1);
+    rows.iter()
+        .map(|row| format!("{:left$}{row}", ""))
+        .collect()
+}
+
+fn chat_lines(chat: &[(&str, Tone)]) -> Vec<ChatLine> {
+    chat.iter()
+        .map(|&(text, tone)| ChatLine {
+            text: text.to_string(),
+            tone,
+        })
+        .collect()
 }
 
 pub fn sample_chat(agent: &str) -> Vec<ChatLine> {
@@ -112,7 +165,7 @@ pub struct App {
     pub keymap: Keymap,
     pub focus: Pane,
     pub mode: Mode,
-    pub wanted: Wanted,
+    pub sessions_wanted: bool,
     pub view: View,
     pub sessions_sel: usize,
     pub view_sel: [usize; 3],
@@ -159,7 +212,7 @@ impl App {
             keymap: Keymap::new(set),
             focus: Pane::Agent,
             mode: Mode::Input,
-            wanted: Wanted::default(),
+            sessions_wanted: true,
             view: View::Changes,
             sessions_sel: START_SESSION,
             view_sel: [View::Changes, View::Workflows, View::Agents]
@@ -176,12 +229,20 @@ impl App {
         }
     }
 
+    pub fn wanted(&self) -> Wanted {
+        Wanted {
+            sessions: self.sessions_wanted,
+            sidebar: self.tabs[self.active].sidebar,
+        }
+    }
+
     pub fn chip(&self) -> &'static str {
         match self.layers.last().map(|top| top.kind) {
             Some(LayerKind::Jump) => "JUMP",
             Some(LayerKind::Keys) => "HELP",
             Some(_) => "MENU",
             None if self.search.is_some() => "SEARCH",
+            None if self.in_running() => "AGENTS",
             None => match (self.keymap.set(), self.mode) {
                 (KeySet::Emacs, _) => "EMACS",
                 (KeySet::Vim, Mode::Input) => "INPUT",
@@ -201,6 +262,7 @@ impl App {
             None if self.search.as_ref().is_some_and(|search| !search.committed) => {
                 KeyCtx::SearchLine
             }
+            None if self.in_running() && self.keymap.set() == KeySet::Vim => KeyCtx::Menu,
             None if self.keymap.set() == KeySet::Vim && self.mode == Mode::Normal => KeyCtx::Normal,
             None => KeyCtx::Input,
         }
@@ -209,6 +271,7 @@ impl App {
     pub fn handle(&mut self, event: Event) {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+            Event::Mouse(mouse) => self.handle_mouse(mouse),
             Event::Resize(width, height) => {
                 self.size = (width, height);
                 if self.panes().is_some() {
@@ -227,6 +290,109 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    pub fn in_running(&self) -> bool {
+        self.tabs[self.active].running_sel.is_some()
+    }
+
+    pub(crate) fn can_enter_running(&self) -> bool {
+        let tab = &self.tabs[self.active];
+        self.ctx() == KeyCtx::Input
+            && self.focus == Pane::Agent
+            && self.slash.is_none()
+            && tab.input.is_empty()
+            && !tab.running.is_empty()
+    }
+
+    /// In vim normal mode the rows sit below the conversation: `j` at its end comes down into
+    /// them, and `k` on the top row goes back up.
+    pub(crate) fn can_fall_into_running(&self) -> bool {
+        let tab = &self.tabs[self.active];
+        self.ctx() == KeyCtx::Normal
+            && self.focus == Pane::Agent
+            && tab.scroll == 0
+            && !tab.running.is_empty()
+    }
+
+    /// Past the last row is the message box, reached only by someone who came from it. Above the
+    /// top row is the conversation, which only vim can move to.
+    fn step_running(&mut self, forward: bool) {
+        let vim = self.keymap.set() == KeySet::Vim;
+        let typing = !vim || self.mode == Mode::Input;
+        let tab = &mut self.tabs[self.active];
+        let (Some(row), max) = (tab.running_sel, tab.running.len().saturating_sub(1)) else {
+            return;
+        };
+        if forward && row == max && typing {
+            tab.running_sel = None;
+        } else if !forward && row == 0 && vim {
+            tab.running_sel = None;
+            self.mode = Mode::Normal;
+        } else {
+            tab.running_sel = Some(stepped(row, forward, max));
+        }
+    }
+
+    pub(crate) fn activate_running(&mut self) {
+        let tab = &mut self.tabs[self.active];
+        let running = tab.running;
+        let Some(row) = tab.running_sel.and_then(|row| running.get(row)) else {
+            return;
+        };
+        match row.opens {
+            Opens::Agent(chat) => {
+                let mut child = Tab::new_session();
+                child.session = tab.session;
+                child.name = row.job.to_string();
+                child.agent = row.name.to_string();
+                child.lines = chat_lines(chat);
+                child.sidebar = tab.sidebar;
+                let parent = std::mem::replace(tab, child);
+                tab.parent = Some(Box::new(parent));
+                self.activate_tab(self.active);
+            }
+            Opens::Workflow(row) => self.show_workflow(row),
+        }
+    }
+
+    fn show_workflow(&mut self, row: usize) {
+        self.tabs[self.active].running_sel = None;
+        self.run_effect(Effect::ShowSidebar(View::Workflows));
+        self.view_sel[View::Workflows as usize] = row;
+        if sidebar_can_dock(self.size.0) {
+            self.focus_pane(Pane::Sidebar);
+        }
+    }
+
+    /// Focus stays put, so reading the diff does not cost the place in the conversation.
+    pub fn show_file(&mut self, file: usize) {
+        self.run_effect(Effect::ShowSidebar(View::Changes));
+        self.diff = Some(file);
+        self.diff_scroll = 0;
+        let rows = view_rows(View::Changes);
+        if let Some(row) = rows
+            .iter()
+            .position(|row| row.action == RowAction::OpenDiff(file))
+        {
+            self.view_sel[View::Changes as usize] = row;
+        }
+    }
+
+    pub(crate) fn step_out(&mut self) {
+        let tab = &mut self.tabs[self.active];
+        if let Some(parent) = tab.parent.take() {
+            *tab = *parent;
+        }
+        self.activate_tab(self.active);
+    }
+
+    pub fn conversation_rect(&self, pane: Rect) -> Rect {
+        let rows = self.tabs[self.active].running.len() as u16;
+        conversation_area(Rect {
+            height: pane.height - rows,
+            ..pane
+        })
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
@@ -261,6 +427,16 @@ impl App {
             | Action::Home
             | Action::End => self.edit(action),
             Action::Submit if self.ctx() == KeyCtx::SearchLine => self.submit_search(),
+            Action::Submit if self.in_running() => self.activate_running(),
+            Action::Next if self.in_running() => self.step_running(true),
+            Action::Prev if self.in_running() => self.step_running(false),
+            Action::Next if self.can_fall_into_running() => {
+                self.tabs[self.active].running_sel = Some(0);
+            }
+            Action::Prev if self.can_enter_running() => {
+                let tab = &mut self.tabs[self.active];
+                tab.running_sel = Some(tab.running.len() - 1);
+            }
             Action::Submit if self.slash.is_some() => self.run_slash(),
             Action::Next if self.slash.is_some() => self.step_slash(true),
             Action::Prev if self.slash.is_some() => self.step_slash(false),
@@ -270,6 +446,7 @@ impl App {
             Action::Interrupt => self.interrupt(),
             Action::EnterInput => {
                 self.search = None;
+                self.tabs[self.active].running_sel = None;
                 self.focus = Pane::Agent;
                 self.mode = Mode::Input;
             }
@@ -280,6 +457,8 @@ impl App {
             Action::OpenBar if self.ctx() != KeyCtx::SearchLine => {
                 self.push_layer(LayerKind::Jump);
             }
+            Action::Palette if self.slash.is_some() => self.step_slash(false),
+            Action::Palette => self.push_layer(LayerKind::Jump),
             Action::OpenSearch => self.open_search(),
             Action::SearchNext if self.search.is_some() => self.step_match(true),
             Action::SearchPrev if self.search.is_some() => self.step_match(false),
@@ -289,6 +468,8 @@ impl App {
             Action::ToggleSessions => self.toggle_sessions(),
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::NextView => self.next_view_if_shown(),
+            Action::PageUp if self.focus == Pane::Agent => self.scroll_agent(true, true),
+            Action::PageDown if self.focus == Pane::Agent => self.scroll_agent(false, true),
             Action::Next => self.step(true),
             Action::Prev => self.step(false),
             Action::NotWired | Action::SearchNext if self.shows_prompt() => self.not_wired(),
@@ -306,6 +487,7 @@ impl App {
             self.focus = Pane::Agent;
         }
         if self.focus == Pane::Agent {
+            self.tabs[self.active].running_sel = None;
             self.edit_message(action);
         }
     }
@@ -381,7 +563,7 @@ impl App {
             Effect::ShowSidebar(view) => {
                 self.set_view(view);
                 if sidebar_can_dock(self.size.0) {
-                    self.wanted.sidebar = true;
+                    self.tabs[self.active].sidebar = true;
                 } else {
                     self.push_layer(LayerKind::Sidebar);
                 }
@@ -414,11 +596,16 @@ impl App {
             } else {
                 self.layers.pop();
             }
-        } else if self.slash.take().is_some() {
+        } else if self.slash.take().is_some() || self.tabs[self.active].running_sel.take().is_some()
+        {
         } else if self.search.is_some() {
             self.back_from_search();
         } else if self.diff.is_some() && self.focus == Pane::Sidebar {
             self.diff = None;
+        } else if self.tabs[self.active].parent.is_some()
+            && (self.mode == Mode::Normal || self.keymap.set() == KeySet::Emacs)
+        {
+            self.step_out();
         } else {
             self.mode = Mode::Normal;
         }
@@ -429,12 +616,15 @@ impl App {
         if tab.input.text().trim().is_empty() {
             return;
         }
+        let reply = if tab.parent.is_some() {
+            SAMPLE_SUBAGENT_REPLY
+        } else {
+            SAMPLE_REPLY
+        };
         let rows = [
-            ("you", Tone::Accent),
-            (tab.input.text(), Tone::Plain),
+            (tab.input.text(), Tone::You),
             ("", Tone::Plain),
-            (tab.agent.as_str(), Tone::Accent),
-            (SAMPLE_REPLY, Tone::Label),
+            (reply, Tone::Reply),
             ("", Tone::Plain),
         ]
         .map(|(text, tone)| ChatLine {
@@ -491,7 +681,7 @@ impl App {
     }
 
     fn panes(&self) -> Option<Panes> {
-        match layout(self.size.0, self.size.1, self.wanted) {
+        match layout(self.size.0, self.size.1, self.wanted()) {
             Screen::Shell(panes) => Some(panes),
             Screen::TooSmall => None,
         }
@@ -503,6 +693,7 @@ impl App {
         }
         self.focus = pane;
         self.search = None;
+        self.tabs[self.active].running_sel = None;
         if pane != Pane::Agent {
             self.mode = Mode::Normal;
             self.slash = None;
@@ -529,6 +720,10 @@ impl App {
             return;
         };
         match (self.focus, dir) {
+            (Pane::Agent, Dir::Down) if !self.tabs[self.active].running.is_empty() => {
+                self.tabs[self.active].running_sel = Some(0);
+            }
+            (Pane::Agent, Dir::Up) => self.tabs[self.active].running_sel = None,
             (Pane::Agent, Dir::Left) if panes.sessions.is_some() => {
                 self.focus_pane(Pane::Sessions);
             }
@@ -568,6 +763,9 @@ impl App {
     }
 
     pub fn activate_tab(&mut self, index: usize) {
+        if index != self.active {
+            self.diff = None;
+        }
         self.active = index;
         self.slash = None;
         self.search = None;
@@ -589,6 +787,7 @@ impl App {
     }
 
     pub fn close_tab(&mut self) {
+        self.diff = None;
         self.tabs.remove(self.active);
         if self.tabs.is_empty() {
             self.tabs.push(Tab::new_session());
@@ -599,8 +798,8 @@ impl App {
     fn close_pane(&mut self) {
         match self.focus {
             Pane::Agent => self.close_tab(),
-            Pane::Sessions => self.wanted.sessions = false,
-            Pane::Sidebar => self.wanted.sidebar = false,
+            Pane::Sessions => self.sessions_wanted = false,
+            Pane::Sidebar => self.tabs[self.active].sidebar = false,
         }
         self.recheck_focus();
     }
@@ -624,18 +823,20 @@ impl App {
         if !untouched {
             self.tabs.push(Tab::new_session());
             self.active = self.tabs.len() - 1;
+            self.diff = None;
         }
         let tab = &mut self.tabs[self.active];
         tab.session = Some(row);
         tab.name = name.to_string();
         tab.agent = agent.to_string();
         tab.lines = sample_chat(agent);
+        tab.running = RUNNING;
         self.activate_tab(self.active);
     }
 
     fn toggle_sessions(&mut self) {
         if sessions_can_dock(self.size.0) {
-            self.wanted.sessions = !self.wanted.sessions;
+            self.sessions_wanted = !self.sessions_wanted;
             self.recheck_focus();
         } else {
             self.toggle_layer(LayerKind::Sessions);
@@ -644,7 +845,8 @@ impl App {
 
     fn toggle_sidebar(&mut self) {
         if sidebar_can_dock(self.size.0) {
-            self.wanted.sidebar = !self.wanted.sidebar;
+            let tab = &mut self.tabs[self.active];
+            tab.sidebar = !tab.sidebar;
             self.recheck_focus();
         } else {
             self.toggle_layer(LayerKind::Sidebar);
@@ -662,7 +864,7 @@ impl App {
 
     fn no_sidebar_hint(&self) -> &'static str {
         match self.keymap.set() {
-            KeySet::Vim => "no right sidebar on screen: ctrl-w ] opens it",
+            KeySet::Vim => "no right sidebar on screen: ] opens it",
             KeySet::Emacs => "no right sidebar on screen: ctrl-x ] opens it",
         }
     }
@@ -697,7 +899,7 @@ impl App {
 
     fn step(&mut self, forward: bool) {
         match self.focus {
-            Pane::Agent => self.scroll_agent(!forward),
+            Pane::Agent => self.scroll_agent(!forward, false),
             Pane::Sessions => self.step_session(forward),
             Pane::Sidebar => self.step_sidebar(forward),
         }
@@ -732,15 +934,22 @@ impl App {
         }
     }
 
-    fn scroll_agent(&mut self, up: bool) {
+    /// One row, or with `page` a screenful.
+    fn scroll_agent(&mut self, up: bool, page: bool) {
         let Some(panes) = self.panes() else {
             return;
         };
-        let area = self.visible_rows(Pane::Agent, conversation_area(panes.agent));
+        let area = self.visible_rows(Pane::Agent, self.conversation_rect(panes.agent));
         let tab = &mut self.tabs[self.active];
         let lines = tab.wrapped_rows(area.width).len();
         let max = lines.saturating_sub(usize::from(area.height));
-        tab.scroll = stepped(tab.scroll, up, max);
+        let by = if page { usize::from(area.height) } else { 1 };
+        let scroll = tab.scroll.min(max);
+        tab.scroll = if up {
+            (scroll + by).min(max)
+        } else {
+            scroll.saturating_sub(by)
+        };
     }
 
     fn activate_session_row(&mut self) {
@@ -773,7 +982,10 @@ mod tests {
     use crate::draw;
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::testing::{buffer, find, keys, numbered, press, screen, session_row, type_text};
+    use crate::sample::SUBAGENT_MARK;
+    use crate::testing::{
+        buffer, find, keys, numbered, press, screen, session_row, type_text, with_right_pane,
+    };
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use ratatui::Terminal;
@@ -862,22 +1074,20 @@ mod tests {
     #[test]
     fn enter_sends_and_appends_a_sample_reply() {
         for set in [Vim, Emacs] {
-            let mut app = App::new(set, 132, 36);
+            let mut app = with_right_pane(App::new(set, 132, 36));
             type_text(&mut app, "hi");
             press(&mut app, "enter");
             let s = screen(&app);
-            assert_eq!(find(&s, "you"), Some((4, 30)));
-            assert_eq!(find(&s, "hi"), Some((5, 30)));
+            assert_eq!(find(&s, "hi"), Some((4, 93)));
             assert_eq!(find(&s, "Engineer"), Some((1, 46)));
             let reply = "sample reply: nothing is wired to an agent yet.";
-            assert_eq!(find(&s, reply), Some((8, 30)));
+            assert_eq!(find(&s, reply), Some((6, 31)));
             assert!(app.tabs[0].input.is_empty());
             assert!(buffer(&app).content().iter().all(|c| c.bg != theme::LOGO));
 
             let tones: Vec<Tone> = app.tabs[0].lines.iter().map(|l| l.tone).collect();
-            use Tone::{Accent, Label, Plain};
-            assert_eq!(tones, [Accent, Plain, Plain, Accent, Label, Plain]);
-            assert_eq!(app.tabs[0].lines[3].text, "Engineer");
+            use Tone::{Plain, Reply, You};
+            assert_eq!(tones, [You, Plain, Reply, Plain]);
         }
     }
 
@@ -895,7 +1105,7 @@ mod tests {
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, " hi ");
         press(&mut app, "enter");
-        assert_eq!(app.tabs[0].lines[1].text, " hi ");
+        assert_eq!(app.tabs[0].lines[0].text, " hi ");
     }
 
     #[test]
@@ -960,9 +1170,13 @@ mod tests {
         for code in [KeyCode::Char('a'), KeyCode::Enter, KeyCode::Char('b')] {
             app.handle(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
         }
-        assert_eq!(app.tabs[0].lines[1].text, "a");
+        assert_eq!(app.tabs[0].lines[0].text, "a");
         assert_eq!(
-            app.tabs[0].lines.iter().filter(|l| l.text == "you").count(),
+            app.tabs[0]
+                .lines
+                .iter()
+                .filter(|l| l.tone == Tone::You)
+                .count(),
             1
         );
         assert_eq!(app.tabs[0].input.text(), "b");
@@ -1075,6 +1289,624 @@ mod tests {
         assert_eq!(app.tabs[0].input.text(), "one");
     }
 
+    #[test]
+    fn wrap_prefers_spaces() {
+        assert_eq!(wrap("alpha beta gamma", 10), ["alpha beta", "gamma"]);
+        assert_eq!(wrap("alpha beta", 7), ["alpha", "beta"]);
+    }
+
+    #[test]
+    fn wrap_breaks_a_word_only_when_it_must() {
+        assert_eq!(wrap("aaaaaaaaaaaa", 5), ["aaaaa", "aaaaa", "aa"]);
+        assert_eq!(wrap("ab cccccccc", 5), ["ab", "ccccc", "ccc"]);
+        assert_eq!(wrap("世界世界", 3), ["世", "界", "世", "界"]);
+    }
+
+    fn session_app() -> App {
+        let mut app = App::new(Vim, 132, 36);
+        enter_on_session(&mut app, "pack registry");
+        assert_eq!(app.mode, Mode::Normal);
+        app
+    }
+
+    #[test]
+    fn rows_sit_directly_above_the_message_box() {
+        let s = screen(&session_app());
+        assert_eq!(find(&s, "◆ Reviewer · auth grouping"), Some((27, 31)));
+        assert_eq!(find(&s, "◆ Researcher · registry login"), Some((28, 31)));
+        assert_eq!(find(&s, "◇ Triage · inbox"), Some((29, 31)));
+        assert_eq!(find(&s, "▸ change unit · cli ux"), Some((30, 31)));
+        assert_eq!(find(&s, "reading crates/gents-cli"), Some((27, 62)));
+        assert_eq!(find(&s, "╭").map(|at| at.0), Some(31));
+    }
+
+    #[test]
+    fn a_tab_with_nothing_running_has_no_rows() {
+        let s = screen(&App::new(Vim, 132, 36));
+        assert_eq!(find(&s, "◆"), None);
+        assert_eq!(find(&s, "select"), None);
+    }
+
+    #[test]
+    fn the_conversation_gives_up_a_row_for_each() {
+        let mut app = session_app();
+        app.tabs[0].lines = numbered(100);
+        assert_eq!(find(&screen(&app), "message 99").map(|at| at.0), Some(26));
+    }
+
+    #[test]
+    fn up_from_an_empty_box_selects_the_last_row() {
+        let mut app = session_app();
+        press(&mut app, "i up");
+        assert_eq!(app.tabs[0].running_sel, Some(3));
+        assert_eq!(app.chip(), "AGENTS");
+        let s = screen(&app);
+        assert!(find(&s, "enter open · j/k move · esc back").is_some());
+    }
+
+    #[test]
+    fn up_with_text_in_the_box_does_not() {
+        let mut app = session_app();
+        press(&mut app, "i");
+        type_text(&mut app, "x");
+        press(&mut app, "up");
+        assert_eq!(app.tabs[0].running_sel, None);
+    }
+
+    #[test]
+    fn j_falls_from_the_end_of_the_conversation() {
+        let mut app = session_app();
+        press(&mut app, "j");
+        assert_eq!(app.tabs[0].running_sel, Some(0));
+    }
+
+    #[test]
+    fn j_scrolls_first_when_scrolled_up() {
+        let mut app = session_app();
+        app.tabs[0].lines = numbered(100);
+        press(&mut app, "k k j");
+        assert_eq!((app.tabs[0].scroll, app.tabs[0].running_sel), (1, None));
+        press(&mut app, "j");
+        assert_eq!((app.tabs[0].scroll, app.tabs[0].running_sel), (0, None));
+        press(&mut app, "j");
+        assert_eq!(app.tabs[0].running_sel, Some(0));
+    }
+
+    #[test]
+    fn j_stops_on_the_last_row() {
+        let mut app = session_app();
+        press(&mut app, "j j j j j j j");
+        assert_eq!(app.tabs[0].running_sel, Some(3));
+    }
+
+    #[test]
+    fn k_climbs_out_of_the_top_row() {
+        let mut app = session_app();
+        press(&mut app, "j k");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.ctx(), KeyCtx::Normal);
+    }
+
+    #[test]
+    fn up_past_the_top_lands_in_normal_mode() {
+        let mut app = session_app();
+        press(&mut app, "i up up up up up");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn down_past_the_last_row_returns_to_the_box() {
+        let mut app = session_app();
+        press(&mut app, "i up down");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.ctx(), KeyCtx::Input);
+    }
+
+    #[test]
+    fn ctrl_w_j_and_k_enter_and_leave_the_rows() {
+        let mut app = session_app();
+        press(&mut app, "ctrl-w j");
+        assert_eq!(app.tabs[0].running_sel, Some(0));
+        press(&mut app, "ctrl-w k");
+        assert_eq!(app.tabs[0].running_sel, None);
+    }
+
+    #[test]
+    fn leaving_the_pane_leaves_the_rows() {
+        let mut app = session_app();
+        press(&mut app, "j ctrl-w h");
+        assert_eq!(app.focus, Pane::Sessions);
+        assert_eq!(app.tabs[0].running_sel, None);
+    }
+
+    #[test]
+    fn enter_steps_in_and_esc_restores_the_parent() {
+        let mut app = session_app();
+        let before = app.tabs[0].clone();
+        press(&mut app, "j");
+        let selected = app.tabs[0].clone();
+        press(&mut app, "enter");
+        let s = screen(&app);
+        assert_eq!(app.tabs[0].agent, "Reviewer");
+        assert!(find(&s, "packs · Engineer › Reviewer").is_some());
+        assert!(find(&s, "Message Reviewer").is_some());
+        assert!(find(&s, "◆ Checking the new subcommands").is_some());
+        assert_eq!(app.ctx(), KeyCtx::Normal);
+        assert!(find(&s, "esc step out").is_some());
+        press(&mut app, "esc");
+        assert_eq!(app.tabs[0], selected);
+        press(&mut app, "esc");
+        assert_eq!(app.tabs[0], before);
+    }
+
+    #[test]
+    fn a_subagents_reply_carries_the_mark() {
+        let mut app = session_app();
+        press(&mut app, "j enter i");
+        type_text(&mut app, "hi");
+        press(&mut app, "enter");
+        let lines = &app.tabs[0].lines;
+        assert!(lines[lines.len() - 2].text.starts_with(SUBAGENT_MARK));
+        let (row, column) = find(&screen(&app), "◆ sample reply").expect("the reply");
+        assert_eq!(buffer(&app)[(column, row)].fg, theme::ACCENT);
+    }
+
+    #[test]
+    fn an_agents_own_reply_has_no_mark() {
+        let s = screen(&session_app());
+        assert_eq!(find(&s, "◆ Moving"), None);
+        assert!(find(&s, "Moving them").is_some());
+    }
+
+    #[test]
+    fn enter_on_a_workflow_row_opens_workflows_on_that_row() {
+        let mut app = session_app();
+        press(&mut app, "j j j j enter");
+        assert!(right_is_shown(&app));
+        assert_eq!(app.view, View::Workflows);
+        assert_eq!(app.view_sel[View::Workflows as usize], 2);
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.focus, Pane::Sidebar);
+        assert_eq!(app.tabs[0].agent, "Engineer");
+
+        let mut narrow = App::new(Vim, 70, 24);
+        narrow.open_session(session_row("pack registry"));
+        press(&mut narrow, "j j j j enter");
+        assert_eq!(
+            narrow.layers.last().map(|top| top.kind),
+            Some(LayerKind::Sidebar)
+        );
+        assert_eq!(narrow.view, View::Workflows);
+        assert_eq!(narrow.tabs[0].running_sel, None);
+    }
+
+    #[test]
+    fn the_card_lists_each_file_with_counts() {
+        let app = session_app();
+        let s = screen(&app);
+        assert!(find(&s, "3 files changed   +58 -12").is_some());
+        let lines = &app.tabs[0].lines;
+        for file in 0..3 {
+            let line = lines
+                .iter()
+                .find(|line| line.tone == Tone::File(file))
+                .expect("a row per file");
+            let row = view_rows(View::Changes)
+                .iter()
+                .find(|row| row.action == RowAction::OpenDiff(file))
+                .expect("the same file in the Changes view");
+            assert_eq!(line.text.trim(), row.text.trim());
+            assert!(find(&s, line.text.trim()).is_some(), "{}", line.text);
+        }
+    }
+
+    #[test]
+    fn file_rows_read_as_links() {
+        let app = session_app();
+        let (row, column) = find(&screen(&app), "M cli/args.rs").expect("the card");
+        assert_eq!(buffer(&app)[(column, row)].fg, theme::ACCENT);
+    }
+
+    #[test]
+    fn show_file_opens_the_pane_on_that_diff_and_keeps_focus() {
+        let mut app = session_app();
+        app.show_file(1);
+        assert!(right_is_shown(&app));
+        assert_eq!(app.view, View::Changes);
+        assert_eq!(app.diff, Some(1));
+        assert_eq!(app.focus, Pane::Agent);
+        let selected = app.view_sel[View::Changes as usize];
+        assert_eq!(
+            view_rows(View::Changes)[selected].action,
+            RowAction::OpenDiff(1)
+        );
+
+        let mut narrow = App::new(Vim, 70, 24);
+        narrow.open_session(session_row("pack registry"));
+        narrow.show_file(2);
+        assert_eq!(
+            narrow.layers.last().map(|top| top.kind),
+            Some(LayerKind::Sidebar)
+        );
+        assert_eq!(narrow.diff, Some(2));
+        press(&mut narrow, "esc");
+        assert_eq!(narrow.diff, None, "back returns to the file list first");
+    }
+
+    #[test]
+    fn emacs_reaches_rows_and_ctrl_g_backs_out() {
+        let mut app = App::new(Emacs, 132, 36);
+        enter_on_session(&mut app, "pack registry");
+        press(&mut app, "up");
+        assert_eq!(app.tabs[0].running_sel, Some(3));
+        press(&mut app, "ctrl-p ctrl-p ctrl-p ctrl-p ctrl-p");
+        assert_eq!(
+            app.tabs[0].running_sel,
+            Some(0),
+            "emacs stays on the top row"
+        );
+        press(&mut app, "enter");
+        assert_eq!(app.tabs[0].agent, "Reviewer");
+        press(&mut app, "ctrl-g");
+        assert_eq!(app.tabs[0].agent, "Engineer");
+        press(&mut app, "ctrl-g");
+        assert_eq!(app.tabs[0].running_sel, None);
+        press(&mut app, "up ctrl-n");
+        assert_eq!(
+            app.tabs[0].running_sel, None,
+            "down past the end is the box"
+        );
+    }
+
+    #[test]
+    fn stepping_in_clears_a_search() {
+        let mut app = session_app();
+        press(&mut app, "/");
+        type_text(&mut app, "Moving");
+        press(&mut app, "enter ctrl-w j enter");
+        assert!(app.search.is_none());
+        assert_eq!(app.tabs[0].agent, "Reviewer");
+    }
+
+    #[test]
+    fn clear_inside_a_subagent_keeps_the_parent() {
+        let mut app = session_app();
+        let lines = app.tabs[0].lines.clone();
+        press(&mut app, "j enter");
+        app.run_effect(Effect::ClearTab);
+        assert!(app.tabs[0].lines.is_empty());
+        press(&mut app, "esc esc");
+        assert_eq!(app.tabs[0].agent, "Engineer");
+        assert_eq!(app.tabs[0].lines, lines);
+    }
+
+    #[test]
+    fn closing_the_tab_inside_a_subagent_closes_the_tab() {
+        let mut app = session_app();
+        press(&mut app, "j enter ctrl-w q");
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].parent, None);
+        assert_eq!(app.tabs[0].agent, "Engineer");
+        assert!(app.tabs[0].lines.is_empty());
+    }
+
+    #[test]
+    fn rows_draw_at_every_breakpoint() {
+        for (width, height) in [
+            (168, 45),
+            (132, 36),
+            (104, 30),
+            (90, 24),
+            (70, 24),
+            (60, 16),
+        ] {
+            let mut app = App::new(Vim, width, height);
+            app.open_session(session_row("pack registry"));
+            let s = screen(&app);
+            assert!(find(&s, "▸ change unit").is_some(), "{width}x{height}");
+            assert!(find(&s, "reading crates").is_some(), "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn the_hint_names_the_way_in() {
+        let mut app = session_app();
+        assert!(find(&screen(&app), "j select").is_some());
+        press(&mut app, "i");
+        assert!(find(&screen(&app), "↑ select").is_some());
+        type_text(&mut app, "x");
+        assert_eq!(find(&screen(&app), "↑ select"), None);
+        press(&mut app, "bs up");
+        assert_eq!(find(&screen(&app), "select"), None);
+        let mut narrow = App::new(Vim, 60, 16);
+        narrow.open_session(session_row("pack registry"));
+        assert_eq!(find(&screen(&narrow), "select"), None);
+    }
+
+    #[test]
+    fn short_keys_move_focus_and_toggle() {
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        press(&mut app, "esc h");
+        assert_eq!(app.focus, Pane::Sessions);
+        press(&mut app, "l l");
+        assert_eq!(app.focus, Pane::Sidebar);
+        press(&mut app, "h");
+        assert_eq!(app.focus, Pane::Agent);
+        press(&mut app, "[ ]");
+        assert_eq!(
+            (app.wanted().sessions, app.wanted().sidebar),
+            (false, false)
+        );
+        press(&mut app, "[ ]");
+        assert_eq!((app.wanted().sessions, app.wanted().sidebar), (true, true));
+    }
+
+    #[test]
+    fn short_keys_are_text_while_typing() {
+        for set in [Vim, Emacs] {
+            let mut app = with_right_pane(App::new(set, 132, 36));
+            type_text(&mut app, "hl[]");
+            assert_eq!(app.tabs[0].input.text(), "hl[]");
+            assert_eq!(app.focus, Pane::Agent);
+            assert!(app.wanted().sidebar);
+        }
+    }
+
+    #[test]
+    fn bracket_closes_the_floating_sidebar() {
+        let mut app = App::new(Vim, 70, 24);
+        press(&mut app, "esc ]");
+        assert_eq!(
+            app.layers.last().map(|top| top.kind),
+            Some(LayerKind::Sidebar)
+        );
+        press(&mut app, "]");
+        assert!(app.layers.is_empty());
+        press(&mut app, "[");
+        assert_eq!(
+            app.layers.last().map(|top| top.kind),
+            Some(LayerKind::Sessions)
+        );
+        press(&mut app, "[");
+        assert!(app.layers.is_empty());
+    }
+
+    #[test]
+    fn ctrl_p_opens_the_bar_from_normal_and_input() {
+        for keys in ["ctrl-p", "esc ctrl-p"] {
+            let mut app = App::new(Vim, 132, 36);
+            press(&mut app, keys);
+            assert_eq!(app.layers.last().map(|top| top.kind), Some(LayerKind::Jump));
+            assert_eq!(app.chip(), "JUMP");
+        }
+    }
+
+    #[test]
+    fn ctrl_p_moves_up_inside_the_slash_list() {
+        let mut app = App::new(Vim, 132, 36);
+        type_text(&mut app, "/");
+        press(&mut app, "down ctrl-p");
+        assert_eq!(app.slash, Some(0));
+        assert!(app.layers.is_empty());
+    }
+
+    #[test]
+    fn ctrl_p_still_moves_up_in_emacs() {
+        let mut app = App::new(Emacs, 132, 36);
+        app.tabs[0].lines = numbered(100);
+        press(&mut app, "ctrl-p");
+        assert!(app.layers.is_empty());
+        assert_eq!(app.tabs[0].scroll, 1);
+    }
+
+    #[test]
+    fn the_keys_overlay_shows_the_short_keys() {
+        let mut app = App::new(Vim, 132, 36);
+        press(&mut app, "esc ?");
+        let s = screen(&app);
+        for text in [
+            "h / l, ctrl-w h/j/k/l",
+            "[ or ctrl-w [",
+            "] or ctrl-w ]",
+            ": / ctrl-p",
+        ] {
+            assert!(find(&s, text).is_some(), "{text}");
+        }
+    }
+
+    fn right_is_shown(app: &App) -> bool {
+        !matches!(app.panes().map(|panes| panes.right), Some(Right::None))
+    }
+
+    #[test]
+    fn the_right_pane_starts_closed_at_every_width() {
+        for (width, height) in [
+            (168, 45),
+            (132, 36),
+            (120, 30),
+            (104, 30),
+            (90, 24),
+            (70, 24),
+        ] {
+            let app = App::new(Vim, width, height);
+            assert!(!right_is_shown(&app), "{width}");
+            let s = screen(&app);
+            assert_eq!(find(&s, "Workflows"), None, "{width}");
+            assert_eq!(find(&s, "+58"), None, "{width}");
+        }
+    }
+
+    #[test]
+    fn the_agent_pane_takes_the_room_of_a_closed_right_pane() {
+        let app = App::new(Vim, 132, 36);
+        let panes = app.panes().expect("panes");
+        assert_eq!((panes.agent.x, panes.agent.width), (28, 104));
+    }
+
+    #[test]
+    fn each_tab_remembers_its_right_pane() {
+        let mut app = App::new(Vim, 132, 36);
+        enter_on_session(&mut app, "pack registry");
+        press(&mut app, "]");
+        assert!(right_is_shown(&app));
+        enter_on_session(&mut app, "flaky");
+        assert_eq!(app.active, 1);
+        assert!(!right_is_shown(&app), "a new tab starts closed");
+        press(&mut app, "g T");
+        assert_eq!(app.active, 0);
+        assert!(right_is_shown(&app), "the first tab kept it open");
+        press(&mut app, "g t");
+        assert!(!right_is_shown(&app), "the second tab kept it closed");
+    }
+
+    #[test]
+    fn a_subagent_starts_with_its_parents_right_pane() {
+        let mut app = session_app();
+        press(&mut app, "j enter");
+        assert!(!right_is_shown(&app));
+        press(&mut app, "esc esc ] j enter");
+        assert_eq!(app.tabs[0].agent, "Reviewer");
+        assert!(right_is_shown(&app));
+        press(&mut app, "] esc");
+        assert_eq!(app.tabs[0].agent, "Engineer");
+        assert!(right_is_shown(&app), "stepping out restores the parent's");
+    }
+
+    #[test]
+    fn switching_tabs_closes_a_diff_and_moves_focus_from_the_pane() {
+        let mut app = App::new(Vim, 132, 36);
+        enter_on_session(&mut app, "pack registry");
+        enter_on_session(&mut app, "flaky");
+        press(&mut app, "g T ] l");
+        assert_eq!(app.focus, Pane::Sidebar);
+        press(&mut app, "enter");
+        assert!(app.diff.is_some());
+        press(&mut app, "g t");
+        assert_eq!(app.diff, None);
+        assert_eq!(app.focus, Pane::Agent);
+    }
+
+    #[test]
+    fn slash_changes_and_workflows_open_the_pane() {
+        for (name, view) in [("changes", View::Changes), ("workflows", View::Workflows)] {
+            let mut app = App::new(Vim, 132, 36);
+            type_text(&mut app, &format!("/{name}"));
+            press(&mut app, "enter");
+            assert!(right_is_shown(&app), "{name}");
+            assert_eq!(app.view, view);
+
+            let mut narrow = App::new(Vim, 70, 24);
+            type_text(&mut narrow, &format!("/{name}"));
+            press(&mut narrow, "enter");
+            assert_eq!(
+                narrow.layers.last().map(|top| top.kind),
+                Some(LayerKind::Sidebar)
+            );
+        }
+    }
+
+    #[test]
+    fn the_bar_finds_changes_by_diff() {
+        let mut app = App::new(Vim, 132, 36);
+        press(&mut app, "esc :");
+        type_text(&mut app, "diff");
+        press(&mut app, "enter");
+        assert!(right_is_shown(&app));
+        assert_eq!(app.view, View::Changes);
+    }
+
+    #[test]
+    fn emacs_up_in_a_list_moves_the_list_not_the_rows() {
+        let mut app = App::new(Emacs, 132, 36);
+        enter_on_session(&mut app, "pack registry");
+        press(&mut app, "ctrl-x o");
+        assert_eq!(app.focus, Pane::Sessions);
+        let before = app.sessions_sel;
+        press(&mut app, "up");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_ne!(app.sessions_sel, before);
+
+        let mut app = App::new(Emacs, 132, 36);
+        enter_on_session(&mut app, "pack registry");
+        press(&mut app, "ctrl-x ] ctrl-x o");
+        assert_eq!(app.focus, Pane::Sidebar);
+        let before = app.view_sel[View::Changes as usize];
+        press(&mut app, "ctrl-n ctrl-p");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.view_sel[View::Changes as usize], before);
+    }
+
+    #[test]
+    fn the_hint_shows_only_where_its_key_works() {
+        let mut app = session_app();
+        press(&mut app, "h");
+        assert_eq!(find(&screen(&app), "select"), None, "sessions focused");
+        press(&mut app, "l");
+        app.tabs[0].lines = numbered(100);
+        press(&mut app, "k");
+        assert_eq!(find(&screen(&app), "select"), None, "scrolled up");
+        press(&mut app, "j");
+        assert!(find(&screen(&app), "j select").is_some());
+    }
+
+    #[test]
+    fn clear_on_a_session_tab_leaves_the_rows_clean() {
+        for (width, height) in [(132, 36), (60, 16)] {
+            let mut app = App::new(Vim, width, height);
+            app.open_session(session_row("pack registry"));
+            app.run_effect(Effect::ClearTab);
+            let s = screen(&app);
+            assert_eq!(find(&s, "start typing"), None, "{width}");
+            let (row, _) = find(&s, "◆ Reviewer · auth").expect("the row");
+            assert!(!s[row as usize].contains("Pick"), "{}", s[row as usize]);
+        }
+    }
+
+    #[test]
+    fn page_keys_scroll_the_conversation_past_the_rows() {
+        for set in [Vim, Emacs] {
+            let mut app = App::new(set, 132, 36);
+            enter_on_session(&mut app, "pack registry");
+            app.tabs[0].lines = numbered(100);
+            press(&mut app, "pgup");
+            assert_eq!(app.tabs[0].scroll, 23, "{set:?}");
+            assert_eq!(app.tabs[0].running_sel, None);
+            press(&mut app, "pgup pgup pgup pgup pgup");
+            assert_eq!(app.tabs[0].scroll, 77, "stops at the top");
+            press(&mut app, "pgdn");
+            assert_eq!(app.tabs[0].scroll, 54);
+        }
+    }
+
+    #[test]
+    fn typing_while_a_row_is_selected_goes_to_the_box_in_emacs() {
+        let mut app = App::new(Emacs, 132, 36);
+        enter_on_session(&mut app, "pack registry");
+        press(&mut app, "up");
+        assert_eq!(app.tabs[0].running_sel, Some(3));
+        type_text(&mut app, "hi");
+        assert_eq!(app.tabs[0].input.text(), "hi");
+        assert_eq!(app.tabs[0].running_sel, None);
+    }
+
+    #[test]
+    fn i_on_a_row_starts_typing_in_vim() {
+        let mut app = session_app();
+        press(&mut app, "j i");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.ctx(), KeyCtx::Input);
+    }
+
+    #[test]
+    fn wrap_drops_every_space_at_a_break() {
+        assert_eq!(
+            wrap("abcdefghij  klmnopqrst", 10),
+            ["abcdefghij", "klmnopqrst"]
+        );
+        assert_eq!(wrap("one  two", 4), ["one", "two"]);
+    }
+
     fn enter_on_session(app: &mut App, text: &str) {
         app.focus = Pane::Sessions;
         app.sessions_sel = session_row(text);
@@ -1083,7 +1915,7 @@ mod tests {
 
     #[test]
     fn ctrl_w_moves_between_docked_panes() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc");
         press(&mut app, "ctrl-w h");
         assert_eq!(app.focus, Pane::Sessions);
@@ -1112,7 +1944,7 @@ mod tests {
 
     #[test]
     fn ctrl_w_with_ctrl_still_held_moves_the_same_way() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w ctrl-h");
         assert_eq!(app.focus, Pane::Sessions);
         press(&mut app, "ctrl-w ctrl-l ctrl-w ctrl-l");
@@ -1162,17 +1994,17 @@ mod tests {
 
     #[test]
     fn ctrl_x_o_cycles_visible_panes() {
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         for pane in [Pane::Sidebar, Pane::Sessions, Pane::Agent] {
             press(&mut app, "ctrl-x o");
             assert_eq!(app.focus, pane);
         }
-        let mut app = App::new(Emacs, 104, 30);
+        let mut app = with_right_pane(App::new(Emacs, 104, 30));
         for pane in [Pane::Sessions, Pane::Agent] {
             press(&mut app, "ctrl-x o");
             assert_eq!(app.focus, pane);
         }
-        let mut app = App::new(Emacs, 70, 24);
+        let mut app = with_right_pane(App::new(Emacs, 70, 24));
         press(&mut app, "ctrl-x o");
         assert_eq!(app.focus, Pane::Agent);
     }
@@ -1195,7 +2027,7 @@ mod tests {
 
     #[test]
     fn rows_skip_non_selectable_and_clamp() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w h");
         assert_eq!(app.sessions_sel, session_row("cli ux redesign"));
         for text in ["flaky", "pack registry", "eval baseline"] {
@@ -1215,7 +2047,7 @@ mod tests {
         let files = app.view_sel[View::Changes as usize];
         press(&mut app, "j");
         assert_eq!(app.view_sel[View::Changes as usize], files + 1);
-        press(&mut app, "ctrl-p");
+        press(&mut app, "k");
         assert_eq!(app.view_sel[View::Changes as usize], files);
     }
 
@@ -1314,37 +2146,37 @@ mod tests {
 
         let mut app = App::new(Vim, 132, 36);
         press(&mut app, "esc ctrl-w h ctrl-w q");
-        assert!(!app.wanted.sessions);
+        assert!(!app.wanted().sessions);
         assert_eq!(app.focus, Pane::Agent);
         assert_eq!(app.tabs.len(), 1);
 
         let mut app = App::new(Emacs, 132, 36);
         app.focus = Pane::Sidebar;
         press(&mut app, "ctrl-x 0");
-        assert!(!app.wanted.sidebar);
+        assert!(!app.wanted().sidebar);
         assert_eq!(app.focus, Pane::Agent);
     }
 
     #[test]
     fn docked_toggles_flip_wanted() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         let edge = find(&screen(&app), "enter send").map(|(_, column)| column);
         press(&mut app, "esc ctrl-w ]");
-        assert!(!app.wanted.sidebar);
+        assert!(!app.wanted().sidebar);
         let s = screen(&app);
         assert_eq!(find(&s, "Changes"), None);
         assert!(find(&s, "enter send").map(|(_, column)| column) > edge);
 
         press(&mut app, "ctrl-w ]");
-        assert!(app.wanted.sidebar);
+        assert!(app.wanted().sidebar);
         assert!(find(&screen(&app), "Changes").is_some());
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "ctrl-x [");
-        assert!(!app.wanted.sessions);
+        assert!(!app.wanted().sessions);
         assert_eq!(find(&screen(&app), "Sessions"), None);
         press(&mut app, "ctrl-x [");
-        assert!(app.wanted.sessions);
+        assert!(app.wanted().sessions);
         assert!(find(&screen(&app), "Sessions").is_some());
     }
 
@@ -1357,7 +2189,7 @@ mod tests {
 
     #[test]
     fn rail_shows_only_while_wanted() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w ]");
         app.handle(Event::Resize(104, 30));
         assert_eq!(find(&screen(&app), "+58"), None);
@@ -1383,7 +2215,7 @@ mod tests {
 
     #[test]
     fn focus_survives_the_too_small_screen() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l");
         assert_eq!(app.focus, Pane::Sidebar);
         app.handle(Event::Resize(40, 10));
@@ -1397,13 +2229,13 @@ mod tests {
 
     #[test]
     fn view_cycles_and_opens_on_changes() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         assert_eq!(app.view, View::Changes);
         for view in [View::Workflows, View::Agents, View::Changes] {
             press(&mut app, "esc ctrl-w }");
             assert_eq!(app.view, view);
         }
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "ctrl-x }");
         assert_eq!(app.view, View::Workflows);
         assert!(find(&screen(&app), "2 running").is_some());
@@ -1411,7 +2243,7 @@ mod tests {
 
     #[test]
     fn file_opens_its_diff_and_back_returns() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
         assert_eq!(app.diff, Some(0));
         let s = screen(&app);
@@ -1424,7 +2256,7 @@ mod tests {
         assert_eq!(app.diff, None);
         assert!(find(&screen(&app), "3 files").is_some());
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "ctrl-x o enter");
         let s = screen(&app);
         assert!(find(&s, "ctrl-g back to files").is_some());
@@ -1435,7 +2267,7 @@ mod tests {
 
     #[test]
     fn changing_the_view_leaves_the_diff() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l enter ctrl-w }");
         assert_eq!(app.diff, None);
         assert!(find(&screen(&app), "2 running").is_some());
@@ -1443,7 +2275,7 @@ mod tests {
 
     #[test]
     fn a_tall_diff_scrolls_to_its_last_row_at_the_smallest_height() {
-        let mut app = App::new(Vim, 132, 16);
+        let mut app = with_right_pane(App::new(Vim, 132, 16));
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
         let s = screen(&app);
         assert!(find(&s, "cli/args.rs       +42 -7").is_some());
@@ -1460,7 +2292,7 @@ mod tests {
 
     #[test]
     fn a_fresh_diff_starts_at_its_top() {
-        let mut app = App::new(Vim, 132, 16);
+        let mut app = with_right_pane(App::new(Vim, 132, 16));
         press(&mut app, "esc ctrl-w l ctrl-w l enter j esc enter");
         assert!(find(&screen(&app), "cli/args.rs       +42 -7").is_some());
     }
@@ -1489,7 +2321,7 @@ mod tests {
         type_text(&mut app, "a/");
         assert_eq!(app.slash, None);
         press(&mut app, "enter");
-        assert_eq!(app.tabs[0].lines[1].text, "a/");
+        assert_eq!(app.tabs[0].lines[0].text, "a/");
     }
 
     #[test]
@@ -1511,7 +2343,7 @@ mod tests {
 
     #[test]
     fn next_and_prev_choose_what_runs() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         type_text(&mut app, "/");
         press(&mut app, "ctrl-n down");
         assert_eq!(app.slash, Some(2));
@@ -1520,12 +2352,12 @@ mod tests {
         press(&mut app, "tab");
         assert_eq!(app.tabs[0].input.text(), "/new");
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         type_text(&mut app, "/");
         for _ in 0..20 {
             press(&mut app, "ctrl-n");
         }
-        assert_eq!(app.slash, Some(7));
+        assert_eq!(app.slash, Some(9));
         type_text(&mut app, "c");
         assert_eq!(app.slash, Some(0));
         press(&mut app, "enter");
@@ -1553,7 +2385,7 @@ mod tests {
         type_text(&mut app, "x");
         assert_eq!(app.slash, None);
         press(&mut app, "enter");
-        assert_eq!(app.tabs[0].lines[1].text, "/cx");
+        assert_eq!(app.tabs[0].lines[0].text, "/cx");
         assert!(app.tabs[0].input.is_empty());
     }
 
@@ -1613,7 +2445,7 @@ mod tests {
     fn each_command_does_what_the_table_says() {
         let run = |width, height, text: &str| {
             let mut app = App::new(Vim, width, height);
-            app.wanted.sidebar = false;
+            app.tabs[app.active].sidebar = false;
             app.tabs[0].lines = numbered(3);
             app.mode = Mode::Input;
             type_text(&mut app, text);
@@ -1629,7 +2461,7 @@ mod tests {
 
         let jobs = run(132, 36, "/jobs");
         assert_eq!(jobs.view, View::Agents);
-        assert!(jobs.wanted.sidebar);
+        assert!(jobs.wanted().sidebar);
         assert!(jobs.layers.is_empty());
         let jobs = run(70, 24, "/jobs");
         assert_eq!(jobs.view, View::Agents);
@@ -1674,9 +2506,9 @@ mod tests {
 
     #[test]
     fn switch_key_set_is_not_a_slash_command() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         type_text(&mut app, "/");
-        assert_eq!(app.slash_matches().len(), 8);
+        assert_eq!(app.slash_matches().len(), 10);
         type_text(&mut app, "switch");
         assert!(app.slash_matches().is_empty());
         assert!(find(&screen(&app), "no matches").is_some());
@@ -1783,21 +2615,21 @@ mod tests {
 
     #[test]
     fn next_view_needs_a_sidebar_on_screen() {
-        let hint = "no right sidebar on screen: ctrl-w ] opens it";
+        let hint = "no right sidebar on screen: ] opens it";
         for width in [104, 70] {
-            let mut app = App::new(Vim, width, 30);
+            let mut app = with_right_pane(App::new(Vim, width, 30));
             press(&mut app, "esc ctrl-w }");
             assert_eq!(app.view, View::Changes);
             assert_eq!(app.notice.as_deref(), Some(hint));
         }
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc ctrl-w l ctrl-w l enter ctrl-w ] ctrl-w }");
         assert_eq!(app.view, View::Changes);
         assert_eq!(app.diff, Some(0));
         assert_eq!(app.notice.as_deref(), Some(hint));
 
-        let mut app = App::new(Emacs, 70, 24);
+        let mut app = with_right_pane(App::new(Emacs, 70, 24));
         press(&mut app, "ctrl-x }");
         assert_eq!(app.view, View::Changes);
         assert!(app
@@ -1865,8 +2697,8 @@ mod tests {
         type_text(&mut app, "hi");
         press(&mut app, "enter");
         let lines = &app.tabs[0].lines;
-        let sent = lines.len() - 6;
-        assert_eq!(lines[sent].text, "you");
+        let sent = lines.len() - 4;
+        assert_eq!(lines[sent].text, "hi");
         assert_eq!(lines[sent - 1].text, "");
         assert_eq!(lines[sent - 2].text, PROMPT_ROW);
     }
@@ -1892,7 +2724,7 @@ mod tests {
 
     #[test]
     fn prompt_keys_are_not_live() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         enter_on_session(&mut app, "flaky");
         for key in ["y", "n", "a"] {
             press(&mut app, key);
@@ -1901,21 +2733,21 @@ mod tests {
             assert_eq!(app.notice, None);
         }
 
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc");
         for key in ["y", "n", "a"] {
             press(&mut app, key);
             assert_eq!(app.notice, None, "{key}");
         }
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         enter_on_session(&mut app, "flaky");
         press(&mut app, "y");
         assert_eq!(app.notice, None);
         assert_eq!(app.tabs[0].input.text(), "y");
 
         for view in [View::Workflows, View::Agents] {
-            let mut app = App::new(Vim, 132, 36);
+            let mut app = with_right_pane(App::new(Vim, 132, 36));
             app.view = view;
             press(&mut app, "esc ctrl-w l ctrl-w l enter");
             assert_eq!(app.notice.as_deref(), Some("not wired yet"));

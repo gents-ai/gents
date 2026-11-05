@@ -9,8 +9,8 @@ use super::{draw_footer, draw_no_matches, draw_row, logo, pane_box, theme};
 use crate::app::{App, Mode, Pane, Tab};
 use crate::commands::COMMANDS;
 use crate::keys::KeySet;
-use crate::layout::conversation_area;
-use crate::sample::Tone;
+use crate::layout::running_area;
+use crate::sample::{Opens, RunState, Tone, SUBAGENT_MARK};
 
 const WORD: &str = "g e n t s";
 const HINT_SESSIONS_DOCKED: &str = "Pick a session on the left, or just start typing";
@@ -20,6 +20,8 @@ const HINT_NORMAL: &str = "Press i to start typing";
 const TEXT_X: u16 = 4;
 const SLASH_H: u16 = 13;
 const SLASH_FOOTER: &str = " tab complete · enter run · esc close";
+const RUNNING_STATUS_X: u16 = 32;
+const RUNNING_HINT_MIN_W: u16 = 64;
 
 pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
     let focused = app.focus == Pane::Agent;
@@ -30,20 +32,21 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
     buf.set_string(x + 1, y + 2, rule, theme::edge(false));
 
     let tab = &app.tabs[app.active];
-    if tab.lines.is_empty() {
+    if tab.lines.is_empty() && tab.running.is_empty() {
         let typing = app.keymap.set() == KeySet::Emacs || app.mode == Mode::Input;
         startup(area, sessions_docked, typing, buf);
     } else {
-        let rows = app.visible_rows(Pane::Agent, conversation_area(area));
+        let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));
         conversation(tab, rows, buf);
     }
+    running_rows(app, tab, area, buf);
     message_box(tab, message_box_area(area), focused, buf);
     if let Some(selected) = app.slash {
         slash_list(app, selected, area, buf);
     }
 }
 
-fn message_box_area(pane: Rect) -> Rect {
+pub fn message_box_area(pane: Rect) -> Rect {
     Rect::new(pane.x + 2, pane.y + pane.height - 4, pane.width - 4, 3)
 }
 
@@ -57,22 +60,55 @@ pub fn cursor(tab: &Tab, pane: Rect) -> Position {
     Position::new(area.x + TEXT_X + column, area.y + 1)
 }
 
-fn tab_chips(app: &App, area: Rect, buf: &mut Buffer) {
+/// Each tab chip's label and width, and the first chip that keeps the active one in `room`.
+fn chips_in(app: &App, room: u16) -> (Vec<String>, Vec<usize>, usize) {
     let chips: Vec<String> = app
         .tabs
         .iter()
         .enumerate()
-        .map(|(index, tab)| format!(" {} {} · {} ", index + 1, tab.name, tab.agent))
+        .map(|(index, tab)| match &tab.parent {
+            Some(parent) => format!(
+                " {} {} · {} › {} ",
+                index + 1,
+                parent.name,
+                parent.agent,
+                tab.agent
+            ),
+            None => format!(" {} {} · {} ", index + 1, tab.name, tab.agent),
+        })
         .collect();
     let widths: Vec<usize> = chips
         .iter()
         .map(|chip| Span::raw(chip.as_str()).width())
         .collect();
     let mut first = 0;
-    while first < app.active && chips_width(&widths[first..=app.active]) > area.width as usize {
+    while first < app.active && chips_width(&widths[first..=app.active]) > room as usize {
         first += 1;
     }
+    (chips, widths, first)
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipHit {
+    Tab(usize),
+    New,
+}
+
+pub fn chip_at(app: &App, pane: Rect, x: u16) -> Option<ChipHit> {
+    let (_, widths, first) = chips_in(app, pane.width - 2);
+    let mut left = pane.x + 1;
+    for (index, width) in widths.iter().enumerate().skip(first) {
+        let right = left + *width as u16;
+        if (left..right).contains(&x) {
+            return Some(ChipHit::Tab(index));
+        }
+        left = right + 1;
+    }
+    (left..left + 3).contains(&x).then_some(ChipHit::New)
+}
+
+fn tab_chips(app: &App, area: Rect, buf: &mut Buffer) {
+    let (chips, _, first) = chips_in(app, area.width);
     let mut x = area.x;
     for (index, chip) in chips.iter().enumerate().skip(first) {
         let style = if index == app.active {
@@ -117,8 +153,56 @@ fn conversation(tab: &Tab, area: Rect, buf: &mut Buffer) {
     let rows = tab.wrapped_rows(area.width);
     let first = first_line(rows.len(), area.height, tab.scroll);
     for ((text, tone), y) in rows[first..].iter().zip(area.top()..area.bottom()) {
-        let style = theme::tone(*tone);
-        buf.set_stringn(area.x, y, text, usize::from(area.width), style);
+        draw_row(buf, area, y, text, *tone, *tone == Tone::Reply);
+        if *tone == Tone::You {
+            let left = (text.len() - text.trim_start().len()).saturating_sub(1) as u16;
+            let block = Rect::new(area.x + left, y, area.width - left, 1);
+            buf.set_style(block, Style::new().bg(theme::YOU_BG));
+        }
+        if *tone == Tone::Reply && text.starts_with(SUBAGENT_MARK) {
+            let mark = Rect::new(area.x + 1, y, 1, 1);
+            buf.set_style(mark, theme::tone(Tone::Accent));
+        }
+    }
+}
+
+fn running_rows(app: &App, tab: &Tab, pane: Rect, buf: &mut Buffer) {
+    if tab.running.is_empty() {
+        return;
+    }
+    let area = running_area(pane, tab.running.len() as u16);
+    let rows = tab.running.iter().zip(area.top()..area.bottom());
+    for (index, (running, y)) in rows.enumerate() {
+        let selected = tab.running_sel == Some(index);
+        let (mark, tone) = match (running.opens, running.state) {
+            (Opens::Workflow(_), _) => ("▸", Tone::Plain),
+            (Opens::Agent(_), RunState::Working) => ("◆", Tone::Plain),
+            (Opens::Agent(_), RunState::Done) => ("◇", Tone::Label),
+        };
+        let head = format!(" {mark} {} · {}", running.name, running.job);
+        draw_row(buf, area, y, &head, tone, selected);
+        if !selected && running.state == RunState::Working {
+            let cell = Rect::new(area.x + 1, y, 1, 1);
+            buf.set_style(cell, theme::tone(Tone::Accent));
+        }
+        let style = if selected {
+            theme::SELECTED
+        } else {
+            theme::tone(Tone::Label)
+        };
+        let room = usize::from(area.width.saturating_sub(RUNNING_STATUS_X));
+        buf.set_stringn(area.x + RUNNING_STATUS_X, y, running.status, room, style);
+    }
+    let hint = if app.can_fall_into_running() {
+        Some("j select ")
+    } else if app.can_enter_running() {
+        Some("↑ select ")
+    } else {
+        None
+    };
+    if let (Some(hint), None, true) = (hint, tab.running_sel, area.width >= RUNNING_HINT_MIN_W) {
+        let x = area.right() - Span::raw(hint).width() as u16;
+        buf.set_string(x, area.bottom() - 1, hint, theme::tone(Tone::Label));
     }
 }
 
@@ -144,10 +228,23 @@ fn message_box(tab: &Tab, area: Rect, focused: bool, buf: &mut Buffer) {
     }
 }
 
-fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
+pub fn slash_area(pane: Rect) -> Rect {
     let message = message_box_area(pane);
     let top = message.y.saturating_sub(SLASH_H).max(pane.y + 3);
-    let rect = Rect::new(message.x, top, message.width, message.y - top);
+    Rect::new(message.x, top, message.width, message.y - top)
+}
+
+/// The list's rows inside `slash_area`, above its footer.
+pub fn slash_rows(rect: Rect) -> Rect {
+    let area = rect.inner(Margin::new(1, 1));
+    Rect {
+        height: area.height - 2,
+        ..area
+    }
+}
+
+fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
+    let rect = slash_area(pane);
     Clear.render(rect, buf);
     buf.set_style(rect, Style::new().fg(theme::FG).bg(theme::BG));
     pane_box(buf, rect, "Commands", false);
@@ -178,7 +275,7 @@ mod tests {
     use crate::app::{sample_chat, ChatLine, Tab};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::Tone;
-    use crate::testing::{buffer, find, press, screen};
+    use crate::testing::{buffer, find, press, screen, with_right_pane};
 
     fn no_logo(app: &App) -> bool {
         buffer(app).content().iter().all(|c| c.bg != theme::LOGO)
@@ -205,19 +302,23 @@ mod tests {
 
     #[test]
     fn startup_pane() {
-        let s = screen(&App::new(Vim, 132, 36));
+        let s = screen(&with_right_pane(App::new(Vim, 132, 36)));
         assert_eq!(find(&s, "1 new session · Engineer"), Some((1, 30)));
         assert_eq!(find(&s, "g e n t s"), Some((25, 58)));
         let hint = "Pick a session on the left, or just start typing";
         assert_eq!(find(&s, hint), Some((27, 39)));
         assert_eq!(find(&s, "Message Engineer"), Some((32, 34)));
         assert_eq!(find(&s, "enter send"), Some((32, 84)));
-        assert!(find(&screen(&App::new(Vim, 70, 24)), "Just start typing").is_some());
+        assert!(find(
+            &screen(&with_right_pane(App::new(Vim, 70, 24))),
+            "Just start typing"
+        )
+        .is_some());
     }
 
     #[test]
     fn the_startup_line_fits_the_mode() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         press(&mut app, "esc");
         let s = screen(&app);
         let docked = "Pick a session on the left, or press i to start typing";
@@ -226,31 +327,92 @@ mod tests {
         press(&mut app, "i");
         assert!(find(&screen(&app), "just start typing").is_some());
 
-        let mut app = App::new(Vim, 70, 24);
+        let mut app = with_right_pane(App::new(Vim, 70, 24));
         press(&mut app, "esc");
         let s = screen(&app);
         assert!(find(&s, "Press i to start typing").is_some());
         assert_eq!(find(&s, "Just start typing"), None);
 
-        let mut app = App::new(Vim, 90, 24);
+        let mut app = with_right_pane(App::new(Vim, 90, 24));
         press(&mut app, "esc");
         let s = screen(&app);
         let (row, column) = find(&s, docked).expect("the line inside the narrowest pane");
         assert!(column > 26 && column + 54 < 83, "{column}");
         assert_eq!(row, 15);
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = with_right_pane(App::new(Emacs, 132, 36));
         press(&mut app, "esc");
         assert!(find(&screen(&app), "just start typing").is_some());
     }
 
     #[test]
     fn logo_sits_where_the_pictures_put_it() {
-        let buf = buffer(&App::new(Vim, 132, 36));
+        let buf = buffer(&with_right_pane(App::new(Vim, 132, 36)));
         assert_eq!(buf[(60, 6)].bg, theme::LOGO);
         assert_ne!(buf[(59, 6)].bg, theme::LOGO);
         assert_eq!(buf[(42, 9)].bg, theme::LOGO);
         assert_ne!(buf[(41, 9)].bg, theme::LOGO);
+    }
+
+    fn chat_app() -> App {
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
+        app.tabs[0].lines = sample_chat("Engineer");
+        app
+    }
+
+    #[test]
+    fn your_message_sits_right_on_a_tinted_block() {
+        let app = chat_app();
+        let text = "Group the sign-in commands under one parent.";
+        let (row, column) = find(&screen(&app), text).expect("the message");
+        assert_eq!(column + text.len() as u16, 95);
+        let buf = buffer(&app);
+        assert_eq!(buf[(column - 1, row)].bg, theme::YOU_BG);
+        assert_eq!(buf[(95, row)].bg, theme::YOU_BG);
+        assert_ne!(buf[(column - 2, row)].bg, theme::YOU_BG);
+    }
+
+    #[test]
+    fn a_reply_is_highlighted_across_the_row() {
+        let app = chat_app();
+        let s = screen(&app);
+        let buf = buffer(&app);
+        let (reply, column) = find(&s, "Moving them").expect("the reply");
+        assert_eq!(column, 31);
+        assert_eq!(buf[(30, reply)].bg, theme::SEL_BG);
+        assert_eq!(buf[(95, reply)].bg, theme::SEL_BG);
+        let (tool, _) = find(&s, "✓ read").expect("a tool row");
+        assert_ne!(buf[(30, tool)].bg, theme::SEL_BG);
+        let (prompt, _) = find(&s, "! Allow").expect("the prompt");
+        assert_ne!(buf[(30, prompt)].bg, theme::SEL_BG);
+    }
+
+    #[test]
+    fn no_name_labels_in_the_conversation() {
+        let mut app = chat_app();
+        crate::testing::type_text(&mut app, "hi");
+        press(&mut app, "i enter");
+        for line in &app.tabs[0].lines {
+            assert_ne!(line.text, "you");
+            assert_ne!(line.text, "Engineer");
+        }
+    }
+
+    #[test]
+    fn a_long_message_keeps_one_left_edge() {
+        let mut tab = Tab::new_session();
+        tab.lines = vec![ChatLine {
+            text: "hello 世界 wörld 🦀 ".repeat(8),
+            tone: Tone::You,
+        }];
+        let rows = rows_at(&tab, 56);
+        assert!(rows.len() > 1);
+        let left = |row: &String| row.len() - row.trim_start().len();
+        for row in &rows {
+            assert_eq!(left(row), left(&rows[0]), "{rows:?}");
+            assert!(Span::raw(row.as_str()).width() <= 55, "{row:?}");
+        }
+        assert!(left(&rows[0]) >= 1);
     }
 
     #[test]
@@ -259,7 +421,7 @@ mod tests {
         app.tabs[0].lines = sample_chat("Engineer");
         let s = screen(&app);
         assert_eq!(find(&s, "g e n t s"), None);
-        assert_eq!(find(&s, "you"), Some((4, 30)));
+        assert_eq!(find(&s, "Group the sign-in").map(|at| at.0), Some(4));
         assert!(no_logo(&app));
         assert_eq!(find(&s, "Message Engineer"), Some((32, 34)));
     }
@@ -323,7 +485,7 @@ mod tests {
 
     #[test]
     fn message_box_follows_pane_focus() {
-        let mut app = App::new(Vim, 132, 36);
+        let mut app = with_right_pane(App::new(Vim, 132, 36));
         let buf = buffer(&app);
         assert_eq!(buf[(30, 31)].symbol(), "╭");
         assert_eq!(buf[(95, 33)].symbol(), "╯");

@@ -16,15 +16,6 @@ pub struct Wanted {
     pub sidebar: bool,
 }
 
-impl Default for Wanted {
-    fn default() -> Wanted {
-        Wanted {
-            sessions: true,
-            sidebar: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Right {
     None,
@@ -111,6 +102,15 @@ pub fn conversation_area(pane: Rect) -> Rect {
     Rect::new(pane.x + 2, pane.y + 4, pane.width - 4, pane.height - 8)
 }
 
+pub fn running_area(pane: Rect, rows: u16) -> Rect {
+    Rect::new(
+        pane.x + 2,
+        pane.y + pane.height - 4 - rows,
+        pane.width - 4,
+        rows,
+    )
+}
+
 pub fn sidebar_rows_area(pane: Rect) -> Rect {
     let inner = pane.inner(Margin::new(1, 1));
     Rect {
@@ -130,6 +130,7 @@ fn size_of(kind: LayerKind, on_top: bool) -> (u16, u16) {
         LayerKind::Jump if on_top => (72, 19),
         LayerKind::Jump => (40, 15),
         LayerKind::Picker => (66, 16),
+        LayerKind::Menu(MenuId::NodeSettings) => (50, 23),
         LayerKind::Menu(_) => (50, 13),
         LayerKind::Keys => (KEYS_FULL_W, 24),
         LayerKind::Sessions => (36, 15),
@@ -235,7 +236,6 @@ mod tests {
         check(132, 36, NO_SESSIONS, None, 98, Side::Sidebar(34));
         check(104, 30, NO_SIDEBAR, Some(26), 78, Side::Nothing);
         check(104, 30, NO_SESSIONS, None, 97, Side::Rail(7));
-        assert_eq!(Wanted::default(), ON);
     }
 
     #[test]

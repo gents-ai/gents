@@ -19,6 +19,7 @@ pub const TAB_BG: Color = Color::from_u32(0x1a221d);
 pub const CHIP_FG: Color = Color::from_u32(0x0f1411);
 pub const LOGO: Color = Color::from_u32(0xf2f5f0);
 pub const MATCH: Color = WARN;
+pub const YOU_BG: Color = Color::from_u32(0x22332a);
 
 pub const SELECTED: Style = Style::new().fg(SEL_FG).bg(SEL_BG);
 pub const TAB_OFF: Style = Style::new().fg(TITLE).bg(TAB_BG);
@@ -31,6 +32,9 @@ pub fn tone(tone: Tone) -> Style {
         Tone::Warn => WARN,
         Tone::Add => ADD,
         Tone::Del => DEL,
+        Tone::You => FG,
+        Tone::Reply => SEL_FG,
+        Tone::File(_) => ACCENT,
     };
     Style::new().fg(color)
 }

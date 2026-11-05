@@ -53,7 +53,8 @@ fn draw_menu(app: &App, layer: &Layer, id: MenuId, rect: Rect, focused: bool, bu
         height: area.height - 3,
         ..area
     };
-    draw_rows(buf, list, rows, Some(layer.selected));
+    let first = list_start(layer.selected, usize::from(list.height));
+    draw_rows(buf, list, &rows[first..], Some(layer.selected - first));
     draw_footer(app, area, area.bottom() - 3, footer, buf);
 }
 

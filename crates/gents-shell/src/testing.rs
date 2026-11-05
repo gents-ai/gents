@@ -23,6 +23,8 @@ fn key(token: &str) -> KeyEvent {
         "down" => Some(KeyCode::Down),
         "home" => Some(KeyCode::Home),
         "end" => Some(KeyCode::End),
+        "pgup" => Some(KeyCode::PageUp),
+        "pgdn" => Some(KeyCode::PageDown),
         _ => None,
     };
     if let Some(code) = named {
@@ -112,6 +114,12 @@ pub fn session_row(text: &str) -> usize {
         .iter()
         .position(|row| row.text.contains(text))
         .expect("a sample session")
+}
+
+/// The right pane starts closed. This opens it for tests about what it shows and where it sits.
+pub fn with_right_pane(mut app: App) -> App {
+    app.tabs[app.active].sidebar = true;
+    app
 }
 
 pub fn kinds(app: &App) -> Vec<LayerKind> {
