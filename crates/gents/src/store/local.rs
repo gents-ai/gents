@@ -1,4 +1,5 @@
 pub mod backend_protection;
+mod tool_permission_projection;
 #[cfg(test)]
 mod backend_protection_tests;
 pub mod file_lock;

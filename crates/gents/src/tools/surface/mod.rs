@@ -23,6 +23,18 @@ pub use policy::{
     EndpointScope, RuntimeToolAvailability, TOOL_POLICY_V1, ToolPolicyBash, ToolPolicySurface,
     ToolPolicyVersion,
 };
+pub(crate) use policy::ToolNodeOperationSource;
+
+pub(crate) fn configured_node_operation_sources(
+    tools: &crate::documents::Tools,
+    ceiling: &ToolCeiling,
+) -> anyhow::Result<Vec<ToolNodeOperationSource>> {
+    let selection = selection::ResolvedToolSelection::from_document(tools)?;
+    let agents = selection::AgentToolConfig::from_document(tools)?;
+    let policy = policy::ToolPolicySurface::from_selection(&selection, &agents)
+        .meet(ceiling.policy());
+    Ok(policy.covered_node_operation_sources(selection.enable_pack_install))
+}
 pub(crate) use root_admission::{
     RootExecutionGuard, load_workspace_root_policy_in_txn, resolve_admitted_tool_root,
 };
@@ -747,3 +759,6 @@ mod tests;
 
 #[cfg(test)]
 mod document_explanation_tests;
+
+#[cfg(test)]
+mod tool_operation_tests;
