@@ -62,6 +62,18 @@ export const FLAGS = [
       "Notifications ship to everyone, fed by the app's one place for things that need the person.",
     restart: false,
   },
+  {
+    id: "pack-notifications",
+    name: "Notifications from packs",
+    description:
+      "Lets a pack's page tell you through the system's notifications, for each kind you turn on under Notifications. Needs Notifications on too.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-02-01",
+    removeWhen:
+      "What a pack's notification may carry outside the app is decided, and they ship to everyone or are dropped.",
+    restart: false,
+  },
 ] as const satisfies readonly Flag[];
 
 export type FlagId = (typeof FLAGS)[number]["id"];
