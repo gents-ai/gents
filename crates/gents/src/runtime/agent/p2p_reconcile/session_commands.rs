@@ -507,9 +507,15 @@ mod tests {
             crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
                 .unwrap(),
         );
+        let user =
+            crate::store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
+                .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
         let node = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(identity.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
                 .build()
                 .await
                 .unwrap(),
@@ -520,21 +526,39 @@ mod tests {
         let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let agent =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
-        let access =
-            ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
-        let session_doc_id = access.transact_write("test.sweep.session", |txn| Box::pin(async {
-            let response = txn.execute_with_variables("mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"session_id": "session", "node_did": identity.did(), "requester_did": identity.did(), "agent_did": agent.did(), "created_at": "2026-10-10T00:00:00Z"}})).await?;
-            Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(&response, "AgentSession")?)
+        let access = ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(
+                format!("http://{address}/api/v0/graphql"),
+                user.did(),
+            )
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+        );
+        let (session_doc_id, agent_doc_id) = access.transact_write("test.sweep.session", |txn| Box::pin(async {
+            let root = txn.execute_client_signed_create("mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did":identity.did()}}), gents_protocol::schemas::NODE).await?;
+            let node_doc = crate::store::graphql::created_doc_id(&root, "Node")?;
+            let selected = txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did":identity.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"enabled":true}}), gents_protocol::schemas::AGENT).await?;
+            let agent_doc = crate::store::graphql::created_doc_id(&selected, "Agent")?;
+            txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc).await?;
+            txn.add_actor_relationship("Agent", &agent_doc, "executor", &::identity::Did::new(agent.did())?).await?;
+            let response = txn.execute_client_signed_create("mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"session_id": "session", "node_did": identity.did(), "requester_did": user.did(), "agent_did": agent.did(), "created_at": "2026-10-10T00:00:00Z", "relationships_pending":false}}), gents_protocol::schemas::AGENT_SESSION).await?;
+            let session = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+            txn.add_resource_relationship("AgentSession", &session, "parent", "agents", &agent_doc).await?;
+            txn.add_actor_relationship("AgentSession", &session, "working_agent", &::identity::Did::new(agent.did())?).await?;
+            Ok::<_, anyhow::Error>((session, agent_doc))
         })).await.unwrap();
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
             command_id: "valid-command".into(),
-            requester_did: identity.did().into(),
+            requester_did: user.did().into(),
             requester_peer_id: None,
             node_did: identity.did().into(),
             agent_did: agent.did().into(),
-            agent_doc_id: "agent-document".into(),
+            agent_doc_id,
             session_id: "session".into(),
             session_doc_id: Some(session_doc_id.clone()),
             issued_at: "2000-01-01T00:00:00Z".into(),
@@ -548,7 +572,7 @@ mod tests {
             native_evidence: None,
             signature: Vec::new(),
         };
-        command.signature = identity
+        command.signature = user
             .sign(&command.signing_payload().unwrap())
             .await
             .unwrap();
@@ -556,10 +580,10 @@ mod tests {
         let mut expected = access.transact_write("test.sparse_goal_commands", |txn| Box::pin(async {
             let mut ids = Vec::new();
             for (id, intent) in [("incomplete-command", None), ("valid-command", Some(valid.as_str()))] {
-                let response = txn.execute_with_variables("mutation($input: AgentSessionGoalControlMutationInputArg!) { create_AgentSessionGoalControl(input: $input) { _docID } }",
+                let response = txn.execute_client_signed_create("mutation($input: AgentSessionGoalControlMutationInputArg!) { create_AgentSessionGoalControl(input: $input) { _docID } }",
                     &serde_json::json!({"input": {"command_id": id, "node_did":identity.did(),
-                        "requester_did": identity.did(), "agent_did": agent.did(),
-                        "session_id": "session", "session_doc_id": session_doc_id, "intent_json":intent}})).await?;
+                        "requester_did": user.did(), "agent_did": agent.did(),
+                        "session_id": "session", "session_doc_id": session_doc_id, "intent_json":intent}}), gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL).await?;
                 let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?;
                 txn.add_resource_relationship("AgentSessionGoalControl", &doc, "parent", "sessions", &session_doc_id).await?;
                 txn.add_actor_relationship("AgentSessionGoalControl", &doc, "working_agent", &::identity::Did::new(agent.did())?).await?;

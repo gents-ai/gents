@@ -259,6 +259,68 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 node.verified_block_signer_did(&version.cid).await?,
                 user.did()
             );
+            let agent_access = ConfigAccess::local_managed_agent(
+                node.clone(),
+                ::identity::Did::new(&binding.agent_did)?,
+                agent.as_ref(),
+            )?;
+            let request = agent_access
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    escape_graphql_string(&receipt.request_doc_ids[0]),
+                    crate::request::watcher::AGENT_REQUEST_FIELDS,
+                ))
+                .await?;
+            let row: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(request["data"]["AgentRequest"][0].clone())?;
+            let request = crate::request::watcher::AgentRequest::try_from(row)?;
+            let (_owner, authority) =
+                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+            let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+                node.clone(),
+                root.clone(),
+                authority,
+            );
+            let (request, admission) = verifier
+                .verify_fresh_for_claim(&request, agent.did())
+                .await?;
+            assert!(
+                admission.is_some(),
+                "User-authored replacement requires native client claim admission"
+            );
+            let mut lifecycle =
+                crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                    node.clone(),
+                    agent.did(),
+                    root.did(),
+                    request,
+                    60,
+                    crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    String::new(),
+                );
+            lifecycle.bind_managed_agent(agent.as_ref())?;
+            lifecycle.set_client_claim_admission(admission);
+            assert!(matches!(
+                lifecycle.claim_with_identity().await?,
+                crate::request::lifecycle::ClaimOutcome::Claimed
+            ));
+            let claimed = agent_access.execute(&format!(
+                r#"{{ AgentRequest(docID: "{}") {{ lifecycle_state _version {{ cid height fieldName }} }} }}"#,
+                escape_graphql_string(&receipt.request_doc_ids[0]),
+            )).await?;
+            assert_eq!(
+                claimed["data"]["AgentRequest"][0]["lifecycle_state"],
+                "claimed"
+            );
+            let claim_version = crate::store::graphql::document_composite_version(
+                &claimed["data"]["AgentRequest"][0],
+                "claimed replacement",
+            )?
+            .context("claim version missing")?;
+            assert_eq!(
+                node.verified_block_signer_did(&claim_version.cid).await?,
+                agent.did()
+            );
             access
                 .delete_actor_relationship(
                     "AgentRequest",
@@ -268,11 +330,6 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 )
                 .await?;
             process_command(&node, &root, &command_doc, agent.as_ref()).await?;
-            let agent_access = ConfigAccess::local_managed_agent(
-                node.clone(),
-                ::identity::Did::new(&binding.agent_did)?,
-                agent.as_ref(),
-            )?;
             let decision = agent_access
                 .transact_readonly("test.edit.revoke", |txn| {
                     let doc = &receipt.request_doc_ids[0];
