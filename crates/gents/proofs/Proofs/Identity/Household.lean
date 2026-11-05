@@ -84,7 +84,7 @@ def policy : List ResourceDefinition :=
         permission "delete" [] [("parent", "delete")]] }
   , { name := "agents"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
-        ⟨"workspace_selected_by", ["configuration->reader"], []⟩,
+        ⟨"workspace_selected_by", ["configuration->reader", "agents->executor"], []⟩,
         ⟨"session_writer", ["actor"], []⟩, ⟨"administrator", ["actor"],
           ["parent", "reader", "session_writer", "administrator", "executor", "config_writer"]⟩,
         ⟨"executor", ["actor"], []⟩, ⟨"config_writer", ["actor"], []⟩]

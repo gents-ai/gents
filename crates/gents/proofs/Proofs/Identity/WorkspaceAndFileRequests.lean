@@ -127,6 +127,24 @@ def callbackSelectedAgentCasesJson : String :=
     [("actor", Lean.toJson actor), ("before", Lean.toJson (callbackSelectedAgentPermission actor)),
      ("after_revocation", Lean.toJson (Household.allowed 8 callbackSelectedAgentRevoked actor "agents" "target" "read"))])).compress
 
+/-- A user who creates a quickstart repository selects its creator and
+participant Agent documents. The target-to-creator executor edge is installed
+with that initial publication; reuse cannot restore a revoked edge. -/
+def quickstartSelectedAgentFixture : Household.State :=
+  { objects := [⟨"agents", "creator", "user"⟩, ⟨"agents", "target", "user"⟩],
+    relations := [⟨"agents", "creator", "executor", .actor "creator"⟩,
+      ⟨"agents", "target", "workspace_selected_by", .entitySet "agents" "creator" "executor"⟩],
+    enrolled := [] }
+
+def quickstartSelectedAgentRevoked : Household.State :=
+  Household.apply quickstartSelectedAgentFixture (.revoke
+    ⟨"agents", "target", "workspace_selected_by", .entitySet "agents" "creator" "executor"⟩)
+
+theorem quickstart_creator_resolves_only_selected_agent :
+    Household.allowed 8 quickstartSelectedAgentFixture "creator" "agents" "target" "read" = true ∧
+    Household.allowed 8 quickstartSelectedAgentFixture "other" "agents" "target" "read" = false ∧
+    Household.allowed 8 quickstartSelectedAgentRevoked "creator" "agents" "target" "read" = false := by native_decide
+
 /-- A filtered or malformed physical request is not proof that an exclusive
 workspace binding is stale. Release requires a visible terminal request. -/
 def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal
