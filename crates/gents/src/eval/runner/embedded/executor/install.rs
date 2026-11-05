@@ -174,10 +174,17 @@ pub(super) async fn install(
         )])?,
     )
     .await?;
-    let root_readers = identity
-        .agent_bindings
-        .values()
-        .map(|binding| binding.agent_did.clone())
+    let root_readers = config
+        .agents
+        .iter()
+        .filter(|agent| {
+            agent.enabled
+                && identity
+                    .agent_bindings
+                    .values()
+                    .any(|binding| binding.agent_did == agent.agent_did)
+        })
+        .map(|agent| agent.agent_did.clone())
         .collect::<Vec<_>>();
     install_workspace_root(&access, &node_did, workspace, &root_readers).await?;
     let mut fixtures = spec.fixtures.clone();
