@@ -1,5 +1,5 @@
 """Checks of the real WebAssembly build that the case files and the native tests cannot see,
-run through `gents plugin run` against the installed pack (scripts/test-pack.sh runs it).
+run through `gents pack plugin run` against the installed pack (scripts/test-pack.sh runs it).
 
     GENTS=<gents binary> PACK_HOME=<home with the pack installed> python3 tools/wasm_check.py [rounds]
 
@@ -34,7 +34,7 @@ def run(folder, request, timeout=900):
     """One plugin call; (exit code, stdout, stderr, seconds)."""
     start = time.time()
     p = subprocess.run(
-        [GENTS, "plugin", "run", "data_tables", "--home", HOME, "--bind-dir", folder,
+        [GENTS, "pack", "plugin", "run", "data_tables", "--home", HOME, "--bind-dir", folder,
          "--input", json.dumps(request)],
         capture_output=True, text=True, timeout=timeout)
     return p.returncode, p.stdout, p.stderr, time.time() - start
