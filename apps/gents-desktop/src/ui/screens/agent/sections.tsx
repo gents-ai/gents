@@ -11,6 +11,7 @@ import {
   Route,
   Sparkles,
   Timer,
+  Users,
   Waypoints,
   Workflow,
   Wrench,
@@ -19,6 +20,9 @@ import {
 import { ContribBoundary, ContribRender } from "@/contrib/react/boundary";
 import { useContributions } from "@/contrib/react/use-contributions";
 import { AGENT_SECTIONS_AREA, type AgentSectionData } from "@/contrib/types";
+import type { FlagId } from "@/lib/flags";
+import { isOn, usePreferences } from "@/preferences";
+import { SHARING_SECTION } from "@/lib/joinInvite";
 import { AgentPanel } from "./AgentPanel";
 import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
 import { AgentsPanel } from "./BehaviorsPanel";
@@ -28,6 +32,7 @@ import { InferencePanel } from "./InferencePanel";
 import { PacksPanel } from "./PacksPanel";
 import { ProfilesPanel } from "./ProfilesPanel";
 import { SchedulesPanel } from "./SchedulesPanel";
+import { SharingPanel } from "./SharingPanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { TasksPanel } from "./TasksPanel";
 import { ToolServicesPanel } from "./ToolServicesPanel";
@@ -51,6 +56,8 @@ type Listed = {
 export type AgentSection = {
   id: string;
   Panel: ComponentType<SectionPanelProps>;
+  /** the experimental feature it shows behind */
+  flag?: FlagId;
 } & (Listed | { under: string });
 
 export const isListed = (section: AgentSection): section is AgentSection & Listed =>
@@ -90,6 +97,14 @@ export const SECTIONS: AgentSection[] = [
     icon: Sparkles,
     count: (d) => d.inferenceBackends.length,
     Panel: ProfilesPanel,
+  },
+  {
+    group: "Configure",
+    id: SHARING_SECTION,
+    label: "Sharing",
+    icon: Users,
+    Panel: SharingPanel,
+    flag: "sharing",
   },
   {
     id: "inference",
@@ -221,15 +236,16 @@ function contributedSection(id: string, data: AgentSectionData): AgentSection {
     re-renders when a plugin registers or unregisters a section. */
 export function useAgentSections(): readonly AgentSection[] {
   const contributed = useContributions(AGENT_SECTIONS_AREA);
+  const flags = usePreferences((p) => p.flags);
   return useMemo(
     () => [
-      ...SECTIONS,
+      ...SECTIONS.filter((s) => !s.flag || isOn(flags, s.flag)),
       ...contributed.flatMap((c) =>
         isSectionData(c.data) && isRouteSegment(c.id)
           ? [contributedSection(c.id, c.data)]
           : [],
       ),
     ],
-    [contributed],
+    [contributed, flags],
   );
 }

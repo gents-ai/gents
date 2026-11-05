@@ -337,7 +337,9 @@ export function PackInstallReview({
       ? fileName(request.package)
       : request?.source === "link"
         ? "A link"
-        : "The registry";
+        : request?.source === "invite"
+          ? "An invite"
+          : "The registry";
 
   const Root = inline ? InlineRoot : Dialog;
   const Content = inline ? InlineContent : DialogContent;
@@ -396,7 +398,9 @@ export function PackInstallReview({
                     ? `from ${from}`
                     : request?.source === "link"
                       ? "from a link"
-                      : "from the registry",
+                      : request?.source === "invite"
+                        ? "from an invite"
+                        : "from the registry",
                 ]
                   .filter(Boolean)
                   .join(" · ")}

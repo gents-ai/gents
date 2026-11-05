@@ -6,7 +6,8 @@ export type PackReviewRequest = {
   /** what to install: a registry name (with `@version` from a link) or a
       `.pack` file's path */
   package: string;
-  source: "registry" | "file" | "link";
+  /** `invite`: a pack an invite brings, at the version the inviter runs */
+  source: "registry" | "file" | "link" | "invite";
   /** the digest a link names; a pack that differs is not offered */
   digest?: string;
 };
