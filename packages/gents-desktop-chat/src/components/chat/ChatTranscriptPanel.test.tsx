@@ -352,7 +352,7 @@ test("puts an input submitted to an empty timeline before the arriving live resp
   expect(html.indexOf(pending.content)).toBeLessThan(html.indexOf("New live"));
 });
 
-test.each(["loading", "missing"] as const)(
+test.each(["loading", "denied", "invalid"] as const)(
   "retains optimistic text while matching authored content is %s",
   (state) => {
     const html = renderToStaticMarkup(
