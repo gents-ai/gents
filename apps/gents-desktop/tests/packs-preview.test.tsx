@@ -276,7 +276,14 @@ const CODE_REVIEW = [
   doc("Tools", "review-caller", "Review caller", {
     tools_id: "review-caller",
     display_name: "Review caller",
-    agents: { target_ids: LENSES.map(([lens]) => `code-review-${lens}`) },
+    integrations: {
+      plugins: [
+        {
+          name: "review_changes",
+          job: { agent_targets: LENSES.map(([lens]) => `code-review-${lens}`) },
+        },
+      ],
+    },
   }),
 ];
 
@@ -337,6 +344,28 @@ describe("what a pack would add, its settings under what owns them", () => {
         .getAllByRole("link")
         .map((link) => link.textContent),
     ).toEqual(["Review reconnaissance toolsTool set · it uses"]);
+  });
+
+  it("keeps what was opened on a pack's page after leaving and coming back", async () => {
+    show(codeReview(CODE_REVIEW), { name: "packs", item: "gents/code_review" });
+    const user = userEvent.setup();
+    const name = "What's under Review reconnaissance";
+    const adds = await screen.findByRole("region", { name: "What it would add" });
+    await user.click(within(adds).getByRole("button", { name }));
+    expect(within(adds).getByRole("button", { name })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    cleanup();
+    show(codeReview(CODE_REVIEW), { name: "packs", item: "gents/code_review" });
+    const again = await screen.findByRole("region", { name: "What it would add" });
+    expect(await within(again).findByRole("button", { name })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(
+      within(again).getByRole("button", { name: "What's under Review triage" }),
+    ).toHaveAttribute("aria-expanded", "false");
   });
 
   it("nests a target no tool set calls under the agent it reaches", async () => {

@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@gents/ui/components/dialog";
 import { RadioGroup, RadioGroupItem } from "@gents/ui/components/radio-group";
+import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
 import type {
   InstalledPack,
@@ -381,285 +382,293 @@ export function PackInstallReview({
         )}
 
         {report && (
-          <div className="grid max-h-[60vh] gap-5 overflow-y-auto">
-            <p className="text-sm text-muted-foreground tabular-nums">
-              {[
-                version ? `Version ${version}` : null,
-                already &&
-                  (already.installed === version
-                    ? "already installed"
-                    : `replaces ${already.installed}`),
-                request?.source === "file"
-                  ? `from ${from}`
-                  : request?.source === "link"
-                    ? "from a link"
-                    : "from the registry",
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
+          <ScrollArea className="-mr-3 max-h-[60vh]">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-5 pr-3">
+              <p className="text-sm text-muted-foreground tabular-nums">
+                {[
+                  version ? `Version ${version}` : null,
+                  already &&
+                    (already.installed === version
+                      ? "already installed"
+                      : `replaces ${already.installed}`),
+                  request?.source === "file"
+                    ? `from ${from}`
+                    : request?.source === "link"
+                      ? "from a link"
+                      : "from the registry",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
 
-            {needs && needs.slots.length > 0 && (
-              <Section
-                title="Models"
-                action={
-                  stale &&
-                  read.state === "reading" && (
-                    <Spinner aria-label="Checking the models" />
-                  )
-                }
-              >
-                <p className="text-sm text-muted-foreground">
-                  {usable.length === 0
-                    ? "This node has no model to run it yet. Set up a model first, then install this pack."
-                    : "Choose the model each part of it runs on."}
-                </p>
-                {usable.length > 0 && (
-                  <ul className="divide-y divide-border/60">
-                    {needs.slots.map((slot) => (
-                      <SlotRow
-                        key={slot.name}
-                        name={slot.name}
-                        description={slot.description}
-                        value={chosen[slot.name] ?? slot.profile ?? ""}
-                        optional={slot.optional}
+              {needs && needs.slots.length > 0 && (
+                <Section
+                  title="Models"
+                  action={
+                    stale &&
+                    read.state === "reading" && (
+                      <Spinner aria-label="Checking the models" />
+                    )
+                  }
+                >
+                  <p className="text-sm text-muted-foreground">
+                    {usable.length === 0
+                      ? "This node has no model to run it yet. Set up a model first, then install this pack."
+                      : "Choose the model each part of it runs on."}
+                  </p>
+                  {usable.length > 0 && (
+                    <ul className="divide-y divide-border/60">
+                      {needs.slots.map((slot) => (
+                        <SlotRow
+                          key={slot.name}
+                          name={slot.name}
+                          description={slot.description}
+                          value={chosen[slot.name] ?? slot.profile ?? ""}
+                          optional={slot.optional}
+                          disabled={installing}
+                          onChange={(profile) =>
+                            setChosen((chosen) => ({ ...chosen, [slot.name]: profile }))
+                          }
+                          items={usable.map((profile) => ({
+                            value: profile.profile_id,
+                            label: profile.display_name || profile.model_name,
+                          }))}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                  {stale && read.state === "unread" && (
+                    <p role="alert" className="text-sm text-warning">
+                      Couldn't use these models.{" "}
+                      <span className="text-muted-foreground">{read.error}</span>
+                    </p>
+                  )}
+                </Section>
+              )}
+
+              {(overlaps.length > 0 || shared.length > 0) && (
+                <Section title="Already on this node">
+                  {overlaps.length > 0 && (
+                    <ul className="grid gap-1 text-sm">
+                      {yours.map((overlap) => (
+                        <li key={overlap.key}>
+                          Replaces your own {overlap.kind} “{overlap.name}”
+                        </li>
+                      ))}
+                      {others.map((overlap) => (
+                        <li key={overlap.key}>
+                          {`${overlap.kind.charAt(0).toUpperCase()}${overlap.kind.slice(1)} “${overlap.name}”`}{" "}
+                          <span className="text-muted-foreground">
+                            Already from {overlap.owner}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {others.length > 0 && (
+                    <p className="text-sm text-warning">
+                      It can't install: a pack can't replace what another pack
+                      installed. Remove that pack first.
+                    </p>
+                  )}
+                  {yours.length > 0 && others.length === 0 && (
+                    <label className="flex items-start gap-2 text-sm">
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={replace}
                         disabled={installing}
-                        onChange={(profile) =>
-                          setChosen((chosen) => ({ ...chosen, [slot.name]: profile }))
-                        }
-                        items={usable.map((profile) => ({
-                          value: profile.profile_id,
-                          label: profile.display_name || profile.model_name,
-                        }))}
+                        onCheckedChange={(checked) => setReplace(checked === true)}
                       />
-                    ))}
-                  </ul>
-                )}
-                {stale && read.state === "unread" && (
-                  <p role="alert" className="text-sm text-warning">
-                    Couldn't use these models.{" "}
-                    <span className="text-muted-foreground">{read.error}</span>
-                  </p>
-                )}
-              </Section>
-            )}
+                      Replace them
+                    </label>
+                  )}
+                  {shared.length > 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      Shares {shared.join(", ")} with what's already on this node.
+                    </p>
+                  )}
+                </Section>
+              )}
 
-            {(overlaps.length > 0 || shared.length > 0) && (
-              <Section title="Already on this node">
-                {overlaps.length > 0 && (
-                  <ul className="grid gap-1 text-sm">
-                    {yours.map((overlap) => (
-                      <li key={overlap.key}>
-                        Replaces your own {overlap.kind} “{overlap.name}”
-                      </li>
-                    ))}
-                    {others.map((overlap) => (
-                      <li key={overlap.key}>
-                        {`${overlap.kind.charAt(0).toUpperCase()}${overlap.kind.slice(1)} “${overlap.name}”`}{" "}
-                        <span className="text-muted-foreground">
-                          Already from {overlap.owner}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {others.length > 0 && (
-                  <p className="text-sm text-warning">
-                    It can't install: a pack can't replace what another pack installed.
-                    Remove that pack first.
-                  </p>
-                )}
-                {yours.length > 0 && others.length === 0 && (
+              {needsAllow && (
+                <Section title="Access it asks for">
+                  {asks.length > 0 ? (
+                    <ul className="grid gap-1 text-sm">
+                      {asks.map((ask) => (
+                        <li key={ask.plugin}>
+                          <span className="font-medium">{ask.plugin}</span>{" "}
+                          <span className="text-muted-foreground">{ask.asks}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      A plugin it installs asks for more than the review could list.
+                    </p>
+                  )}
                   <label className="flex items-start gap-2 text-sm">
                     <Checkbox
                       className="mt-0.5"
-                      checked={replace}
+                      checked={allow}
                       disabled={installing}
-                      onCheckedChange={(checked) => setReplace(checked === true)}
+                      onCheckedChange={(checked) => setAllow(checked === true)}
                     />
-                    Replace them
+                    Allow this access
                   </label>
-                )}
-                {shared.length > 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    Shares {shared.join(", ")} with what's already on this node.
-                  </p>
-                )}
-              </Section>
-            )}
+                </Section>
+              )}
 
-            {needsAllow && (
-              <Section title="Access it asks for">
-                {asks.length > 0 ? (
-                  <ul className="grid gap-1 text-sm">
-                    {asks.map((ask) => (
-                      <li key={ask.plugin}>
-                        <span className="font-medium">{ask.plugin}</span>{" "}
-                        <span className="text-muted-foreground">{ask.asks}</span>
+              {choosesEdits && (
+                <Section title="Your edits">
+                  <p className="text-sm text-muted-foreground">
+                    {why === "edited"
+                      ? "Some documents it installed were edited since."
+                      : "If you've edited documents it installed:"}
+                  </p>
+                  <RadioGroup
+                    value={edited}
+                    onValueChange={(value) => setEdited(value as PackEditedChoice)}
+                    aria-label="Your edits"
+                    className="grid gap-2 text-sm"
+                  >
+                    <label className="flex items-center gap-2">
+                      <RadioGroupItem value="keep" disabled={installing} /> Keep my
+                      edits
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <RadioGroupItem value="overwrite" disabled={installing} /> Replace
+                      them with the pack's
+                    </label>
+                  </RadioGroup>
+                </Section>
+              )}
+
+              <Section title="What it adds">
+                {groups.length ? (
+                  <ul className="divide-y divide-border/60">
+                    {groups.map((group) => (
+                      <li key={group.key}>
+                        <Collapsible className="group/kind">
+                          <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 py-2 text-left text-sm">
+                            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-data-open/kind:rotate-90 motion-reduce:transition-none" />
+                            <span className="flex-1">{group.label}</span>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <ul className="grid gap-2 pb-3 pl-5.5">
+                              {group.items.map((item) => {
+                                const inner = (
+                                  <>
+                                    {group.section && (
+                                      <ItemIcon
+                                        section={group.section}
+                                        name={item.name}
+                                      />
+                                    )}
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block wrap-break-word">
+                                        {item.name}
+                                      </span>
+                                      {item.detail && (
+                                        <span className="block text-xs wrap-break-word text-muted-foreground">
+                                          {item.detail}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </>
+                                );
+                                const opens =
+                                  onInspect &&
+                                  item.collection &&
+                                  item.id &&
+                                  !installing;
+                                return (
+                                  <li key={item.key} title={item.id}>
+                                    {opens ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          inspect(item.collection!, item.id)
+                                        }
+                                        className="-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-start gap-3 rounded-lg px-2 py-1 text-left text-sm transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+                                      >
+                                        {inner}
+                                      </button>
+                                    ) : (
+                                      <span className="flex items-start gap-3 text-sm">
+                                        {inner}
+                                      </span>
+                                    )}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </CollapsibleContent>
+                        </Collapsible>
                       </li>
                     ))}
                   </ul>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    A plugin it installs asks for more than the review could list.
+                    {report.documents
+                      ? "No documents"
+                      : "Not reported for this kind of pack"}
                   </p>
                 )}
-                <label className="flex items-start gap-2 text-sm">
-                  <Checkbox
-                    className="mt-0.5"
-                    checked={allow}
-                    disabled={installing}
-                    onCheckedChange={(checked) => setAllow(checked === true)}
-                  />
-                  Allow this access
-                </label>
               </Section>
-            )}
 
-            {choosesEdits && (
-              <Section title="Your edits">
-                <p className="text-sm text-muted-foreground">
-                  {why === "edited"
-                    ? "Some documents it installed were edited since."
-                    : "If you've edited documents it installed:"}
-                </p>
-                <RadioGroup
-                  value={edited}
-                  onValueChange={(value) => setEdited(value as PackEditedChoice)}
-                  aria-label="Your edits"
-                  className="grid gap-2 text-sm"
-                >
-                  <label className="flex items-center gap-2">
-                    <RadioGroupItem value="keep" disabled={installing} /> Keep my edits
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <RadioGroupItem value="overwrite" disabled={installing} /> Replace
-                    them with the pack's
-                  </label>
-                </RadioGroup>
-              </Section>
-            )}
+              <Collapsible className="group/details">
+                <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                  Details
+                  <ChevronDown className="size-3 transition-transform duration-150 group-data-open/details:rotate-180 motion-reduce:transition-none" />
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
+                    <dt className={DT}>Pack</dt>
+                    <dd className="wrap-break-word">{pack}</dd>
+                    <dt className={DT}>From</dt>
+                    <dd className="wrap-break-word">
+                      {request?.source === "registry" ? from : request?.package}
+                    </dd>
+                    <dt className={DT}>Digest</dt>
+                    <dd className="font-mono text-xs break-all select-all">
+                      {report.digest}
+                    </dd>
+                    {size ? (
+                      <>
+                        <dt className={DT}>Size</dt>
+                        <dd className="tabular-nums">{bytes(size)}</dd>
+                      </>
+                    ) : null}
+                    {report.collections === null ? (
+                      <>
+                        <dt className={DT}>Collections</dt>
+                        <dd>Not known before it installs: it changes existing ones</dd>
+                      </>
+                    ) : report.collections?.length ? (
+                      <>
+                        <dt className={DT}>Collections</dt>
+                        <dd className="wrap-break-word">
+                          {report.collections.join(", ")}
+                        </dd>
+                      </>
+                    ) : null}
+                  </dl>
+                </CollapsibleContent>
+              </Collapsible>
 
-            <Section title="What it adds">
-              {groups.length ? (
-                <ul className="divide-y divide-border/60">
-                  {groups.map((group) => (
-                    <li key={group.key}>
-                      <Collapsible className="group/kind">
-                        <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 py-2 text-left text-sm">
-                          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-data-open/kind:rotate-90 motion-reduce:transition-none" />
-                          <span className="flex-1">{group.label}</span>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent>
-                          <ul className="grid gap-2 pb-3 pl-5.5">
-                            {group.items.map((item) => {
-                              const inner = (
-                                <>
-                                  {group.section && (
-                                    <ItemIcon
-                                      section={group.section}
-                                      name={item.name}
-                                    />
-                                  )}
-                                  <span className="min-w-0 flex-1">
-                                    <span className="block wrap-break-word">
-                                      {item.name}
-                                    </span>
-                                    {item.detail && (
-                                      <span className="block text-xs wrap-break-word text-muted-foreground">
-                                        {item.detail}
-                                      </span>
-                                    )}
-                                  </span>
-                                </>
-                              );
-                              const opens =
-                                onInspect && item.collection && item.id && !installing;
-                              return (
-                                <li key={item.key} title={item.id}>
-                                  {opens ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => inspect(item.collection!, item.id)}
-                                      className="-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-start gap-3 rounded-lg px-2 py-1 text-left text-sm transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
-                                    >
-                                      {inner}
-                                    </button>
-                                  ) : (
-                                    <span className="flex items-start gap-3 text-sm">
-                                      {inner}
-                                    </span>
-                                  )}
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </CollapsibleContent>
-                      </Collapsible>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {report.documents
-                    ? "No documents"
-                    : "Not reported for this kind of pack"}
+              {refusal && (
+                <p role="alert" className="text-sm text-warning">
+                  {why === "changed"
+                    ? "The pack changed since you reviewed it. Nothing was installed."
+                    : why === "authority"
+                      ? "It needs the access above to install. Nothing was installed."
+                      : why === "edited"
+                        ? "Choose what happens to your edits, then install."
+                        : `Couldn't install: ${refusal}`}
                 </p>
               )}
-            </Section>
-
-            <Collapsible className="group/details">
-              <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-                Details
-                <ChevronDown className="size-3 transition-transform duration-150 group-data-open/details:rotate-180 motion-reduce:transition-none" />
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
-                  <dt className={DT}>Pack</dt>
-                  <dd className="wrap-break-word">{pack}</dd>
-                  <dt className={DT}>From</dt>
-                  <dd className="wrap-break-word">
-                    {request?.source === "registry" ? from : request?.package}
-                  </dd>
-                  <dt className={DT}>Digest</dt>
-                  <dd className="font-mono text-xs break-all select-all">
-                    {report.digest}
-                  </dd>
-                  {size ? (
-                    <>
-                      <dt className={DT}>Size</dt>
-                      <dd className="tabular-nums">{bytes(size)}</dd>
-                    </>
-                  ) : null}
-                  {report.collections === null ? (
-                    <>
-                      <dt className={DT}>Collections</dt>
-                      <dd>Not known before it installs: it changes existing ones</dd>
-                    </>
-                  ) : report.collections?.length ? (
-                    <>
-                      <dt className={DT}>Collections</dt>
-                      <dd className="wrap-break-word">
-                        {report.collections.join(", ")}
-                      </dd>
-                    </>
-                  ) : null}
-                </dl>
-              </CollapsibleContent>
-            </Collapsible>
-
-            {refusal && (
-              <p role="alert" className="text-sm text-warning">
-                {why === "changed"
-                  ? "The pack changed since you reviewed it. Nothing was installed."
-                  : why === "authority"
-                    ? "It needs the access above to install. Nothing was installed."
-                    : why === "edited"
-                      ? "Choose what happens to your edits, then install."
-                      : `Couldn't install: ${refusal}`}
-              </p>
-            )}
-          </div>
+            </div>
+          </ScrollArea>
         )}
 
         <DialogFooter>

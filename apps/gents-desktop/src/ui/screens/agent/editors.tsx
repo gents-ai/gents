@@ -322,13 +322,10 @@ export function AreaRow({
       />
       {stacked && (overflowing || expanded) && (
         <div className="-mt-1 flex justify-end">
-          <Button
-            variant="quiet"
-            size="sm"
-            onClick={() => setExpanded((open) => !open)}
-          >
-            {expanded ? "Show less" : "Show all"}
-          </Button>
+          <ShowAllToggle
+            expanded={expanded}
+            onToggle={() => setExpanded((open) => !open)}
+          />
         </div>
       )}
     </Wrap>
@@ -427,13 +424,10 @@ export function MarkdownRow({
       )}
       {(overflowing || expanded) && (
         <div className="-mt-1 flex justify-end">
-          <Button
-            variant="quiet"
-            size="sm"
-            onClick={() => setExpanded((open) => !open)}
-          >
-            {expanded ? "Show less" : "Show all"}
-          </Button>
+          <ShowAllToggle
+            expanded={expanded}
+            onToggle={() => setExpanded((open) => !open)}
+          />
         </div>
       )}
     </StackedRow>
@@ -1055,6 +1049,31 @@ export function FactRow({
   );
 }
 
+/* Not a native button: a read-only view disables every button inside its
+   fieldset, and reading a long value in full is still allowed there. */
+function ShowAllToggle({
+  expanded,
+  onToggle,
+  className,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <Button
+      variant="quiet"
+      size="sm"
+      className={className}
+      nativeButton={false}
+      render={<span />}
+      onClick={onToggle}
+    >
+      {expanded ? "Show less" : "Show all"}
+    </Button>
+  );
+}
+
 export function LongFactRow({
   label,
   description,
@@ -1072,14 +1091,11 @@ export function LongFactRow({
         {children}
       </p>
       {(overflowing || expanded) && (
-        <Button
-          variant="quiet"
-          size="sm"
+        <ShowAllToggle
+          expanded={expanded}
+          onToggle={() => setExpanded((open) => !open)}
           className="-mt-1 -ml-3 self-start"
-          onClick={() => setExpanded((open) => !open)}
-        >
-          {expanded ? "Show less" : "Show all"}
-        </Button>
+        />
       )}
     </StackedRow>
   );

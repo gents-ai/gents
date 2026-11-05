@@ -125,9 +125,24 @@ export async function readPackInfo(api: PackApi, pack: string) {
 }
 
 /** forgets what was read, and the registry page and places the lists kept */
+/* Which rows of a pack's page are open or shut and how far down it was, kept
+   while the app runs so coming back from one of its items finds it as it was. */
+type PackPlace = { shut: Record<string, boolean>; other: boolean; top: number };
+const NO_PLACE: PackPlace = { shut: {}, other: false, top: 0 };
+const packPlaces = createStore<Record<string, PackPlace>>(() => ({}));
+export const usePackPlace = (place: string) =>
+  useStore(packPlaces, (s) => s[place] ?? NO_PLACE);
+export const packPlaceTop = (place: string) => packPlaces.getState()[place]?.top ?? 0;
+export const keepPackPlace = (place: string, patch: Partial<PackPlace>) =>
+  packPlaces.setState((s) => ({
+    ...s,
+    [place]: { ...NO_PLACE, ...s[place], ...patch },
+  }));
+
 export function resetInstalledPacks() {
   installed.setState({ packs: null, unread: null, info: {} }, true);
   listView.setState({ registry: null, scroll: { installed: 0, registry: 0 } });
+  packPlaces.setState({}, true);
 }
 
 export const shortName = (pack: string) => pack.slice(pack.lastIndexOf("/") + 1);
@@ -282,8 +297,16 @@ export function nodeLinks(node: NodeView): ResourceLinks {
         ? node.contexts.find((c) => c.context_id === agent.contextId)
         : undefined;
     },
-    targetsOfTools: (toolsId) =>
-      node.tools.find((t) => t.tools_id === toolsId)?.agents?.target_ids ?? [],
+    targetsOfTools: (toolsId) => {
+      const tools = node.tools.find((t) => t.tools_id === toolsId);
+      return [
+        ...(tools?.agents?.target_ids ?? []),
+        /* a tool set also reaches agents through its plugins' background jobs */
+        ...(tools?.integrations?.plugins ?? []).flatMap(
+          (plugin) => plugin.job?.agent_targets ?? [],
+        ),
+      ];
+    },
     agentOfTarget: (targetId) =>
       node.agentTargets?.find((t) => t.target_id === targetId)?.agent_id,
   };
