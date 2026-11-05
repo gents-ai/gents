@@ -622,6 +622,53 @@ mod no_model {
         Ok(())
     }
 
+    /// `command` under a shell that outlives it on the same terminal and prints that
+    /// terminal's flags afterward, as the shell a person returns to would find them.
+    fn reporting_terminal_flags(command: &Command) -> Command {
+        let mut shell = Command::new("/bin/sh");
+        shell
+            .args([
+                "-c",
+                r#"trap : INT; "$@"; code=$?; stty -a; exit $code"#,
+                "sh",
+            ])
+            .arg(command.get_program())
+            .args(command.get_args());
+        if let Some(directory) = command.get_current_dir() {
+            shell.current_dir(directory);
+        }
+        for (key, value) in command.get_envs() {
+            match value {
+                Some(value) => shell.env(key, value),
+                None => shell.env_remove(key),
+            };
+        }
+        shell
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_c_at_the_hidden_key_prompt_restores_the_terminal() -> Result<()> {
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&folder);
+
+        let mut terminal =
+            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("key-prompt"))?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
+        // Echo goes off just after the prompt prints, and the interrupt has to find it off.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal.send("\x03")?;
+        terminal.expect_exit(130).await?;
+
+        let transcript = terminal.transcript();
+        let flag = |name| transcript.split_whitespace().any(|word| word == name);
+        ensure!(flag("echo") && !flag("-echo"), "{transcript}");
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn setup_warns_about_a_model_that_does_not_answer_and_keeps_going() -> Result<()> {

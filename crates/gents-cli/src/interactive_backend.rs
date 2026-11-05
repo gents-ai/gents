@@ -234,6 +234,20 @@ pub(crate) async fn prompt_line_default(label: &str, default: &str) -> Result<St
 async fn prompt_secret(text: &str) -> Result<String> {
     eprint!("{text}");
     let _ = std::io::stderr().flush();
+    // `biased` installs the handler on the first poll, before echo goes off, so no
+    // interrupt can land while the terminal is hidden with nothing to restore it.
+    tokio::select! {
+        biased;
+        Ok(()) = tokio::signal::ctrl_c() => {
+            set_terminal_echo(true);
+            eprintln!();
+            std::process::exit(130);
+        }
+        line = read_hidden_line() => line,
+    }
+}
+
+async fn read_hidden_line() -> Result<String> {
     let hidden = set_terminal_echo(false);
     let line = read_line().await;
     if hidden {
