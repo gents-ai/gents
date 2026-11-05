@@ -12,6 +12,7 @@ import { useSharingActions } from "@/hooks/useSharing";
 import { fullTime } from "../TranscriptMarker";
 import { span, useMinute } from "../time";
 import {
+  CopyButton,
   DAY_SECONDS,
   errorMessage,
   ItemRow,
@@ -21,6 +22,7 @@ import {
   partyName,
   scopeInSentence,
   scopeText,
+  shortDid,
 } from "./parts";
 
 /* access that ends within this long is worth a look */
@@ -42,10 +44,10 @@ export function MemberRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { party, scope, profile } = member;
-  const who = partyName(party);
-  const what = scopeText(scope);
   /* this app's own way into the node: revoking it cuts the app off */
   const thisApp = useThisAppDid() === party.did;
+  const who = thisApp ? "This app" : partyName(party);
+  const what = scopeText(scope);
   const renewable = sharing.renew && member.leaseExpiresAt !== null;
 
   async function run(kind: "renew" | "revoke") {
@@ -67,20 +69,27 @@ export function MemberRow({
     <ItemRow
       label={`${who}: ${what}`}
       title={
-        <span className="flex min-w-0 items-center gap-2">
+        thisApp ? (
+          <span
+            className="truncate text-sm font-medium"
+            title="How this app reaches the node. It can't be revoked from here."
+          >
+            This app
+          </span>
+        ) : (
           <Party party={party} />
-          {thisApp && (
-            <span
-              className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
-              title="How this app reaches the node. It can't be revoked from here."
-            >
-              This app
-            </span>
-          )}
-        </span>
+        )
       }
       description={
         <>
+          {thisApp && (
+            <span className="inline-flex min-w-0 items-center gap-0.5">
+              <span className="truncate font-mono" title={party.did}>
+                {shortDid(party.did)}
+              </span>
+              <CopyButton text={party.did} label={`Copy ${party.did}`} title="Copy DID" />
+            </span>
+          )}
           <span>{what}</span>
           {profile.name && <span>{profile.name}</span>}
           <Lease ends={member.leaseExpiresAt} />

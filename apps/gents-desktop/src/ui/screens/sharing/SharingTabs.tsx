@@ -9,12 +9,22 @@ import type {
   SharingDecision,
   SharingMember,
 } from "../../../hooks/sharing";
+import { useThisAppDid } from "@/hooks/useClient";
 import { EmptyList } from "../agent/ListDetail";
 import { DecisionRow } from "./History";
 import { InviteRow } from "./Invites";
 import { MemberRow } from "./Members";
 
 export type SharingTab = "access" | "invites" | "history";
+
+/* this app's own pairing leads; the rest keep the runtime's order */
+const appFirst = (members: SharingMember[], appDid: string | null | undefined) =>
+  appDid
+    ? [
+        ...members.filter((m) => m.party.did === appDid),
+        ...members.filter((m) => m.party.did !== appDid),
+      ]
+    : members;
 
 /* the tab chosen, kept while the app runs */
 const chosen = createStore<{ tab: SharingTab }>(() => ({ tab: "access" }));
@@ -46,6 +56,7 @@ export function SharingTabs({
   note: ReactNode;
 }) {
   const stored = useStore(chosen, (s) => s.tab);
+  const thisApp = useThisAppDid();
   const tabs: { id: SharingTab; label: string; count?: number }[] = [
     ...(available.members
       ? [{ id: "access" as const, label: "Access", count: members.length }]
@@ -80,7 +91,7 @@ export function SharingTabs({
           empty={`Nobody else has access to ${name}.`}
           count={members.length}
         >
-          {members.map((member) => (
+          {appFirst(members, thisApp).map((member) => (
             <MemberRow key={member.requestId} nodeDid={nodeDid} member={member} />
           ))}
         </List>

@@ -420,7 +420,7 @@ describe("the Sharing page", () => {
     expect(line.textContent).toContain("By did:key:z6MkOp…DEF456");
   });
 
-  it("marks this app's own way into the node, and doesn't offer to revoke it", async () => {
+  it("puts this app's own way into the node first, by name, and doesn't offer to revoke it", async () => {
     show({
       requests: [],
       members: [member(), member({ requestId: "request-app", candidateDid: OPERATOR })],
@@ -429,10 +429,11 @@ describe("the Sharing page", () => {
     const rows = within(
       await screen.findByRole("list", { name: "Who has access" }),
     ).getAllByRole("listitem");
-    const app = rows.find((row) => row.textContent?.includes("This app"))!;
-    expect(app).toBeTruthy();
+    const [app, other] = rows as [HTMLElement, HTMLElement];
+    expect(app.getAttribute("aria-label")).toMatch(/^This app: /);
+    expect(app.textContent).toContain("did:key:z6MkOp…DEF456");
+    expect(within(app).getByRole("button", { name: `Copy ${OPERATOR}` })).toBeTruthy();
     expect(within(app).queryByRole("button", { name: /^More for/ })).toBeNull();
-    const other = rows.find((row) => row !== app)!;
     expect(within(other).getByRole("button", { name: /^More for/ })).toBeTruthy();
   });
 
