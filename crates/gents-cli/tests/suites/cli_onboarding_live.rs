@@ -450,15 +450,7 @@ mod no_model {
 
         let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("first-run"))?;
 
-        for row in [
-            "         █████████   ",
-            "█████████            ",
-            "               ██████",
-            "      ███            ",
-            "         █████████   ",
-        ] {
-            terminal.expect(row, PROMPT).await?;
-        }
+        terminal.expect("██", PROMPT).await?;
         terminal.expect(INSTALL_MESSAGE, PROMPT).await?;
         terminal
             .answer(FOLDER_QUESTION, &folder.to_string_lossy())
@@ -482,6 +474,24 @@ mod no_model {
                 && !terminal.transcript().contains("--yolo"),
             "setup says what agents can do, and names no flag nobody typed: {}",
             terminal.transcript()
+        );
+        let transcript = terminal.transcript();
+        let questions = [
+            FOLDER_QUESTION,
+            ROOT_QUESTION,
+            INFERENCE_QUESTION,
+            "Server base URL",
+            "Model",
+        ];
+        for screen in transcript.split(CLEAR_SCREEN) {
+            let asked = questions
+                .iter()
+                .filter(|question| screen.contains(**question));
+            ensure!(asked.count() <= 1, "more than one question on: {screen}");
+        }
+        ensure!(
+            transcript.starts_with(CLEAR_SCREEN),
+            "setup starts on a clear screen: {transcript}"
         );
         let agents = live
             .gents()
@@ -521,6 +531,11 @@ mod no_model {
             !second.transcript().contains(FOLDER_QUESTION)
                 && !second.transcript().contains(INFERENCE_QUESTION),
             "a set up home asks nothing: {}",
+            second.transcript()
+        );
+        ensure!(
+            !second.transcript().contains(CLEAR_SCREEN),
+            "only setup clears the screen: {}",
             second.transcript()
         );
         assert_eq!(live.service_pid(), Some(pid));
@@ -630,6 +645,15 @@ mod no_model {
         terminal.answer(ROOT_QUESTION, "~").await?;
         terminal.expect("your whole home folder", PROMPT).await?;
         terminal.answer("Use it?", "n").await?;
+        ensure!(
+            terminal.transcript().split(CLEAR_SCREEN).any(|screen| {
+                screen.contains("is not an existing folder")
+                    && screen.contains("too broad")
+                    && screen.matches(ROOT_QUESTION).count() > 1
+            }),
+            "a refused answer stays on screen with the question: {}",
+            terminal.transcript()
+        );
         terminal
             .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
@@ -780,6 +804,14 @@ mod no_model {
         terminal.expect(NO_MODEL_TEXT, PROMPT).await?;
         terminal.expect("gents config backend set", PROMPT).await?;
         terminal.answer("Model name:", NO_MODEL_NAME).await?;
+        ensure!(
+            terminal
+                .transcript()
+                .split(CLEAR_SCREEN)
+                .any(|screen| screen.contains(NO_MODEL_TEXT) && screen.contains("Model name:")),
+            "the warning stays on screen with the next question: {}",
+            terminal.transcript()
+        );
         terminal
             .expect("gents config backend set --file", PROMPT)
             .await?;

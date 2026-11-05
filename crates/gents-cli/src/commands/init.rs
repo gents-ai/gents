@@ -166,7 +166,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
-    crate::interactive_backend::resolve_backend_interactively(&mut args).await?;
+    crate::interactive_backend::resolve_backend_interactively(&mut args, || {}).await?;
     let data_dir = args
         .data_dir
         .clone()

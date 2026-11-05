@@ -20,12 +20,31 @@ use super::interface_install_message;
 /// `apps/gents-desktop/src-tauri/icons/icon.png`.
 const LOGO_GRID: [&str; 5] = ["...###.", "###....", ".....##", "..#....", "...###."];
 
-/// One grid cell is three columns by one row, wider than the icon's square cells so the
-/// mark holds up beside a terminal's text.
+/// The logo's shape: columns across the grid, whose cells share them as evenly as whole
+/// columns allow. 14 is the icon's own proportions, since a terminal cell is about twice as
+/// tall as it is wide; the logo reads better somewhat wider than that.
+const LOGO_WIDTH: usize = 18;
+const LOGO_CELLS: usize = 7;
+
 pub(super) fn logo() -> String {
+    let column = |cell: usize| (2 * cell * LOGO_WIDTH + LOGO_CELLS) / (2 * LOGO_CELLS);
     LOGO_GRID
-        .map(|row| row.replace('#', "███").replace('.', "   "))
+        .map(|row| {
+            row.chars()
+                .enumerate()
+                .map(|(cell, mark)| {
+                    let shown = if mark == '#' { "█" } else { " " };
+                    shown.repeat(column(cell + 1) - column(cell))
+                })
+                .collect::<String>()
+        })
         .join("\n")
+}
+
+/// Gives the next question a screen to itself. It clears only what is visible: `3J` would also
+/// erase the scrollback the person was reading before they typed `gents`.
+fn next_screen() {
+    eprintln!("\x1b[2J\x1b[H{}\n", logo());
 }
 
 /// `~user` is not expanded, so that spelling is an ordinary relative folder.
@@ -84,7 +103,7 @@ pub(super) async fn setup(
     home_given: Option<PathBuf>,
     store_key_custody: Option<StoreKeyCustodyArg>,
 ) -> Result<PathBuf> {
-    eprintln!("{}\n", logo());
+    next_screen();
     eprintln!("Welcome to Gents. A few questions and this machine is ready.\n");
     let interface = interface_bin(CODEX_BIN_ENV, "codex");
     if !binary_on_path(&interface, std::env::var_os("PATH").as_deref()) {
@@ -107,6 +126,7 @@ pub(super) async fn setup(
         None => {
             let default = crate::absolutize(resolve_home_dir(None))?;
             let answer = prompt_line_default("Data folder", &default.to_string_lossy()).await?;
+            next_screen();
             resolve_folder_answer(&answer, &default, &user_home, &cwd)
         }
     };
@@ -122,10 +142,10 @@ pub(super) async fn setup(
 
     eprintln!("Commands run as you; this folder is not a sandbox.");
     let tool_root = ask_tool_root(&cwd, &user_home).await?;
-    eprintln!();
+    next_screen();
     let mut args = parse_init_args(&init_argv(&home, &tool_root))?;
     args.store_key_custody = store_key_custody;
-    resolve_backend_interactively(&mut args).await?;
+    resolve_backend_interactively(&mut args, next_screen).await?;
 
     let initialized = init_home(args).await?;
     for line in next_step_lines(&initialized, &home) {
@@ -212,14 +232,16 @@ mod tests {
     use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 
     #[test]
-    fn logo_keeps_the_app_icon_grid_three_columns_to_a_cell() {
-        let grid = ["...###.", "###....", ".....##", "..#....", "...###."];
-        let expected: Vec<String> = grid
-            .iter()
-            .map(|row| row.replace('#', "███").replace('.', "   "))
-            .collect();
-        assert_eq!(logo().lines().collect::<Vec<_>>(), expected);
-        assert!(logo().lines().all(|row| row.chars().count() == 21));
+    fn logo_keeps_the_app_icon_grid_at_its_width() {
+        let rows: Vec<Vec<char>> = logo().lines().map(|row| row.chars().collect()).collect();
+        assert_eq!(rows.len(), LOGO_GRID.len());
+        for (row, grid) in rows.iter().zip(LOGO_GRID) {
+            assert_eq!(row.len(), LOGO_WIDTH);
+            for (cell, mark) in grid.chars().enumerate() {
+                let middle = (2 * cell + 1) * LOGO_WIDTH / (2 * LOGO_CELLS);
+                assert_eq!(row[middle] == '█', mark == '#', "{grid} cell {cell}");
+            }
+        }
     }
 
     #[test]

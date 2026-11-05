@@ -31,6 +31,7 @@ pub(super) const INFERENCE_QUESTION: &str = "Choose an inference provider";
 /// The answer to `INFERENCE_QUESTION` that picks a local server.
 pub(super) const LOCAL_PROVIDER: &str = "4";
 pub(super) const NO_MODEL_TEXT: &str = "No model answered at";
+pub(super) const CLEAR_SCREEN: &str = "\x1b[2J";
 pub(super) const ROOT_QUESTION: &str = "Which folder should agents work in?";
 /// A relative answer to `ROOT_QUESTION`, because every test's terminal starts in its
 /// temporary `HOME`. `LiveBox::new` creates it.

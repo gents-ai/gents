@@ -31,11 +31,16 @@ impl BackendSelection {
     }
 }
 
-pub(crate) async fn resolve_backend_interactively(args: &mut InitArgs) -> Result<()> {
+/// `next_screen` runs after each answer, so whatever follows that answer is on the screen it
+/// leaves: a warning stays with the question after it.
+pub(crate) async fn resolve_backend_interactively(
+    args: &mut InitArgs,
+    next_screen: fn(),
+) -> Result<()> {
     if !should_prompt(args) {
         return Ok(());
     }
-    let selection = pick_backend().await?;
+    let selection = pick_backend(next_screen).await?;
     eprintln!("Using {}.\n", selection.label);
     selection.apply_to(args);
     Ok(())
@@ -67,7 +72,7 @@ fn inference_endpoint_env_set() -> bool {
 
 /// Asks what the desktop's inference step asks, from the catalog it reads, so a provider
 /// appears here once whichever way it is reached.
-async fn pick_backend() -> Result<BackendSelection> {
+async fn pick_backend(next_screen: fn()) -> Result<BackendSelection> {
     let local = detect_local_server().await;
     let catalog = inference_setup_catalog();
     eprintln!("Choose an inference provider");
@@ -82,6 +87,7 @@ async fn pick_backend() -> Result<BackendSelection> {
         );
     }
     let provider = &catalog.providers[ask_choice(catalog.providers.len()).await?];
+    next_screen();
     let option = match provider.auth_options.as_slice() {
         [only] => only,
         options => {
@@ -89,13 +95,15 @@ async fn pick_backend() -> Result<BackendSelection> {
             for (number, option) in (1..).zip(options) {
                 eprintln!("  {number}) {}", option.display_name);
             }
-            &options[ask_choice(options.len()).await?]
+            let chosen = &options[ask_choice(options.len()).await?];
+            next_screen();
+            chosen
         }
     };
     match connection_preset(provider.id, option.method) {
-        None => local_selection(option, local).await,
+        None => local_selection(option, local, next_screen).await,
         Some(preset) if option.method == InferenceAuthMethod::ApiKey => {
-            api_key_selection(preset, option).await
+            api_key_selection(preset, option, next_screen).await
         }
         Some(preset) => Ok(BackendSelection {
             inference_url: None,
@@ -157,6 +165,7 @@ fn connection_wire_api(method: InferenceAuthMethod) -> Option<OpenAiWireApiArg> 
 async fn api_key_selection(
     preset: BackendPresetArg,
     option: &InferenceAuthOption,
+    next_screen: fn(),
 ) -> Result<BackendSelection> {
     eprintln!("The key is stored in the backend document.");
     let key = prompt_secret(&format!("Paste your {} (hidden): ", option.display_name)).await?;
@@ -164,6 +173,7 @@ async fn api_key_selection(
     if key.is_empty() {
         bail!("no API key entered");
     }
+    next_screen();
     let model = match preset {
         BackendPresetArg::OpenAi => prompt_line_default("Model", OPENAI_DEFAULT_MODEL).await?,
         _ => prompt_line("Model name: ").await?.trim().to_string(),
@@ -171,6 +181,7 @@ async fn api_key_selection(
     if model.is_empty() {
         bail!("no model name entered");
     }
+    next_screen();
     Ok(BackendSelection {
         inference_url: None,
         backend_preset: Some(preset),
@@ -184,12 +195,14 @@ async fn api_key_selection(
 async fn local_selection(
     option: &InferenceAuthOption,
     detected: Option<(String, String)>,
+    next_screen: fn(),
 ) -> Result<BackendSelection> {
     let (default_url, mut model) = match detected {
         Some((url, model)) => (url, Some(model)),
         None => (option.default_endpoint.clone(), None),
     };
     let url = prompt_line_default("Server base URL", &default_url).await?;
+    next_screen();
     if model.is_none() || url != default_url {
         model = probe_or_warn(&url).await;
     }
@@ -200,6 +213,7 @@ async fn local_selection(
     if model.is_empty() {
         bail!("no model name entered");
     }
+    next_screen();
     Ok(BackendSelection {
         label: format!("{url} · {model}"),
         inference_url: Some(url),
