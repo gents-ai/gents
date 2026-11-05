@@ -609,6 +609,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_remote_edits_replicate_signed_effect_and_receipt",
         },
         ConformanceConsumer::RustTest {
+            id: "runtime::agent::p2p_reconcile::session_commands::tests::generated_session_command_discovery_uses_held_agent_and_native_visibility",
+            package: "gents",
+            source_path: "crates/gents/src/runtime/agent/p2p_reconcile/session_commands.rs",
+            module_path: "runtime::agent::p2p_reconcile::session_commands::tests",
+            function: "generated_session_command_discovery_uses_held_agent_and_native_visibility",
+        },
+        ConformanceConsumer::RustTest {
+            id: "runtime::agent::p2p_reconcile::session_input_edit::verified_graph_tests::signed_user_graph_and_agent_effect_share_the_claim_transaction",
+            package: "gents",
+            source_path: "crates/gents/src/runtime/agent/p2p_reconcile/session_input_edit/verified_graph_tests.rs",
+            module_path: "runtime::agent::p2p_reconcile::session_input_edit::verified_graph_tests",
+            function: "signed_user_graph_and_agent_effect_share_the_claim_transaction",
+        },
+        ConformanceConsumer::RustTest {
             id: "lifecycle::queue::tests::management::generated_pending_management_cases_bind_to_signed_replacement_owner",
             package: "gents",
             source_path: "crates/gents/src/request/lifecycle/queue/tests/management.rs",
