@@ -144,7 +144,7 @@ function Shared({
     historyLeftOut === null;
   return (
     <>
-      <RequestsStrip nodeDid={nodeDid} requests={requests} />
+      <RequestsStrip nodeDid={nodeDid} nodeName={name} requests={requests} />
       {nothing ? (
         <>
           <Nothing

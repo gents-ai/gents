@@ -10,6 +10,7 @@ import { navigate, type Route } from "@/lib/router";
 import { useFlag } from "@/preferences";
 import type { JoinRequest } from "../../hooks/sharing";
 import { noteWaiting, reviewJoinRequest } from "@/screens/sharing/JoinRequestDialog";
+import { sayDenied } from "@/screens/sharing/decided";
 import { inNativeShell, windowLabel } from "../../lib/nativeShell";
 import { scopeInSentence, shortDid } from "@/screens/sharing/parts";
 
@@ -87,7 +88,9 @@ export function JoinRequestAlerts({ route }: { route: Route }) {
                        otherwise count as a press outside it and close it */
                     setTimeout(() => reviewJoinRequest(homeDid, nodeName, request), 0);
                   }}
-                  onDeny={() => sharing.deny(homeDid, request.requestId)}
+                  onDeny={() =>
+                    sharing.deny(homeDid, request.requestId).then(sayDenied)
+                  }
                 />
               ),
               { id: `join:${request.requestId}`, duration: Infinity },

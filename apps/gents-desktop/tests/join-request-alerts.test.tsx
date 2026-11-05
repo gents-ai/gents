@@ -85,7 +85,8 @@ describe("telling the person about requests to join", () => {
     expect(notice.textContent).toContain("A device asks to join");
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
     const dialog = await screen.findByTestId("join-request-dialog");
-    expect(dialog.textContent).toContain("asks to join");
+    expect(dialog.textContent).toContain("A device wants to join Local Agent");
+    expect(dialog.textContent).toContain("They'd get all of Local Agent");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     await vi.waitFor(() =>
       expect(api.decideJoinRequest).toHaveBeenCalledWith(
@@ -96,6 +97,9 @@ describe("telling the person about requests to join", () => {
       expect(screen.queryByTestId("join-request-dialog")).toBeNull(),
     );
     expect(navigate).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Approved: a device can use Local Agent for 30 days"),
+    ).toBeTruthy();
   });
 
   it("counts requests in one notice once a few are waiting", async () => {
@@ -147,6 +151,7 @@ describe("telling the person about requests to join", () => {
         expect.objectContaining({ requestId: "r1" }),
       ),
     );
+    expect(await screen.findByText("Denied: that device won't get in")).toBeTruthy();
   });
 
   it("takes the notice away once the request is no longer waiting", async () => {

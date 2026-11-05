@@ -15,7 +15,11 @@ import { useSharingActions } from "@/hooks/useSharing";
 import { SHARING_SECTION } from "@/lib/joinInvite";
 import { navigate } from "@/lib/router";
 import { fullTime, shortTime } from "../TranscriptMarker";
-import { errorMessage, LeaseSelect, Party, partyName, scopeInSentence } from "./parts";
+import { CopyButton, errorMessage, LeaseSelect, partyName, shortDid } from "./parts";
+import { MonitorSmartphone } from "lucide-react";
+import { cn } from "@gents/ui/lib/utils";
+import { useMinute } from "../time";
+import { sayApproved, sayDenied } from "./decided";
 
 const reviewing = createStore<{
   nodeDid: string;
@@ -60,6 +64,7 @@ export function JoinRequestDialog() {
   const [lease, setLease] = useState(String(DEFAULT_LEASE_SECONDS));
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const minute = useMinute();
   if (!open) return <Dialog open={false} />;
   const { nodeDid, nodeName, request } = open;
   /* named honestly until a request carries its device's own name */
@@ -72,9 +77,15 @@ export function JoinRequestDialog() {
     setBusy(kind);
     setError(null);
     try {
-      if (kind === "approve")
+      if (kind === "approve") {
         await sharing.approve(nodeDid, request.requestId, Number(lease));
-      else await sharing.deny(nodeDid, request.requestId);
+        sayApproved(nodeName, Number(lease), () =>
+          sharing.revoke(nodeDid, request.requestId),
+        );
+      } else {
+        await sharing.deny(nodeDid, request.requestId);
+        sayDenied();
+      }
       closeReview();
       setLease(String(DEFAULT_LEASE_SECONDS));
     } catch (cause) {
@@ -83,6 +94,12 @@ export function JoinRequestDialog() {
       setBusy(null);
     }
   };
+  const left = Date.parse(request.expiresAt) - minute;
+  const expires = gone
+    ? null
+    : left < 60_000
+      ? "Expires in under a minute"
+      : `Expires in ${Math.round(left / 60_000)} min`;
   return (
     <Dialog
       open
@@ -92,45 +109,73 @@ export function JoinRequestDialog() {
     >
       <DialogContent className="sm:max-w-lg" data-testid="join-request-dialog">
         <DialogHeader>
-          <DialogTitle>
-            {who} asks to join {nodeName}
-          </DialogTitle>
-          <DialogDescription>
-            Nothing is shared until you approve. A request lasts only a few minutes.
-          </DialogDescription>
+          <div className="flex items-start gap-3">
+            <span
+              aria-hidden
+              className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+            >
+              <MonitorSmartphone className="size-5" />
+            </span>
+            <div className="grid min-w-0 gap-1">
+              <DialogTitle>
+                {who} wants to join {nodeName}
+              </DialogTitle>
+              <DialogDescription className="flex flex-wrap items-center gap-x-2">
+                <span className="flex min-w-0 items-center gap-1 font-mono text-xs">
+                  {shortDid(request.from.did)}
+                  <CopyButton
+                    text={request.from.did}
+                    label={`Copy ${request.from.did}`}
+                    title="Copy DID"
+                  />
+                </span>
+                {request.requestedAt && (
+                  <span title={fullTime(request.requestedAt)}>
+                    asked {shortTime(request.requestedAt)}
+                  </span>
+                )}
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-6 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">From</dt>
-          <dd className="min-w-0">
-            <Party party={request.from} />
-          </dd>
-          <dt className="text-muted-foreground">They'd get</dt>
-          <dd>
-            {scopeInSentence(request.scope).replace(/^the /, "The ")}
-            {request.profile.name ? `, as ${request.profile.name}` : ""}
-          </dd>
-          <dt className="text-muted-foreground">How</dt>
-          <dd>{request.inviteId ? "With an invite you made" : "No invite"}</dd>
-          {request.requestedAt && (
-            <>
-              <dt className="text-muted-foreground">Asked</dt>
-              <dd title={fullTime(request.requestedAt)}>
-                {shortTime(request.requestedAt)}
-              </dd>
-            </>
+
+        <div
+          className={cn(
+            "grid gap-2 rounded-xl border p-4 text-sm",
+            request.scope.kind === "node"
+              ? "border-warning/40 bg-warning/5"
+              : "border-border bg-muted/40",
           )}
-          <dt className="text-muted-foreground">Expires</dt>
-          <dd title={fullTime(request.expiresAt)}>{shortTime(request.expiresAt)}</dd>
-          <dt className="text-muted-foreground">Access lasts</dt>
-          <dd>
+        >
+          <p>{grantText(request, nodeName)}</p>
+          <p className="flex flex-wrap items-center gap-2 text-muted-foreground">
+            For
             <LeaseSelect
               value={lease}
               onChange={setLease}
               label={`Access for ${partyName(request.from)} lasts`}
               disabled={busy !== null || gone}
             />
-          </dd>
-        </dl>
+          </p>
+          {request.inviteId && (
+            <p className="text-muted-foreground">Using an invite you made.</p>
+          )}
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          Nothing is shared until you approve.{" "}
+          <button
+            type="button"
+            className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => {
+              closeReview();
+              navigate({ name: "agent", nodeDid, section: SHARING_SECTION });
+            }}
+          >
+            Open Sharing
+          </button>
+        </p>
+
         {gone && (
           <p role="status" className="text-sm text-muted-foreground">
             This request isn't waiting any more: it expired, or was decided elsewhere.
@@ -141,17 +186,17 @@ export function JoinRequestDialog() {
             {error}
           </p>
         )}
-        <DialogFooter className="sm:justify-between">
-          <Button
-            variant="ghost"
-            disabled={busy !== null}
-            onClick={() => {
-              closeReview();
-              navigate({ name: "agent", nodeDid, section: SHARING_SECTION });
-            }}
+
+        <DialogFooter className="items-center sm:justify-between">
+          <span
+            className={cn(
+              "text-xs text-muted-foreground tabular-nums",
+              left < 60_000 && "text-warning",
+            )}
+            title={fullTime(request.expiresAt)}
           >
-            Open Sharing
-          </Button>
+            {expires}
+          </span>
           {gone ? (
             <Button onClick={closeReview}>Close</Button>
           ) : (
@@ -172,4 +217,14 @@ export function JoinRequestDialog() {
       </DialogContent>
     </Dialog>
   );
+}
+
+/* what approving would give, in words: the whole node is the broad one */
+function grantText(request: JoinRequest, nodeName: string) {
+  const { scope } = request;
+  if (scope.kind === "node")
+    return `They'd get all of ${nodeName}: its agents, sessions and settings, and they could send requests to any of its agents.`;
+  if (scope.kind === "pack")
+    return `They'd get the ${scope.name} pack's data and pages on ${nodeName}, and nothing else.`;
+  return `They could start sessions with the ${scope.name} agent on ${nodeName}, and nothing else.`;
 }
