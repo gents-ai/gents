@@ -26,7 +26,7 @@ pub const UX_PLUGIN_AREAS: &[&str] = &[
 /// input `{"role":"ux"}` is `{"module":"<esm>","css":"<optional>"}`)
 /// produces the module. Whichever produced it, the module passes the same
 /// gate: an import allowlist and the declared-contributions check.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackUxPlugin {
     /// Unique within the pack; the desktop shows it as `<ns>/<pack>/<name>`.
@@ -56,7 +56,7 @@ pub struct PackUxPlugin {
 
 /// One `DatastoreToolSurface` a UX plugin's pages may call into, by the
 /// surface's id on the agent's node, narrowed to the named tools.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UxDataSurface {
     pub surface: String,
@@ -74,7 +74,7 @@ pub fn is_valid_ux_data_tool_name(name: &str) -> bool {
 
 /// What a UX plugin declares it contributes: the gate the desktop's
 /// plugin context enforces on every `register` call.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UxContributions {
     /// Area ids, each one of [`UX_PLUGIN_AREAS`].

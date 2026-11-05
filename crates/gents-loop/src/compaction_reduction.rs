@@ -197,7 +197,7 @@ pub fn apply_reduction_decision<T, C>(
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CompactionStrategy {
     StripToolResults,
