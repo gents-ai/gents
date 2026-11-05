@@ -37,6 +37,12 @@ pub(crate) struct McpRegisterArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to update instead of local home state")]
     pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        value_name = "DID",
+        help = "Node that owns the service. Defaults to this home's node"
+    )]
+    pub(crate) node_did: Option<String>,
     #[arg(value_name = "SERVICE")]
     pub(crate) service: String,
     #[arg(long, value_name = "URL", help = "Streamable HTTP MCP endpoint")]
@@ -60,7 +66,17 @@ pub(crate) struct McpProbeArgs {
         help = "GraphQL endpoint to read registry rows instead of local home state"
     )]
     pub(crate) graphql: Option<String>,
-    #[arg(long, action = ArgAction::SetTrue, help = "Probe every online MCP service")]
+    #[arg(
+        long,
+        value_name = "DID",
+        help = "Node that owns the service. Defaults to this home's node"
+    )]
+    pub(crate) node_did: Option<String>,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        help = "Probe every enabled MCP service of the node"
+    )]
     pub(crate) all: bool,
     #[arg(long, default_value = "5s", value_name = "DURATION")]
     pub(crate) timeout: String,
