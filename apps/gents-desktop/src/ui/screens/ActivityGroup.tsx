@@ -79,11 +79,14 @@ function Step({
         <>
           {note && <p className="pb-2 text-xs text-muted-foreground">{note}</p>}
           {open ? (
-            asked ? (
-              <FiledQuestion itemId={asked.itemId} question={asked.question} />
-            ) : (
-              <ToolBody tool={tool} />
-            )
+            /* find counts a step's output on its own */
+            <div data-find-part={`step:${tool.itemKey}`} className="contents">
+              {asked ? (
+                <FiledQuestion itemId={asked.itemId} question={asked.question} />
+              ) : (
+                <ToolBody tool={tool} />
+              )}
+            </div>
           ) : null}
         </>
       ) : undefined}
@@ -414,6 +417,7 @@ export function Reasoning({ text, stateKey }: { text: string; stateKey?: string 
       <CollapsibleContent className="mt-1 border-l border-border pl-3">
         <div
           ref={body}
+          data-find-part={stateKey ? `reasoning:${stateKey}` : undefined}
           className={cn(
             "relative text-muted-foreground",
             !all && "max-h-80 overflow-hidden",

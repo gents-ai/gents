@@ -13,6 +13,7 @@ export type SearchTarget =
       kind: "node";
       nodeDid: string;
       name: string;
+      avatar: string | null;
       /** the node the app works with now */
       current?: boolean;
       /** the one before it, which the last-node key goes back to */
@@ -96,6 +97,8 @@ export type SearchSources = {
   nodes: readonly {
     nodeDid: string;
     name: string;
+    /** the node's saved portrait, if it has one */
+    avatar: string | null;
     place: string;
     offline: boolean;
     current?: boolean;
@@ -137,6 +140,7 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
           kind: "node",
           nodeDid: n.nodeDid,
           name: n.name,
+          avatar: n.avatar,
           current: n.current,
           last: n.last,
         },

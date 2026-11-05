@@ -8,6 +8,7 @@ import { NavPanel } from "@/app/RailFlyout";
 import { switchedRoute } from "@/app/NodeSwitcher";
 import { bindNavigationGuard } from "@/lib/router";
 import { NewSession } from "@/screens/session/NewSession";
+import { avatarSrc } from "@/lib/avatar";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, testApp } from "./app-fixture";
 
@@ -25,6 +26,32 @@ describe("switching node", () => {
       sessionId: null,
     });
     expect(switchedRoute({ name: "mailbox" }, "b")).toBeNull();
+  });
+
+  it("draws each node with its saved portrait", async () => {
+    const app = testApp({
+      deployments: [
+        node(),
+        node({
+          nodeDid: "did:key:z6MkJuno",
+          label: "Juno",
+          source: "enrollment",
+          nodeConfig: { node_did: "did:key:z6MkJuno", avatar: "12" },
+          node: { ...deployment.node, nodeDid: "did:key:z6MkJuno", displayName: null },
+        }),
+      ],
+      selection: { nodeDid: deployment.nodeDid },
+    });
+    renderIn(
+      app,
+      <TooltipProvider>
+        <NavPanel route={{ name: "mailbox" }} settings={null} syncRow={false} />
+      </TooltipProvider>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: "Switch node" }));
+    const juno = await screen.findByRole("menuitemradio", { name: /Juno/ });
+    expect(juno.querySelector(`img[src="${avatarSrc("12")}"]`)).not.toBeNull();
   });
 
   it("lists the nodes from the nav's node row and makes the chosen one active", async () => {

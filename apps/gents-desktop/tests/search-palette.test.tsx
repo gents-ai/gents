@@ -16,6 +16,7 @@ import {
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 import { useExclusivePopover } from "../src/ui/hooks/useExclusivePopover";
 import { MailboxStack } from "../src/ui/screens/MailboxStack";
+import { avatarSrc } from "@/lib/avatar";
 
 const NODE = "did:key:z6MkAgent";
 
@@ -287,6 +288,34 @@ describe("the search palette", () => {
     await waitFor(() =>
       expect(app.stores.selection.getState().nodeDid).toBe("did:key:juno"),
     );
+  });
+
+  it("draws a node result with the node's saved portrait", () => {
+    const app = testApp({
+      deployments: [
+        node(),
+        node({
+          nodeDid: "did:key:juno",
+          label: "Juno",
+          source: "enrollment",
+          nodeConfig: { node_did: "did:key:juno", avatar: "12" },
+          node: { ...node().node, nodeDid: "did:key:juno", displayName: null },
+        }),
+      ],
+      selection: { nodeDid: NODE },
+    });
+    renderIn(app, <SearchPalette />);
+    act(() => openSearch());
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "juno" },
+    });
+    const juno = screen
+      .getAllByRole("option")
+      .find((o) => o.textContent?.includes("Juno"));
+    expect(juno?.querySelector(`img[src="${avatarSrc("12")}"]`)).not.toBeNull();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search" }), {
+      key: "Escape",
+    });
   });
 
   it("names the pack an agent came from, and finds its agents by the pack", () => {

@@ -7,7 +7,7 @@ import { fleetNodes } from "@/lib/scope";
 import { shownNodes, useHidden } from "@/lib/hidden";
 import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { useApp } from "./AppContext";
 import { NodeActivity } from "./NodeActivity";
 import { switchedRoute } from "./NodeSwitcher";
@@ -59,6 +59,7 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
                 <span className="relative grid size-4 shrink-0 place-items-center">
                   <NodeAvatar
                     name={name}
+                    {...nodeAvatarOf(node)}
                     className={cn("size-4", !node.dialSucceeded && "opacity-50")}
                   />
                   <span

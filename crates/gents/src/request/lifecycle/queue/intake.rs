@@ -127,12 +127,17 @@ pub(crate) fn boundary_candidate(rows: &[AgentRequestRow]) -> Option<&AgentReque
         {
             return None;
         }
-        let agent_steer = queue.source == QueueSource::Steering
-            && row.admission_kind.as_deref() != Some("runtime-internal")
+        let direct_steer = row.admission_kind.as_deref() != Some("runtime-internal")
             && row.runtime_source_kind.is_none()
-            && row.caused_by_parent_request_doc_id.is_some()
-            && row.caused_by_parent_tool_call_doc_id.is_some();
-        return (!passed_queue || agent_steer).then_some(row);
+            && match queue.source {
+                QueueSource::User => true,
+                QueueSource::Steering => {
+                    row.caused_by_parent_request_doc_id.is_some()
+                        && row.caused_by_parent_tool_call_doc_id.is_some()
+                }
+                _ => false,
+            };
+        return (!passed_queue || direct_steer).then_some(row);
     }
     None
 }

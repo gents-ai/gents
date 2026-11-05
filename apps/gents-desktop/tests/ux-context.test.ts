@@ -70,6 +70,47 @@ afterEach(() => {
 });
 
 describe("ux plugin context", () => {
+  it("binds a data call to the expected runtime before dispatch", async () => {
+    let node = "did:key:a";
+    host.shell.selectedDeployment = () => ({ nodeDid: node }) as never;
+    const call = vi.fn(async () => ({ kind: "create" as const, output: {} }));
+    host.data = { call, surfaces: async () => [] };
+    const ctx = createUxContext("docs", {
+      onDispose: (dispose) => collected.push(dispose),
+      listing: "gents/docs/docs",
+    });
+    expect(ctx.data.supportsExpectedNode).toBe(true);
+    node = "did:key:b";
+    await expect(ctx.data.call("docs", "save", {}, "did:key:a")).rejects.toThrow(
+      "selected runtime changed",
+    );
+    expect(call).not.toHaveBeenCalled();
+    await ctx.data.call("docs", "save", {}, "did:key:b");
+    expect(call).toHaveBeenCalledWith(
+      "gents/docs/docs",
+      "did:key:b",
+      "docs",
+      "save",
+      {},
+    );
+    let finish!: (value: { kind: "create"; output: object }) => void;
+    call.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const pending = ctx.data.call("docs", "save", {}, "did:key:b");
+    node = "did:key:c";
+    finish({ kind: "create", output: {} });
+    await pending;
+    expect(call).toHaveBeenLastCalledWith(
+      "gents/docs/docs",
+      "did:key:b",
+      "docs",
+      "save",
+      {},
+    );
+  });
   it("namespaces ids and stamps provenance", () => {
     const ctx = createUxContext("acme", { onDispose: (d) => collected.push(d) });
     ctx.register({ id: "row", area: SESSION_HEADER_ACTIONS_AREA, render: () => null });

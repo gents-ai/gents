@@ -95,6 +95,15 @@ describe("the experimental features settings", () => {
     expect(reset).toBeDisabled();
   });
 
+  it("asks the system not to autocorrect the search", () => {
+    openSection();
+    const search = screen.getByRole("searchbox", {
+      name: "Search experimental features",
+    });
+    expect(search).toHaveAttribute("autocorrect", "off");
+    expect(search).toHaveAttribute("spellcheck", "false");
+  });
+
   it("filters by name, description and id, and clears the search with Escape", async () => {
     const user = userEvent.setup();
     openSection();

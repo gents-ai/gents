@@ -124,10 +124,19 @@ pub struct EnrollmentDecisionRejected {
 
 /// Pending enrollment discovery uses a bounded wait on the live runtime.
 pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
-    let identity = resolve_home_identity(args.home.as_deref())
-        .context("loading operator identity for pending enrollments")?;
+    let home = resolve_home_dir(args.home.as_deref());
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let mut url = reqwest::Url::parse(graphql.url()).context("parsing runtime GraphQL endpoint")?;
+    let body = load_pending_enrollments(&home, graphql.url()).await?;
+    print_json(&body)
+}
+
+pub(crate) async fn load_pending_enrollments(
+    home: &std::path::Path,
+    graphql: &str,
+) -> Result<serde_json::Value> {
+    let identity = resolve_home_identity(Some(home))
+        .context("loading operator identity for pending enrollments")?;
+    let mut url = reqwest::Url::parse(graphql).context("parsing runtime GraphQL endpoint")?;
     url.set_path("/enrollment/pending");
     url.set_query(None);
     url.set_fragment(None);
@@ -163,5 +172,5 @@ pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error")
     );
-    print_json(&body)
+    Ok(body)
 }

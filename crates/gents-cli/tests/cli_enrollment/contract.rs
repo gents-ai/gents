@@ -200,6 +200,19 @@ async fn run_contract_with_streaming_cadence(
             reached("enrollment_offered");
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
             reached("runtime_saw_request");
+            let stored = graphql_query(&graphql, "{ NetworkEnrollmentRequest { request_id profile issued_at } }").await?;
+            let signed_request = stored.pointer("/data/NetworkEnrollmentRequest")
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.iter().find(|row| row["request_id"] == pending.request_id))
+                .context("runtime did not return the signed enrollment request")?;
+            let queue = run_cli_json(&runtime_home, &["p2p", "enrollment", "pending", "--home", home])?;
+            let displayed = queue["pending"].as_array()
+                .and_then(|rows| rows.iter().find(|row| row["request_id"] == pending.request_id))
+                .context("operator pending queue omitted the enrollment request")?;
+            for field in ["profile", "issued_at"] {
+                anyhow::ensure!(signed_request[field].as_str().is_some_and(|value| !value.is_empty()), "signed request lacks {field}");
+                anyhow::ensure!(displayed[field] == signed_request[field], "pending queue did not preserve signed {field}");
+            }
             run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
             reached("operator_approved");
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
@@ -1145,7 +1158,13 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
         let terminal = call(owner.node_identity().did().to_owned(), key.clone()).await?;
         anyhow::ensure!(terminal.status() == reqwest::StatusCode::NOT_FOUND, "terminal activity remained visible");
-        run_cli_json(&runtime_home, &["p2p", "enrollment", "revoke", &enrollment, "--home", home])?;
+        let revocation = gents_server::server_host::decide_managed_enrollment(
+            &runtime_home,
+            &graphql,
+            &enrollment,
+            gents_server::server_host::ManagedEnrollmentDecision::Revoke,
+        ).await?;
+        anyhow::ensure!(revocation.state == "revoked", "unexpected revocation: {revocation:?}");
         let revoked = timeout(ENROLL_BUDGET, async {
             loop {
                 let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;

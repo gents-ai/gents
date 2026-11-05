@@ -22,7 +22,7 @@ import { useAriaKeys, useKeysHint } from "@/commands/commands";
 import { Hint } from "@/screens/Hint";
 import { fleetNodes } from "@/lib/scope";
 import { shownNodes, useHidden } from "@/lib/hidden";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { NodeActivity } from "./NodeActivity";
 
 /** Where switching to `nodeDid` leads from `route`: the same page on the
@@ -128,6 +128,7 @@ export function NodeSwitcher({
                       <span className="relative shrink-0">
                         <NodeAvatar
                           name={name}
+                          {...nodeAvatarOf(node)}
                           className={cn("size-6", !node.dialSucceeded && "opacity-50")}
                         />
                         <span
