@@ -242,7 +242,7 @@ async fn replacements_were_applied(
 ) -> Result<bool> {
     for (index, old) in command.edit.selected_request_doc_ids.iter().enumerate() {
         let query = format!(
-            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{_docID lifecycle_state superseded_by_request_doc_id}} }}"#,
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{_docID lifecycle_state superseded_by_request_doc_id failure_reason}} }}"#,
             escape_graphql_string(old)
         );
         let response = txn.execute(&query).await?;
@@ -257,7 +257,11 @@ async fn replacements_were_applied(
                 row["lifecycle_state"] == "superseded"
                     && row["superseded_by_request_doc_id"].as_str() == Some(doc)
             }
-            None => row["lifecycle_state"] == "interrupted",
+            None => {
+                row["lifecycle_state"] == "interrupted"
+                    && row["failure_reason"].as_str()
+                        == Some(crate::request::lifecycle::REMOVED_REASON)
+            }
         };
         if !applied {
             return Ok(false);
@@ -373,6 +377,11 @@ pub(crate) async fn process_command(
                     crate::request::lifecycle::queue::PersistedReplacements::Conflicting =>
                         (SessionInputEditOutcome::Rejected, "replacement identity conflicts with edit".into(), Vec::new()),
                     crate::request::lifecycle::queue::PersistedReplacements::None => {
+                        if command.replacements.is_empty()
+                            && replacements_were_applied(txn, &command, &[]).await? {
+                            // A terminal removal does not name the command that caused it.
+                            return Ok(None);
+                        }
                         let now = Utc::now();
                         let issued_at = DateTime::parse_from_rfc3339(&command.issued_at)?.with_timezone(&Utc);
                         if now < issued_at { return Ok(Some(issued_at)); }
