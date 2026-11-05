@@ -61,7 +61,7 @@ if (backend === "deterministic" && params.get("scenario") === "notices") {
           companionProfiles: [],
           switchCost: "",
           unavailableReason:
-            "no other Claude account offers claude-sonnet-5-5; add one with `gents claude-login --label <label>`",
+            "no other Claude account offers claude-sonnet-5-5; add one with `gents auth login claude --label <label>`",
           goal: {
             goalId: "goal-limit",
             status: "usage_limited",

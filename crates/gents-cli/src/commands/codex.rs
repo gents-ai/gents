@@ -155,8 +155,11 @@ pub(crate) async fn ensure_endpoint_is_this_homes(remote: &str, expected_did: &s
 
 fn foreign_endpoint_refusal(remote: &str, identity: Option<&RuntimeIdentity>) -> String {
     let other_home = identity.map_or(String::new(), |identity| {
-        let home = identity.home.display();
-        format!(" It serves Gents home {home}; run `gents --home {home}` to open it.")
+        format!(
+            " It serves Gents home {}; run `gents --home {}` to open it.",
+            identity.home.display(),
+            crate::shell_word(&identity.home)
+        )
     });
     format!(
         "could not confirm the Codex endpoint {remote} belongs to this Gents home.{other_home} To use this home, stop whatever holds that endpoint."
@@ -636,6 +639,22 @@ pub(crate) mod tests {
         assert!(message.contains("--agent"), "{message}");
         assert!(message.contains("local"), "{message}");
         assert!(message.contains("pinned"), "{message}");
+    }
+
+    #[test]
+    fn printed_commands_quote_a_home_with_spaces() {
+        let mut other = identity(Some(&[]));
+        other.home = PathBuf::from("/srv/other home");
+        let refusal = foreign_endpoint_refusal("127.0.0.1:1", Some(&other));
+        assert!(
+            refusal.contains("`gents --home '/srv/other home'`"),
+            "{refusal}"
+        );
+        let refusal = cannot_open_refusal(&other, Path::new("/srv/my home"));
+        assert!(
+            refusal.contains("gents status --home '/srv/my home'"),
+            "{refusal}"
+        );
     }
 
     #[tokio::test]

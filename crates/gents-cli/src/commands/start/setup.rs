@@ -223,7 +223,10 @@ fn next_step_lines(initialized: &serde_json::Value, home: &Path) -> Vec<String> 
         .filter(|step| !matches!(*step, "gents server" | "gents codex"))
         .map(|step| {
             if step.starts_with("gents auth login") {
-                format!("Sign in later with `{step} --home {}`.", home.display())
+                format!(
+                    "Sign in later with `{step} --home {}`.",
+                    crate::shell_word(home)
+                )
             } else if step.starts_with("ollama ") || step.starts_with("llama-server ") {
                 format!("If your model is not running yet, start it with `{step}`.")
             } else {
@@ -285,6 +288,13 @@ mod tests {
             ]
         );
         assert!(next_step_lines(&serde_json::json!({}), home).is_empty());
+        assert_eq!(
+            next_step_lines(
+                &serde_json::json!({"next_steps": ["gents auth login codex"]}),
+                Path::new("/srv/my home")
+            ),
+            ["Sign in later with `gents auth login codex --home '/srv/my home'`."]
+        );
     }
 
     #[test]

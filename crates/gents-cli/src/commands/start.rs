@@ -89,8 +89,8 @@ impl InterfaceEndpoint {
                 ensure!(
                     is_mine && holds_one,
                     "the Grok socket {socket} is not held by this Gents home's runtime, so Grok did not open. Stop whatever holds it (`lsof {socket}` names it), restart this home's runtime with `gents service restart --home {home}` or whatever is running it, with its Codex endpoint on, then run `gents` again.",
-                    socket = socket.display(),
-                    home = home.display()
+                    socket = crate::shell_word(socket),
+                    home = crate::shell_word(home)
                 );
                 Ok(())
             }
@@ -209,7 +209,7 @@ async fn ensure_up_runtime_opens(
         bail!(
             "this home's runtime is up, but its {} has not opened. Check `gents status --home {home}`: a missing agent keeps it closed, and a restart will not help that. Otherwise restart it with `gents service restart --home {home}`, or restart whatever is running it, then run `gents` again.",
             endpoint.describe(),
-            home = home.display()
+            home = crate::shell_word(home)
         );
     }
     endpoint.ensure_is_this_homes(home, expected_did).await
@@ -235,7 +235,7 @@ async fn wait_for_endpoint(
                 "the runtime did not open its {} within {} s; it was left running, check `gents service status --home {}`",
                 endpoint.describe(),
                 timeout.as_secs_f32(),
-                home.display()
+                crate::shell_word(home)
             );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -246,7 +246,7 @@ async fn wait_for_endpoint(
 fn no_service_manager_message(home: &Path) -> String {
     format!(
         "run `gents server --home {}` in another terminal, then `gents`",
-        home.display()
+        crate::shell_word(home)
     )
 }
 
@@ -270,7 +270,7 @@ pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
             crate::commands::codex::CODEX_BIN_ENV,
         ),
         InterfaceClient::Grok => (
-            "Grok was not found. Install the Grok CLI from x.ai",
+            "Grok was not found. Install it with `curl -fsSL https://x.ai/cli/install.sh | bash`",
             GROK_BIN_ENV,
         ),
     };
@@ -463,6 +463,70 @@ mod tests {
         assert!(
             refusals.iter().all(|refusal| refusal == &refusals[0]),
             "{refusals:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn printed_commands_quote_a_home_and_socket_with_spaces() {
+        let home = Path::new("/srv/my home");
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let mut codex = InterfaceEndpoint::Codex {
+            remote: format!("ws://127.0.0.1:{port}/"),
+        };
+        let mut grok = InterfaceEndpoint::Grok {
+            socket: PathBuf::from("/tmp/my held.sock"),
+            runtime: format!("ws://127.0.0.1:{port}/"),
+        };
+
+        for (message, command) in [
+            (
+                no_service_manager_message(home),
+                "gents server --home '/srv/my home'",
+            ),
+            (
+                wait_for_endpoint(home, &codex, Duration::ZERO)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "gents service status --home '/srv/my home'",
+            ),
+            (
+                ensure_up_runtime_opens(home, "mine", &mut codex, Duration::ZERO)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "gents service restart --home '/srv/my home'",
+            ),
+            (
+                grok.ensure_is_this_homes(home, "mine")
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "gents service restart --home '/srv/my home'",
+            ),
+            (
+                grok.ensure_is_this_homes(home, "mine")
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "lsof '/tmp/my held.sock'",
+            ),
+        ] {
+            assert!(message.contains(command), "{message}");
+        }
+    }
+
+    #[test]
+    fn the_install_text_gives_a_real_line_for_each_interface() {
+        let codex = interface_install_message(InterfaceClient::Codex);
+        assert!(codex.contains("brew install codex"), "{codex}");
+        assert!(codex.contains("npm install -g @openai/codex"), "{codex}");
+        let grok = interface_install_message(InterfaceClient::Grok);
+        assert!(
+            grok.contains("curl -fsSL https://x.ai/cli/install.sh | bash"),
+            "{grok}"
         );
     }
 

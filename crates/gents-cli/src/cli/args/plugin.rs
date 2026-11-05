@@ -187,7 +187,9 @@ pub(crate) struct PluginRunArgs {
 pub(crate) struct PluginBindArgs {
     #[arg(help = "Installed plugin, as `name` or `namespace/name`")]
     pub(crate) name: String,
-    #[arg(help = "Existing inference profile (see `gents profile list`) the plugin calls through")]
+    #[arg(
+        help = "Existing inference profile (see `gents config profile list`) the plugin calls through"
+    )]
     pub(crate) profile: String,
     #[command(flatten)]
     pub(crate) scope: ScopeArgs,

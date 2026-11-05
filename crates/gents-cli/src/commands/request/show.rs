@@ -62,7 +62,7 @@ async fn load_request_show_snapshot(
     let request_rows = request_response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("request show query omitted rows")?;
+        .context("debug request show query omitted rows")?;
     anyhow::ensure!(
         request_rows.len() == 1,
         "request {request_id} is missing or ambiguous"
@@ -269,16 +269,16 @@ fn request_show_tool_calls_query(
     let request_doc_id = request
         .doc_id
         .as_deref()
-        .context("request show missing physical identity")?;
+        .context("debug request show missing physical identity")?;
     let scope = gents::session::session_scope_filter(
         request
             .node_did
             .as_deref()
-            .context("request show missing node")?,
+            .context("debug request show missing node")?,
         request
             .session_id
             .as_deref()
-            .context("request show missing session")?,
+            .context("debug request show missing session")?,
         request.requester_did.as_deref(),
     );
     let mut fields = vec![
