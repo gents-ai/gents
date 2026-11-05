@@ -762,12 +762,29 @@ pub(crate) async fn persisted_replacements_in_txn(
                                 .as_str(),
                         ) =>
             {
-                exact.push(
-                    row["_docID"]
-                        .as_str()
-                        .context("replacement lacks physical identity")?
-                        .to_owned(),
-                );
+                let doc = row["_docID"]
+                    .as_str()
+                    .context("replacement lacks physical identity")?
+                    .to_owned();
+                if expected_docs.is_some() {
+                    let owners = txn
+                        .document_owners("AgentRequest", std::slice::from_ref(&doc))
+                        .await?;
+                    let [owner] = owners.as_slice() else {
+                        anyhow::bail!("replacement native owner observation is unavailable");
+                    };
+                    anyhow::ensure!(
+                        owner.doc_id == doc && owner.visible,
+                        "replacement native owner observation is unavailable"
+                    );
+                    let Some(owner) = owner.owner.as_ref() else {
+                        anyhow::bail!("replacement native owner observation is unavailable");
+                    };
+                    if owner.as_str() != create.admission.signer_did {
+                        return Ok(PersistedReplacements::Conflicting);
+                    }
+                }
+                exact.push(doc);
             }
             Some(_) => return Ok(PersistedReplacements::Conflicting),
         }

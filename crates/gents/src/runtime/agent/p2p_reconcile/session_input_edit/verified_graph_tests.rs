@@ -18,6 +18,8 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             None,
         )?);
         let user = KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
+        let collaborator =
+            KeyIdentity::load_or_create(directory.path().join("collaborator.key"), None)?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         let node = Arc::new(
@@ -32,7 +34,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let binding = crate::store::identity::provision_agent_identity(root.as_ref())?;
         let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
         let admin = ConfigAccess::local_as(node.clone(), root.did().parse()?);
-        for did in [user.did(), binding.agent_did.as_str()] {
+        for did in [user.did(), collaborator.did(), binding.agent_did.as_str()] {
             for permission in [
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
@@ -84,6 +86,14 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 &::identity::Did::new(&binding.agent_did)?,
             )
             .await?;
+        access
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "session_writer",
+                &::identity::Did::new(collaborator.did())?,
+            )
+            .await?;
         let mut original = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "original",
@@ -127,10 +137,20 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 authored_input: None,
             }],
         };
+        let author: &dyn NodeIdentity = if case["selectedAllowed"].as_bool().unwrap() {
+            &user
+        } else {
+            &collaborator
+        };
+        let edit_access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), author.did())
+                .with_client_signing_capability(author.client_signing_capability()?)?
+                .with_client_signed_agent_creates(),
+        );
         let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
-            &access,
-            &user,
-            AgentRequestAdmissionRecord::client(user.did()),
+            &edit_access,
+            author,
+            AgentRequestAdmissionRecord::client(author.did()),
             root.did(),
             "session",
             user.did(),
@@ -138,12 +158,18 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         )
         .await?;
         let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
-            test_signed_replacement_fields(&access, &user, root.did(), "session", &replacements)
-                .await;
+            test_signed_replacement_fields(
+                &edit_access,
+                author,
+                root.did(),
+                "session",
+                &replacements,
+            )
+            .await;
         let mut command = SessionInputEdit {
             version: SESSION_INPUT_EDIT_VERSION,
             command_id: uuid::Uuid::new_v4().to_string(),
-            requester_did: user.did().to_owned(),
+            requester_did: author.did().to_owned(),
             requester_peer_id: None,
             node_did: root.did().to_owned(),
             session_id: "session".into(),
@@ -157,7 +183,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             replacement_evidence,
             signature: vec![],
         };
-        command.signature = user.sign(&command.signing_payload()).await?;
+        command.signature = author.sign(&command.signing_payload()).await?;
         let mut altered = command.replacement_evidence[0].clone();
         let signature = altered["composite_signature"]
             .as_array_mut()
@@ -174,7 +200,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             case["tamperedAccepted"].as_bool().unwrap()
         );
         let command_doc =
-            crate::request::lifecycle::queue::publish_edit_command(&access, &command).await?;
+            crate::request::lifecycle::queue::publish_edit_command(&edit_access, &command).await?;
         let command_row = access.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid height fieldName }} }} }}"#, escape_graphql_string(&command_doc))).await?;
         let command_version = crate::store::graphql::document_composite_version(
             &command_row["data"]["AgentSessionInputEdit"][0],
@@ -183,18 +209,69 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         .context("command version missing")?;
         assert_eq!(
             node.verified_block_signer_did(&command_version.cid).await?,
-            user.did()
+            author.did()
         );
         if !case["selectedAllowed"]
             .as_bool()
             .context("modeled selection missing")?
         {
-            admin
-                .revoke_node_permission(
-                    &::identity::Did::new(user.did())?,
-                    NodePermission::DocumentUpdate,
-                )
+            let selected_agent = ConfigAccess::local_managed_agent(
+                node.clone(),
+                ::identity::Did::new(agent.did())?,
+                agent.as_ref(),
+            )?;
+            let subject = ::identity::Did::new(author.did())?;
+            let observed = selected_agent
+                .transact_readonly("test.edit.selected_permission", |txn| {
+                    let subject = &subject;
+                    let session = &command.session_doc_id;
+                    let agent_doc = &command.agent_doc_id;
+                    let old_doc = &old_doc;
+                    Box::pin(async move {
+                        let named = |permission: &str| defra_node::DocumentAccessMode::Named {
+                            permission: permission.into(),
+                            node_permission: NodePermission::DocumentUpdate,
+                        };
+                        let session = txn
+                            .observe_document_access(
+                                subject,
+                                "AgentSession",
+                                std::slice::from_ref(session),
+                                named("update"),
+                            )
+                            .await?;
+                        let agent = txn
+                            .observe_document_access(
+                                subject,
+                                "Agent",
+                                std::slice::from_ref(agent_doc),
+                                named("invoke"),
+                            )
+                            .await?;
+                        let selected = txn
+                            .observe_document_access(
+                                subject,
+                                "AgentRequest",
+                                std::slice::from_ref(old_doc),
+                                named("update"),
+                            )
+                            .await?;
+                        Ok::<_, anyhow::Error>((session, agent, selected))
+                    })
+                })
                 .await?;
+            assert_eq!(
+                observed.0.as_slice(),
+                [defra_node::DocumentAccessDecision::Allowed]
+            );
+            assert_eq!(
+                observed.1.as_slice(),
+                [defra_node::DocumentAccessDecision::Allowed]
+            );
+            assert_eq!(
+                observed.2.as_slice(),
+                [defra_node::DocumentAccessDecision::Denied]
+            );
         }
         if case["selectedAllowed"].as_bool().unwrap() {
             let (failure, mutations) = ConfigApplyTxn::with_successful_mutation_failure_at(
