@@ -30,7 +30,19 @@ source consistency checks, not a separate runtime compatibility version.
   side with no restart, with no saved agent setting. For Codex this needs a local
   runtime with no pinned agent, and `--agent` is refused for any other endpoint.
 - When `gents` opens Codex from a directory inside the tool root, the thread starts
-  there. From outside it, `gents` prints the directory the thread will use.
+  there. From outside it, `gents` prints the directory the thread will use, before
+  Codex opens and again after it exits. Threads default to the tool root.
+- First-run setup asks which folder agents may work in, whichever tools were chosen.
+  It refuses the filesystem root and anything above the person's home, as the desktop
+  does, and asks for confirmation before using the whole home.
+- `gents config client set codex|grok` chooses the interface a home opens, and
+  `config client show` reads it. A home set to Grok serves the Grok socket. `gents`
+  opens the socket the runtime reports and refuses one its runtime does not hold.
+- `gents` remembers the home setup chose. This also moves the desktop's default home.
+- The shim answers `config/read` for a directory inside the tool root as trusted, so
+  Codex does not ask about it on every open. Outside the tool root Codex still asks.
+- The shim refuses a WebSocket handshake carrying `Origin`. With a loopback bind and no
+  public URL, `GET /runtime` answers only a loopback `Host`.
 
 ## 1.0.0-rc1 - 2026-11-03
 
