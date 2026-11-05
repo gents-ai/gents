@@ -7,7 +7,7 @@
   "authors": ["gents"],
   "tags": ["fixture"],
   "kind": "documents",
-  "assets": ["pack_config.json", "schemas/shared_fixture_move.graphql"],
+  "assets": ["README.md", "pack_config.json", "schemas/shared_fixture_move.graphql"],
   "dependencies": [],
   "config": "pack_config.json",
   "schemas": ["schemas/shared_fixture_move.graphql"]
