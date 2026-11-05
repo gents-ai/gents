@@ -82,6 +82,7 @@ function show({
   records = [],
   limits = {},
   olderRuntime = false,
+  clientDid,
   initNodeDid = OWN,
   decide = vi.fn(async () => ({
     requestId: "request-laptop",
@@ -94,6 +95,8 @@ function show({
   records?: JoinHistoryView["history"];
   limits?: Partial<JoinHistoryView>;
   olderRuntime?: boolean;
+  /** this app's own DID, as the client snapshot reports it */
+  clientDid?: string;
   initNodeDid?: string;
   decide?: (request: unknown) => Promise<JoinRequestDecisionView>;
 } = {}) {
@@ -154,7 +157,7 @@ function show({
     api,
     snapshot: {
       bootstrap: { ...bootstrap, initNodeDid },
-      client: { deployments: [node()] },
+      client: { deployments: [node()], ...(clientDid ? { clientDid } : {}) },
     },
   });
   renderIn(app, <AgentScreen nodeDid={deployment.nodeDid} section="sharing" />);
@@ -415,6 +418,22 @@ describe("the Sharing page", () => {
     const line = within(history).getByRole("listitem");
     expect(line.getAttribute("aria-label")).toBe("Revoked: did:key:z6MkMe…ABC789");
     expect(line.textContent).toContain("By did:key:z6MkOp…DEF456");
+  });
+
+  it("marks this app's own way into the node, and doesn't offer to revoke it", async () => {
+    show({
+      requests: [],
+      members: [member(), member({ requestId: "request-app", candidateDid: OPERATOR })],
+      clientDid: OPERATOR,
+    });
+    const rows = within(
+      await screen.findByRole("list", { name: "Who has access" }),
+    ).getAllByRole("listitem");
+    const app = rows.find((row) => row.textContent?.includes("This app"))!;
+    expect(app).toBeTruthy();
+    expect(within(app).queryByRole("button", { name: /^More for/ })).toBeNull();
+    const other = rows.find((row) => row !== app)!;
+    expect(within(other).getByRole("button", { name: /^More for/ })).toBeTruthy();
   });
 
   it("lists what was decided, and what the runtime says it left out", async () => {

@@ -1,3 +1,4 @@
+import { useThisAppDid } from "@/hooks/useClient";
 import type {
   SharingDecision,
   SharingDecisionKind,
@@ -38,7 +39,8 @@ export function historyNote(limits: SharingHistoryLimits | null) {
 /** One line of the node's sharing history: what happened to whom, for
     what, who decided it and when. */
 export function DecisionRow({ decision }: { decision: SharingDecision }) {
-  const who = partyName(decision.party);
+  const thisApp = useThisAppDid() === decision.party.did;
+  const who = `${partyName(decision.party)}${thisApp ? " (this app)" : ""}`;
   const when = shortTime(decision.at);
   return (
     <ItemRow
