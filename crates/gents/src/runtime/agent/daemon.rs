@@ -76,7 +76,10 @@ pub(crate) async fn verify_request_at_claim_boundary(
     Option<crate::request::admission::ClientClaimAdmission>,
 )> {
     let agent_did = agent_identity.did();
-    match verifier.verify_fresh_for_claim(&request, agent_did).await {
+    match verifier
+        .verify_fresh_for_claim_with_identity(&request, agent_identity)
+        .await
+    {
         Ok(verified) => Some(verified),
         Err(error) if error.is_denied() => {
             let reason = format!("request admission denied: {error:#}");

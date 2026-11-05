@@ -255,15 +255,17 @@ where
                 let skill_reminders = self
                     .prompt_builder
                     .selected_skill_reminders(selected_skill_ids);
-                let overlay = crate::tools::workspace::resolve_request_workspace_overlay(
-                    &self.node,
-                    &request,
-                    lifecycle.execution_generation()?,
-                    self.agent_config.tools.static_policy().bash.execution_mode
-                        == crate::tools::native::CommandExecutionMode::ArtifactWrite,
-                    self.operator_tool_root.as_deref(),
-                )
-                .await?;
+                let overlay =
+                    crate::tools::workspace::resolve_request_workspace_overlay_with_identity(
+                        &self.node,
+                        self.agent_config.agent_identity.as_ref(),
+                        &request,
+                        lifecycle.execution_generation()?,
+                        self.agent_config.tools.static_policy().bash.execution_mode
+                            == crate::tools::native::CommandExecutionMode::ArtifactWrite,
+                        self.operator_tool_root.as_deref(),
+                    )
+                    .await?;
                 let frozen_instruction_manifest =
                     crate::tools::workspace::frozen_instruction_manifest_from_overlay(
                         overlay.as_ref(),

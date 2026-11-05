@@ -246,7 +246,13 @@ pub(crate) async fn verify_fresh_local_self_request(
     }
     observation.hop_within_bound = request_hop_admitted(node, &row).await?;
     require_admitted_observation(observation, None)?;
-    verify_request_input(node, &row, &admission).await?;
+    verify_request_input(
+        node,
+        &row,
+        &admission,
+        (identity.did() == target_agent_did).then_some(identity),
+    )
+    .await?;
     row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
 }
 
@@ -645,18 +651,34 @@ impl AgentRequestAdmissionVerifier {
         request: &AgentRequest,
         target_agent_did: &str,
     ) -> AdmissionResult<AgentRequest> {
-        self.verify_fresh_with_observation(request, target_agent_did, None, false)
+        self.verify_fresh_with_observation(request, target_agent_did, None, false, None)
             .await
             .map(|(request, _)| request)
     }
 
+    #[cfg(test)]
     pub(crate) async fn verify_fresh_for_claim(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,
     ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
-        self.verify_fresh_with_observation(request, target_agent_did, None, true)
+        self.verify_fresh_with_observation(request, target_agent_did, None, true, None)
             .await
+    }
+
+    pub(crate) async fn verify_fresh_for_claim_with_identity(
+        &self,
+        request: &AgentRequest,
+        agent_identity: &dyn NodeIdentity,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        self.verify_fresh_with_observation(
+            request,
+            agent_identity.did(),
+            None,
+            true,
+            Some(agent_identity),
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -666,9 +688,15 @@ impl AgentRequestAdmissionVerifier {
         target_agent_did: &str,
         observed_at: chrono::DateTime<Utc>,
     ) -> AdmissionResult<AgentRequest> {
-        self.verify_fresh_with_observation(request, target_agent_did, Some(observed_at), false)
-            .await
-            .map(|(request, _)| request)
+        self.verify_fresh_with_observation(
+            request,
+            target_agent_did,
+            Some(observed_at),
+            false,
+            None,
+        )
+        .await
+        .map(|(request, _)| request)
     }
 
     async fn verify_fresh_with_observation(
@@ -677,6 +705,7 @@ impl AgentRequestAdmissionVerifier {
         target_agent_did: &str,
         test_observed_at: Option<chrono::DateTime<Utc>>,
         allow_cross_actor_client_claim: bool,
+        agent_identity: Option<&dyn NodeIdentity>,
     ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
         let row = load_signed_request_as(&self.node, &request.doc_id, target_agent_did).await?;
         let admission = row_admission(&row).map_err(AgentRequestAdmissionError::denied)?;
@@ -904,7 +933,7 @@ impl AgentRequestAdmissionVerifier {
             }
         }
         require_admitted_observation(observation, denied)?;
-        verify_request_input(&self.node, &row, &admission).await?;
+        verify_request_input(&self.node, &row, &admission, agent_identity).await?;
         let client_claim = (allow_cross_actor_client_claim
             && admission.kind == AgentRequestAdmissionKind::Client)
             .then(|| ClientClaimAdmission { row: row.clone() });
@@ -963,6 +992,7 @@ async fn verify_request_input(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
+    agent_identity: Option<&dyn NodeIdentity>,
 ) -> AdmissionResult<()> {
     use gents_protocol::request_input::QueueSource;
     let input = row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT);
@@ -989,9 +1019,32 @@ async fn verify_request_input(
         .and_then(|host| host.bash.as_ref())
         .and_then(|bash| bash.execution_mode)
         == Some(crate::tools::native::CommandExecutionMode::ArtifactWrite);
-    crate::tools::workspace::validate_request_workspace_input(node, &request, artifact_requested)
+    if let Some(agent_identity) = agent_identity {
+        crate::tools::workspace::validate_request_workspace_input_with_identity(
+            node,
+            agent_identity,
+            &request,
+            artifact_requested,
+        )
         .await
         .map_err(AgentRequestAdmissionError::denied)?;
+    } else if request
+        .workspace_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+            "workspace admission requires the selected held Agent"
+        )));
+    } else {
+        crate::tools::workspace::validate_request_workspace_input(
+            node,
+            &request,
+            artifact_requested,
+        )
+        .await
+        .map_err(AgentRequestAdmissionError::denied)?;
+    }
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
         && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);
     let client_goal =
