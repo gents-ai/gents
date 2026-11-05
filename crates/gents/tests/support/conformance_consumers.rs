@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "triggers::callback::tests::callback_parent_requires_the_selected_authenticated_agent",
+            package: "gents",
+            source_path: "crates/gents/src/triggers/callback/tests.rs",
+            module_path: "triggers::callback::tests",
+            function: "callback_parent_requires_the_selected_authenticated_agent",
+        },
+        ConformanceConsumer::RustTest {
             id: "tools::surface::root_publication::tests::native_workspace_root_publication_obeys_node_authority",
             package: "gents",
             source_path: "crates/gents/src/tools/surface/root_publication.rs",
