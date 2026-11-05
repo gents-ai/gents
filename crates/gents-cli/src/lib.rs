@@ -105,19 +105,44 @@ const ROOT_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
 
-Start               chat  codex  status
-Work                session  goal  task  job  mailbox
-Accounts            auth  cloud
-Configure           config  tools  mcp  pack
-Runtime             server  service  provision  reset  diagnose  p2p  desktop
-Data and debugging  data  debug
-Measure             eval  optimization
-                    version
+\x1b[1;4mStart\x1b[0m
+  chat          Chat with the selected or default agent in the terminal
+  codex         Open the Codex terminal UI against the local Node runtime
+  status        Show the current local runtime status
+\x1b[1;4mWork\x1b[0m
+  session       Manage and fork sessions
+  goal          Inspect and control durable session goals
+  task          Trigger configured Task documents on demand
+  job           Inspect and control plugin jobs
+  mailbox       List and resolve human-attention mailbox items
+\x1b[1;4mAccounts\x1b[0m
+  auth          Sign in, check credentials and manage subscription accounts
+  cloud         Sign in to and work with a gents cloud
+\x1b[1;4mConfigure\x1b[0m
+  config        Inspect and write runtime configuration documents
+  tools         Explain resolved agent tool surfaces
+  mcp           Probe registered MCP service health
+  pack          List, inspect, build, publish, install and exercise packs
+\x1b[1;4mRuntime\x1b[0m
+  server        Run the local gents runtime from an initialized home
+  service       Install and control the per-user native Gents runtime service
+  provision     Provision a local node home from a portable manifest root
+  reset         Clear persisted local runtime state
+  diagnose      Run local configuration and runtime diagnostics
+  p2p           Inspect and control live P2P runtime connectivity
+  desktop       Manage local desktop state
+  version       Print build and release metadata
+\x1b[1;4mData and debugging\x1b[0m
+  data          Query, write and export application documents and schemas
+  debug         Inspect requests, responses, traces, background calls and slots
+\x1b[1;4mMeasure\x1b[0m
+  eval          Run, inspect, compare and clean up evals
+  optimization  Run, inspect, promote and revert configuration optimization jobs
 
 Run `gents` with no command to set up a home and open a conversation.
 Run `gents <command> --help` for details.
 
-Options:
+\x1b[1;4mOptions:\x1b[0m
 {options}";
 const INIT_AFTER_HELP: &str = "\
 Bootstrap a local home directory with one default backend, one default agent, and a safe read-only Tools document.

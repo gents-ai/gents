@@ -155,7 +155,7 @@ pub(crate) enum Command {
     },
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
-    #[command(about = "Query, write, export and create application documents and schemas")]
+    #[command(about = "Query, write and export application documents and schemas")]
     Data {
         #[command(subcommand)]
         command: DataCommand,
@@ -191,7 +191,7 @@ pub(crate) enum Command {
         command: ConfigCommand,
     },
     #[command(
-        about = "Inspect low-level requests, responses, traces, background calls and fleet slots"
+        about = "Inspect requests, responses, traces, background calls and slots"
     )]
     Debug {
         #[command(subcommand)]

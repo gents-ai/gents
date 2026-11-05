@@ -94,7 +94,8 @@ fn old_names_stop_working() {
 
 #[test]
 fn root_help_lists_every_visible_command_exactly_once() {
-    const SECTIONS: &[&str] = &[
+    let template = crate::ROOT_HELP_TEMPLATE;
+    for section in [
         "Start",
         "Work",
         "Accounts",
@@ -102,22 +103,44 @@ fn root_help_lists_every_visible_command_exactly_once() {
         "Runtime",
         "Data and debugging",
         "Measure",
-        "",
-    ];
-    let mut listed: Vec<&str> = crate::ROOT_HELP_TEMPLATE
+    ] {
+        assert!(
+            template.contains(&format!("\x1b[1;4m{section}\x1b[0m\n  ")),
+            "{section} is a styled heading above its commands"
+        );
+    }
+    let cli = Cli::command();
+    let rows: Vec<(&str, &str)> = template
         .lines()
-        .filter(|line| {
-            line.get(..20)
-                .is_some_and(|label| SECTIONS.contains(&label.trim_end()))
+        .filter_map(|line| line.strip_prefix("  "))
+        .map(|row| {
+            let (name, about) = row.split_once(' ').expect("a row names and describes");
+            (name, about.trim_start())
         })
-        .flat_map(|line| line[20..].split_whitespace())
         .collect();
-    assert_eq!(listed.len(), 26, "{listed:?}");
+    assert_eq!(rows.len(), 26, "{rows:?}");
     for hidden in ["init", "prepare-runtime", "__native-fs-runner"] {
-        assert!(!listed.contains(&hidden), "{hidden} is hidden: {listed:?}");
+        assert!(
+            !rows.iter().any(|(name, _)| *name == hidden),
+            "{hidden} is hidden: {rows:?}"
+        );
+    }
+    for (name, about) in &rows {
+        let command = cli
+            .find_subcommand(name)
+            .unwrap_or_else(|| panic!("{name} is a command"));
+        assert_eq!(
+            command.get_about().map(ToString::to_string).as_deref(),
+            Some(*about),
+            "{name}'s row says what its own help says"
+        );
+        assert!(
+            "  ".len() + 14 + about.chars().count() <= 80,
+            "{name}'s row fits an 80 column terminal"
+        );
     }
 
-    let cli = Cli::command();
+    let mut listed: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
     let mut visible: Vec<&str> = cli
         .get_subcommands()
         .filter(|command| !command.is_hide_set())
