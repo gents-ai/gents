@@ -6,6 +6,7 @@ import type {
 import { CopyButton } from "@source-inc/gents-desktop-ui";
 import { CapturedContextItems } from "./CapturedContextItems.js";
 import { requestProgressPresentation } from "../../chat-shell.js";
+import { RuntimeBackgroundItem } from "./RuntimeBackgroundItem.js";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
 import {
@@ -98,6 +99,13 @@ export function UserMessageItem({
   item: UserMessage | AutomatedInput;
   onEdit?: (item: UserMessage) => void;
 }) {
+  if (item.kind === "automatedInput" && item.origin.kind === "goalContinuation")
+    return null;
+  if (
+    item.kind === "automatedInput" &&
+    item.origin.kind === "backgroundCompletion"
+  )
+    return <RuntimeBackgroundItem item={item} />;
   const content = normalizeTranscriptText(item.content);
   const received =
     item.kind === "automatedInput" && item.origin.kind === "sessionMessage"
