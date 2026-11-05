@@ -188,6 +188,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     .await?;
     for schema in [
         gents_protocol::schemas::NODE,
+        gents_protocol::schemas::NETWORK,
         gents_protocol::schemas::PEER_PAIRING_APPLIED,
         gents_protocol::schemas::PEER_PAIRING_DESIRED,
         gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE,
