@@ -1,6 +1,7 @@
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Toaster } from "@gents/ui/components/sonner";
+import { toast } from "sonner";
 import type { JoinRequestView } from "@source-inc/gents-desktop-client";
 import { JoinRequestAlerts } from "../src/ui/app/JoinRequestAlerts";
 import {
@@ -68,6 +69,7 @@ function show(route: Route = { name: "sessions" }, sharing = true) {
 }
 
 afterEach(() => {
+  toast.dismiss();
   cleanup();
   resetJoinRequestReview();
   resetPreferences();
@@ -93,6 +95,46 @@ describe("telling the person about requests to join", () => {
       expect(screen.queryByTestId("join-request-dialog")).toBeNull(),
     );
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("counts requests in one notice once a few are waiting", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { set } = show();
+    await screen.findByRole("status", { name: /asks to join/ });
+    set([
+      request("r1", "did:key:z6MkLaptopAAAA1111"),
+      request("r2", "did:key:z6MkPhoneBBBB2222"),
+      request("r3", "did:key:z6MkTabletCCC3333"),
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(await screen.findByText("3 requests to join Local Agent")).toBeTruthy();
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("status", { name: /asks to join/ })).toBeNull(),
+    );
+  });
+
+  it("says when a request it's showing is no longer waiting", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { set } = show();
+    await screen.findByRole("status", { name: /asks to join/ });
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByTestId("join-request-dialog");
+    set([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(await screen.findByText(/isn't waiting any more/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    const dialog = screen.getByTestId("join-request-dialog");
+    const close = within(dialog)
+      .getAllByRole("button", { name: "Close" })
+      .find((b) => b.textContent === "Close")!;
+    fireEvent.click(close);
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId("join-request-dialog")).toBeNull(),
+    );
   });
 
   it("denies straight from the notice", async () => {
