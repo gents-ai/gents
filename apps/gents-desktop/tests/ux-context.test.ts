@@ -135,7 +135,9 @@ describe("ux plugin context", () => {
 
   it("stops the remaining watches if one cleanup fails", async () => {
     const disposers: Array<() => void> = [];
-    const bad = vi.fn(() => { throw new Error("cleanup failed"); });
+    const bad = vi.fn(() => {
+      throw new Error("cleanup failed");
+    });
     const good = vi.fn();
     host.shell.selectedDeployment = () => ({ nodeDid: "did:key:node" }) as never;
     host.data = {
@@ -162,12 +164,15 @@ describe("ux plugin context", () => {
     host.data = {
       call: async () => ({ kind: "query", output: {} }),
       surfaces: async () => [],
-      watch: () => new Promise((resolve) => { complete = resolve; }),
+      watch: () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
     };
     const disposers: Array<() => void> = [];
     const ctx = createUxContext("board", {
       listing: "example/pack/board",
-      onDispose: (dispose) => retired ? dispose() : disposers.push(dispose),
+      onDispose: (dispose) => (retired ? dispose() : disposers.push(dispose)),
     });
     const pending = ctx.data.watch("board", "list", {}, () => {});
     retired = true;
