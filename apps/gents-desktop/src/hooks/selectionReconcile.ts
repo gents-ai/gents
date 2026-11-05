@@ -15,10 +15,10 @@ export const OPEN_ON_WAIT_MS = 5000;
 
 /* a dial that failed leaves its error; before the first dial there is
    neither a connection nor an error */
-const reachOf = (node: NodeView) =>
+export const reachOf = (node: NodeView) =>
   node.dialSucceeded ? "reachable" : node.lastError ? "failed" : "unknown";
 
-const nameOf = (node: NodeView) => node.node.displayName ?? node.label;
+export const nameOf = (node: NodeView) => node.node.displayName ?? node.label;
 
 /* the node used last on this device, else this machine's own, else the
    first listed, passing over the chosen node the app couldn't open on */

@@ -231,7 +231,7 @@ function RouteScreen({ route }: { route: Route }) {
     case "sessionsArchived":
       return <SessionsScreen archived entry={route} />;
     case "session":
-      return <SessionScreen />;
+      return <SessionScreen nodeDid={route.nodeDid} sessionId={route.sessionId} />;
     case "mailbox":
       return <MailboxScreen />;
     case "automations":
