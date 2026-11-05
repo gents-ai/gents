@@ -128,3 +128,57 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
     server.shutdown().await.expect("shut down test node");
     client.shutdown().await.expect("shut down test node");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn identity_policy_catalog_matches_applied_schemas() {
+    use gents_protocol::schemas::{
+        AGENT_OWNERSHIP_POLICY_ID, ALL, ALL_COLLECTION_NAMES, IDENTITY_POLICY_BINDINGS,
+        RUNTIME_ALL, RUNTIME_COLLECTION_NAMES,
+    };
+
+    let node = fresh_node().await;
+    let schemas = ALL_COLLECTION_NAMES
+        .iter()
+        .copied()
+        .zip(ALL.iter().copied())
+        .chain(
+            RUNTIME_COLLECTION_NAMES
+                .iter()
+                .copied()
+                .zip(RUNTIME_ALL.iter().copied()),
+        );
+    for (name, sdl) in schemas {
+        let binding = IDENTITY_POLICY_BINDINGS
+            .iter()
+            .find(|(bound, _)| *bound == name);
+        assert_eq!(
+            sdl.contains(AGENT_OWNERSHIP_POLICY_ID),
+            binding.is_some(),
+            "{name} identity policy directive and startup catalog must agree"
+        );
+        if let Some((_, resource)) = binding {
+            node.add_collection(sdl)
+                .await
+                .expect("apply policy-bound schema");
+            let collection = node.get_collection(name).unwrap().expect("collection");
+            let policy = collection.policy.expect("native policy binding");
+            assert_eq!(policy.id, AGENT_OWNERSHIP_POLICY_ID, "{name}");
+            assert_eq!(policy.resource_name, *resource, "{name}");
+            assert!(!collection.is_branchable, "{name}");
+        }
+    }
+    for (name, _) in IDENTITY_POLICY_BINDINGS {
+        assert_eq!(
+            IDENTITY_POLICY_BINDINGS
+                .iter()
+                .filter(|(other, _)| other == name)
+                .count(),
+            1,
+            "duplicate {name}"
+        );
+        assert!(
+            ALL_COLLECTION_NAMES.contains(name) || RUNTIME_COLLECTION_NAMES.contains(name),
+            "missing {name}"
+        );
+    }
+}

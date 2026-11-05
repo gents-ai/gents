@@ -135,44 +135,16 @@ pub async fn ensure_migrations_with_registry(
     Ok(report)
 }
 
-fn identity_policy_bindings() -> [(&'static str, &'static str); 16] {
-    use gents_protocol::schemas::{
-        AGENT_MESSAGE_NAME, AGENT_NAME, AGENT_OUTPUT_SEGMENT_NAME, AGENT_REQUEST_NAME,
-        AGENT_SESSION_GOAL_CONTROL_NAME, AGENT_SESSION_GOAL_RECEIPT_NAME, AGENT_SESSION_NAME,
-        AGENT_TOOL_CALL_NAME, AGENT_TOOL_CONTROL_CLAIM_NAME, AGENT_TOOL_CONTROL_NAME,
-        CALLBACK_INVOCATION_NAME, CALLBACK_RESULT_NAME, GOAL_CREATION_CLAIM_NAME, GOAL_NAME,
-        NODE_NAME, NODE_READINESS_NAME,
-    };
-    [
-        (NODE_NAME, "nodes"),
-        (NODE_READINESS_NAME, "operations"),
-        (AGENT_NAME, "agents"),
-        (AGENT_REQUEST_NAME, "delivered_requests"),
-        (AGENT_SESSION_NAME, "sessions"),
-        (AGENT_SESSION_GOAL_CONTROL_NAME, "goal_controls"),
-        (AGENT_SESSION_GOAL_RECEIPT_NAME, "goal_receipts"),
-        (AGENT_MESSAGE_NAME, "children"),
-        (AGENT_OUTPUT_SEGMENT_NAME, "children"),
-        (AGENT_TOOL_CALL_NAME, "children"),
-        (AGENT_TOOL_CONTROL_NAME, "children"),
-        (AGENT_TOOL_CONTROL_CLAIM_NAME, "children"),
-        (GOAL_NAME, "children"),
-        (GOAL_CREATION_CLAIM_NAME, "children"),
-        (CALLBACK_INVOCATION_NAME, "agent_children"),
-        (CALLBACK_RESULT_NAME, "agent_children"),
-    ]
-}
-
 fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
     use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
-    let bindings = identity_policy_bindings();
+    let bindings = gents_protocol::schemas::IDENTITY_POLICY_BINDINGS;
     if !registry
         .managed_names()
         .any(|name| bindings.iter().any(|(collection, _)| *collection == name))
     {
         return Ok(());
     }
-    for (name, resource) in bindings {
+    for &(name, resource) in bindings {
         if !registry.managed_names().any(|managed| managed == name) {
             continue;
         }
@@ -193,7 +165,7 @@ fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> R
 
 async fn register_identity_policy(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
     if !registry.managed_names().any(|name| {
-        identity_policy_bindings()
+        gents_protocol::schemas::IDENTITY_POLICY_BINDINGS
             .iter()
             .any(|(collection, _)| *collection == name)
     }) {

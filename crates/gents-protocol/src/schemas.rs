@@ -47,6 +47,28 @@ pub use gents_schemas::{
     WORKSPACE_ROOT_NAME,
 };
 
+/// Native identity-policy bindings for managed collections. Startup checks this
+/// catalog separately from schema lineage because policy bindings are outside
+/// DefraDB's schema version identity.
+pub const IDENTITY_POLICY_BINDINGS: &[(&str, &str)] = &[
+    (NODE_NAME, "nodes"),
+    (NODE_READINESS_NAME, "operations"),
+    (AGENT_NAME, "agents"),
+    (AGENT_REQUEST_NAME, "delivered_requests"),
+    (AGENT_SESSION_NAME, "sessions"),
+    (AGENT_SESSION_GOAL_CONTROL_NAME, "goal_controls"),
+    (AGENT_SESSION_GOAL_RECEIPT_NAME, "goal_receipts"),
+    (AGENT_MESSAGE_NAME, "children"),
+    (AGENT_OUTPUT_SEGMENT_NAME, "children"),
+    (AGENT_TOOL_CALL_NAME, "children"),
+    (AGENT_TOOL_CONTROL_NAME, "children"),
+    (AGENT_TOOL_CONTROL_CLAIM_NAME, "children"),
+    (GOAL_NAME, "children"),
+    (GOAL_CREATION_CLAIM_NAME, "children"),
+    (CALLBACK_INVOCATION_NAME, "agent_children"),
+    (CALLBACK_RESULT_NAME, "agent_children"),
+];
+
 pub const INFERENCE_BACKEND_NAME: &str = "InferenceBackend";
 pub const INFERENCE_BACKEND: &str = include_str!("../schemas/inference/inference_backend.graphql");
 pub const INFERENCE_CALL_NAME: &str = "InferenceCall";
