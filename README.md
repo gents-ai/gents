@@ -38,7 +38,7 @@ read `<path>`?". The tool sees only the file or folder the question names. Only 
 From a terminal:
 
 ```sh
-gents pack install gents/data_tables --inference-slot data_analyst=<profile>
+gents config pack install gents/data_tables --inference-slot data_analyst=<profile>
 gents chat --agent-id data-analyst "Which region sold the most in reports/sales.csv?"
 ```
 
@@ -60,14 +60,14 @@ and reads `rows`, `markdown` and `warnings`; a result with `next.cursor` is cont
 Installing the pack also installs one plugin node, `data-run`, wired as a plain callback, so no model is needed: create a `DataJob` document and the records below appear.
 
 ```sh
-gents pack plugin dirs add /data/reports --home <home>   # a callback call reads only allowed folders
-gents server --home <home> --http-port 8080 &
+gents config pack plugin dirs add /data/reports --home <home>   # a callback call reads only allowed folders
+gents runtime server --home <home> --http-port 8080 &
 gql() { curl -fsS http://127.0.0.1:8080/api/v0/graphql -H 'content-type: application/json' -d "$(jq -cn --arg q "$1" '{query: $q}')"; }
 gql 'mutation { create_DataJob(input: {run_id: "r1", path: "/data/reports", sql: "SELECT region, sum(units) AS units FROM sales GROUP BY region"}) { _docID } }'
 gql '{ DataRow(filter: {run_id: {_eq: "r1"}}) { row values } }'
 ```
 
-`path` is the absolute path of a folder or one file inside an allowed folder (`gents pack plugin dirs add <folder>`):
+`path` is the absolute path of a folder or one file inside an allowed folder (`gents config pack plugin dirs add <folder>`):
 a callback call has no working folder and nobody to ask, so a relative path, or one outside the allowed folders,
 fails the job with a sentence. A request is recognized as a node's by the `run_id`
 every such document carries. The node never writes: a `DataJob` has no `output`, so every node call reads.
@@ -92,10 +92,10 @@ that wants a chart passes them on unchanged (see "Combine it" below). The collec
 
 ## Use it from the CLI
 
-`gents pack plugin run` binds the folder you name for one call:
+`gents config pack plugin run` binds the folder you name for one call:
 
 ```sh
-gents pack plugin run gents/data_tables --bind-dir ./reports \
+gents config pack plugin run gents/data_tables --bind-dir ./reports \
   --input '{"sql": "SELECT region, sum(units) AS units FROM sales GROUP BY region"}' | jq -r .markdown
 ```
 
@@ -105,14 +105,14 @@ A long result is read to the end with the cursor:
 dir=./reports sql='SELECT * FROM sales' cursor=""
 while :; do
   input="$(jq -nc --arg s "$sql" --arg c "$cursor" '{sql: $s} + (if $c == "" then {} else {cursor: $c} end)')"
-  out="$(gents pack plugin run gents/data_tables --bind-dir "$dir" --input "$input")"
+  out="$(gents config pack plugin run gents/data_tables --bind-dir "$dir" --input "$input")"
   jq -c '.rows[]' <<<"$out"
   cursor="$(jq -r '.next.cursor // empty' <<<"$out")"
   [ -n "$cursor" ] || break
 done
 ```
 
-To write a result, add `output`: `gents pack plugin run gents/data_tables --bind-dir ./reports --input
+To write a result, add `output`: `gents config pack plugin run gents/data_tables --bind-dir ./reports --input
 '{"sql": "SELECT * FROM sales", "output": "copy.parquet"}'`.
 
 ## Combine it
@@ -185,8 +185,8 @@ refused.
 ## Installation
 
 ```sh
-gents pack install ./packs/gents/data_tables --home <home> --inference-slot data_analyst=<profile>
-gents pack install gents/data_tables --home <home> --inference-slot data_analyst=<profile>   # once published
+gents config pack install ./packs/gents/data_tables --home <home> --inference-slot data_analyst=<profile>
+gents config pack install gents/data_tables --home <home> --inference-slot data_analyst=<profile>   # once published
 ```
 
 Building from a source checkout compiles the plugin to `wasm32-wasip1` with the compiler `rust-toolchain.toml`
@@ -213,7 +213,7 @@ build.
 
 ## Tests
 
-`scripts/test-pack.sh packs/gents/data_tables` builds the pack, runs `gents pack test` (every case in
+`scripts/test-pack.sh packs/gents/data_tables` builds the pack, runs `gents config pack test` (every case in
 `plugins/data_tables/tests/`, byte-exact, through the real WebAssembly host), the plugin's own `cargo test`, the
 install case and the callback cases. The fixtures under `plugins/data_tables/tests/fixtures` are written by
 `cargo run --example gen_fixtures` and are identical when it runs again.
