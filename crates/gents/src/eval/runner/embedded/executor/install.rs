@@ -174,7 +174,12 @@ pub(super) async fn install(
         )])?,
     )
     .await?;
-    install_workspace_root(&access, workspace).await?;
+    let root_readers = identity
+        .agent_bindings
+        .values()
+        .map(|binding| binding.agent_did.clone())
+        .collect::<Vec<_>>();
+    install_workspace_root(&access, &node_did, workspace, &root_readers).await?;
     let mut fixtures = spec.fixtures.clone();
     for fixture in &mut fixtures.documents {
         crate::pack::bind_agent_references(&mut fixture.document, &identity.agent_bindings)?;
@@ -361,32 +366,25 @@ fn object<'a>(value: &'a mut Value, named: &str) -> Result<&'a mut serde_json::M
         .with_context(|| format!("the trial's {named} document is not an object"))
 }
 
-async fn install_workspace_root(access: &ConfigAccess, workspace: &Path) -> Result<()> {
+async fn install_workspace_root(
+    access: &ConfigAccess,
+    node_did: &str,
+    workspace: &Path,
+    reader_agents: &[String],
+) -> Result<()> {
     let root = workspace
         .to_str()
         .with_context(|| format!("{} is not UTF-8", workspace.display()))?;
-    let mutation = "mutation($input: WorkspaceRootMutationInputArg!) { create_WorkspaceRoot(input: $input) { _docID } }";
-    let variables = json!({"input": {
-        "root_path": root,
-        "display_name": "Eval trial workspace",
-        "enabled": true,
-        "updated_at": chrono::Utc::now().to_rfc3339()
-    }});
-    access
-        .transact_write("eval.trial.workspace_root", |txn| {
-            let variables = &variables;
-            Box::pin(async move {
-                txn.execute_client_signed_create(
-                    mutation,
-                    variables,
-                    gents_protocol::schemas::WORKSPACE_ROOT,
-                )
-                .await?;
-                Ok::<_, crate::store::config_client::ConfigClientError>(())
-            })
-        })
-        .await
-        .context("publishing the trial workspace root")?;
+    crate::tools::surface::set_workspace_root_with_readers(
+        access,
+        node_did,
+        root,
+        Some("Eval trial workspace"),
+        true,
+        reader_agents,
+    )
+    .await
+    .context("publishing the trial workspace root")?;
     Ok(())
 }
 
