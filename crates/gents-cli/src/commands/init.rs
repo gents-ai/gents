@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use gents::documents::{
     Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
-    InferenceExecution, SurfaceToolDecl, Tools,
+    InferenceExecution, InferenceSampling, SurfaceToolDecl, Tools,
 };
 use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
@@ -31,6 +31,8 @@ use crate::{
     normalize_optional_string, print_json, read_init_config, resolve_home_dir, write_init_config,
     BackendResolutionMode,
 };
+
+mod model_choice;
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
 
@@ -283,10 +285,10 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             &args,
             initialized_identity.identity.did(),
             tool_package,
+            None,
         )
         .await?;
         write_init_config(&home_dir, &stored)?;
-        clear_init_pending(&home_dir)?;
         let runtime_state_reset = if args.reset {
             clear_runtime_state(&home_dir)?
         } else {
@@ -299,6 +301,16 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             maybe_inline_grok_login(&access, initialized_identity.identity.did(), &summary).await;
         let claude_login =
             maybe_inline_claude_login(&access, initialized_identity.identity.did(), &summary).await;
+        let summary = match args.picked_connection.as_ref() {
+            Some(connection) => {
+                let node_did = initialized_identity.identity.did();
+                let choice = model_choice::choose(&access, node_did, connection).await?;
+                initialize_runtime_home(&access, &args, node_did, tool_package, Some(&choice))
+                    .await?
+            }
+            None => summary,
+        };
+        clear_init_pending(&home_dir)?;
 
         let output = json!({
             "status": "initialized",
@@ -832,6 +844,7 @@ async fn initialize_runtime_home(
     args: &InitArgs,
     node_did: &str,
     tool_package: ToolPackageArg,
+    choice: Option<&model_choice::ModelChoice>,
 ) -> Result<InitSummary> {
     let Some(node) = access.local_node() else {
         anyhow::bail!("init requires local DefraDB access");
@@ -846,7 +859,10 @@ async fn initialize_runtime_home(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let model_name = resolve_init_model_name(args)?;
+    let model_name = match choice {
+        Some(choice) => Some(choice.model_name.as_str()),
+        None => resolve_init_model_name(args)?,
+    };
     let backend = resolve_init_backend_config(args)?;
     let backend_id_was_generated = explicit_backend_id.is_none();
     let backend_id = explicit_backend_id
@@ -908,7 +924,9 @@ async fn initialize_runtime_home(
         auth: backend_auth,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
-        max_concurrent: args.max_concurrent,
+        max_concurrent: choice
+            .and_then(|choice| choice.max_concurrent)
+            .or(args.max_concurrent),
         max_queue_depth: Some(args.max_queue_depth),
         enabled: model_name.is_some(),
         tags: Vec::new(),
@@ -961,6 +979,22 @@ async fn initialize_runtime_home(
         model_name.unwrap_or_default(),
     );
     inference_profile.execution_id = Some(inference_execution_id);
+    let sampling = choice
+        .filter(|choice| choice.temperature.is_some() || choice.top_p.is_some())
+        .map(|choice| InferenceSampling {
+            node_did: node_did.to_string(),
+            sampling_id: format!("{inference_profile_id}-sampling"),
+            display_name: Some(format!("{backend_name} recommended sampling")),
+            temperature: choice.temperature,
+            top_p: choice.top_p,
+            ..InferenceSampling::default()
+        });
+    if let Some(choice) = choice {
+        inference_profile.reasoning_effort = choice.reasoning_effort;
+        inference_profile.context_window = choice.context_window;
+        inference_profile.max_output_tokens = choice.max_output_tokens;
+        inference_profile.sampling_id = sampling.as_ref().map(|row| row.sampling_id.clone());
+    }
     let agent = Agent {
         agent_id: default_agent_id.clone(),
         node_did: node_did.to_string(),
@@ -994,6 +1028,9 @@ async fn initialize_runtime_home(
     }
     backend_doc.validate()?;
     inference_execution.validate()?;
+    if let Some(sampling) = &sampling {
+        sampling.validate()?;
+    }
     inference_profile.validate()?;
     let wide_open_preset_id = wide_open_tools_id_for_node(node_did);
     let mut documents = vec![
@@ -1001,10 +1038,15 @@ async fn initialize_runtime_home(
         replacement(Collection::Tools, &tools)?,
         replacement(Collection::AgentContext, &context)?,
         replacement(Collection::InferenceExecution, &inference_execution)?,
+    ];
+    if let Some(sampling) = &sampling {
+        documents.push(replacement(Collection::InferenceSampling, sampling)?);
+    }
+    documents.extend([
         replacement(Collection::InferenceProfile, &inference_profile)?,
         replacement(Collection::Agent, &agent)?,
         replacement(Collection::Tools, &wide_open_tools_document(node_did))?,
-    ];
+    ]);
     if let Some(surface) = &engineer_mailbox {
         documents.push(replacement(Collection::DatastoreToolSurface, surface)?);
     }
@@ -1464,6 +1506,11 @@ fn resolve_init_model_name(args: &InitArgs) -> Result<Option<&str>> {
         return Ok(Some(model_name));
     }
 
+    // The menu's model is chosen after sign-in, which needs this store to exist first.
+    if args.picked_connection.is_some() {
+        return Ok(None);
+    }
+
     if let Some(default) = args.preset_default_model_name() {
         return Ok(Some(default));
     }
@@ -1749,7 +1796,7 @@ mod tests {
 
         let args = init_args();
         let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
+        let summary = initialize_runtime_home(&access, &args, &owner, tool_package, None)
             .await
             .expect("a fresh home initializes");
         gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
@@ -1830,7 +1877,7 @@ mod tests {
         let mut args = init_args();
         args.engineer = engineer;
         let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
+        let summary = initialize_runtime_home(&access, &args, &owner, tool_package, None)
             .await
             .expect("a fresh home initializes");
         gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
@@ -1990,6 +2037,7 @@ mod tests {
 
     fn init_args() -> InitArgs {
         InitArgs {
+            picked_connection: None,
             home: None,
             data_dir: None,
             dangerously_overwrite: false,

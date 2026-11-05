@@ -26,7 +26,8 @@ source consistency checks, not a separate runtime compatibility version.
   configured interface. Setup seeds The Engineer with the desktop's default
   authority (the `yolo` tool package; commands run as you and the tool root is
   not a sandbox) and asks for a provider, then its connection method, from the
-  desktop's catalog. Without a terminal it prints help and exits 2, as a missing
+  desktop's catalog. After sign-in it lists the provider's models and asks each
+  value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
   subcommand did. `gents` refuses a Codex endpoint that does not identify
   itself as this home's, and the shim answers that question at `GET /runtime`.
 - `gents --agent ID` and `gents codex --agent ID` open any runnable agent side by

@@ -87,6 +87,9 @@ pub(crate) fn store_key_custody(
 
 #[derive(clap::Args)]
 pub(crate) struct InitArgs {
+    /// Set by the interactive menu, never by a flag.
+    #[arg(skip)]
+    pub(crate) picked_connection: Option<crate::interactive_backend::PickedConnection>,
     #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, hide = true)]

@@ -79,9 +79,14 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         );
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
-        let initialized =
-            initialize_runtime_home(&access, &args, owner, resolve_initial_tool_package(&args)?)
-                .await;
+        let initialized = initialize_runtime_home(
+            &access,
+            &args,
+            owner,
+            resolve_initial_tool_package(&args)?,
+            None,
+        )
+        .await;
         let Some(expected) = &case.expected else {
             assert!(initialized.is_err(), "{case:?}");
             assert!(
@@ -217,9 +222,14 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     );
     gents::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
-    let summary =
-        initialize_runtime_home(&access, &args, owner, resolve_initial_tool_package(&args)?)
-            .await?;
+    let summary = initialize_runtime_home(
+        &access,
+        &args,
+        owner,
+        resolve_initial_tool_package(&args)?,
+        None,
+    )
+    .await?;
     let mut backend = gents::inference::backends::registry::list_all_backends(&node)
         .await?
         .remove(0);

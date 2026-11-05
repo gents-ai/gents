@@ -456,7 +456,7 @@ mod no_model {
             .answer(FOLDER_QUESTION, &folder.to_string_lossy())
             .await?;
         terminal
-            .answer_root_and_inference(backend.endpoint(), NO_MODEL_NAME)
+            .answer_scanned_inference(backend.endpoint(), NO_MODEL_NAME)
             .await?;
         terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
         terminal.expect("gents chat", EXIT).await?;
@@ -576,9 +576,7 @@ mod no_model {
         terminal
             .answer(FOLDER_QUESTION, &file.join("sub").to_string_lossy())
             .await?;
-        terminal
-            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
+        terminal.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
         let code = terminal.wait_exit(PROMPT).await?;
 
         ensure!(code != 0, "{}", terminal.transcript());
@@ -620,9 +618,7 @@ mod no_model {
         fs::write(&blocker, "")?;
 
         let mut terminal = setup_of(&live, &folder, "midway")?;
-        terminal
-            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
+        terminal.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
         let code = terminal.wait_exit(RUNTIME_UP).await?;
         ensure!(code != 0, "{}", terminal.transcript());
         ensure!(
@@ -893,6 +889,61 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn setup_lists_the_servers_models_and_asks_each_value_with_its_default() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "scan")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
+        terminal
+            .answer("Server base URL", backend.endpoint())
+            .await?;
+        terminal
+            .expect("Choose a model for Local (1 found)", PROMPT)
+            .await?;
+        terminal.answer("part of a name", "not-listed").await?;
+        terminal.expect("No model matches that", PROMPT).await?;
+        terminal.answer("part of a name", "").await?;
+        terminal
+            .expect("Temperature (0 to 2) [0.7]", PROMPT)
+            .await?;
+        terminal.send("9\r")?;
+        terminal.expect("Answer a number, 0 to 2", PROMPT).await?;
+        terminal.answer("Temperature (0 to 2) [0.7]", "0.2").await?;
+        terminal.answer("Top-p (0 to 1) [1]", "").await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+
+        let read = |collection: &str, fields: &[&str]| -> Result<String> {
+            let mut command = live.gents();
+            command.args(["data", "query", "find", "--collection", collection]);
+            for field in fields {
+                command.args(["--field", field]);
+            }
+            let output = command.arg("--home").arg(&folder).output()?;
+            ensure!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let sampling = read("InferenceSampling", &["temperature", "top_p"])?;
+        ensure!(sampling.contains("0.2"), "the changed value: {sampling}");
+        let profile = read("InferenceProfile", &["model_name", "sampling_id"])?;
+        ensure!(
+            profile.contains(NO_MODEL_NAME) && profile.contains("-sampling"),
+            "the profile uses the chosen model and its values: {profile}"
+        );
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn setup_warns_about_a_model_that_does_not_answer_and_keeps_going() -> Result<()> {
         let live = LiveBox::new()?;
         let held = HeldShimPort::serving(b"").await?;
@@ -904,6 +955,7 @@ mod no_model {
         terminal
             .answer("Server base URL", NO_MODEL_ENDPOINT)
             .await?;
+        terminal.expect("Looking for models", PROMPT).await?;
         terminal.expect(NO_MODEL_TEXT, PROMPT).await?;
         terminal.expect("gents config backend set", PROMPT).await?;
         terminal.answer("Model name:", NO_MODEL_NAME).await?;
@@ -1217,7 +1269,7 @@ mod with_model {
         terminal
             .answer(FOLDER_QUESTION, &folder.to_string_lossy())
             .await?;
-        terminal.answer_root_and_inference(endpoint, model).await?;
+        terminal.answer_scanned_inference(endpoint, model).await?;
         Ok(terminal)
     }
 

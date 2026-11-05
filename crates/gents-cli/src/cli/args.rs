@@ -190,9 +190,7 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    #[command(
-        about = "Inspect requests, responses, traces, background calls and slots"
-    )]
+    #[command(about = "Inspect requests, responses, traces, background calls and slots")]
     Debug {
         #[command(subcommand)]
         command: DebugCommand,

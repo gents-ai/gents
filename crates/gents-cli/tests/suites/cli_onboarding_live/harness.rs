@@ -513,6 +513,27 @@ impl Terminal {
         self.answer("Model", model).await
     }
 
+    /// A local server that lists `model`, whose recommended values are all kept.
+    pub(super) async fn answer_scanned_inference(
+        &mut self,
+        endpoint: &str,
+        model: &str,
+    ) -> Result<()> {
+        self.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        self.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
+        self.answer("Server base URL", endpoint).await?;
+        self.answer("part of a name", model).await?;
+        self.answer("Temperature", "").await?;
+        self.answer("Top-p", "").await
+    }
+
+    /// Every question `init` needs, for a setup that fails before it reaches the model.
+    pub(super) async fn answer_root_and_server(&mut self, endpoint: &str) -> Result<()> {
+        self.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        self.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
+        self.answer("Server base URL", endpoint).await
+    }
+
     /// The questions after the data folder: where agents work, then a local backend.
     pub(super) async fn answer_root_and_inference(
         &mut self,

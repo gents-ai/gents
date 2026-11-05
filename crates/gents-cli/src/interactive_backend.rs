@@ -12,13 +12,24 @@ use crate::cli::args::{BackendPresetArg, InitArgs, OpenAiWireApiArg};
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5.4-mini";
 const LOCAL_PROBE_URLS: [&str; 2] = ["http://127.0.0.1:8080/v1", "http://127.0.0.1:11434/v1"];
 
+/// The menu's answer, kept so `init` can list the connection's models once it is signed in.
+pub(crate) struct PickedConnection {
+    pub(crate) provider: InferenceProviderId,
+    pub(crate) method: InferenceAuthMethod,
+    pub(crate) provider_name: String,
+    pub(crate) endpoint: String,
+    pub(crate) api_key: Option<String>,
+    pub(crate) fallback_model: Option<String>,
+    pub(crate) next_screen: fn(),
+}
+
 struct BackendSelection {
     inference_url: Option<String>,
     backend_preset: Option<BackendPresetArg>,
     openai_wire_api: Option<OpenAiWireApiArg>,
-    model_name: Option<String>,
     api_key: Option<String>,
     label: String,
+    connection: PickedConnection,
 }
 
 impl BackendSelection {
@@ -26,8 +37,8 @@ impl BackendSelection {
         args.inference_endpoint = self.inference_url;
         args.backend_preset = self.backend_preset;
         args.openai_wire_api = self.openai_wire_api;
-        args.model_name = self.model_name;
         args.api_key = self.api_key;
+        args.picked_connection = Some(self.connection);
     }
 }
 
@@ -78,7 +89,7 @@ async fn pick_backend(next_screen: fn()) -> Result<BackendSelection> {
     eprintln!("Choose an inference provider");
     for (number, provider) in (1..).zip(&catalog.providers) {
         let detected = match (&local, provider.id) {
-            (Some((url, _)), InferenceProviderId::Local) => format!(" Detected at {url}."),
+            (Some(url), InferenceProviderId::Local) => format!(" Detected at {url}."),
             _ => String::new(),
         };
         eprintln!(
@@ -100,18 +111,30 @@ async fn pick_backend(next_screen: fn()) -> Result<BackendSelection> {
             chosen
         }
     };
+    let connection = PickedConnection {
+        provider: provider.id,
+        method: option.method,
+        provider_name: provider.display_name.clone(),
+        endpoint: String::new(),
+        api_key: None,
+        fallback_model: None,
+        next_screen,
+    };
     match connection_preset(provider.id, option.method) {
-        None => local_selection(option, local, next_screen).await,
+        None => local_selection(option, local, connection).await,
         Some(preset) if option.method == InferenceAuthMethod::ApiKey => {
-            api_key_selection(preset, option, next_screen).await
+            api_key_selection(preset, option, connection).await
         }
         Some(preset) => Ok(BackendSelection {
             inference_url: None,
             backend_preset: Some(preset),
             openai_wire_api: connection_wire_api(option.method),
-            model_name: None,
             api_key: None,
             label: option.display_name.clone(),
+            connection: PickedConnection {
+                fallback_model: preset.default_model_name().map(str::to_string),
+                ..connection
+            },
         }),
     }
 }
@@ -165,84 +188,58 @@ fn connection_wire_api(method: InferenceAuthMethod) -> Option<OpenAiWireApiArg> 
 async fn api_key_selection(
     preset: BackendPresetArg,
     option: &InferenceAuthOption,
-    next_screen: fn(),
+    connection: PickedConnection,
 ) -> Result<BackendSelection> {
     eprintln!("The key is stored in the backend document.");
     let key = prompt_secret(&format!("Paste your {} (hidden): ", option.display_name)).await?;
-    let key = key.trim();
+    let key = key.trim().to_string();
     if key.is_empty() {
         bail!("no API key entered");
     }
-    next_screen();
-    let model = match preset {
-        BackendPresetArg::OpenAi => prompt_line_default("Model", OPENAI_DEFAULT_MODEL).await?,
-        _ => prompt_line("Model name: ").await?.trim().to_string(),
-    };
-    if model.is_empty() {
-        bail!("no model name entered");
-    }
-    next_screen();
+    (connection.next_screen)();
     Ok(BackendSelection {
         inference_url: None,
         backend_preset: Some(preset),
         openai_wire_api: None,
-        label: format!("{} · {model}", option.display_name),
-        model_name: Some(model),
-        api_key: Some(key.to_string()),
+        api_key: Some(key.clone()),
+        label: option.display_name.clone(),
+        connection: PickedConnection {
+            api_key: Some(key),
+            fallback_model: matches!(preset, BackendPresetArg::OpenAi)
+                .then(|| OPENAI_DEFAULT_MODEL.to_string()),
+            ..connection
+        },
     })
 }
 
 async fn local_selection(
     option: &InferenceAuthOption,
-    detected: Option<(String, String)>,
-    next_screen: fn(),
+    detected: Option<String>,
+    connection: PickedConnection,
 ) -> Result<BackendSelection> {
-    let (default_url, mut model) = match detected {
-        Some((url, model)) => (url, Some(model)),
-        None => (option.default_endpoint.clone(), None),
-    };
+    let default_url = detected.unwrap_or_else(|| option.default_endpoint.clone());
     let url = prompt_line_default("Server base URL", &default_url).await?;
-    next_screen();
-    if model.is_none() || url != default_url {
-        model = probe_or_warn(&url).await;
-    }
-    let model = match model {
-        Some(model) => prompt_line_default("Model", &model).await?,
-        None => prompt_line("Model name: ").await?.trim().to_string(),
-    };
-    if model.is_empty() {
-        bail!("no model name entered");
-    }
-    next_screen();
+    (connection.next_screen)();
     Ok(BackendSelection {
-        label: format!("{url} · {model}"),
-        inference_url: Some(url),
+        label: url.clone(),
+        inference_url: Some(url.clone()),
         backend_preset: None,
         openai_wire_api: None,
-        model_name: Some(model),
         api_key: None,
+        connection: PickedConnection {
+            endpoint: url,
+            ..connection
+        },
     })
 }
 
-async fn detect_local_server() -> Option<(String, String)> {
+async fn detect_local_server() -> Option<String> {
     for url in LOCAL_PROBE_URLS {
-        if let Some(model) = probe_models(url).await {
-            return Some((url.to_string(), model));
+        if probe_models(url).await.is_some() {
+            return Some(url.to_string());
         }
     }
     None
-}
-
-/// A model that does not answer yet is no reason to stop setup, but a mistyped address
-/// would otherwise show only when the first window fails to open.
-async fn probe_or_warn(url: &str) -> Option<String> {
-    let model = probe_models(url).await;
-    if model.is_none() {
-        eprintln!(
-            "No model answered at {url}. Setup will continue, but agents cannot run until one does: start it, or change the address later with `gents config backend set`."
-        );
-    }
-    model
 }
 
 /// Discovery probes optional local endpoints before prompting; an absent or
@@ -348,7 +345,7 @@ async fn read_line() -> Result<String> {
             .context("reading from stdin")?;
         if read == 0 {
             eprintln!();
-            bail!("input ended before an answer; nothing was set up");
+            bail!("input ended before an answer; run this again to continue");
         }
         Ok(buf)
     })
