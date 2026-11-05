@@ -38,6 +38,7 @@ import type {
   Node,
   Agent,
   AgentView,
+  InstalledPack,
   SessionSummary,
   SessionProvenance,
   TriggerView,
@@ -50,8 +51,16 @@ import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
+import type { SharingAdapter } from "../../src/hooks/sharing";
+import {
+  createHarnessSharing,
+  harnessInstalledPacks,
+  isSharingScenario,
+  type SharingScenario,
+} from "./sharingHarness";
 
-const NODE_DID = "did:key:z6MkBombadilAgent";
+export const HARNESS_NODE_DID = "did:key:z6MkBombadilAgent";
+const NODE_DID = HARNESS_NODE_DID;
 const DEFAULT_AGENT_ID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
 const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
@@ -537,7 +546,8 @@ export type DesktopUiHarnessScenario =
   | "automated-inputs"
   | "background"
   | "notices"
-  | "startup-port-in-use";
+  | "startup-port-in-use"
+  | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -620,6 +630,9 @@ type DesktopUiHarness = {
   scenario: DesktopUiHarnessScenario;
   performance: MobilePerformanceHarnessController | null;
   sessionSync: SessionSyncHarnessController;
+  /* the sharing scenarios' stand-in; absent elsewhere, so the app's own
+     default applies */
+  sharing?: SharingAdapter;
 };
 
 const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
@@ -1968,6 +1981,10 @@ export function createDesktopUiHarness(
   }
 
   let allowedFolders: AllowedFolder[] = [];
+  /* the sharing scenarios have a pack to share, or one to install */
+  let installedPacks: InstalledPack[] = isSharingScenario(scenario)
+    ? harnessInstalledPacks(scenario)
+    : [];
   const attachmentPayloads = new Map<string, RequestAttachment[]>();
   const adapter: DesktopApiAdapter = {
     readAttachment: async () => {
@@ -2092,7 +2109,7 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async listInstalledPacks() {
-      return { packs: [] };
+      return { packs: clone(installedPacks) };
     },
     async listPackPluginSlots() {
       return { plugins: [], profiles: [] };
@@ -2109,6 +2126,17 @@ export function createDesktopUiHarness(
     },
     async installPack(request) {
       const [pack, version] = request.package.split("@");
+      if (!request.preview && version)
+        installedPacks = [
+          ...installedPacks.filter((p) => p.pack !== pack),
+          {
+            pack: pack!,
+            installed: version,
+            latest: version,
+            outdated: false,
+            error: null,
+          },
+        ];
       return {
         pack: pack!,
         coordinate: pack!,
@@ -4382,6 +4410,7 @@ export function createDesktopUiHarness(
     scenario,
     performance,
     sessionSync,
+    sharing: isSharingScenario(scenario) ? createHarnessSharing(scenario) : undefined,
   };
 }
 
@@ -4926,7 +4955,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "notices":
       return value;
     default:
-      return "default";
+      return isSharingScenario(value) ? value : "default";
   }
 }
 

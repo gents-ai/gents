@@ -9,6 +9,7 @@ import {
 } from "@gents/shell";
 
 import { flag } from "@/preferences";
+import { SHARING_SECTION, startJoin } from "./joinInvite";
 import { isAppLink, linkRoute, parseLink } from "./links";
 
 /* the desktop's routes: the kit's, and a UX plugin's own page. The kit's
@@ -133,16 +134,41 @@ export function navigate(route: Route) {
   navigateReviewed(route);
 }
 
+/* the node this desktop runs, once known: an invite opens there */
+let homeNode: string | null = null;
+
+export function bindHomeNode(nodeDid: string | null) {
+  homeNode = nodeDid;
+}
+
 /** Follows a `gents:` link, from a message or from outside the app. A link
     only goes somewhere: it never installs, joins or sends. A pack link opens
     that pack's page with what it would add, which installs only when the
-    person chooses Install there and again in its review. False when the link
-    names nothing this app opens, or the person stayed where they were. */
+    person chooses Install there and again in its review; an invite link opens
+    the Sharing section of this desktop's node with the join dialog on the
+    invite's preview, which joins only when the person chooses Join. False when
+    the link names nothing this app opens, or the person stayed where they
+    were. */
 export function openLink(href: string): boolean {
   const link = parseLink(href);
-  if (!link || (link.kind === "pack" && !flag("packs"))) {
+  if (
+    !link ||
+    (link.kind === "pack" && !flag("packs")) ||
+    (link.kind === "invite" && (!flag("sharing") || !homeNode))
+  ) {
     console.warn("ignored a gents link this app doesn't open", href);
     return false;
+  }
+  if (link.kind === "invite") {
+    const route: Route = {
+      name: "agent",
+      nodeDid: homeNode!,
+      section: SHARING_SECTION,
+    };
+    return reviewNavigation(route, () => {
+      if (current && pathFor(route) !== pathFor(current.route)) current.navigate(route);
+      startJoin(link.invite);
+    });
   }
   return navigateReviewed(linkRoute(link));
 }
