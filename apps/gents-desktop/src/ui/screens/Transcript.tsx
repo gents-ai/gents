@@ -423,9 +423,14 @@ function Reply({
 }) {
   const live = item.kind === "liveAssistant";
   return (
-    <div data-testid={live ? "live-assistant" : undefined}>
+    /* the space under a reply sits below its actions, so the copy button
+       and time stay with the text they belong to */
+    <div
+      data-testid={live ? "live-assistant" : undefined}
+      className={item.content ? "pb-4" : undefined}
+    >
       <AssistantMessage
-        className={item.content ? "py-4" : undefined}
+        className={item.content ? "pt-4" : undefined}
         actions={
           !live && item.content
             ? copyActions(writtenText(item.content ?? "", []))
