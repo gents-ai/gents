@@ -214,28 +214,48 @@ function createStorage(pluginId: string): UxStorage {
 function createLifetime(track: (dispose: () => void) => void) {
   const cleanups = new Set<() => void>();
   let tracked = false;
+  let disposed = false;
   const scoped = (cleanup: () => void) => {
+    let active = true;
+    const close = () => {
+      if (!active) return;
+      active = false;
+      cleanups.delete(close);
+      cleanup();
+    };
+    if (disposed) {
+      close();
+      return close;
+    }
+    cleanups.add(close);
     if (!tracked) {
       tracked = true;
       track(() => {
-        cleanups.forEach((pending) => pending());
-        cleanups.clear();
+        disposed = true;
+        let failed = false;
+        let firstError: unknown;
+        for (const pending of [...cleanups]) {
+          try {
+            pending();
+          } catch (error) {
+            if (!failed) firstError = error;
+            failed = true;
+          }
+        }
+        if (failed) throw firstError;
       });
     }
-    cleanups.add(cleanup);
-    return () => {
-      cleanups.delete(cleanup);
-      cleanup();
-    };
+    return close;
   };
   return {
+    scoped,
     setTimeout: (fn: () => void, ms: number) => {
-      const clear = () => globalThis.clearTimeout(id);
       const id = globalThis.setTimeout(() => {
-        cleanups.delete(clear);
+        close();
         fn();
       }, ms);
-      return scoped(clear);
+      const close = scoped(() => globalThis.clearTimeout(id));
+      return close;
     },
     setInterval: (fn: () => void, ms: number) => {
       const id = globalThis.setInterval(fn, ms);
@@ -339,6 +359,7 @@ export function createUxContext(
     options.onDispose?.(dispose);
     return dispose;
   };
+  const { scoped: trackLifetime, ...lifetime } = createLifetime(track);
   const host = () => hostOrThrow();
   const caller: UxCaller = { id: pluginId, name: options.name ?? pluginId };
   const send = (content: string) => host().shell.send(content, caller);
@@ -349,7 +370,7 @@ export function createUxContext(
     registerMany: (cs) => track(registry.registerMany(cs.map(scope))),
     onDispose: (fn) => void track(fn),
     onEvent: (type, listener) => track(onUxEvent(type, listener)),
-    ...createLifetime(track),
+    ...lifetime,
     plugin: (name, input) => {
       const h = host();
       if (!options.listing || !h.plugin) {
@@ -381,13 +402,7 @@ export function createUxContext(
           args,
           listener,
         );
-        let closed = false;
-        return track(() => {
-          if (!closed) {
-            closed = true;
-            stop();
-          }
-        });
+        return trackLifetime(stop);
       },
       call: (surface, tool, args) => {
         const h = host();
