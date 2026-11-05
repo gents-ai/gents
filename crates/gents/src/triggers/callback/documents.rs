@@ -1309,6 +1309,18 @@ pub async fn flush_workspace_docs(
                 && Some(workspace.integrator_principal.as_str()) == action.integrator_agent_did.as_deref(),
                 "workspace publication differs from the frozen Agent selection");
             let existing = workspace_document_id_in_txn(txn, "IsolatedWorkspace", &workspace.workspace_id, &workspace.owner_node_did).await?;
+            if let Some(existing_doc) = &existing {
+                let query = format!(r#"{{IsolatedWorkspace(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{lifecycle_state seal_hash}}}}"#, escape_graphql_string(existing_doc));
+                let response = txn.execute(&query).await?;
+                let rows = response["data"]["IsolatedWorkspace"].as_array().context("workspace state query omitted rows")?;
+                let [row] = rows.as_slice() else { anyhow::bail!("workspace state unavailable or ambiguous") };
+                let previous = row["lifecycle_state"].as_str().and_then(crate::tools::native::normalize_workspace_lifecycle_state).context("workspace lifecycle state invalid")?;
+                let desired = crate::tools::native::normalize_workspace_lifecycle_state(&workspace.lifecycle_state).context("workspace publication state invalid")?;
+                anyhow::ensure!(previous == desired || (previous == "provisioning" && matches!(desired, "ready" | "provisionFailed")), "stale callback workspace publication cannot replace an advanced lifecycle");
+                if previous == desired {
+                    anyhow::ensure!(row["seal_hash"].as_str() == workspace.seal_hash.as_deref(), "workspace publication seal differs from the retained state");
+                }
+            }
             let parent = if existing.is_none() {
                 for (did, doc) in [(&action.writer_agent_did, &action.writer_agent_doc_id), (&action.integrator_agent_did, &action.integrator_agent_doc_id)] {
                     let did = did.as_deref().context("workspace Agent DID missing")?;

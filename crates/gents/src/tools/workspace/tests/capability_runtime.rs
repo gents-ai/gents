@@ -614,6 +614,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             crate::store::config_client::NodePermission::DocumentDelete,
             crate::store::config_client::NodePermission::CollectionGet,
             crate::store::config_client::NodePermission::DacRelationAdd,
+            crate::store::config_client::NodePermission::DacRelationDelete,
         ] {
             admin
                 .grant_node_permission(&actor.parse()?, permission)
@@ -687,6 +688,48 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     let mut docs = MemoryWorkspaceDocuments::default();
     docs.write_isolated_workspace(workspace)?;
     docs.write_placement(placement)?;
+    let mut aborted = docs.load_isolated_workspace("workspace")?.unwrap();
+    aborted.workspace_id = "aborted-workspace".into();
+    let abort: anyhow::Result<()> = creator_access
+        .transact_write("test.workspace.abort_publication", |txn| {
+            let aborted = &aborted;
+            let parent = &agent_docs[0];
+            let writer_did = writer.did();
+            Box::pin(async move {
+                let response = txn
+                    .execute(&isolated_workspace_upsert_mutation(aborted))
+                    .await?;
+                let rows = crate::store::graphql::mutation_documents(
+                    &response,
+                    "upsert_IsolatedWorkspace",
+                )?
+                .unwrap();
+                let id = rows[0]["_docID"].as_str().unwrap();
+                txn.add_resource_relationship("IsolatedWorkspace", id, "parent", "agents", parent)
+                    .await?;
+                txn.add_actor_relationship("IsolatedWorkspace", id, "writer", &writer_did.parse()?)
+                    .await?;
+                anyhow::bail!("forced rollback after staged relationships")
+            })
+        })
+        .await;
+    assert!(abort.is_err());
+    let rows = creator_access
+        .execute(
+            r#"{ IsolatedWorkspace(filter: {workspace_id: {_eq: "aborted-workspace"}}) {_docID} }"#,
+        )
+        .await?;
+    let visible = !rows["data"]["IsolatedWorkspace"]
+        .as_array()
+        .unwrap()
+        .is_empty();
+    assert_eq!(
+        visible,
+        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+            ["aborted_document_visible"]
+            .as_bool()
+            .unwrap()
+    );
     crate::triggers::callback::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
         .await?;
     let workspace_rows = writer_access
@@ -696,6 +739,38 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .as_str()
         .unwrap()
         .to_owned();
+    creator_access
+        .delete_actor_relationship(
+            "IsolatedWorkspace",
+            &workspace_doc,
+            "writer",
+            &writer.did().parse()?,
+        )
+        .await?;
+    crate::triggers::callback::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+        .await?;
+    let visible_after_retry = !writer_access
+        .execute("{ IsolatedWorkspace { _docID } }")
+        .await?["data"]["IsolatedWorkspace"]
+        .as_array()
+        .unwrap()
+        .is_empty();
+    assert_eq!(
+        visible_after_retry,
+        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+            ["revoked_writer_restored"]
+            .as_bool()
+            .unwrap(),
+        "duplicate workspace publication changed a revoked role"
+    );
+    creator_access
+        .add_actor_relationship(
+            "IsolatedWorkspace",
+            &workspace_doc,
+            "writer",
+            &writer.did().parse()?,
+        )
+        .await?;
     let mut requests = Vec::new();
     for name in ["one", "two"] {
         let response = writer_access.write("test.workspace.request", &format!(r#"mutation {{create_AgentRequest(input: {{request_id: "{name}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{}", session_id: "session", content: "work", created_at: "2026-11-05T00:00:00Z", workspace_id: "workspace", workspace_owner_node_did: "{}", workspace_authority: "readWrite", lifecycle_state: "pending"}}) {{_docID}}}}"#, user.did(), user.did(), writer.did(), user.did())).await?;
@@ -819,6 +894,21 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     assert_eq!(
         state["data"]["IsolatedWorkspace"][0]["lifecycle_state"],
         "cleaning"
+    );
+    let stale = crate::triggers::callback::flush_workspace_docs(
+        &creator_access,
+        &docs,
+        creator.did(),
+        &action,
+    )
+    .await;
+    assert_eq!(
+        stale.is_ok(),
+        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+            ["stale_publication_allowed"]
+            .as_bool()
+            .unwrap(),
+        "stale callback publication changed a cleaning workspace"
     );
     node.shutdown().await?;
     Ok(())

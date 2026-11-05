@@ -1551,6 +1551,12 @@ def caseCoverage : List CoverageEntry :=
       "Cleanup claims the parent with native update permission after checking the canonical binding inventory.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "workspace_publication_cases"
+      "WorkspacePublicationCases"
+      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_completion_access_cases"
       "WorkspaceCompletionAccessCases"
       "tools::workspace::tests::capability_runtime::workspace_completion_reads_keep_selected_agent_visibility"

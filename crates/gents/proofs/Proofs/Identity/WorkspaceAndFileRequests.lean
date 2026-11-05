@@ -112,6 +112,19 @@ theorem failed_workspace_publication_is_empty : publishWorkspace false = ⟨fals
 theorem workspace_reuse_does_not_restore_revocation :
     reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true)) = ⟨true, true, false, true⟩ := by rfl
 
+/-- Callback publication can complete provisioning or repeat an identical
+result. A stale retry cannot replace an advanced workspace lifecycle. -/
+def callbackWorkspacePublishable (existing desired : String) : Bool :=
+  existing == desired || (existing == "provisioning" && (desired == "ready" || desired == "provisionFailed"))
+
+theorem callback_retry_does_not_reopen_cleaning :
+    callbackWorkspacePublishable "cleaning" "ready" = false := by decide
+
+def workspacePublicationCasesJson : String :=
+  (Lean.Json.mkObj [("revoked_writer_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true))).writer),
+    ("stale_publication_allowed", Lean.toJson (callbackWorkspacePublishable "cleaning" "ready")),
+    ("aborted_document_visible", Lean.toJson (publishWorkspace false).document)]).compress
+
 def workspacePublicationFixture : Household.State :=
   { objects := [⟨"agents", "agent-doc", "user"⟩,
       ⟨"workspaces", "workspace", "creator"⟩,
