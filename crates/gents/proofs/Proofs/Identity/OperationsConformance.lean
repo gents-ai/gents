@@ -274,4 +274,32 @@ def replayProducerCasesJson : String := (toJson
       ("native_manager", toJson manager), ("committed", toJson committed),
       ("deliverable", toJson (Identity.RelationshipReplay.producerMayDeliver held manager committed))])).compress
 
+def enrollmentPolicyCasesJson : String :=
+  let revoked := apply enrollmentRequestWithParent (.revokeAs "candidate"
+    ⟨"enrollment_records", "request", "reader", .actor "admin"⟩)
+  let cases : List (String × State × DID × String × String) :=
+    [("candidate-request-write", enrollmentRequestFixture, "candidate", "request", "update"),
+     ("admin-request-read", enrollmentRequestFixture, "admin", "request", "read"),
+     ("admin-request-write", enrollmentRequestFixture, "admin", "request", "update"),
+     ("user-request-before-parent", enrollmentRequestFixture, "user", "request", "read"),
+     ("user-request-after-parent", enrollmentRequestWithParent, "user", "request", "read"),
+     ("outsider-request", enrollmentRequestWithParent, "outsider", "request", "read"),
+     ("revoked-admin", revoked, "admin", "request", "read"),
+     ("admin-terminal-write", enrollmentTerminalFixture, "admin", "terminal", "update"),
+     ("candidate-terminal-read", enrollmentTerminalFixture, "candidate", "terminal", "read"),
+     ("candidate-terminal-write", enrollmentTerminalFixture, "candidate", "terminal", "update"),
+     ("user-terminal-read", enrollmentTerminalFixture, "user", "terminal", "read"),
+     ("outsider-terminal", enrollmentTerminalFixture, "outsider", "terminal", "read")]
+  (toJson (cases.map fun (name, state, actor, id, permission) =>
+    Json.mkObj [("name", toJson name), ("actor", toJson actor), ("document", toJson id),
+      ("permission", toJson permission),
+      ("allowed", toJson (allowed 5 state actor "enrollment_records" id permission))])).compress
+
+def networkProtocolCasesJson : String :=
+  let collections := ["Network", "NetworkEnrollmentRequest", "NetworkEnrollmentDecision",
+    "NetworkEnrollmentRouteReceipt", "NetworkAuthorizationRevision", "NodeDirectoryEntry",
+    "PeerRegistry", "AgentSession"]
+  (toJson (collections.map fun name => Json.mkObj [
+    ("collection", toJson name), ("resource", toJson (networkProtocolResource name))])).compress
+
 end Identity.OperationsConformance

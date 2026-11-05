@@ -123,6 +123,98 @@ theorem raw_tool_disable_alone_does_not_revoke_reader :
      allowed 5 after.acp "agent" "pairing_observations" "route" "read") = (false, true) := by
   native_decide
 
+/-- Enrollment requests contain the signed offer token and client nonce. The
+candidate runtime is their native owner; the exact admin runtime is an explicit
+reader. A parent is a native relationship to a physical Node, not a DID field
+or a consequence of enrollment. Foreign relationships are not assumed to
+replicate. Terminal decisions, revisions and receipts reverse the creator and
+reader roles. A candidate User is a separate identity and must be authenticated
+independently before it is granted access to a decision. -/
+def enrollmentRequestFixture : State :=
+  { objects := [⟨"nodes", "admin-node", "user"⟩,
+      ⟨"enrollment_records", "request", "candidate"⟩],
+    relations := [⟨"enrollment_records", "request", "reader", .actor "admin"⟩],
+    enrolled := [] }
+
+def enrollmentRequestWithParent : State :=
+  apply enrollmentRequestFixture (.grantAs "candidate"
+    ⟨"enrollment_records", "request", "parent", .object "nodes" "admin-node"⟩)
+
+theorem request_reader_is_exact_and_read_only :
+    (allowed 5 enrollmentRequestFixture "candidate" "enrollment_records" "request" "update",
+     allowed 5 enrollmentRequestFixture "admin" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestFixture "admin" "enrollment_records" "request" "update",
+     allowed 5 enrollmentRequestFixture "user" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestFixture "sibling" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestFixture "outsider" "enrollment_records" "request" "read") =
+      (true, true, false, false, false, false) := by native_decide
+
+theorem user_reaches_request_only_after_exact_node_parent :
+    (allowed 5 enrollmentRequestFixture "user" "enrollment_records" "request" "read",
+     allowed 5 enrollmentRequestWithParent "user" "enrollment_records" "request" "read") =
+      (false, true) := by native_decide
+
+theorem enrollment_does_not_reconstruct_revoked_request_reader :
+    let revoked := apply enrollmentRequestWithParent (.revokeAs "candidate"
+      ⟨"enrollment_records", "request", "reader", .actor "admin"⟩)
+    allowed 5 revoked "admin" "enrollment_records" "request" "read" = false := by native_decide
+
+def enrollmentTerminalFixture : State :=
+  { objects := [⟨"nodes", "admin-node", "user"⟩,
+      ⟨"enrollment_records", "terminal", "admin"⟩],
+    relations := [⟨"enrollment_records", "terminal", "reader", .actor "candidate"⟩,
+      ⟨"enrollment_records", "terminal", "parent", .object "nodes" "admin-node"⟩],
+    enrolled := [] }
+
+theorem terminal_reads_are_scoped_to_candidate_and_node_owner :
+    (allowed 5 enrollmentTerminalFixture "admin" "enrollment_records" "terminal" "update",
+     allowed 5 enrollmentTerminalFixture "candidate" "enrollment_records" "terminal" "read",
+     allowed 5 enrollmentTerminalFixture "candidate" "enrollment_records" "terminal" "update",
+     allowed 5 enrollmentTerminalFixture "user" "enrollment_records" "terminal" "read",
+     allowed 5 enrollmentTerminalFixture "sibling" "enrollment_records" "terminal" "read",
+     allowed 5 enrollmentTerminalFixture "outsider" "enrollment_records" "terminal" "read") =
+      (true, true, false, true, false, false) := by native_decide
+
+/-- These branchable protocol records carry private enrollment or routing data.
+A native reader grant is per physical document and does not imply permission on
+any application document. This classification does not publish a binding: each
+writer and receiver still needs the authenticated publication path. -/
+def networkProtocolResource : String → Option String
+  | "Network" => some "enrollment_records"
+  | "NetworkEnrollmentRequest" => some "enrollment_records"
+  | "NetworkEnrollmentDecision" => some "enrollment_records"
+  | "NetworkEnrollmentRouteReceipt" => some "enrollment_records"
+  | "NetworkAuthorizationRevision" => some "enrollment_records"
+  | "NodeDirectoryEntry" => some "enrollment_records"
+  | "PeerRegistry" => some "enrollment_records"
+  | _ => none
+
+/-- Document creation and all requested native grants commit together. The
+recipient DID must come from the authenticated protocol; naming an enrolled
+peer alone neither creates nor restores a reader grant. -/
+def publishNetworkRecord (state : State) (creator recipient : DID) (id node : String)
+    (created parentGranted readerGranted committed : Bool) : State :=
+  if created && parentGranted && readerGranted && committed then
+    let created := directCreate state creator "enrollment_records" id true true
+    let parent := apply created
+      (.grantAs creator ⟨"enrollment_records", id, "parent", .object "nodes" node⟩)
+    apply parent (.grantAs creator ⟨"enrollment_records", id, "reader", .actor recipient⟩)
+  else state
+
+theorem failed_network_reader_grant_aborts_publication (state : State)
+    (creator recipient : DID) (id node : String) (created parent committed : Bool) :
+    publishNetworkRecord state creator recipient id node created parent false committed = state := by
+  simp [publishNetworkRecord]
+
+theorem enrollment_grant_does_not_authorize_application_documents :
+    let state : State := { objects := [⟨"nodes", "home", "user"⟩,
+      ⟨"children", "application", "runtime"⟩], relations := [], enrolled := ["candidate"] }
+    let published := publishNetworkRecord state "runtime" "candidate" "decision" "home"
+      true true true true
+    (allowed 5 published "candidate" "enrollment_records" "decision" "read",
+     allowed 5 published "candidate" "children" "application" "read") = (true, false) := by
+  native_decide
+
 /-- A user-created secret configuration and both native relationships share
 the transaction. Failure to resolve its Node or stage either grant aborts the
 creation; a later update does not reinstall relationships. -/

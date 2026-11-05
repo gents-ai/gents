@@ -64,6 +64,11 @@ def policy : List ResourceDefinition :=
         ⟨"reader_manager", ["actor"], ["route_reader", "tool_reader"]⟩]
       permissions := [permission "read" ["route_reader", "tool_reader"] [("parent", "read")],
         permission "update" [] [], permission "delete" [] []] }
+  , { name := "enrollment_records"
+      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+        ⟨"reader_manager", ["actor"], ["reader"]⟩]
+      permissions := [permission "read" ["reader"] [("parent", "read")],
+        permission "update" [] [], permission "delete" [] []] }
   , { name := "configuration"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"selected_by", ["agents->executor", "configuration->selected_by"], []⟩,

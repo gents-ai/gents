@@ -298,6 +298,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) identity_pairing_reader_policy_cases: Vec<serde_json::Value>,
     pub(crate) identity_relationship_replay_cases: Vec<serde_json::Value>,
     pub(crate) identity_relationship_replay_producer_cases: Vec<serde_json::Value>,
+    pub(crate) identity_network_protocol_cases: Vec<serde_json::Value>,
+    pub(crate) identity_enrollment_policy_cases: Vec<serde_json::Value>,
     pub(crate) identity_readiness_recovery_cases: Vec<serde_json::Value>,
     pub(crate) identity_readiness_observation_cases: Vec<serde_json::Value>,
     pub(crate) identity_readiness_settled_cases: Vec<serde_json::Value>,
