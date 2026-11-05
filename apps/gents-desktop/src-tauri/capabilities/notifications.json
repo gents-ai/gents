@@ -1,0 +1,7 @@
+{
+  "identifier": "notifications",
+  "description": "The views that post notifications hear about their clicks.",
+  "windows": ["main", "gents-view-*"],
+  "platforms": ["macOS"],
+  "permissions": ["post-notifications"]
+}

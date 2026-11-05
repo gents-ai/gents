@@ -148,6 +148,19 @@ export async function postNotification(options: { title: string; body?: string }
   await invoke("plugin:notification|notify", { options });
 }
 
+/** Tells a view its notification was clicked, with the id it posted it under. */
+export const NOTIFICATION_CLICKED_EVENT = "desktop://notification-clicked";
+
+/** Posts a notification whose click this view hears about, on macOS:
+    `reportsClick` says whether it will. */
+export function postClickableNotification(options: {
+  title: string;
+  body?: string;
+  id: string;
+}): Promise<{ reportsClick: boolean }> {
+  return invoke("desktop_post_notification", options);
+}
+
 export async function homeFolder(): Promise<string | null> {
   if (!inNativeShell()) return null;
   return homeDir();

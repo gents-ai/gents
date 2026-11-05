@@ -58,6 +58,9 @@ tauri-plugin-deep-link = "~2.4.10"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# What tauri-plugin-notification delivers through (via notify-rust); used
+# directly to wait on a notice's click. Keep it on notify-rust's version.
+mac-notification-sys = "=0.6.15"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSWindowTabGroup", "NSGraphics", "NSEvent", "block2", "objc2-core-foundation"] }
 block2 = "0.6"

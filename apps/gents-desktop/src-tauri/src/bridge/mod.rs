@@ -1,5 +1,7 @@
 #[cfg(desktop)]
 mod links;
+#[cfg(target_os = "macos")]
+mod notifications;
 mod product_telemetry;
 #[cfg(target_os = "macos")]
 mod swipe;
@@ -117,6 +119,7 @@ pub fn run() {
         windows::desktop_window_setup_complete,
         swipe::swipe_scroll_edges,
         links::desktop_take_links,
+        notifications::desktop_post_notification,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled
