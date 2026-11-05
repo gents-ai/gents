@@ -141,12 +141,17 @@ export function JoinRequestDialog() {
           </div>
         </DialogHeader>
 
-        <div className="grid gap-1.5 rounded-lg border border-border bg-muted/40 px-3.5 py-3 text-sm">
-          <b className="font-medium">They'd be able to</b>
-          <span>{ableTo(request, nodeName)}</span>
-          <b className="mt-1 font-medium">They'd see</b>
-          <span>{seeing(request, nodeName)}</span>
-          <span className="mt-1 flex flex-wrap items-center gap-2 text-muted-foreground">
+        {/* a strong label over a softer line, so each answer reads apart */}
+        <div className="grid gap-3 rounded-lg border border-border bg-muted/40 px-3.5 py-3 text-sm">
+          <p className="grid gap-0.5">
+            <b className="font-semibold text-foreground">They'd be able to</b>
+            <span className="text-foreground/75">{ableTo(request, nodeName)}</span>
+          </p>
+          <p className="grid gap-0.5">
+            <b className="font-semibold text-foreground">They'd see</b>
+            <span className="text-foreground/75">{seeing(request, nodeName)}</span>
+          </p>
+          <span className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3 text-xs text-muted-foreground">
             For
             <LeaseSelect
               value={lease}
@@ -177,7 +182,7 @@ export function JoinRequestDialog() {
           Nothing is shared until you approve.{" "}
           <button
             type="button"
-            className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+            className="cursor-pointer text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
             onClick={() => {
               closeReview();
               navigate({ name: "agent", nodeDid, section: SHARING_SECTION });
