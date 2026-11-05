@@ -1097,6 +1097,13 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         };
         let (owner, enrollment) = enroll(temp.path().join("owner")).await.context("enrolling activity owner")?;
         let (other, _) = enroll(temp.path().join("other")).await.context("enrolling second activity observer")?;
+        let members = gents_server::server_host::managed_enrollment_members(&runtime_home, &graphql).await?;
+        let member = members.iter().find(|member| member.request_id == enrollment).context("approved member missing")?;
+        anyhow::ensure!(member.candidate_did == owner.node_identity().did() && !member.authorization_expires_at.is_empty(), "incorrect approved member");
+        let history = gents_server::server_host::managed_enrollment_history(&runtime_home, &graphql).await?;
+        anyhow::ensure!(history.history.iter().any(|entry| entry.request_id == enrollment && entry.state == gents_server::server_host::ManagedEnrollmentHistoryState::Approved), "approval missing from history");
+        anyhow::ensure!(history.omits_superseded, "history scope missing");
+
         let session = Uuid::new_v4().to_string();
         let prompt = "activity authorization request";
         owner.submit_request(&session, &node_did, prompt, Some(&agent)).await?;
@@ -1165,6 +1172,11 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
             gents_server::server_host::ManagedEnrollmentDecision::Revoke,
         ).await?;
         anyhow::ensure!(revocation.state == "revoked", "unexpected revocation: {revocation:?}");
+        let members = gents_server::server_host::managed_enrollment_members(&runtime_home, &graphql).await?;
+        anyhow::ensure!(!members.iter().any(|member| member.request_id == enrollment), "revoked member remains active");
+        let history = gents_server::server_host::managed_enrollment_history(&runtime_home, &graphql).await?;
+        anyhow::ensure!(history.history.iter().any(|entry| entry.request_id == enrollment && entry.state == gents_server::server_host::ManagedEnrollmentHistoryState::Revoked && entry.revoked_at.is_some()), "revocation missing from history");
+
         let revoked = timeout(ENROLL_BUDGET, async {
             loop {
                 let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
