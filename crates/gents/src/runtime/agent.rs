@@ -333,6 +333,15 @@ impl Gents {
         &self.node
     }
 
+    /// Start an operator-authorized observation of a declared pack query.
+    pub async fn watch_ux_data(
+        &self,
+        home: &std::path::Path,
+        request: crate::observe::ux_data::UxDataCall,
+    ) -> anyhow::Result<crate::observe::ux_data::UxDataWatch> {
+        crate::observe::ux_data::watch_local(home, self.node.clone(), request).await
+    }
+
     pub fn inference_observations(
         &self,
     ) -> &crate::observe::inference_observation::InferenceObservationRegistry {

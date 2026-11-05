@@ -12,13 +12,15 @@
 //! document to fill it from.
 
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::documents::{
-    list_datastore_tool_surfaces, DatastoreToolSurfaceDocument, SurfaceToolDecl,
+    list_datastore_tool_surfaces, DatastoreToolSurfaceDocument, QueryToolDecl, SurfaceToolDecl,
 };
 use crate::inference::llm::tool::Tool;
 use crate::plugin::ux::UxListing;
@@ -159,6 +161,119 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
         .with_context(|| format!("tool {tool:?} answered something other than JSON"))?;
     tracing::info!(ux = %ux, surface = %surface, tool = %tool, kind, "ux data call");
     Ok(json!({ "kind": kind, "output": output }))
+}
+
+async fn watch_declaration(
+    home: &Path,
+    access: &ConfigAccess,
+    request: &UxDataCall,
+) -> Result<QueryToolDecl> {
+    let listing = listing_with_data(home, &request.ux)?;
+    anyhow::ensure!(
+        listing
+            .data
+            .iter()
+            .any(|declared| declared.surface == request.surface
+                && declared.tools.contains(&request.tool)),
+        "query is not declared in the plugin manifest"
+    );
+    let document = installed_surface(access, &request.node_did, &request.surface).await?;
+    let entry = document
+        .entries
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .find(|entry| entry.tool_name() == request.tool)
+        .ok_or_else(|| anyhow!("surface has no declared query"))?;
+    anyhow::ensure!(!has_runtime_fill(entry), "query has runtime-filled fields");
+    match entry {
+        SurfaceToolDecl::Query(decl) => Ok(decl.clone()),
+        SurfaceToolDecl::Create(_) => bail!("only declared queries may be observed"),
+    }
+}
+
+/// One operator-owned local subscription. It emits query results, never raw
+/// document change events. Drop it to close the underlying subscription.
+pub struct UxDataWatch {
+    home: PathBuf,
+    access: ConfigAccess,
+    request: UxDataCall,
+    declaration: QueryToolDecl,
+    changes: events::DocumentChangeSubscription,
+    last: Value,
+    closed: bool,
+}
+
+impl UxDataWatch {
+    pub fn initial(&self) -> &Value {
+        &self.last
+    }
+
+    pub async fn next(&mut self) -> Result<Value> {
+        anyhow::ensure!(!self.closed, "pack data observation is closed");
+        let result = self.next_open().await;
+        if result.is_err() {
+            self.closed = true;
+        }
+        result
+    }
+
+    async fn next_open(&mut self) -> Result<Value> {
+        loop {
+            self.changes
+                .recv()
+                .await
+                .context("pack data observation closed")?;
+            anyhow::ensure!(
+                watch_declaration(&self.home, &self.access, &self.request).await?
+                    == self.declaration,
+                "pack data declaration changed; reconnect the observation"
+            );
+            let current = call(&self.home, &self.access, self.request.clone()).await?;
+            anyhow::ensure!(
+                watch_declaration(&self.home, &self.access, &self.request).await?
+                    == self.declaration,
+                "pack data declaration changed; reconnect the observation"
+            );
+            if current != self.last {
+                self.last = current.clone();
+                return Ok(current);
+            }
+        }
+    }
+}
+
+/// The caller must authenticate the node operator. Subscription precedes the
+/// initial read so a concurrent change remains pending for the next read.
+pub async fn watch_local(
+    home: &Path,
+    node: Arc<crate::defra_node::EmbeddedNode>,
+    request: UxDataCall,
+) -> Result<UxDataWatch> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(request.node_did.as_str()),
+        "selected node does not own this runtime"
+    );
+    let access = ConfigAccess::local(node.clone());
+    let declaration = watch_declaration(home, &access, &request).await?;
+    let changes = crate::subscribe_collections(
+        &node,
+        [declaration.collection.as_str(), "DatastoreToolSurface"],
+    )?;
+    let last = call(home, &access, request.clone()).await?;
+    anyhow::ensure!(
+        watch_declaration(home, &access, &request).await? == declaration,
+        "pack data declaration changed; reconnect the observation"
+    );
+    Ok(UxDataWatch {
+        home: home.to_owned(),
+        access,
+        request,
+        declaration,
+        changes,
+        last,
+        closed: false,
+    })
 }
 
 /// The declarations behind the plugin's surfaces on `node_did`: for each
