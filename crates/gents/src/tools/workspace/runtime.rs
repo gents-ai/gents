@@ -6,7 +6,9 @@ use defra_node::Node as EmbeddedNode;
 
 use crate::request::lifecycle::WorkspaceLineage;
 use crate::request::watcher::AgentRequest;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
+#[cfg(test)]
+use crate::store::graphql::graphql_with_transaction_retry;
 use crate::tools::native::WorkspaceAuthority;
 
 use super::action_plan::{
@@ -308,22 +310,23 @@ fn ctx_repository_path(repository: &RepositoryPlacementRef) -> PathBuf {
 
 /// Explicit operator/ack cleanup. Never invoked from request terminal.
 pub async fn cleanup_workspace(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor_did: &str,
+    access: &crate::ConfigAccess,
     node_did: &str,
     workspace_id: &str,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
     let workspace_id = optional_id(Some(workspace_id))
         .ok_or_else(|| anyhow::anyhow!("cleanup_workspace requires a workspace_id"))?;
-    let mut docs = load_docs(node, workspace_id, node_did).await?;
+    claim_workspace_cleanup(access, workspace_id, node_did).await?;
+    let mut docs = load_docs_with_access(access, workspace_id, node_did).await?;
     let workspace = docs
         .load_isolated_workspace(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
     let repository =
-        load_repository(node, &workspace.repository_id, &workspace.owner_node_did).await?;
+        load_repository_with_access(access, &workspace.repository_id, &workspace.owner_node_did)
+            .await?;
 
     let plan = emit_cleanup_workspace_plan(CleanupWorkspaceAction {
         workspace_id: workspace_id.to_string(),
@@ -346,9 +349,36 @@ pub async fn cleanup_workspace(
         execute_cleanup_workspace_plan(&plan, &mut journal, &mut ctx)
             .map_err(|err| anyhow::anyhow!("{err}"))?
     };
-    flush_cleanup_outcome(node, actor_did, &docs, &outcome).await
+    flush_cleanup_outcome(access, &docs, &outcome).await
 }
 
+pub(super) async fn claim_workspace_cleanup(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    owner: &str,
+) -> Result<()> {
+    access.transact_write("workspace.claim_cleanup", |txn| Box::pin(async move {
+        let response = txn.execute(&super::overlay::isolated_workspace_record_query(workspace_id, owner)).await?;
+        let rows = response["data"]["IsolatedWorkspace"].as_array().context("workspace cleanup query omitted rows")?;
+        let [row] = rows.as_slice() else { anyhow::bail!("cleanup workspace unavailable or ambiguous") };
+        let doc = row["_docID"].as_str().filter(|id| !id.is_empty()).context("cleanup workspace physical ID missing")?;
+        let state = row["lifecycle_state"].as_str().context("cleanup workspace state missing")?;
+        let normalized = crate::tools::native::normalize_workspace_lifecycle_state(state);
+        anyhow::ensure!(matches!(normalized, Some("sealed" | "cleaning" | "cleaned" | "provisionFailed")),
+            "workspace in state {state} cannot be cleaned");
+        let response = txn.execute(&super::overlay::workspace_bindings_for_parent_query(doc)).await?;
+        let values = response.pointer("/data/WorkspaceBinding").context("cleanup binding query omitted rows")?;
+        let bindings = super::overlay::validate_workspace_bindings(serde_json::from_value(values.clone())?, workspace_id)?;
+        anyhow::ensure!(bindings.iter().all(|binding| binding.workspace_doc_id.as_deref() == Some(doc) && binding.owner_node_did == owner), "cleanup binding parent mismatch");
+        anyhow::ensure!(!bindings.iter().any(WorkspaceBindingDoc::is_active), "workspace has Active binding(s); cleanup requires them Released first");
+        let next = if normalized == Some("cleaned") { "cleaned" } else { "cleaning" };
+        let response = txn.execute(&format!(r#"mutation {{update_IsolatedWorkspace(docID: "{}", input: {{lifecycle_state: "{next}", binding_revision: "{}"}}) {{_docID}}}}"#, escape_graphql_string(doc), uuid::Uuid::new_v4())).await?;
+        anyhow::ensure!(crate::store::graphql::mutation_documents(&response, "update_IsolatedWorkspace")?.is_some_and(|rows| rows.len() == 1), "workspace cleanup claim was not authorized");
+        Ok::<_, anyhow::Error>(())
+    })).await
+}
+
+#[cfg(test)]
 pub async fn writer_request_already_sealed(
     node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -614,28 +644,6 @@ pub(super) async fn release_writer_binding_in_txn(
     Ok(())
 }
 
-async fn load_docs(
-    node: &EmbeddedNode,
-    workspace_id: &str,
-    node_did: &str,
-) -> Result<MemoryWorkspaceDocuments> {
-    let mut docs = MemoryWorkspaceDocuments::default();
-    if let Some(workspace) = load_isolated_workspace_doc(node, workspace_id, node_did).await? {
-        docs.write_isolated_workspace(workspace)?;
-    }
-    if let Some(placement) = load_placement_doc(node, workspace_id, node_did).await? {
-        docs.write_placement(placement)?;
-    }
-    for binding in super::overlay::load_workspace_bindings_for(node, workspace_id, node_did).await?
-    {
-        docs.write_binding(binding)?;
-    }
-    for receipt in load_receipts(node, workspace_id).await? {
-        docs.write_receipt(receipt)?;
-    }
-    Ok(docs)
-}
-
 pub(super) async fn load_docs_with_access(
     access: &crate::ConfigAccess,
     workspace_id: &str,
@@ -690,6 +698,7 @@ where
     Ok(serde_json::from_value(values.clone())?)
 }
 
+#[cfg(test)]
 async fn load_receipts(
     node: &EmbeddedNode,
     workspace_id: &str,
@@ -725,20 +734,6 @@ fn workspace_receipts_query(workspace_id: &str) -> String {
     )
 }
 
-async fn load_isolated_workspace_doc(
-    node: &EmbeddedNode,
-    workspace_id: &str,
-    node_did: &str,
-) -> Result<Option<IsolatedWorkspaceDoc>> {
-    let query = isolated_workspace_doc_query(workspace_id, node_did);
-    let response =
-        graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace for seal").await?;
-    let mut found =
-        crate::store::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
-    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped IsolatedWorkspace");
-    Ok(found.pop())
-}
-
 fn isolated_workspace_doc_query(workspace_id: &str, node_did: &str) -> String {
     format!(
         r#"{{
@@ -752,20 +747,6 @@ fn isolated_workspace_doc_query(workspace_id: &str, node_did: &str) -> String {
     )
 }
 
-async fn load_placement_doc(
-    node: &EmbeddedNode,
-    workspace_id: &str,
-    node_did: &str,
-) -> Result<Option<WorkspacePlacementDoc>> {
-    let query = placement_doc_query(workspace_id, node_did);
-    let response =
-        graphql_with_transaction_retry(node, &query, "load WorkspacePlacement for seal").await?;
-    let mut found =
-        crate::store::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
-    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped WorkspacePlacement");
-    Ok(found.pop())
-}
-
 fn placement_doc_query(workspace_id: &str, node_did: &str) -> String {
     format!(
         r#"{{
@@ -777,24 +758,6 @@ fn placement_doc_query(workspace_id: &str, node_did: &str) -> String {
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(node_did),
     )
-}
-
-async fn load_repository(
-    node: &EmbeddedNode,
-    repository_id: &str,
-    node_did: &str,
-) -> Result<RepositoryPlacementRef> {
-    let response = graphql_with_transaction_retry(
-        node,
-        &repository_query(repository_id, node_did),
-        "load scoped RepositoryPlacement",
-    )
-    .await?;
-    let found = crate::store::graphql::rows::<crate::documents::RepositoryPlacement>(
-        &response,
-        "RepositoryPlacement",
-    )?;
-    selected_repository(found)
 }
 
 pub(super) async fn load_repository_with_access(
@@ -947,8 +910,7 @@ async fn write_workspace_receipt(
 }
 
 async fn flush_cleanup_outcome(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor_did: &str,
+    access: &crate::ConfigAccess,
     docs: &MemoryWorkspaceDocuments,
     outcome: &CleanupWorkspaceOutcome,
 ) -> Result<()> {
@@ -959,17 +921,14 @@ async fn flush_cleanup_outcome(
         .cloned()
         .collect();
     let mutation = workspace_cleanup_docs_mutation(&outcome.workspace, &bindings);
-    crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(actor_did.to_owned())?,
-    )
-    .write("workspace.cleanup_documents", &mutation)
-    .await
-    .with_context(|| {
-        format!(
-            "persist cleaned workspace {}",
-            outcome.workspace.workspace_id
-        )
-    })?;
+    access
+        .write("workspace.cleanup_documents", &mutation)
+        .await
+        .with_context(|| {
+            format!(
+                "persist cleaned workspace {}",
+                outcome.workspace.workspace_id
+            )
+        })?;
     Ok(())
 }

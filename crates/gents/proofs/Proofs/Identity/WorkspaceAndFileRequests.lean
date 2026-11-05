@@ -144,6 +144,24 @@ def admitExclusive (complete occupied : Bool) : Bool := complete && !occupied
 theorem incomplete_inventory_cannot_admit : admitExclusive false false = false := by rfl
 theorem occupied_inventory_cannot_admit : admitExclusive true true = false := by rfl
 
+/-- Cleanup claims its physical workspace in a native authorized transaction.
+The complete canonical binding inventory must contain no active binding, and
+the shared workspace write records cleaning before the host effect. -/
+def mayBeginCleanup (nativeUpdate complete active : Bool) : Bool :=
+  nativeUpdate && complete && !active
+
+theorem cleanup_without_native_update_cannot_begin :
+    mayBeginCleanup false true false = false := by rfl
+theorem cleanup_with_active_binding_cannot_begin :
+    mayBeginCleanup true true true = false := by rfl
+
+def workspaceCleanupCasesJson : String :=
+  let cases : List (String × Bool × Bool) :=
+    [("active", true, true), ("unauthorized", false, false), ("available", true, false)]
+  (Lean.toJson (cases.map fun (name, allowed, active) => Lean.Json.mkObj
+    [("name", Lean.toJson name), ("allowed", Lean.toJson allowed),
+      ("active", Lean.toJson active), ("begins", Lean.toJson (mayBeginCleanup allowed true active))])).compress
+
 def workspaceAdmissionCasesJson : String :=
   (Lean.toJson ([false, true].map fun occupied =>
     Lean.Json.mkObj [("complete", Lean.toJson true), ("occupied", Lean.toJson occupied),

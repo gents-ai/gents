@@ -1037,12 +1037,10 @@ async fn verify_request_input(
             "workspace admission requires the selected held Agent"
         )));
     } else {
-        crate::tools::workspace::validate_request_workspace_input(
-            node,
+        crate::tools::workspace::validate_unbound_request_workspace_input(
             &request,
             artifact_requested,
         )
-        .await
         .map_err(AgentRequestAdmissionError::denied)?;
     }
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal

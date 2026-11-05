@@ -1545,6 +1545,12 @@ def caseCoverage : List CoverageEntry :=
       "Exercises competing canonical exclusive admissions; native conflict fencing needs central validation.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "workspace_cleanup_cases"
+      "WorkspaceCleanupCases"
+      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "Cleanup claims the parent with native update permission after checking the canonical binding inventory.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_completion_access_cases"
       "WorkspaceCompletionAccessCases"
       "tools::workspace::tests::capability_runtime::workspace_completion_reads_keep_selected_agent_visibility"

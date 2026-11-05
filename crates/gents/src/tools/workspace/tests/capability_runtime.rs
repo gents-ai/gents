@@ -789,6 +789,37 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .unwrap()["admitted"],
         false
     );
+    writer_access.write("test.workspace.seal", &format!(r#"mutation {{update_IsolatedWorkspace(docID: "{}", input: {{lifecycle_state: "sealed"}}) {{_docID}}}}"#, workspace_doc)).await?;
+    let other_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        other.did().parse()?,
+        other.as_ref(),
+    )?;
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_cleanup_cases {
+        let name = case["name"].as_str().unwrap();
+        if name == "unauthorized" {
+            writer_access.write("test.workspace.release", &format!(r#"mutation {{update_WorkspaceBinding(docID: "{}", input: {{lifecycle_state: "released"}}) {{_docID}}}}"#, binding_doc)).await?;
+        }
+        let access = if name == "unauthorized" {
+            &other_access
+        } else {
+            &writer_access
+        };
+        let result =
+            super::super::runtime::claim_workspace_cleanup(access, "workspace", user.did()).await;
+        assert_eq!(
+            result.is_ok(),
+            case["begins"].as_bool().unwrap(),
+            "{case}: {result:?}"
+        );
+    }
+    let state = writer_access
+        .execute("{ IsolatedWorkspace { lifecycle_state } }")
+        .await?;
+    assert_eq!(
+        state["data"]["IsolatedWorkspace"][0]["lifecycle_state"],
+        "cleaning"
+    );
     node.shutdown().await?;
     Ok(())
 }

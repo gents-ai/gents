@@ -20,6 +20,10 @@ inductive Transition : IsolatedWorkspace → IsolatedWorkspace → Prop where
       pre.state = .sealed →
       post = { pre with state := .cleaning } →
       Transition pre post
+  | begin_failed_cleanup {pre post : IsolatedWorkspace} :
+      pre.state = .provisionFailed →
+      post = { pre with state := .cleaning } →
+      Transition pre post
   | finish_cleanup {pre post : IsolatedWorkspace} :
       pre.state = .cleaning →
       post = { pre with state := .cleaned } →
@@ -31,6 +35,7 @@ def transitionLegal (pre : IsolatedWorkspace) (postState : WorkspaceState) : Boo
   | .provisioning, .provisionFailed => true
   | .ready, .sealed => pre.sealHash.isSome
   | .sealed, .cleaning => true
+  | .provisionFailed, .cleaning => true
   | .cleaning, .cleaned => true
   | _, _ => false
 

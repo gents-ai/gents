@@ -1030,9 +1030,12 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
             .unwrap();
     let result = node.execute(&mutation).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
+    let admin = crate::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
     let error = crate::tools::workspace::cleanup_workspace(
-        &node,
-        &owner.request().agent_did,
+        &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
@@ -1049,10 +1052,6 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         )
         .await
         .unwrap();
-    let admin = crate::ConfigAccess::local_as(
-        node.clone(),
-        node.node_identity_did().unwrap().parse().unwrap(),
-    );
     admin
         .transact_write("test.workspace.release", |txn| {
             Box::pin(super::super::runtime::release_writer_binding_in_txn(
@@ -1066,8 +1065,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         .await
         .unwrap();
     crate::tools::workspace::cleanup_workspace(
-        &node,
-        &owner.request().agent_did,
+        &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
