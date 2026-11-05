@@ -16,6 +16,15 @@ invoke("desktop_pack_plugin_bind", {
 });
 
 invoke("desktop_join_requests_list", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_join_members_list", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_join_history_read", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_join_request_decide", {
+  request: {
+    nodeDid: "did:key:z6MkNode",
+    requestId: "request",
+    decision: { kind: "revoke" },
+  },
+});
 invoke("desktop_join_request_decide", {
   request: {
     nodeDid: "did:key:z6MkNode",

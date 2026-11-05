@@ -29,6 +29,8 @@ export type {
   ManagedServerStatus,
   ManagedServerResetResult,
   HomeResetDisposition,
+  JoinHistoryView,
+  JoinMemberView,
   JoinRequestDecideRequest,
   JoinRequestDecisionView,
   JoinRequestView,
