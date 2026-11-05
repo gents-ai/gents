@@ -122,6 +122,35 @@ pub struct EnrollmentDecisionRejected {
     pub code: Option<gents_protocol::enrollment::EnrollmentDecisionRefusalCode>,
 }
 
+/// The runtime refused a signed enrollment query.
+#[derive(Debug, thiserror::Error)]
+#[error("runtime rejected enrollment query ({status}): {message}")]
+pub struct EnrollmentQueryRejected {
+    pub status: reqwest::StatusCode,
+    pub message: String,
+}
+
+impl EnrollmentQueryRejected {
+    /// Whether the runtime predates the query. A runtime's JSON extractor
+    /// answers 422, in plain text, for a query name its enum doesn't have,
+    /// before reading the command; every other refusal on this route is the
+    /// query service's own 400 or 503.
+    pub fn query_is_unknown_to_runtime(&self) -> bool {
+        self.status == reqwest::StatusCode::UNPROCESSABLE_ENTITY
+    }
+}
+
+fn enrollment_query_result(status: reqwest::StatusCode, body: &str) -> Result<serde_json::Value> {
+    if !status.is_success() {
+        let message = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|json| Some(json.get("error")?.as_str()?.to_string()))
+            .unwrap_or_else(|| body.to_string());
+        return Err(EnrollmentQueryRejected { status, message }.into());
+    }
+    serde_json::from_str(body).context("decoding enrollment query response")
+}
+
 /// Pending enrollment discovery uses a bounded wait on the live runtime.
 pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
     let home = resolve_home_dir(args.home.as_deref());
@@ -169,16 +198,56 @@ pub(crate) async fn load_enrollment_query(
         .await
         .context("loading enrollment query from live runtime")?;
     let status = response.status();
-    let body: serde_json::Value = response
-        .json()
+    let body = response
+        .text()
         .await
-        .context("decoding enrollment query response")?;
-    anyhow::ensure!(
-        status.is_success(),
-        "runtime rejected enrollment query ({status}): {}",
-        body.get("error")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown error")
-    );
-    Ok(body)
+        .context("reading enrollment query response")?;
+    enrollment_query_result(status, &body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    fn rejection(status: StatusCode, body: &str) -> EnrollmentQueryRejected {
+        enrollment_query_result(status, body)
+            .expect_err("refused")
+            .downcast()
+            .expect("typed refusal")
+    }
+
+    #[test]
+    fn a_runtime_that_lacks_the_query_is_told_from_other_refusals() {
+        let older = rejection(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Failed to deserialize the JSON body into the target type: query: unknown variant `members`, expected `pending` at line 1 column 28",
+        );
+        assert!(older.query_is_unknown_to_runtime());
+        assert!(older.message.contains("unknown variant `members`"));
+
+        let refused = rejection(StatusCode::BAD_REQUEST, r#"{"error":"nonce was used"}"#);
+        assert!(!refused.query_is_unknown_to_runtime());
+        assert_eq!(refused.message, "nonce was used");
+        assert_eq!(
+            refused.to_string(),
+            "runtime rejected enrollment query (400 Bad Request): nonce was used"
+        );
+
+        let starting = rejection(
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":"enrollment authority is not ready"}"#,
+        );
+        assert!(!starting.query_is_unknown_to_runtime());
+    }
+
+    #[test]
+    fn an_answer_that_is_not_json_stays_a_decoding_failure() {
+        let error = enrollment_query_result(StatusCode::OK, "<html>").expect_err("not json");
+        assert!(error.downcast_ref::<EnrollmentQueryRejected>().is_none());
+        assert_eq!(
+            enrollment_query_result(StatusCode::OK, r#"{"members":[]}"#).expect("json"),
+            serde_json::json!({ "members": [] })
+        );
+    }
 }
