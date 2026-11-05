@@ -45,7 +45,7 @@ theorem runtime_access_requires_its_explicit_grant :
     Household.allowed 5 revokedRuntimeFixture "runtime" "configuration" "request" "update" = false := by native_decide
 
 def requestAccessCasesJson : String :=
-  (Lean.toJson (["user", "runtime", "agent", "other"].flatMap fun actor =>
+  (Lean.toJson (["user", "runtime", "writer", "integrator", "other"].flatMap fun actor =>
     ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
       [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
        ("expected", Lean.toJson (requestPermission actor permission))])).compress
@@ -73,14 +73,16 @@ establish an unconfigured fallback. -/
 def workspaceRootFixture : Household.State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"workspace_roots", "root", "user"⟩],
     relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
-      ⟨"workspace_roots", "root", "parent", .object "nodes" "node"⟩], enrolled := [] }
+      ⟨"workspace_roots", "root", "parent", .object "nodes" "node"⟩,
+      ⟨"workspace_roots", "root", "reader", .actor "writer"⟩,
+      ⟨"workspace_roots", "root", "reader", .actor "integrator"⟩], enrolled := [] }
 
 def workspaceRootPermission (actor permission : String) : Bool :=
   Household.allowed 6 workspaceRootFixture actor "workspace_roots" "root" permission
 
 def workspaceRootAfterRevocation : Household.State :=
-  { workspaceRootFixture with relations := workspaceRootFixture.relations.filter
-      (fun relation => relation.resource != "workspace_roots") }
+  Household.apply workspaceRootFixture (.revoke
+    ⟨"workspace_roots", "root", "parent", .object "nodes" "node"⟩)
 
 def workspaceRootPublicationAllowed (actor : String) : Bool :=
   Household.allowed 6 workspaceRootFixture actor "nodes" "node" "update"
@@ -90,6 +92,16 @@ theorem runtime_root_access_is_read_only :
     workspaceRootPermission "runtime" "update" = false ∧
     workspaceRootPublicationAllowed "runtime" = false := by native_decide
 
+theorem explicitly_selected_agents_read_root_without_update :
+    workspaceRootPermission "writer" "read" = true ∧
+    workspaceRootPermission "integrator" "read" = true ∧
+    workspaceRootPermission "writer" "update" = false ∧
+    workspaceRootPermission "integrator" "update" = false := by native_decide
+
+def workspaceRootAfterWriterRevocation : Household.State :=
+  Household.apply workspaceRootFixture (.revoke
+    ⟨"workspace_roots", "root", "reader", .actor "writer"⟩)
+
 def workspaceRootAccessCasesJson : String :=
   (Lean.toJson (["user", "runtime", "agent", "other"].flatMap fun actor =>
     ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
@@ -97,6 +109,7 @@ def workspaceRootAccessCasesJson : String :=
        ("expected", Lean.toJson (workspaceRootPermission actor permission)),
        ("may_publish", Lean.toJson (workspaceRootPublicationAllowed actor)),
        ("after_parent_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterRevocation actor "workspace_roots" "root" permission)),
+       ("after_writer_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterWriterRevocation actor "workspace_roots" "root" permission)),
        ("aborted_document", Lean.toJson (publish false).document)])).compress
 
 /-- Workspace workflow configuration chooses the writer and integrator
