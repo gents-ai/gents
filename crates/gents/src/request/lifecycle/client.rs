@@ -50,9 +50,7 @@ fn request_actor(access: &ConfigAccess, create: &AgentRequestCreate) -> anyhow::
 
 /// Translate the canonical request owner's GraphQL input into the native
 /// signed-create adapter's variables without constructing another wire shape.
-pub(crate) fn client_request_input(
-    create: &AgentRequestCreate,
-) -> anyhow::Result<serde_json::Value> {
+pub fn client_request_input(create: &AgentRequestCreate) -> anyhow::Result<serde_json::Value> {
     let document = create
         .graphql_client_publication_mutation()
         .map_err(anyhow::Error::msg)?;

@@ -11,7 +11,7 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::QueueDelivery;
 use gents_protocol::session_input_edit::SessionInputEditReceipt;
 
-use crate::support::{test_db, TestDb};
+use crate::support::{self, test_db, TestDb};
 
 pub(super) async fn enqueue(
     db: &TestDb,
@@ -107,6 +107,7 @@ async fn submit_edit_inner(
     let worker = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&db).await,
         cancel.clone(),
     ));
     let access = ConfigAccess::local_as(

@@ -147,6 +147,65 @@ pub fn test_agent_with_identity(
     }
 }
 
+pub async fn session_command_agent_snapshot(
+    db: &super::TestDb,
+) -> tokio::sync::watch::Receiver<
+    Arc<gents::runtime::agent::p2p_reconcile::session_commands::SessionCommandAgentSnapshot>,
+> {
+    let access =
+        gents::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    let response = access
+        .execute("{ Agent { agent_did creation_nonce node_did } }")
+        .await
+        .unwrap();
+    let mut agents = rapidhash::RapidHashMap::default();
+    for row in response["data"]["Agent"].as_array().expect("Agent rows") {
+        if row["node_did"].as_str() != Some(db.node_identity.did()) {
+            continue;
+        }
+        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: row["agent_did"].as_str().expect("Agent DID").into(),
+            creation_nonce: row["creation_nonce"]
+                .as_str()
+                .expect("Agent creation nonce")
+                .into(),
+        };
+        let signer =
+            gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .expect("held Agent identity");
+        let node = test_node_for(db.node_identity.clone(), &binding.agent_did);
+        let agent = Arc::new(test_agent_with_identity(node, signer));
+        agents.insert(binding.agent_did, agent);
+    }
+    assert!(
+        !agents.is_empty(),
+        "session command tests require a held Agent"
+    );
+    let default_agent_did = agents.keys().next().unwrap().clone();
+    let runtime_node = test_node_for(db.node_identity.clone(), &default_agent_did);
+    let snapshot =
+        gents::runtime::agent::p2p_reconcile::session_commands::SessionCommandAgentSnapshot {
+            generation: 1,
+            node: Some(runtime_node),
+            local_did: db.node_identity.did().into(),
+            default_agent_did,
+            agents,
+            tool_surfaces: Default::default(),
+            backend_admission_configs: Default::default(),
+            unavailable_agents: Default::default(),
+            active_schedules: Default::default(),
+            unavailable_schedules: Default::default(),
+            active_event_triggers: Default::default(),
+            unavailable_event_triggers: Default::default(),
+            active_tasks: Default::default(),
+            dispatchers: Default::default(),
+            agent_executor_capacities: Default::default(),
+            agent_executor_queue_capacities: Default::default(),
+        };
+    let (_sender, receiver) = tokio::sync::watch::channel(Arc::new(snapshot));
+    receiver
+}
+
 pub async fn configure_child_agent(
     node: &Arc<EmbeddedNode>,
     node_did: &str,

@@ -90,6 +90,49 @@ async fn write_command(db: &TestDb, command: &SessionInputEdit) -> String {
     gents::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
 }
 
+async fn signed_edit_targets(
+    db: &TestDb,
+    signer: &dyn gents::store::identity::NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+    replacements: &[AgentRequestCreate],
+) -> (String, String, String, Vec<serde_json::Value>) {
+    let access =
+        ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(signer.did()).unwrap());
+    let (session_doc_id, agent_did, agent_doc_id) = access
+        .transact_readonly("test.input_edit.targets", |txn| {
+            Box::pin(async move {
+                let session =
+                    gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        .await?
+                        .expect("session exists");
+                let (agent_doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    gents::Collection::Agent,
+                    node_did,
+                    &session.session.agent_did,
+                )
+                .await?
+                .expect("selected Agent exists");
+                Ok::<_, anyhow::Error>((session.doc_id, session.session.agent_did, agent_doc))
+            })
+        })
+        .await
+        .unwrap();
+    let mut evidence = Vec::with_capacity(replacements.len());
+    for replacement in replacements {
+        evidence.push(
+            gents::store::config_client::prepare_request_evidence(
+                signer,
+                gents::request::lifecycle::client_request_input(replacement).unwrap(),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    (session_doc_id, agent_did, agent_doc_id, evidence)
+}
+
 #[tokio::test]
 async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
     let runtime = support::test_p2p_db("input-edit-runtime").await;
@@ -224,6 +267,7 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
     let edit_task = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&runtime).await,
         edit_cancel.clone(),
     ));
     for (case, modeled) in fresh.iter().zip(&prepared) {
@@ -250,6 +294,7 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
     let revoked_task = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&runtime).await,
         cancel.clone(),
     ));
     for (case, modeled) in revoked.iter().zip(&prepared) {
@@ -546,6 +591,14 @@ impl RemoteEdit<'_> {
                 chrono::Utc::now() + chrono::Duration::hours(1) + offset
             }
         };
+        let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) = signed_edit_targets(
+            self.client,
+            self.client.node_identity.as_ref(),
+            did,
+            &session_id,
+            &native,
+        )
+        .await;
         let mut command = SessionInputEdit {
             version: SESSION_INPUT_EDIT_VERSION,
             command_id: format!("edit-{name}"),
@@ -557,10 +610,14 @@ impl RemoteEdit<'_> {
             } else {
                 format!("{session_id}-foreign")
             },
+            session_doc_id,
+            agent_did,
+            agent_doc_id,
             issued_at: instant(&model["issued_at"]).to_rfc3339(),
             expires_at: instant(&model["expires_at"]).to_rfc3339(),
             edit,
             replacements: native,
+            replacement_evidence,
             signature: Vec::new(),
         };
         command.signature = self
@@ -728,6 +785,8 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     .await
     .unwrap();
     let now = chrono::Utc::now();
+    let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+        signed_edit_targets(&db, db.node_identity.as_ref(), &did, session, &replacements).await;
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: "edit-before-reopen".into(),
@@ -735,10 +794,14 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         requester_peer_id: None,
         node_did: did.clone(),
         session_id: session.into(),
+        session_doc_id,
+        agent_did,
+        agent_doc_id,
         issued_at: (now - chrono::Duration::seconds(1)).to_rfc3339(),
         expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
         edit,
         replacements,
+        replacement_evidence,
         signature: vec![],
     };
     command.signature = db
@@ -754,6 +817,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     let task = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&db).await,
         cancel.clone(),
     ));
     let row = wait_row(
@@ -839,6 +903,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     let task = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&db).await,
         cancel.clone(),
     ));
     let rejected = wait_row(
@@ -966,6 +1031,8 @@ async fn local_edit_command_as(
     .await
     .unwrap();
     let now = chrono::Utc::now();
+    let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+        signed_edit_targets(db, identity, did, &session_id, &replacements).await;
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: format!("command-{suffix}"),
@@ -973,10 +1040,14 @@ async fn local_edit_command_as(
         requester_peer_id: None,
         node_did: did.into(),
         session_id,
+        session_doc_id,
+        agent_did,
+        agent_doc_id,
         issued_at: (now - chrono::Duration::seconds(1)).to_rfc3339(),
         expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
         edit,
         replacements,
+        replacement_evidence,
         signature: Vec::new(),
     };
     command.signature = identity.sign(&command.signing_payload()).await.unwrap();
@@ -1054,6 +1125,7 @@ async fn same_physical_edit_replicates_and_replays_once() {
     let worker = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&runtime).await,
         cancel.clone(),
     ));
     let observed = wait_row(
@@ -1132,6 +1204,7 @@ async fn same_physical_edit_replicates_and_replays_once() {
     let worker = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&runtime).await,
         cancel.clone(),
     ));
     for suffix in ["replay-barrier-one", "replay-barrier-two"] {
@@ -1231,6 +1304,7 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
         let worker = tokio::spawn(run_session_command_reconciler(
             owner.node.clone(),
             identity.clone(),
+            support::fixtures::session_command_agent_snapshot(&owner).await,
             cancel.clone(),
         ));
         let observed = wait_row(
@@ -1316,6 +1390,7 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
     let worker = tokio::spawn(run_session_command_reconciler(
         owner.node.clone(),
         identity.clone(),
+        support::fixtures::session_command_agent_snapshot(&owner).await,
         cancel.clone(),
     ));
     for suffix in ["collision-barrier-one", "collision-barrier-two"] {
