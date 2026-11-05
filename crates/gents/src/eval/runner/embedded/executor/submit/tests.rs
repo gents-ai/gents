@@ -22,6 +22,7 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
         let waiting = seed_and_await_fire(
             &home,
             "did:test:unselected",
+            home.did(),
             &ready,
             &seed,
             Some(Duration::from_secs(2)),
@@ -60,7 +61,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     )
     .await
     .unwrap();
-    assert_eq!(fired_request(&home.node, &doc_id).await.unwrap(), None);
+    assert_eq!(fired_request(&home.node, &doc_id, home.did()).await.unwrap(), None);
 
     create_document(
         &access,
@@ -70,7 +71,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
             "request_id": "fired",
             "node_did": home.did(),
             "requester_did": home.did(),
-            "agent_did": "seeded-agent",
+            "agent_did": home.did(),
             "session_id": "s-1",
             "content": "x",
             "execution_origin": "event",
@@ -107,6 +108,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     let resolved = resolve_seed_failure(
         &home.node,
         &doc_id,
+        home.did(),
         failure,
         Some(Duration::from_secs(600)),
         Instant::now(),
