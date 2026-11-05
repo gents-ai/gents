@@ -193,4 +193,20 @@ mod tests {
             .unwrap()
             .contains(&serde_json::json!("plugin-window")));
     }
+
+    /* the app has permissions of its own, so a command none of them allows
+       is refused at runtime ("not allowed. Command not found") */
+    #[test]
+    fn the_main_view_may_open_a_plugin_window() {
+        let permission = include_str!("../../permissions/plugin-window.toml");
+        assert!(permission.contains("identifier = \"open-plugin-window\""));
+        assert!(permission.contains("\"desktop_open_plugin_window\""));
+        let main: serde_json::Value =
+            serde_json::from_str(include_str!("../../capabilities/default.json")).unwrap();
+        assert!(main["windows"].as_array().unwrap().contains(&serde_json::json!("main")));
+        assert!(main["permissions"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("open-plugin-window")));
+    }
 }

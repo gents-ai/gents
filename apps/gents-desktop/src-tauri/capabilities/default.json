@@ -17,6 +17,7 @@
     "dialog:allow-message",
     "gents-desktop-bridge:default",
     "gents-desktop-bridge:full",
-    "native-swipe"
+    "native-swipe",
+    "open-plugin-window"
   ]
 }

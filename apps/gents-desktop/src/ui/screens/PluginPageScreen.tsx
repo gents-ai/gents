@@ -7,7 +7,7 @@
    edge and top to bottom, not the reading column: a plugin page is an
    app surface of its own (a board, a diff viewer) that lays itself out and
    scrolls inside its frame. */
-import { AppWindow } from "lucide-react";
+import { SquareArrowOutUpRight } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import { ContribBoundary, ContribRender } from "@/contrib/react/boundary";
@@ -78,7 +78,7 @@ function OpenInWindow({ pluginId }: { pluginId: string }) {
             )
           }
         >
-          <AppWindow />
+          <SquareArrowOutUpRight />
         </Button>
       </Hint>
     </PaneBar>
