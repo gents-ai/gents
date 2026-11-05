@@ -413,7 +413,9 @@ fn instruction_manifest_for_persist(
     base_sha: &str,
 ) -> Result<String> {
     if let Some(existing) = documents.load_isolated_workspace(workspace_id)? {
-        if !is_empty_manifest(&existing.instruction_manifest) {
+        if normalize_workspace_lifecycle_state(&existing.lifecycle_state) == Some("provisioning")
+            || !is_empty_manifest(&existing.instruction_manifest)
+        {
             return Ok(existing.instruction_manifest);
         }
     }
