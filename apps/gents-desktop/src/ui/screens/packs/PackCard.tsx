@@ -82,11 +82,13 @@ export function PackMeta({
       {downloads !== null && (
         <span
           title={`${downloads.toLocaleString()} downloads`}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground tabular-nums"
+          className="grid w-12 grid-cols-[auto_1fr] items-center gap-1 text-xs text-muted-foreground tabular-nums"
         >
           <Download aria-hidden className="size-3" />
-          <span className="sr-only">Downloads: </span>
-          {compact.format(downloads)}
+          <span className="text-right">
+            <span className="sr-only">Downloads: </span>
+            {compact.format(downloads)}
+          </span>
         </span>
       )}
     </span>
@@ -138,6 +140,7 @@ export function PackCard({
   menu,
   meta,
   badge,
+  statusClassName,
 }: {
   pack: string;
   to: string;
@@ -152,6 +155,8 @@ export function PackCard({
   meta?: ReactNode;
   /** a word beside its name, such as Yours */
   badge?: ReactNode;
+  /** the status column's width, where every row's should line up */
+  statusClassName?: string;
 }) {
   const namespace = namespaceOf(pack);
   return (
@@ -187,6 +192,7 @@ export function PackCard({
         className={cn(
           "max-w-48 min-w-10 shrink-0 truncate text-right text-xs tabular-nums",
           warn ? "text-warning" : "text-muted-foreground",
+          statusClassName,
         )}
       >
         {status}
