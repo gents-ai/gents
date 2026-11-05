@@ -7,8 +7,14 @@ const MAX_EVENT_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) fn take_event(buffer: &mut Vec<u8>) -> anyhow::Result<Option<serde_json::Value>> {
     let delimiter = [
-        buffer.windows(2).position(|part| part == b"\n\n").map(|at| (at, 2)),
-        buffer.windows(4).position(|part| part == b"\r\n\r\n").map(|at| (at, 4)),
+        buffer
+            .windows(2)
+            .position(|part| part == b"\n\n")
+            .map(|at| (at, 2)),
+        buffer
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .map(|at| (at, 4)),
     ]
     .into_iter()
     .flatten()

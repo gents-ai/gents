@@ -250,6 +250,7 @@ async fn watch_stream(
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(35))
         .build()?;
     loop {
         let started = tokio::time::Instant::now();
