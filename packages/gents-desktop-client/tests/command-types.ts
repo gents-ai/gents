@@ -15,6 +15,23 @@ invoke("desktop_pack_plugin_bind", {
   request: { plugin: "example/model", profile: null },
 });
 
+invoke("desktop_join_requests_list", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_join_request_decide", {
+  request: {
+    nodeDid: "did:key:z6MkNode",
+    requestId: "request",
+    decision: { kind: "approve", leaseSeconds: 30 * 24 * 60 * 60 },
+  },
+});
+invoke("desktop_join_request_decide", {
+  request: {
+    nodeDid: "did:key:z6MkNode",
+    requestId: "request",
+    // @ts-expect-error An approval carries its lease.
+    decision: { kind: "approve" },
+  },
+});
+
 // @ts-expect-error The native inventory has no such command.
 invoke("desktop_missing_command");
 // @ts-expect-error A required native argument cannot be omitted.
