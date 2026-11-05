@@ -71,6 +71,7 @@ def main():
             )
             command = [
                 args.gents,
+                "pack",
                 "plugin",
                 "run",
                 "gents/browser_exec",

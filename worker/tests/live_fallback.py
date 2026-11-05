@@ -52,6 +52,7 @@ def main():
 
         def call(tool, data):
             return run(
+                "pack",
                 "plugin",
                 "run",
                 f"gents/{tool}",

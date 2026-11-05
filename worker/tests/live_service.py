@@ -79,6 +79,7 @@ def main():
             )
             run("pack", "install", str(pack), "--home", str(home), "--grant-authority")
             command = [
+                "pack",
                 "plugin",
                 "run",
                 "gents/browser_exec",

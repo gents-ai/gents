@@ -82,8 +82,8 @@ affects the answer.
 For a direct call after install:
 
 ```sh
-gents plugin run gents/web_search --input '{"query":"official HTTP status code reference","intent":"web","max_results":5}'
-gents plugin run gents/web_fetch --input '{"url":"https://www.rfc-editor.org/rfc/rfc9110","mode":"read","max_chars":4000}'
+gents pack plugin run gents/web_search --input '{"query":"official HTTP status code reference","intent":"web","max_results":5}'
+gents pack plugin run gents/web_fetch --input '{"url":"https://www.rfc-editor.org/rfc/rfc9110","mode":"read","max_chars":4000}'
 ```
 
 The three HTTP research plugins declare `OutboundHttp` through the host. The guest rejects local

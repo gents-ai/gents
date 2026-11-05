@@ -158,6 +158,7 @@ def main():
         subprocess.run(
             [
                 gents,
+                "debug",
                 "trace",
                 "export",
                 "--home",
