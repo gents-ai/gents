@@ -37,6 +37,10 @@ use gents_desktop_bridge::tauri_commands::inference_setup::{
     InferenceDiscoveryRequest, InferenceRecommendationRequest,
 };
 use gents_desktop_bridge::tauri_commands::operations::list_backends_with_health_for_core;
+use gents_desktop_bridge::tauri_commands::packs::PackInstallRequest;
+use gents_desktop_bridge::tauri_commands::ux_plugins::{
+    PluginCallRequest, UxDataCallRequest, UxDataSurfacesRequest,
+};
 use gents_desktop_bridge::types::{
     AgentSaveRequest, BackendRotationSetRequest, BackendSaveRequest, ChatSendRequest,
     DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshotRequest,
@@ -48,6 +52,7 @@ use gents_desktop_bridge::types::{
     ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
     TriggerSaveRequest,
 };
+use gents_server::packs;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,8 +129,116 @@ struct VersionResponse {
 pub(super) async fn handle_request(
     fixture: &Arc<LiveBridgeFixture>,
     request: HttpRequestData,
+    runtime: &tokio::runtime::Handle,
 ) -> Result<HttpResponse> {
     match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/desktop/packs/plugin-slots") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(runtime, move || packs::plugin_slots(home)).await?)
+        }
+        ("GET", "/desktop/packs/wire-sources") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(runtime, move || packs::wire_sources(home)).await?)
+        }
+        ("GET", "/desktop/packs/account") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(runtime, move || packs::whoami(home, None)).await?)
+        }
+        ("GET", "/desktop/packs/installed") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(runtime, move || packs::installed(home, None)).await?)
+        }
+        ("POST", "/desktop/packs/search") => {
+            let query = decode::<PackSearchRequest>(&request.body, "decoding pack search")?;
+            json(
+                run_pack(runtime, move || {
+                    packs::search(None, query.query, query.page.max(1))
+                })
+                .await?,
+            )
+        }
+        ("POST", "/desktop/packs/info") => {
+            let request = decode::<PackInfoRequest>(&request.body, "decoding pack info")?;
+            json(run_pack(runtime, move || packs::info(None, request.package)).await?)
+        }
+        ("POST", "/desktop/packs/install") => {
+            let request = decode::<PackInstallRequest>(&request.body, "decoding pack install")?;
+            let home = fixture.node_home().to_path_buf();
+            json(
+                run_pack(runtime, move || {
+                    packs::install(
+                        home,
+                        request.package,
+                        request.registry,
+                        request.inference_slots,
+                        request.edited,
+                        request.grant_authority,
+                        request.preview,
+                    )
+                })
+                .await?,
+            )
+        }
+        ("GET", "/desktop/ux/plugins") => {
+            json(serde_json::json!({ "plugins": packs::ux_list(fixture.node_home())? }))
+        }
+        ("POST", "/desktop/ux/source") => {
+            let request = decode::<UxSourceRequest>(&request.body, "decoding ux source")?;
+            let home = fixture.node_home().to_path_buf();
+            json(serde_json::to_value(
+                run_pack(runtime, move || packs::ux_module(home, request.id)).await?,
+            )?)
+        }
+        ("POST", "/desktop/ux/data") => {
+            let request = decode::<UxDataCallRequest>(&request.body, "decoding ux data")?;
+            let access = fixture.desktop_core().operator_access(&request.node_did)?;
+            json(
+                packs::ux_data_call(
+                    fixture.node_home().to_path_buf(),
+                    access,
+                    gents::observe::ux_data::UxDataCall {
+                        ux: request.ux,
+                        node_did: request.node_did,
+                        surface: request.surface,
+                        tool: request.tool,
+                        args: request.args,
+                    },
+                )
+                .await?,
+            )
+        }
+        ("POST", "/desktop/ux/surfaces") => {
+            let request = decode::<UxDataSurfacesRequest>(&request.body, "decoding ux surfaces")?;
+            let access = fixture.desktop_core().operator_access(&request.node_did)?;
+            json(
+                packs::ux_data_surfaces(
+                    fixture.node_home().to_path_buf(),
+                    access,
+                    request.ux,
+                    request.node_did,
+                )
+                .await?,
+            )
+        }
+        ("POST", "/desktop/ux/plugin-call") => {
+            let request = decode::<PluginCallRequest>(&request.body, "decoding plugin call")?;
+            let home = fixture.node_home().to_path_buf();
+            let operator = if packs::plugin_call_uses_data(&home, &request.ux, &request.name)? {
+                let node_did = packs::ux_installing_node(&home)?;
+                let access = fixture
+                    .desktop_core()
+                    .local_home_operator_access(&node_did, &home)?;
+                Some((access, node_did))
+            } else {
+                None
+            };
+            let output = run_pack(runtime, move || {
+                packs::plugin_call(home, request.ux, request.name, request.input, operator)
+            })
+            .await?;
+            json(serde_json::json!({ "output": output }))
+        }
+
         ("OPTIONS", _) => Ok(HttpResponse::empty("204 No Content")),
         ("GET", "/health") => Ok(HttpResponse::json_ok(
             serde_json::json!({ "status": "ok" }).to_string(),
@@ -841,4 +954,31 @@ fn require_live_fixture() -> Result<()> {
 async fn snapshot_response(fixture: &Arc<LiveBridgeFixture>) -> Result<HttpResponse> {
     let snapshot = build_desktop_client_snapshot(fixture).await;
     Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
+}
+
+#[derive(Deserialize)]
+struct PackSearchRequest {
+    query: String,
+    page: u32,
+}
+#[derive(Deserialize)]
+struct PackInfoRequest {
+    package: String,
+}
+#[derive(Deserialize)]
+struct UxSourceRequest {
+    id: String,
+}
+
+fn json(value: serde_json::Value) -> Result<HttpResponse> {
+    Ok(HttpResponse::json_ok(serde_json::to_string(&value)?))
+}
+
+async fn run_pack<F, Fut, T>(runtime: &tokio::runtime::Handle, operation: F) -> Result<T>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T>>,
+    T: Send + 'static,
+{
+    gents::store::local::storage_backend::drive_unsendable(runtime, operation).await?
 }

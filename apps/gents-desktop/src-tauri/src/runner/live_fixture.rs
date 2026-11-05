@@ -105,6 +105,10 @@ impl LiveBridgeFixture {
             })
     }
 
+    pub(crate) fn node_home(&self) -> &Path {
+        &self.node_home
+    }
+
     pub(crate) fn data_root(&self) -> &Path {
         self.node_home
             .parent()
@@ -445,17 +449,27 @@ fn non_empty_clone(value: &str) -> Option<String> {
 
 /// Drives a live fixture to completion on the runtime it owns. Callers are
 /// synchronous process or test entry points outside any runtime.
+#[cfg(test)]
 pub(crate) fn run_on_live_runtime<F>(future: F) -> Result<F::Output>
 where
     F: std::future::Future,
 {
+    run_on_live_runtime_with_handle(|_| future)
+}
+
+pub(crate) fn run_on_live_runtime_with_handle<F, Fut>(start: F) -> Result<Fut::Output>
+where
+    F: FnOnce(tokio::runtime::Handle) -> Fut,
+    Fut: std::future::Future,
+{
     const STACK_BYTES: usize = 16 * 1024 * 1024;
-    Ok(tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(4)
         .thread_stack_size(STACK_BYTES)
-        .build()?
-        .block_on(future))
+        .build()?;
+    let handle = runtime.handle().clone();
+    Ok(runtime.block_on(start(handle)))
 }
 
 async fn wait_for_operator_graphql(endpoint: &str, node_did: &str) -> Result<()> {

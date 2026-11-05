@@ -22,6 +22,7 @@ gents = { path = "../../../crates/gents" }
 gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
+gents-server = { package = "gents-cli", path = "../../../crates/gents-cli", default-features = false, features = ["typescript"] }
 gents-protocol = { path = "../../../crates/gents-protocol" }
 reqwest.workspace = true
 rapidhash = { workspace = true }

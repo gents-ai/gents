@@ -21,7 +21,10 @@ pub(crate) struct BridgeRunnerServer {
 }
 
 impl BridgeRunnerServer {
-    pub(crate) async fn start(fixture: Arc<LiveBridgeFixture>) -> Result<Self> {
+    pub(crate) async fn start(
+        fixture: Arc<LiveBridgeFixture>,
+        runtime: tokio::runtime::Handle,
+    ) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let (stop, mut stopped) = oneshot::channel();
@@ -32,7 +35,7 @@ impl BridgeRunnerServer {
                     _ = &mut stopped => break,
                     accepted = listener.accept() => {
                         let Ok((stream, _)) = accepted else { break };
-                        connections.spawn(serve_connection(stream, Arc::clone(&fixture)));
+                        connections.spawn(serve_connection(stream, Arc::clone(&fixture), runtime.clone()));
                     }
                     Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 }
@@ -53,9 +56,13 @@ impl BridgeRunnerServer {
     }
 }
 
-async fn serve_connection(mut stream: TcpStream, fixture: Arc<LiveBridgeFixture>) {
+async fn serve_connection(
+    mut stream: TcpStream,
+    fixture: Arc<LiveBridgeFixture>,
+    runtime: tokio::runtime::Handle,
+) {
     let response = match read_http_request(&mut stream).await {
-        Ok(request) => handle_request(&fixture, request).await,
+        Ok(request) => handle_request(&fixture, request, &runtime).await,
         Err(error) => Err(error),
     }
     .unwrap_or_else(|error| {
