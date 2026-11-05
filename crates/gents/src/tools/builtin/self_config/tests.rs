@@ -3933,9 +3933,25 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     crate::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
-    let seed_agent = "beh-test";
-    crate::test_support::install_test_agent(&node, &owner, seed_agent).await;
-    crate::upsert_node(&node, &owner, None, Some(seed_agent), true, None)
+    let seed_binding = crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let seed_agent = seed_binding.agent_did.clone();
+    let selected_agent =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &seed_binding).unwrap();
+    let operator =
+        crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(&owner).unwrap());
+    operator
+        .transact_write("test.self_config.root_grants", |txn| {
+            let (owner, agent_did) = (&owner, &seed_agent);
+            Box::pin(async move {
+                crate::store::config_client::grant_selected_self_configuration(
+                    txn, owner, agent_did,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    crate::upsert_node(&node, &owner, None, Some(&seed_agent), true, None)
         .await
         .expect("bind default agent");
 
@@ -3960,37 +3976,34 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .expect("original transcript fixture");
 
     let selected_text = selected_root.to_string_lossy().into_owned();
-    let escaped_selected = crate::store::graphql::escape_graphql_string(&selected_text);
     let fixture_actor = ::identity::Did::new(owner.clone()).expect("fixture creator DID");
-    let workspace_root_mutation = format!(
-        r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
-    );
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        Some(fixture_actor.clone()),
-        "test.agent.workspace_root",
-        |txn| {
-            let mutation = &workspace_root_mutation;
-            Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
-        },
+    crate::tools::surface::set_workspace_root_with_readers(
+        &operator,
+        &owner,
+        &selected_text,
+        None,
+        true,
+        &[seed_agent.clone()],
     )
     .await
     .expect("publish selected WorkspaceRoot");
 
     let mut tool_config = config(&["node"]);
-    tool_config.agent_did = seed_agent.into();
+    tool_config.agent_did = seed_agent.clone();
     tool_config.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
         file_mode: crate::tools::surface::FileToolMode::ReadOnly,
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(operator_root.path().to_path_buf()),
     };
-    let agent_tools = build_self_config_tools(
+    let agent_tools = build_self_config_tools_with_runtime(
         std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
+        Some(selected_agent),
         Some(identity.clone()),
         &tool_config,
         test_plugins(),
+        None,
     );
     let profile_id = format!("{seed_agent}:inference");
     let command = |preview: bool| {
