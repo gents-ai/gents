@@ -85,8 +85,8 @@ describe("telling the person about requests to join", () => {
     expect(notice.textContent).toContain("A device asks to join");
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
     const dialog = await screen.findByTestId("join-request-dialog");
-    expect(dialog.textContent).toContain("A device wants to join Local Agent");
-    expect(dialog.textContent).toContain("They'd get all of Local Agent");
+    expect(dialog.textContent).toContain("A device asks to join Local Agent");
+    expect(dialog.textContent).toContain("Use all of Local Agent");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     await vi.waitFor(() =>
       expect(api.decideJoinRequest).toHaveBeenCalledWith(
