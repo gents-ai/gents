@@ -62,6 +62,19 @@ jobs:
         run: rustup toolchain install --no-self-update
       - name: Install migration and callback fixture targets
         run: rustup target add wasm32-unknown-unknown wasm32-wasip1
+      - name: Ensure CMake for native dependencies
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+            choco install cmake --yes --no-progress --installargs 'ADD_CMAKE_TO_PATH=System'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $env:PATH = "$env:ProgramFiles\CMake\bin;$env:PATH"
+          }
+          $cmake = (Get-Command cmake -ErrorAction Stop).Source
+          & $cmake --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          (Split-Path $cmake) >> $env:GITHUB_PATH
+
       - name: Install protobuf compiler
         run: choco install protoc --yes --no-progress
       - name: Restore Rust dependencies
@@ -118,6 +131,19 @@ jobs:
         run: rustup toolchain install --no-self-update
       - name: Install migration fixture target
         run: rustup target add wasm32-unknown-unknown
+      - name: Ensure CMake for native dependencies
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+            choco install cmake --yes --no-progress --installargs 'ADD_CMAKE_TO_PATH=System'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $env:PATH = "$env:ProgramFiles\CMake\bin;$env:PATH"
+          }
+          $cmake = (Get-Command cmake -ErrorAction Stop).Source
+          & $cmake --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          (Split-Path $cmake) >> $env:GITHUB_PATH
+
       - name: Install protobuf compiler
         run: choco install protoc --yes --no-progress
       - name: Restore Rust dependencies

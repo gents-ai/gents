@@ -104,8 +104,8 @@ pub(super) async fn enrollment_pending_handler(
         )
             .into_response();
     };
-    match service.pending(&command).await {
-        Ok(pending) => (StatusCode::OK, axum::Json(json!({"pending": pending}))).into_response(),
+    match service.query(&command).await {
+        Ok(result) => (StatusCode::OK, axum::Json(result)).into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,
             axum::Json(json!({"error": error.to_string()})),

@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use gents_protocol::enrollment::{
-    EnrollmentOperatorAction, DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+    EnrollmentOperatorAction, EnrollmentOperatorQuery,
+    DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
 };
 
 use crate::cli::{Cli, Command};
@@ -27,6 +28,51 @@ pub struct ManagedPendingEnrollment {
 #[derive(serde::Deserialize)]
 struct ManagedPendingEnrollments {
     pending: Vec<ManagedPendingEnrollment>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ManagedEnrollmentMember {
+    pub request_id: String,
+    pub network_id: String,
+    pub candidate_did: String,
+    pub candidate_peer: String,
+    pub profile: String,
+    pub authorization_expires_at: String,
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedEnrollmentHistoryState {
+    Approved,
+    Denied,
+    Revoked,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ManagedEnrollmentHistoryEntry {
+    pub request_id: String,
+    pub candidate_did: String,
+    pub candidate_peer: String,
+    pub profile: String,
+    pub state: ManagedEnrollmentHistoryState,
+    pub decided_at: String,
+    pub decided_by: String,
+    pub revoked_at: Option<String>,
+    pub revoked_by: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManagedEnrollmentMembers {
+    members: Vec<ManagedEnrollmentMember>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ManagedEnrollmentHistory {
+    pub history: Vec<ManagedEnrollmentHistoryEntry>,
+    pub observed_count: usize,
+    pub limit: usize,
+    pub omits_superseded: bool,
+    pub conflicts_omitted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +208,36 @@ pub async fn pending_managed_enrollments(
     let result: ManagedPendingEnrollments =
         serde_json::from_value(body).context("decoding managed pending enrollments")?;
     Ok(result.pending)
+}
+
+pub async fn managed_enrollment_members(
+    home: &Path,
+    graphql: &str,
+) -> Result<Vec<ManagedEnrollmentMember>> {
+    let body = crate::commands::p2p::enrollment_admin::load_enrollment_query(
+        home,
+        graphql,
+        EnrollmentOperatorQuery::Members,
+    )
+    .await?;
+    let result: ManagedEnrollmentMembers =
+        serde_json::from_value(body).context("decoding managed enrollment members")?;
+    Ok(result.members)
+}
+
+pub async fn managed_enrollment_history(
+    home: &Path,
+    graphql: &str,
+) -> Result<ManagedEnrollmentHistory> {
+    let body = crate::commands::p2p::enrollment_admin::load_enrollment_query(
+        home,
+        graphql,
+        EnrollmentOperatorQuery::History,
+    )
+    .await?;
+    let result: ManagedEnrollmentHistory =
+        serde_json::from_value(body).context("decoding managed enrollment history")?;
+    Ok(result)
 }
 
 pub async fn decide_managed_enrollment(
