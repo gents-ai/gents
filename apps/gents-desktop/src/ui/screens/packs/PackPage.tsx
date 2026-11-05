@@ -1,3 +1,4 @@
+import { readFailure } from "./review";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowLeft, ArrowRight, ChevronRight } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -20,7 +21,7 @@ import { AgentInitials } from "../parts";
 import { isListed, SECTIONS } from "../agent/sections";
 import { canOpenPageWindows, openPageWindow } from "../PluginPageScreen";
 import { IS_MAC } from "../shortcutKeys";
-import { CARD, PackMenu, PackMeta, Section } from "./PackCard";
+import { CARD, PackMenu, PackMeta, Section, ErrorDetail } from "./PackCard";
 import { isExternalUrl } from "../../../lib/externalLinks";
 import { copyText } from "../../lib/clipboard";
 import { isPackName, packLink, type PackReviewRequest } from "@/lib/packReview";
@@ -576,10 +577,12 @@ export function PackPage({
               <Spinner /> Reading the pack
             </p>
           ) : preview.state === "unread" ? (
-            <p role="alert" className="text-sm text-warning">
-              Couldn't read what it would add.{" "}
-              <span className="text-muted-foreground">{preview.error}</span>
-            </p>
+            <div className="grid gap-2">
+              <p role="alert" className="text-sm text-warning">
+                {readFailure(preview.error)}
+              </p>
+              <ErrorDetail error={preview.error} />
+            </div>
           ) : would && would.tree.length + would.other.length > 0 ? (
             <Resources
               {...would}

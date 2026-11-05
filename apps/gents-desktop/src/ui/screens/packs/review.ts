@@ -103,6 +103,17 @@ export function previewPlugins(report: PackInstallReport): {
   return { plugins: names(report.installed_plugins), pages: names(report.ux_plugins) };
 }
 
+/** Why a pack couldn't be read, in words: a pack built for an older Gents
+    names fields this one doesn't know, and a listed pack may have no
+    version yet. The installer's own words stay available as detail. */
+export function readFailure(error: string): string {
+  if (/unknown field|manifest is not valid|is not a valid pack/.test(error))
+    return "This pack was made for an older version of Gents, so it can't be installed. Its publisher needs to update it.";
+  if (error.includes("has no published version"))
+    return "This pack has no version to install yet.";
+  return "Couldn't read this pack.";
+}
+
 /** Why an install stopped, as the review asks about it: the pack needs
     authority the person hasn't allowed, documents it would replace were
     edited, or the pack is not the one reviewed. Read from the error's words,
