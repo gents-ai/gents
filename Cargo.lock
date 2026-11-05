@@ -4458,6 +4458,7 @@ dependencies = [
  "gents-fs-runner",
  "gents-lean-contract",
  "gents-protocol",
+ "gents-shell",
  "hostname",
  "identity",
  "include_dir",

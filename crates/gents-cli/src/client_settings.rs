@@ -10,7 +10,9 @@ use crate::home_state::{read_init_config, resolve_home_dir};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum InterfaceClient {
+    /// Built into `gents`, so there is nothing to install.
     #[default]
+    Shell,
     Codex,
     Grok,
 }
@@ -18,6 +20,7 @@ pub(crate) enum InterfaceClient {
 impl InterfaceClient {
     fn name(self) -> &'static str {
         match self {
+            Self::Shell => "shell",
             Self::Codex => "codex",
             Self::Grok => "grok",
         }
@@ -173,19 +176,44 @@ mod tests {
         assert!(!GROK.persist(home.path()).unwrap(), "unchanged");
     }
 
+    const SHELL: ClientSettings = ClientSettings {
+        client: InterfaceClient::Shell,
+    };
+
     #[test]
-    fn no_file_means_codex() {
+    fn no_file_means_the_shell() {
         let home = tempfile::tempdir().unwrap();
+        assert_eq!(ClientSettings::read(home.path()).unwrap(), SHELL);
+    }
+
+    #[test]
+    fn setting_the_shell_removes_the_file() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!SHELL.persist(home.path()).unwrap(), "already the default");
+        GROK.persist(home.path()).unwrap();
+        assert!(SHELL.persist(home.path()).unwrap());
+        assert!(!client_settings_path(home.path()).exists());
+    }
+
+    #[test]
+    fn codex_round_trips_as_exactly_client_codex() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(CODEX.persist(home.path()).unwrap());
+        assert_eq!(
+            fs::read_to_string(client_settings_path(home.path())).unwrap(),
+            r#"{"client":"codex"}"#
+        );
         assert_eq!(ClientSettings::read(home.path()).unwrap(), CODEX);
     }
 
     #[test]
-    fn setting_codex_removes_the_file() {
-        let home = tempfile::tempdir().unwrap();
-        assert!(!CODEX.persist(home.path()).unwrap(), "already the default");
-        GROK.persist(home.path()).unwrap();
-        assert!(CODEX.persist(home.path()).unwrap());
-        assert!(!client_settings_path(home.path()).exists());
+    fn the_shell_is_named_shell_and_runs_everywhere() {
+        assert_eq!(
+            InterfaceClient::from_str("shell", false),
+            Ok(InterfaceClient::Shell)
+        );
+        assert_eq!(InterfaceClient::Shell.name(), "shell");
+        ensure_client_supported(InterfaceClient::Shell, false).unwrap();
     }
 
     #[test]
@@ -248,7 +276,7 @@ mod tests {
         assert_eq!(ClientSettings::read(home.path()).unwrap(), GROK);
 
         fs::write(&path, "not json").unwrap();
-        assert!(CODEX.persist(home.path()).unwrap());
+        assert!(SHELL.persist(home.path()).unwrap());
         assert!(!path.exists());
     }
 

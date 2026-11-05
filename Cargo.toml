@@ -86,6 +86,7 @@ gents-protocol = { path = "crates/gents-protocol" }
 gents-loop = { path = "crates/gents-loop" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-login-ui = { path = "crates/gents-login-ui" }
+gents-shell = { path = "crates/gents-shell" }
 gents-claude = { path = "crates/gents-claude" }
 gents-claude-login = { path = "crates/gents-claude-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }

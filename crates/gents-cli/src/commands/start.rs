@@ -27,6 +27,10 @@ const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
 const YOLO_PUBLISH_WAIT: Duration = Duration::from_secs(30);
 
 enum InterfaceEndpoint {
+    /// Waits for the same endpoint as Codex: the shell will read this home's runtime there.
+    Shell {
+        remote: String,
+    },
     Codex {
         remote: String,
     },
@@ -44,6 +48,9 @@ impl InterfaceEndpoint {
     fn for_client(client: InterfaceClient) -> Result<Self> {
         ensure_client_supported(client, cfg!(unix))?;
         Ok(match client {
+            InterfaceClient::Shell => Self::Shell {
+                remote: crate::DEFAULT_CODEX_REMOTE.to_string(),
+            },
             InterfaceClient::Codex => Self::Codex {
                 remote: crate::DEFAULT_CODEX_REMOTE.to_string(),
             },
@@ -59,7 +66,7 @@ impl InterfaceEndpoint {
 
     async fn answers(&self) -> bool {
         match self {
-            Self::Codex { remote } => endpoint_answers(remote).await,
+            Self::Shell { remote } | Self::Codex { remote } => endpoint_answers(remote).await,
             #[cfg(unix)]
             Self::Grok { socket, runtime } => {
                 let reported = runtime_identity_at(runtime)
@@ -80,7 +87,9 @@ impl InterfaceEndpoint {
     /// and one with its Codex endpoint off cannot say, so it is refused the same way.
     async fn ensure_is_this_homes(&mut self, home: &Path, expected_did: &str) -> Result<()> {
         match self {
-            Self::Codex { remote } => ensure_endpoint_is_this_homes(remote, expected_did).await,
+            Self::Shell { remote } | Self::Codex { remote } => {
+                ensure_endpoint_is_this_homes(remote, expected_did).await
+            }
             Self::Grok { socket, runtime } => {
                 let identity = runtime_identity_at(runtime).await;
                 let is_mine = identity
@@ -104,6 +113,7 @@ impl InterfaceEndpoint {
 
     fn describe(&self) -> String {
         match self {
+            Self::Shell { remote } => format!("runtime endpoint {remote}"),
             Self::Codex { remote } => format!("Codex endpoint {remote}"),
             Self::Grok { socket, .. } => format!("Grok socket {}", socket.display()),
         }
@@ -116,6 +126,19 @@ impl InterfaceEndpoint {
         resume: Option<String>,
     ) -> Result<()> {
         match self {
+            Self::Shell { .. } => {
+                ensure!(
+                    agent.is_none(),
+                    "the shell cannot open a given agent yet; run `gents config client set codex` to use `--agent`"
+                );
+                // The shell's loop blocks on terminal reads, so it runs off the runtime's workers.
+                tokio::task::spawn_blocking(|| {
+                    gents_shell::terminal::run(gents_shell::keys::KeySet::Vim)
+                })
+                .await
+                .context("the shell's thread")?
+                .context("running the shell")
+            }
             Self::Codex { remote } => {
                 open_codex(CodexArgs {
                     remote,
@@ -484,6 +507,7 @@ fn grok_command_args(socket: &Path, agent: Option<&str>, prompt: Option<&str>) -
 
 pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
     let (how, override_env) = match client {
+        InterfaceClient::Shell => unreachable!("the shell is built into gents"),
         InterfaceClient::Codex => (
             "Codex was not found. Install it with `brew install codex` or `npm install -g @openai/codex`",
             crate::commands::codex::CODEX_BIN_ENV,
@@ -735,6 +759,30 @@ mod tests {
         ] {
             assert!(message.contains(command), "{message}");
         }
+    }
+
+    #[test]
+    fn the_default_interface_is_the_built_in_shell_on_the_runtime_endpoint() {
+        let endpoint = InterfaceEndpoint::for_client(InterfaceClient::default()).unwrap();
+        let InterfaceEndpoint::Shell { remote } = &endpoint else {
+            panic!("expected the shell");
+        };
+        assert_eq!(remote, crate::DEFAULT_CODEX_REMOTE);
+        assert!(endpoint.describe().contains(crate::DEFAULT_CODEX_REMOTE));
+    }
+
+    #[tokio::test]
+    async fn the_shell_refuses_a_given_agent_it_cannot_open_yet() {
+        let endpoint = InterfaceEndpoint::for_client(InterfaceClient::Shell).unwrap();
+        let error = endpoint
+            .open(Some("reviewer".to_string()), None, None)
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("gents config client set codex"),
+            "{message}"
+        );
     }
 
     #[test]
