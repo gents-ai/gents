@@ -1,6 +1,7 @@
 use super::*;
 use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
 use crate::store::identity::NodeIdentity;
+use anyhow::Context;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -827,6 +828,14 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &writer.did().parse()?,
         )
         .await?;
+    overlapping_native_workspace_fences_conflict(
+        &node,
+        writer.as_ref(),
+        &writer_access,
+        &workspace_doc,
+        user.did(),
+    )
+    .await?;
     let mut requests = Vec::new();
     for name in ["one", "two"] {
         let response = writer_access.write("test.workspace.request", &format!(r#"mutation {{create_AgentRequest(input: {{request_id: "{name}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{}", session_id: "session", content: "work", created_at: "2026-11-05T00:00:00Z", workspace_id: "workspace", workspace_owner_node_did: "{}", workspace_authority: "readWrite", lifecycle_state: "pending"}}) {{_docID}}}}"#, user.did(), user.did(), writer.did(), user.did())).await?;
@@ -1039,5 +1048,144 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         );
     }
     node.shutdown().await?;
+    Ok(())
+}
+
+/// This uses two native handles so the local mutation gate cannot serialize the
+/// snapshots before either transaction writes the shared workspace revision.
+async fn overlapping_native_workspace_fences_conflict(
+    node: &defra_node::Node,
+    writer: &dyn NodeIdentity,
+    writer_access: &crate::ConfigAccess,
+    workspace_doc: &str,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let signer = writer
+        .managed_agent_signer()
+        .expect("selected writer signer");
+    let first = node.begin_transaction(false).await?;
+    let second = node.begin_transaction(false).await?;
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(writer.did().to_owned()));
+    let query = super::super::overlay::workspace_bindings_for_parent_query(workspace_doc);
+    for handle in [&first, &second] {
+        let response = node
+            .execute_request_in_txn_with_signer(
+                defra_node::QueryRequest::new(&query).with_identity(Some(writer.did().parse()?)),
+                handle,
+                signer.native(),
+            )
+            .await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "native binding inventory failed: {:?}",
+            response.errors
+        );
+        let data = response
+            .data
+            .context("native binding inventory omitted data")?;
+        anyhow::ensure!(
+            data["WorkspaceBinding"]
+                .as_array()
+                .is_some_and(Vec::is_empty),
+            "conflict fixture must start with an empty binding inventory"
+        );
+    }
+    for (handle, name) in [
+        (&first, "native-overlap-one"),
+        (&second, "native-overlap-two"),
+    ] {
+        let fence = format!(
+            r#"mutation {{ update_IsolatedWorkspace(docID: "{}", input: {{binding_revision: "{}"}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(workspace_doc),
+            name
+        );
+        let response = node
+            .execute_request_in_txn_with_signer(
+                defra_node::QueryRequest::new(&fence).with_identity(Some(writer.did().parse()?)),
+                handle,
+                signer.native(),
+            )
+            .await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "native workspace fence failed: {:?}",
+            response.errors
+        );
+        let document = WorkspaceBindingDoc {
+            workspace_doc_id: Some(workspace_doc.to_owned()),
+            binding_id: name.into(),
+            workspace_id: "workspace".into(),
+            request_id: name.into(),
+            request_doc_id: name.into(),
+            authority: "readWrite".into(),
+            owner_node_did: owner.into(),
+            seal_hash: None,
+            lifecycle_state: "active".into(),
+        };
+        let mutation = workspace_binding_upsert_mutation(&document);
+        let response = node
+            .execute_request_in_txn_with_signer(
+                defra_node::QueryRequest::new(&mutation).with_identity(Some(writer.did().parse()?)),
+                handle,
+                signer.native(),
+            )
+            .await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "native binding write failed: {:?}",
+            response.errors
+        );
+        let envelope = serde_json::to_value(response)?;
+        let rows = crate::store::graphql::mutation_documents(&envelope, "upsert_WorkspaceBinding")?
+            .context("native binding write omitted confirmation")?;
+        let [row] = rows else {
+            anyhow::bail!("native binding write did not confirm one document")
+        };
+        let doc = row["_docID"]
+            .as_str()
+            .context("native binding physical ID missing")?;
+        let parent = format!("workspaces:\"{}\"", workspace_doc);
+        anyhow::ensure!(
+            node.add_dac_actor_relationship_for_in_txn(
+                handle,
+                &context,
+                "WorkspaceBinding",
+                doc,
+                "parent",
+                &parent
+            )
+            .await?,
+            "native binding parent grant failed"
+        );
+    }
+    node.commit_transaction(&first).await?;
+    let conflict = node.commit_transaction(&second).await;
+    anyhow::ensure!(
+        matches!(&conflict, Err(query::TransactionError::Conflict(_))),
+        "overlapping workspace revision did not produce a native transaction conflict: {conflict:?}"
+    );
+    let _ = node.discard_transaction(&second).await;
+    let response = writer_access.execute(&query).await?;
+    let rows = response["data"]["WorkspaceBinding"]
+        .as_array()
+        .context("binding inventory omitted rows")?;
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_admission_cases;
+    let expected = cases
+        .iter()
+        .find(|case| case["complete"] == true && case["occupied"] == false)
+        .and_then(|case| case["admitted"].as_bool())
+        .context("missing modeled empty admission")?;
+    assert_eq!(rows.len(), usize::from(expected));
+    let [winner] = rows.as_slice() else {
+        anyhow::bail!("only one overlapping binding should commit")
+    };
+    assert_eq!(winner["binding_id"], "native-overlap-one");
+    let delete = format!(
+        r#"mutation {{ delete_WorkspaceBinding(filter: {{binding_id: {{_eq: "native-overlap-one"}}}}) {{_docID}} }}"#
+    );
+    writer_access
+        .write("test.workspace.conflict.cleanup", &delete)
+        .await?;
     Ok(())
 }
