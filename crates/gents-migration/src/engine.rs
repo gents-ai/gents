@@ -88,6 +88,7 @@ pub async fn ensure_migrations_with_registry(
     register_client_journal_policy(node, registry).await?;
     register_mailbox_policy(node, registry).await?;
     register_baseline(node, registry, &mut report).await?;
+    register_branchable_identity_collection_owners(node, registry).await?;
     if let Some(owner) = file_image_owner.filter(|_| manages_file_images(registry)) {
         register_file_image_owner(node, owner, registry).await?;
     }
@@ -189,6 +190,7 @@ fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> R
         }
         if let Some(collection) = node.get_collection(name)? {
             if collection.is_branchable
+                != gents_protocol::schemas::is_replicated_protocol_collection(name)
                 || !collection.policy.as_ref().is_some_and(|policy| {
                     policy.id == AGENT_OWNERSHIP_POLICY_ID && policy.resource_name == resource
                 })
@@ -197,6 +199,69 @@ fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> R
                     collection: name.into(),
                 });
             }
+        }
+    }
+    Ok(())
+}
+
+/// Branchable reads fall back to a collection ACP object when a document has
+/// no registered genesis. The local runtime owns that object so missing or
+/// unverified registrations do not become public reads.
+async fn register_branchable_identity_collection_owners(
+    node: &EmbeddedNode,
+    registry: &Registry<'_>,
+) -> Result<()> {
+    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, IDENTITY_POLICY_BINDINGS};
+    let owned: Vec<_> = IDENTITY_POLICY_BINDINGS
+        .iter()
+        .filter(|(name, _)| {
+            gents_protocol::schemas::is_replicated_protocol_collection(name)
+                && registry.managed_names().any(|managed| managed == *name)
+        })
+        .collect();
+    if owned.is_empty() {
+        return Ok(());
+    }
+    let runtime = identity::Did::new(node.node_identity_did().ok_or(Error::MissingNodeIdentity)?)
+        .map_err(|error| Error::InvalidIdentityCollectionOwner { error })?;
+    let acp = node.document_acp();
+    for (name, resource) in owned {
+        let collection = node
+            .get_collection(name)?
+            .ok_or_else(|| Error::CollectionMissing {
+                collection: (*name).to_owned(),
+            })?;
+        if acp
+            .is_doc_registered(
+                AGENT_OWNERSHIP_POLICY_ID,
+                resource,
+                &collection.collection_id,
+            )
+            .await
+            .map_err(|error| Error::from(defra_node::Error::from(error)))?
+        {
+            let owner = acp
+                .get_doc_owner(
+                    AGENT_OWNERSHIP_POLICY_ID,
+                    resource,
+                    &collection.collection_id,
+                )
+                .await
+                .map_err(|error| Error::from(defra_node::Error::from(error)))?;
+            if owner.as_ref() != Some(&runtime) {
+                return Err(Error::ForeignIdentityCollectionOwner {
+                    collection: (*name).to_owned(),
+                });
+            }
+        } else {
+            acp.register_object(
+                &runtime,
+                AGENT_OWNERSHIP_POLICY_ID,
+                resource,
+                &collection.collection_id,
+            )
+            .await
+            .map_err(|error| Error::from(defra_node::Error::from(error)))?;
         }
     }
     Ok(())
