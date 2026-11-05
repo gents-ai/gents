@@ -213,6 +213,19 @@ mod tests {
             .await?;
         let path = directory.path().join("one").to_string_lossy().into_owned();
         let root_doc = set_workspace_root(&owner, runtime.did(), &path, Some("one"), true).await?;
+        let query = format!("{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID _version {{ cid height fieldName }} }} }}", escape_graphql_string(&root_doc));
+        let signed = owner.execute(&query).await?;
+        let signed_rows: Vec<Value> = rows(&signed, "WorkspaceRoot")?;
+        let [signed_root] = signed_rows.as_slice() else {
+            anyhow::bail!("published root was not visible")
+        };
+        let version =
+            crate::store::graphql::document_composite_version(signed_root, "workspace root")?
+                .context("published root is missing a composite version")?;
+        assert_eq!(
+            node.verified_block_signer_did(&version.cid).await?,
+            user.did()
+        );
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_root_access_cases;
         assert!(!cases.is_empty());
         for case in cases {
