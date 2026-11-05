@@ -154,6 +154,7 @@ describe("a plugin in its frame", () => {
     const stop = vi.fn();
     host.data!.watch = async () => stop;
     const source = `export default { id: 'board', async register(ctx) {
+      ctx.onEvent('shell-changed', event => ctx.storage.set('node', event.payload.nodeDid))
       await ctx.data.watch('board', 'list_tasks', {}, () => {})
     } }`;
     try {
@@ -163,6 +164,7 @@ describe("a plugin in its frame", () => {
       changed();
       await settle();
       expect(stop).toHaveBeenCalledOnce();
+      expect(window.localStorage.getItem("gents.ux.board.node")).toBe('"did:key:b"');
     } finally {
       host.shell.selectedDeployment = previous;
       delete host.onShellChange;

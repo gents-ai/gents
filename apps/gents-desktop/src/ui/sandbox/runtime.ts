@@ -581,9 +581,26 @@ export function createSandboxRuntime(
       case "data-watch-closed":
         dataWatchStops.get(message.id)?.();
         return;
-      case "shell":
+      case "shell": {
+        const previous =
+          (shell.selectedDeployment as UxDeployment | null)?.nodeDid ?? null;
         shell = message.shell;
+        const current =
+          (shell.selectedDeployment as UxDeployment | null)?.nodeDid ?? null;
+        if (previous !== current) {
+          const event = { type: "shell-changed", payload: { nodeDid: current } };
+          for (const type of ["shell-changed", "*"]) {
+            eventListeners.get(type)?.forEach((listener) => {
+              try {
+                listener(event);
+              } catch (error) {
+                log("error", `listener for ${type} threw: ${String(error)}`);
+              }
+            });
+          }
+        }
         return;
+      }
       case "theme":
         applyTheme(message.theme);
         return;

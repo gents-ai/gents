@@ -7,7 +7,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { UxContext, UxDataCallResult } from "@/sandbox/contract";
+import type { UxContext, UxDataCallResult, UxDataWatchEvent } from "@/sandbox/contract";
 import { useQuery } from "@/sandbox/data-hooks";
 
 const ROW_CAP = 3;
@@ -113,6 +113,97 @@ type Out = {
   limit_note?: string;
   field_recovery?: { row: number; doc_id: string }[];
 };
+
+describe("useQuery live observation", () => {
+  function liveTool() {
+    const data = rows(4);
+    const t = tool(data);
+    let node = "a";
+    const events = new Map<string, () => void>();
+    const watches: Array<{
+      listener: (event: UxDataWatchEvent) => void;
+      stop: ReturnType<typeof vi.fn>;
+    }> = [];
+    t.ctx.shell = {
+      selectedDeployment: () => ({ nodeDid: node }),
+    } as UxContext["shell"];
+    t.ctx.onEvent = (type, listener) => {
+      events.set(type, () => listener({ type, payload: {} }));
+      return () => {
+        events.delete(type);
+      };
+    };
+    t.ctx.data.watch = async (_surface, _tool, _args, listener) => {
+      const stop = vi.fn();
+      watches.push({ listener, stop });
+      return stop;
+    };
+    return {
+      ...t,
+      data,
+      watches,
+      events,
+      select: (next: string) => {
+        node = next;
+        events.get("shell-changed")?.();
+      },
+    };
+  }
+
+  it("re-reads every page on a scoped snapshot and stops when unmounted", async () => {
+    const t = liveTool();
+    const hook = renderHook(() =>
+      useQuery<Out>(t.ctx, "s", "list", { intervalMs: 0, pages: "all" }),
+    );
+    await waitFor(() => expect(hook.result.current.data?.count).toBe(4));
+    await waitFor(() => expect(t.watches).toHaveLength(1));
+    t.data.push({ id: "d4", title: "new" });
+    act(() =>
+      t.watches[0]!.listener({
+        kind: "snapshot",
+        value: { kind: "query", output: {} },
+      }),
+    );
+    await waitFor(() => expect(hook.result.current.data?.count).toBe(5));
+    expect(hook.result.current.data?.results.at(-1)?.title).toBe("new");
+    hook.unmount();
+    expect(t.watches[0]!.stop).toHaveBeenCalledOnce();
+  });
+
+  it("stops the old watch and ignores stale events when the node changes", async () => {
+    const t = liveTool();
+    const hook = renderHook(() => useQuery<Out>(t.ctx, "s", "list", { intervalMs: 0 }));
+    await waitFor(() => expect(t.watches).toHaveLength(1));
+    act(() => t.select("b"));
+    await waitFor(() => expect(t.watches).toHaveLength(2));
+    expect(t.watches[0]!.stop).toHaveBeenCalledOnce();
+    const calls = t.call.mock.calls.length;
+    act(() =>
+      t.watches[0]!.listener({
+        kind: "snapshot",
+        value: { kind: "query", output: {} },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(t.call.mock.calls.length).toBe(calls);
+    hook.unmount();
+  });
+
+  it("uses the existing client-update fallback if the stream fails", async () => {
+    const t = liveTool();
+    const hook = renderHook(() =>
+      useQuery<Out>(t.ctx, "s", "list", { intervalMs: 0, pages: "all" }),
+    );
+    await waitFor(() => expect(hook.result.current.data?.count).toBe(4));
+    await waitFor(() => expect(t.watches).toHaveLength(1));
+    act(() => t.watches[0]!.listener({ kind: "error", message: "unavailable" }));
+    await waitFor(() => expect(t.events.has("client-updated")).toBe(true));
+    t.data.push({ id: "d4", title: "new" });
+    act(() => t.events.get("client-updated")?.());
+    await waitFor(() => expect(hook.result.current.data?.count).toBe(5));
+    hook.unmount();
+  });
+});
 
 describe("useQuery pages", () => {
   it("answers one page by default, next_offset and all", async () => {
