@@ -739,6 +739,13 @@ async fn execute_running_invocation(
         );
     }
     if existing_workspace.is_none() {
+        anyhow::ensure!(
+            matches!(
+                current_state(&journal, 0),
+                Some(ActionJournalState::Validated)
+            ),
+            "workspace reservation is unavailable after host execution began"
+        );
         let action_for_reservation = action.clone();
         let repository_for_reservation = repository.clone();
         let ceiling_for_reservation = ceiling.map(Path::to_path_buf);

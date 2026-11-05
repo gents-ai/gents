@@ -119,6 +119,13 @@ def mayProvisionWorkspace (reservationConfirmed : Bool) : Bool := reservationCon
 
 theorem unconfirmed_reservation_has_no_host_effect : mayProvisionWorkspace false = false := by rfl
 
+/-- After Executing is durable, a missing reservation is an unconfirmed or
+legacy recovery state. It is not permission to create a replacement reservation. -/
+def mayReserveWorkspace (executionStarted reservationVisible : Bool) : Bool :=
+  !executionStarted && !reservationVisible
+
+theorem executing_cannot_create_replacement_reservation : mayReserveWorkspace true false = false := by rfl
+
 /-- Callback publication can complete provisioning or repeat an identical
 result. A stale retry cannot replace an advanced workspace lifecycle. -/
 def callbackWorkspacePublishable (existing desired : String) : Bool :=
