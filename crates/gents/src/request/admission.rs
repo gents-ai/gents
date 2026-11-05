@@ -92,6 +92,7 @@ fn base_admission_observation(
         source_document_binding_current: false,
         target_policy_allows: false,
         peer_authority_allows: false,
+        agent_scope_allows: false,
         hop_within_bound: false,
     }
 }
@@ -407,13 +408,15 @@ impl AgentRequestAdmissionVerifier {
                         .fresh_member_authorized_for_agent(
                             &admission.signer_did,
                             required_row_string(row.node_did.as_deref(), "node_did")?,
+                            target_agent_id,
                         )
                         .await
                         .context("reload peer requester admission")
                         .map_err(AgentRequestAdmissionError::unavailable)?;
+                    observation.agent_scope_allows = observation.peer_authority_allows;
                     if !observation.peer_authority_allows {
                         denied = Some(anyhow::anyhow!(
-                            "peer requester is not authorized for the target node"
+                            "peer requester is not authorized for the target agent"
                         ));
                     }
                 }
@@ -438,6 +441,7 @@ impl AgentRequestAdmissionVerifier {
                         let observed_at = test_observed_at.unwrap_or_else(Utc::now);
                         observation.current_approval =
                             row.node_did.as_deref() == Some(current.owner_node.as_str());
+                        observation.agent_scope_allows = current.allows_agent(target_agent_id);
                         observation.exact_generation = admission.enrollment_request_id.as_deref()
                             == Some(current.request_id.as_str())
                             && admission.enrollment_request_digest.as_deref()
@@ -461,6 +465,10 @@ impl AgentRequestAdmissionVerifier {
                         }
                         if !observation.current_approval {
                             denied = Some(anyhow::anyhow!("enrollment target agent mismatch"));
+                        } else if !observation.agent_scope_allows {
+                            denied = Some(anyhow::anyhow!(
+                                "requester is not authorized for this agent"
+                            ));
                         } else if !observation.exact_generation {
                             denied = Some(anyhow::anyhow!(
                                 "request carries a stale or mixed enrollment generation"

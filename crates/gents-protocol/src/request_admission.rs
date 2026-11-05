@@ -156,6 +156,7 @@ pub struct AgentRequestAdmissionObservation {
     pub target_policy_allows: bool,
     /// The target's `PeerAdmissionAuthority` ACP authorizes the requester DID.
     pub peer_authority_allows: bool,
+    pub agent_scope_allows: bool,
     /// The target node's configured causal-hop cap admits this request, if set.
     pub hop_within_bound: bool,
 }
@@ -193,6 +194,7 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
                 && observation.current_approval
                 && observation.exact_generation
                 && observation.authorization_fresh
+                && observation.agent_scope_allows
         }
         AgentRequestAdmissionKind::LocalSelf => {
             observation.signer_matches_requester && observation.requester_matches_target
@@ -201,6 +203,7 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
             observation.signer_matches_requester
                 && !observation.requester_matches_target
                 && observation.peer_authority_allows
+                && observation.agent_scope_allows
         }
         AgentRequestAdmissionKind::RuntimeInternal => {
             let common = observation.runtime_evidence_present

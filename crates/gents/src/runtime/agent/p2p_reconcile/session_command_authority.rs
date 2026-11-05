@@ -141,6 +141,7 @@ mod tests {
             member_ticket: "member-ticket".into(),
             owner_node: owner_node.into(),
             profile: "client".into(),
+            agent_ids: None,
             request_digest: "enrollment-digest-1".into(),
             authorization_sequence: 1,
             authorization_expires_at: expires_at.into(),

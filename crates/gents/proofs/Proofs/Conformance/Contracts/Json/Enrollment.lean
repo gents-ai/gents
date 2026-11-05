@@ -177,6 +177,7 @@ def agentRequestAdmissionCaseJson (c : AgentRequestAdmissionCase) : String :=
     ++ "\"source_document_binding_current\":" ++ boolJson c.sourceDocumentBindingCurrent ++ ","
     ++ "\"target_policy_allows\":" ++ boolJson c.targetPolicyAllows ++ ","
     ++ "\"peer_authority_allows\":" ++ boolJson c.peerAuthorityAllows ++ ","
+    ++ "\"agent_scope_allows\":" ++ boolJson c.agentScopeAllows ++ ","
     ++ "\"hop_within_bound\":" ++ boolJson c.hopWithinBound ++ ","
     ++ "\"expected_admitted\":" ++ boolJson c.expectedAdmitted ++ ","
     ++ "\"expected_disposition\":" ++ jsonString c.expectedDisposition

@@ -46,9 +46,18 @@ pub struct EnrollmentAuthorizationFence {
     pub member_ticket: String,
     pub owner_node: String,
     pub profile: String,
+    pub agent_ids: Option<Vec<String>>,
     pub request_digest: String,
     pub authorization_sequence: u64,
     pub authorization_expires_at: String,
+}
+
+impl EnrollmentAuthorizationFence {
+    pub fn allows_agent(&self, agent_id: &str) -> bool {
+        self.agent_ids
+            .as_ref()
+            .is_none_or(|ids| ids.iter().any(|id| id == agent_id))
+    }
 }
 
 enum EnrollmentAuthorityCommand {
@@ -91,6 +100,7 @@ pub trait PeerAdmissionAuthority: Send + Sync {
         &self,
         member_did: &str,
         owner_node: &str,
+        agent_id: &str,
     ) -> Result<bool>;
 }
 
@@ -266,11 +276,14 @@ impl PeerAdmissionAuthority for EnrollmentAuthorityHandle {
         &self,
         member_did: &str,
         owner_node: &str,
+        agent_id: &str,
     ) -> Result<bool> {
         Ok(self
             .fresh_member_authorization(member_did)
             .await?
-            .is_some_and(|authorization| authorization.owner_node == owner_node))
+            .is_some_and(|authorization| {
+                authorization.owner_node == owner_node && authorization.allows_agent(agent_id)
+            }))
     }
 }
 
@@ -566,6 +579,7 @@ pub(crate) fn exact_authorization_fence(
         member_ticket: active.request.candidate_ticket.clone(),
         owner_node: active.request.owner_agent.clone(),
         profile: active.request.profile.clone(),
+        agent_ids: active.decision.agent_ids.clone(),
         request_digest: active.request.request_digest.clone(),
         authorization_sequence: active.revision.sequence,
         authorization_expires_at: active.revision.authorization_expires_at.clone(),
@@ -1308,6 +1322,7 @@ mod tests {
                 member_ticket: "ticket".into(),
                 owner_node: authority.owner_node,
                 profile: authority.profile,
+                agent_ids: None,
                 request_digest: "digest".into(),
                 authorization_sequence: 1,
                 authorization_expires_at: "2099-01-01T00:00:00Z".into(),
@@ -1386,6 +1401,7 @@ mod tests {
             candidate_peer: request.candidate_peer.clone(),
             owner_agent: request.owner_agent.clone(),
             decision: EnrollmentDecisionKind::Approved,
+            agent_ids: None,
             authorization_sequence: sequence,
             authorization_expires_at: expires_at.into(),
             decided_at: "2030-01-01T00:00:01Z".into(),
@@ -1427,6 +1443,52 @@ mod tests {
             active: vec![active],
             ..EnrollmentProjection::default()
         }
+    }
+
+    #[tokio::test]
+    async fn peer_agent_scope_uses_fresh_authority() {
+        let mut active = active_enrollment(1, "2099-01-01T00:00:00Z");
+        active.decision.agent_ids = Some(vec!["reviewer".into(), "editor".into()]);
+        let member = active.request.candidate_did.clone();
+        let node = active.request.owner_agent.clone();
+        let current = Arc::new(Mutex::new(projection_with_active(active.clone())));
+        let reader = CurrentProjectionReader(current.clone());
+        let (mut owner, handle) = enrollment_authority_channel();
+        let task = tokio::spawn(async move {
+            while let Some(command) = owner.commands.recv().await {
+                handle_authority_command(&reader, &owner.sender, command).await;
+            }
+        });
+
+        assert!(handle
+            .fresh_member_authorized_for_agent(&member, &node, "reviewer")
+            .await
+            .unwrap());
+        assert!(handle
+            .fresh_member_authorized_for_agent(&member, &node, "editor")
+            .await
+            .unwrap());
+        assert!(!handle
+            .fresh_member_authorized_for_agent(&member, &node, "engineer")
+            .await
+            .unwrap());
+        assert!(!handle
+            .fresh_member_authorized_for_agent(&member, "other-node", "reviewer")
+            .await
+            .unwrap());
+        *current.lock().unwrap() = projection_with_revoked(&active);
+        assert!(!handle
+            .fresh_member_authorized_for_agent(&member, &node, "reviewer")
+            .await
+            .unwrap());
+        active.decision.agent_ids = None;
+        *current.lock().unwrap() = projection_with_active(active);
+        assert!(handle
+            .fresh_member_authorized_for_agent(&member, &node, "engineer")
+            .await
+            .unwrap());
+        drop(handle);
+        task.await.unwrap();
     }
 
     struct CurrentProjectionReader(Arc<Mutex<EnrollmentProjection>>);

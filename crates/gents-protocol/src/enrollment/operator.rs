@@ -51,6 +51,8 @@ pub struct EnrollmentOperatorDecisionCommand {
     pub action: EnrollmentOperatorAction,
     /// Must be zero for deny/revoke.
     pub lease_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_ids: Option<Vec<String>>,
     pub admin_did: String,
     pub issued_at: String,
     pub nonce: String,
@@ -60,21 +62,31 @@ pub struct EnrollmentOperatorDecisionCommand {
 impl EnrollmentOperatorDecisionCommand {
     pub fn signing_payload(&self) -> Vec<u8> {
         let version = self.protocol_version.to_string();
-        canonical_domain_payload(
-            OPERATOR_DECISION_COMMAND_SIGNATURE_DOMAIN,
-            [
-                version.as_str(),
-                &self.request_id,
-                self.action.as_str(),
-                &self.lease_seconds.to_string(),
-                &self.admin_did,
-                &self.issued_at,
-                &self.nonce,
-            ],
-        )
+        let lease = self.lease_seconds.to_string();
+        let mut fields = vec![
+            version.as_str(),
+            &self.request_id,
+            self.action.as_str(),
+            &lease,
+            &self.admin_did,
+            &self.issued_at,
+            &self.nonce,
+        ];
+        let scope = self
+            .agent_ids
+            .as_ref()
+            .map(|ids| serde_json::to_string(ids).expect("string list serializes"));
+        if let Some(scope) = scope.as_deref() {
+            fields.push(scope);
+        }
+        canonical_domain_payload(OPERATOR_DECISION_COMMAND_SIGNATURE_DOMAIN, fields)
     }
 
     pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
+        super::decision::validate_agent_scope(self.agent_ids.as_deref())?;
+        if self.action != EnrollmentOperatorAction::Approve && self.agent_ids.is_some() {
+            return Err(EnrollmentError::AgentScopeOnNonApproval);
+        }
         if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
             return Err(EnrollmentError::UnsupportedOperatorDecisionVersion {
                 version: self.protocol_version,
@@ -115,6 +127,32 @@ impl EnrollmentOperatorDecisionCommand {
             return Err(EnrollmentError::OperatorDecisionExpired);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod agent_scope_tests {
+    use super::*;
+
+    #[test]
+    fn approval_scope_is_bound_to_operator_signature_payload() {
+        let mut command = EnrollmentOperatorDecisionCommand {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            request_id: "request".into(),
+            action: EnrollmentOperatorAction::Approve,
+            lease_seconds: 60,
+            agent_ids: None,
+            admin_did: "admin".into(),
+            issued_at: "2098-01-01T00:00:00Z".into(),
+            nonce: "nonce".into(),
+            admin_sig: vec![0; 64],
+        };
+        let unrestricted = command.signing_payload();
+        command.agent_ids = Some(vec!["reviewer".into()]);
+        let reviewer = command.signing_payload();
+        assert_ne!(unrestricted, reviewer);
+        command.agent_ids = Some(vec!["editor".into()]);
+        assert_ne!(reviewer, command.signing_payload());
     }
 }
 

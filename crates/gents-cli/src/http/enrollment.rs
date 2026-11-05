@@ -48,10 +48,11 @@ impl EnrollmentDecisionService {
         match command.action {
             EnrollmentOperatorAction::Approve => {
                 self.store
-                    .decide_request_with_lease(
+                    .decide_request_with_scope(
                         command.request_id.trim(),
                         gents_protocol::enrollment::EnrollmentDecisionKind::Approved,
                         std::time::Duration::from_secs(command.lease_seconds),
+                        command.agent_ids.clone(),
                     )
                     .await
             }
@@ -362,6 +363,7 @@ mod tests {
             gents::KeyIdentity::load_or_create(temp.path().join("admin.key"), None).unwrap();
         let now = Utc::now();
         let mut command = EnrollmentOperatorDecisionCommand {
+            agent_ids: None,
             protocol_version: ENROLLMENT_PROTOCOL_VERSION,
             request_id: "request-1".into(),
             action: EnrollmentOperatorAction::Approve,

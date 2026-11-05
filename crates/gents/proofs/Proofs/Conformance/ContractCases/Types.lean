@@ -208,6 +208,7 @@ structure AgentRequestAdmissionCase where
   sourceDocumentBindingCurrent : Bool
   targetPolicyAllows : Bool
   peerAuthorityAllows : Bool
+  agentScopeAllows : Bool
   hopWithinBound : Bool
   expectedAdmitted : Bool
   expectedDisposition : String

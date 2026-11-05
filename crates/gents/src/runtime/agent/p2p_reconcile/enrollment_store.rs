@@ -39,7 +39,7 @@ const ENROLLMENT_DOCUMENT_QUERY: &str = r#"{
   }
   NetworkEnrollmentDecision {
     _docID protocol_version decision_id request_id request_digest network_id admin_did
-    candidate_did candidate_peer owner_agent decision authorization_sequence
+    candidate_did candidate_peer owner_agent decision agent_ids_json authorization_sequence
     authorization_expires_at decided_at
     signer_did admin_sig
   }
@@ -250,6 +250,17 @@ impl GraphqlEnrollmentStore {
         kind: WireDecisionKind,
         lease: Duration,
     ) -> Result<EnrollmentDecisionOutcome> {
+        self.decide_request_with_scope(request_id, kind, lease, None)
+            .await
+    }
+
+    pub async fn decide_request_with_scope(
+        &self,
+        request_id: &str,
+        kind: WireDecisionKind,
+        lease: Duration,
+        agent_ids: Option<Vec<String>>,
+    ) -> Result<EnrollmentDecisionOutcome> {
         let _guard = self.decision_lock.lock().await;
         let projection = self.load_projection().await?;
         anyhow::ensure!(
@@ -265,6 +276,10 @@ impl GraphqlEnrollmentStore {
             anyhow::ensure!(
                 kind == WireDecisionKind::Approved,
                 "request {request_id} is already approved"
+            );
+            anyhow::ensure!(
+                active.decision.agent_ids == agent_ids,
+                "request {request_id} is already approved with a different agent scope"
             );
             let request = active.request.clone();
             let decision_doc_id = active.decision_doc_id.clone();
@@ -349,6 +364,7 @@ impl GraphqlEnrollmentStore {
             candidate_peer: pending.request.candidate_peer.clone(),
             owner_agent: pending.request.owner_agent.clone(),
             decision: kind.clone(),
+            agent_ids,
             authorization_sequence: sequence,
             authorization_expires_at: authorization_expires_at.clone(),
             decided_at: decided_at.clone(),
@@ -1969,7 +1985,7 @@ fn decision_mutation(
           protocol_version: {}, decision_id: "{}", request_id: "{}",
           request_digest: "{}", network_id: "{}", admin_did: "{}",
           candidate_did: "{}", candidate_peer: "{}", owner_agent: "{}",
-          decision: "{}", authorization_sequence: {}, authorization_expires_at: "{}", decided_at: "{}",
+          decision: "{}", agent_ids_json: {}, authorization_sequence: {}, authorization_expires_at: "{}", decided_at: "{}",
           signer_did: "{}", admin_sig: "{}"
         }}"#,
         decision.protocol_version,
@@ -1982,6 +1998,13 @@ fn decision_mutation(
         escaped(&decision.candidate_peer),
         escaped(&decision.owner_agent),
         decision.decision.as_str(),
+        decision.agent_ids.as_ref().map_or_else(
+            || "null".to_string(),
+            |ids| format!(
+                "\"{}\"",
+                escaped(&serde_json::to_string(ids).expect("string list serializes"))
+            )
+        ),
         decision.authorization_sequence,
         escaped(&decision.authorization_expires_at),
         escaped(&decision.decided_at),
@@ -2176,6 +2199,7 @@ struct DecisionRow {
     candidate_peer: String,
     owner_agent: String,
     decision: String,
+    agent_ids_json: Option<String>,
     authorization_sequence: i64,
     authorization_expires_at: String,
     decided_at: String,
@@ -2200,6 +2224,12 @@ impl DecisionRow {
                 "denied" => WireDecisionKind::Denied,
                 other => anyhow::bail!("unknown enrollment decision {other:?}"),
             },
+            agent_ids: self
+                .agent_ids_json
+                .as_ref()
+                .map(|value| serde_json::from_str(value))
+                .transpose()
+                .context("decoding enrollment agent scope")?,
             authorization_sequence: u64::try_from(self.authorization_sequence)
                 .context("negative enrollment authorization sequence")?,
             authorization_expires_at: self.authorization_expires_at.clone(),

@@ -22,7 +22,7 @@ pub(super) const STATUS_ENROLLMENT_QUERY: &str = r#"{
   }
   NetworkEnrollmentDecision {
     protocol_version decision_id request_id request_digest network_id admin_did candidate_did
-    candidate_peer owner_agent decision authorization_sequence authorization_expires_at
+    candidate_peer owner_agent decision agent_ids_json authorization_sequence authorization_expires_at
     decided_at signer_did admin_sig
   }
   NetworkAuthorizationRevision {
@@ -104,6 +104,7 @@ pub(super) struct EnrollmentDecisionRow {
     pub(super) candidate_peer: String,
     pub(super) owner_agent: String,
     pub(super) decision: String,
+    pub(super) agent_ids_json: Option<String>,
     pub(super) authorization_sequence: i64,
     pub(super) authorization_expires_at: String,
     pub(super) decided_at: String,
@@ -128,6 +129,12 @@ impl EnrollmentDecisionRow {
                 "denied" => EnrollmentDecisionKind::Denied,
                 other => anyhow::bail!("unknown enrollment decision {other:?}"),
             },
+            agent_ids: self
+                .agent_ids_json
+                .as_ref()
+                .map(|value| serde_json::from_str(value))
+                .transpose()
+                .context("decoding enrollment agent scope")?,
             authorization_sequence: u64::try_from(self.authorization_sequence)
                 .context("negative enrollment decision sequence")?,
             authorization_expires_at: self.authorization_expires_at.clone(),

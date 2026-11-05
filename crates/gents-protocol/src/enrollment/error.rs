@@ -1,5 +1,9 @@
 #[derive(Debug, thiserror::Error)]
 pub enum EnrollmentError {
+    #[error("agent scope contains an invalid or repeated agent id")]
+    InvalidAgentScope,
+    #[error("only an approval may carry an agent scope")]
+    AgentScopeOnNonApproval,
     #[error("unsupported enrollment request version {version}")]
     UnsupportedRequestVersion { version: u8 },
     #[error("request offer_id mismatch")]

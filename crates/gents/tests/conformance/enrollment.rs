@@ -53,6 +53,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             source_document_binding_current: case.source_document_binding_current,
             target_policy_allows: case.target_policy_allows,
             peer_authority_allows: case.peer_authority_allows,
+            agent_scope_allows: case.agent_scope_allows,
             hop_within_bound: case.hop_within_bound,
         };
         let actual = gents::final_claim_admission_disposition(true, observation)

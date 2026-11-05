@@ -49,6 +49,8 @@ pub struct EnrollmentDecisionRecord {
     pub candidate_peer: String,
     pub owner_agent: String,
     pub decision: EnrollmentDecisionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_ids: Option<Vec<String>>,
     pub authorization_sequence: u64,
     pub authorization_expires_at: String,
     pub decided_at: String,
@@ -60,28 +62,37 @@ impl EnrollmentDecisionRecord {
     pub fn signing_payload(&self) -> Vec<u8> {
         let version = self.protocol_version.to_string();
         let sequence = self.authorization_sequence.to_string();
-        canonical_domain_payload(
-            DECISION_SIGNATURE_DOMAIN,
-            [
-                version.as_str(),
-                &self.decision_id,
-                &self.request_id,
-                &self.request_digest,
-                &self.network_id,
-                &self.admin_did,
-                &self.candidate_did,
-                &self.candidate_peer,
-                &self.owner_agent,
-                self.decision.as_str(),
-                sequence.as_str(),
-                &self.authorization_expires_at,
-                &self.decided_at,
-                &self.signer_did,
-            ],
-        )
+        let mut fields = vec![
+            version.as_str(),
+            &self.decision_id,
+            &self.request_id,
+            &self.request_digest,
+            &self.network_id,
+            &self.admin_did,
+            &self.candidate_did,
+            &self.candidate_peer,
+            &self.owner_agent,
+            self.decision.as_str(),
+            sequence.as_str(),
+            &self.authorization_expires_at,
+            &self.decided_at,
+            &self.signer_did,
+        ];
+        let scope = self
+            .agent_ids
+            .as_ref()
+            .map(|ids| serde_json::to_string(ids).expect("string list serializes"));
+        if let Some(scope) = scope.as_deref() {
+            fields.push(scope);
+        }
+        canonical_domain_payload(DECISION_SIGNATURE_DOMAIN, fields)
     }
 
     pub fn validate_against_request(&self, request: &EnrollmentRequestRecord) -> Result<()> {
+        validate_agent_scope(self.agent_ids.as_deref())?;
+        if self.decision != EnrollmentDecisionKind::Approved && self.agent_ids.is_some() {
+            return Err(EnrollmentError::AgentScopeOnNonApproval);
+        }
         if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
             return Err(EnrollmentError::UnsupportedDecisionVersion {
                 version: self.protocol_version,
@@ -162,6 +173,24 @@ impl EnrollmentDecisionRecord {
     }
 }
 
+pub(super) fn validate_agent_scope(agent_ids: Option<&[String]>) -> Result<()> {
+    if let Some(ids) = agent_ids {
+        let mut seen = std::collections::HashSet::new();
+        if ids.len() > 256
+            || ids.iter().any(|id| {
+                id.is_empty()
+                    || id.len() > 256
+                    || id.trim() != id
+                    || id.chars().any(char::is_control)
+                    || !seen.insert(id)
+            })
+        {
+            return Err(EnrollmentError::InvalidAgentScope);
+        }
+    }
+    Ok(())
+}
+
 pub fn derive_decision_id(request_id: &str, request_digest: &str) -> String {
     format!(
         "decision-{}",
@@ -170,4 +199,77 @@ pub fn derive_decision_id(request_id: &str, request_digest: &str) -> String {
             &[request_id, request_digest],
         )
     )
+}
+
+#[cfg(test)]
+mod agent_scope_tests {
+    use super::*;
+
+    fn decision() -> EnrollmentDecisionRecord {
+        EnrollmentDecisionRecord {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            decision_id: "decision".into(),
+            request_id: "request".into(),
+            request_digest: "digest".into(),
+            network_id: "network".into(),
+            admin_did: "admin".into(),
+            candidate_did: "candidate".into(),
+            candidate_peer: "peer".into(),
+            owner_agent: "owner".into(),
+            decision: EnrollmentDecisionKind::Approved,
+            agent_ids: None,
+            authorization_sequence: 1,
+            authorization_expires_at: "2099-01-01T00:00:00Z".into(),
+            decided_at: "2098-01-01T00:00:00Z".into(),
+            signer_did: "admin".into(),
+            admin_sig: vec![0; 64],
+        }
+    }
+
+    #[test]
+    fn changing_or_stripping_agent_scope_changes_signed_bytes() {
+        let all = decision();
+        let legacy = canonical_domain_payload(
+            DECISION_SIGNATURE_DOMAIN,
+            [
+                "2",
+                "decision",
+                "request",
+                "digest",
+                "network",
+                "admin",
+                "candidate",
+                "peer",
+                "owner",
+                "approved",
+                "1",
+                "2099-01-01T00:00:00Z",
+                "2098-01-01T00:00:00Z",
+                "admin",
+            ],
+        );
+        assert_eq!(all.signing_payload(), legacy);
+        assert!(serde_json::to_value(&all)
+            .unwrap()
+            .get("agent_ids")
+            .is_none());
+        let mut scoped = all.clone();
+        scoped.agent_ids = Some(vec!["reviewer".into()]);
+        let scoped_bytes = scoped.signing_payload();
+        assert_ne!(all.signing_payload(), scoped_bytes);
+        scoped.agent_ids = Some(vec!["editor".into()]);
+        assert_ne!(scoped.signing_payload(), scoped_bytes);
+        scoped.agent_ids = Some(vec![]);
+        assert_ne!(all.signing_payload(), scoped.signing_payload());
+    }
+
+    #[test]
+    fn rejects_noncanonical_and_duplicate_agent_ids() {
+        assert!(validate_agent_scope(None).is_ok());
+        assert!(validate_agent_scope(Some(&[])).is_ok());
+        assert!(validate_agent_scope(Some(&["reviewer".into()])).is_ok());
+        assert!(validate_agent_scope(Some(&["".into()])).is_err());
+        assert!(validate_agent_scope(Some(&[" reviewer".into()])).is_err());
+        assert!(validate_agent_scope(Some(&["a".into(), "a".into()])).is_err());
+    }
 }

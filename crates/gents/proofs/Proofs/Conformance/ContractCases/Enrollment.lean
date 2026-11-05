@@ -47,6 +47,7 @@ private def requestAdmissionCase (name : String)
   , sourceDocumentBindingCurrent := observation.sourceDocumentBindingCurrent
   , targetPolicyAllows := observation.targetPolicyAllows
   , peerAuthorityAllows := observation.peerAuthorityAllows
+  , agentScopeAllows := observation.agentScopeAllows
   , hopWithinBound := observation.hopWithinBound
   , expectedAdmitted := projectAgentRequestAdmission observation
   , expectedDisposition := requestAdmissionDispositionName
@@ -75,12 +76,16 @@ private def requestAdmissionBase (kind : AgentRequestAdmissionKind) :
   , sourceDocumentBindingCurrent := false
   , targetPolicyAllows := false
   , peerAuthorityAllows := false
+  , agentScopeAllows := true
   , hopWithinBound := true }
 
 def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   [ requestAdmissionCase "valid-current-enrollment" (requestAdmissionBase .enrollment)
   , requestAdmissionCase "revoked-enrollment"
       { requestAdmissionBase .enrollment with currentApproval := false }
+  , requestAdmissionCase "enrollment-agent-outside-grant"
+      { requestAdmissionBase .enrollment with agentScopeAllows :=
+          (AgentGrant.selected ["reviewer"]).allows "engineer" }
   , requestAdmissionCase "expired-enrollment"
       { requestAdmissionBase .enrollment with authorizationFresh := false }
   , requestAdmissionCase "superseded-enrollment-generation"
@@ -123,6 +128,22 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "peer-authority-denied"
       { requestAdmissionBase .peer with
           requesterMatchesTarget := false, peerAuthorityAllows := false }
+  , requestAdmissionCase "peer-agent-inside-grant"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := false, peerAuthorityAllows := true
+          agentScopeAllows := (AgentGrant.selected ["reviewer", "editor"]).allows "reviewer" }
+  , requestAdmissionCase "peer-agent-outside-grant"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := false, peerAuthorityAllows := true
+          agentScopeAllows := (AgentGrant.selected ["reviewer"]).allows "engineer" }
+  , requestAdmissionCase "peer-empty-agent-grant"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := false, peerAuthorityAllows := true
+          agentScopeAllows := (AgentGrant.selected []).allows "reviewer" }
+  , requestAdmissionCase "peer-all-agents"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := false, peerAuthorityAllows := true
+          agentScopeAllows := AgentGrant.all.allows "engineer" }
   , requestAdmissionCase "peer-same-node-is-not-peer"
       { requestAdmissionBase .peer with
           requesterMatchesTarget := true, peerAuthorityAllows := true }
@@ -258,10 +279,10 @@ private def titleRequestAdmissionCase (name : String) (request : AgentRequestSem
   , runtimeEvidence := evidence, sessionAgent
   , expectedAdmitted := decide (agentRequestAdmissible ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
-      ⟨false, CausalHop.defaultMaxRequestHop⟩)
+      ⟨false, CausalHop.defaultMaxRequestHop, .all⟩)
   , expectedClaimable := decide (agentRequestClaimable ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
-      ⟨false, CausalHop.defaultMaxRequestHop⟩ sessionAgent []
+      ⟨false, CausalHop.defaultMaxRequestHop, .all⟩ sessionAgent []
       (fun _ => false) (fun _ => false))
   , expectedDisposition := auxiliaryPendingDisposition observationAvailable ({} : Enrollment.State)
       request admission evidence sessionAgent branchFieldsExact pendingDeadlineAbsent

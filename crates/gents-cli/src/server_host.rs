@@ -118,6 +118,7 @@ pub async fn approve_managed_client_enrollment(
         request_id,
         EnrollmentOperatorAction::Approve,
         DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+        None,
     )
     .await
     .context("approving desktop enrollment on managed runtime")?;

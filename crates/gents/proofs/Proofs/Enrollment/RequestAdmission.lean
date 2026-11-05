@@ -1,4 +1,5 @@
 import Proofs.Enrollment.Transition
+import Proofs.Enrollment.AgentGrant
 import Proofs.Enrollment.RequestInput
 import Proofs.Request.Executable
 import Proofs.Request.CausalHop
@@ -274,6 +275,9 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
 structure TargetAuthority where
   peerAuthorityAllows : Bool
   maxRequestHop : Option Nat
+  /-- The verified current decision supplies this grant; a missing legacy scope
+  represents all agents, while an explicit empty selection represents none. -/
+  agentGrant : AgentGrant := .all
   deriving DecidableEq, Repr
 
 /-- `authorizationFresh` is the current-clock lease check made during this
@@ -294,7 +298,7 @@ def agentRequestAdmissible
       | some enrolledRequest, some approval =>
           currentApproval s enrolledRequest approval ∧
           exactEnrollmentGeneration request admission enrolledRequest approval ∧
-          authorizationFresh = true
+          authorizationFresh = true ∧ target.agentGrant.allows request.agentId = true
       | _, _ => False
   | .localSelf =>
       admission.signerDid = request.requesterDid ∧
@@ -302,7 +306,7 @@ def agentRequestAdmissible
   | .peer =>
       admission.signerDid = request.requesterDid ∧
       request.requesterDid ≠ request.targetNode ∧
-      target.peerAuthorityAllows = true
+      target.peerAuthorityAllows = true ∧ target.agentGrant.allows request.agentId = true
   | .runtimeInternal =>
       match runtimeEvidence with
       | some evidence => exactRuntimeInternalEvidence request admission evidence
@@ -440,6 +444,7 @@ structure AgentRequestAdmissionObservation where
   sourceDocumentBindingCurrent : Bool
   targetPolicyAllows : Bool
   peerAuthorityAllows : Bool
+  agentScopeAllows : Bool
   hopWithinBound : Bool
   deriving DecidableEq, Repr
 
@@ -449,14 +454,14 @@ def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation
   match observation.kind with
   | .enrollment =>
       observation.signerMatchesRequester && observation.currentApproval &&
-      observation.exactGeneration && observation.authorizationFresh
+      observation.exactGeneration && observation.authorizationFresh && observation.agentScopeAllows
   | .localSelf =>
       observation.signerMatchesRequester &&
       observation.requesterMatchesTarget
   | .peer =>
       observation.signerMatchesRequester &&
       !observation.requesterMatchesTarget &&
-      observation.peerAuthorityAllows
+      observation.peerAuthorityAllows && observation.agentScopeAllows
   | .runtimeInternal =>
       observation.runtimeEvidencePresent &&
       observation.signerMatchesIssuer && observation.signerMatchesTarget &&
@@ -498,7 +503,7 @@ def auxiliaryPendingDisposition
   if !request.purpose.isAuxiliary then .deny
   else admissionDispositionFromResult observationAvailable <|
     decide (agentRequestClaimable s request admission none none false runtimeEvidence
-      branchFieldsExact pendingDeadlineAbsent ⟨false, maxRequestHop⟩ sessionAgent []
+      branchFieldsExact pendingDeadlineAbsent ⟨false, maxRequestHop, .all⟩ sessionAgent []
       (fun _ => false) (fun _ => false))
 
 def auxiliaryPendingStep?
@@ -668,7 +673,21 @@ theorem peer_requires_foreign_signed_authorized_requester
     admission.signerDid = request.requesterDid ∧
       request.requesterDid ≠ request.targetNode ∧ target.peerAuthorityAllows = true := by
   simp only [agentRequestAdmissible, hkind] at hadmit
-  exact hadmit.2.2.2.2.1
+  exact ⟨hadmit.2.2.2.2.1.1, hadmit.2.2.2.2.1.2.1, hadmit.2.2.2.2.1.2.2.1⟩
+
+theorem scoped_agent_denied_for_enrollment_and_peers
+    (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
+    (enrollmentRequest : Option Request) (decision : Option Decision) (fresh : Bool)
+    (runtimeEvidence : Option RuntimeInternalEvidence)
+    (branchFieldsExact pendingDeadlineAbsent : Bool) (target : TargetAuthority)
+    (hkind : admission.kind = .peer ∨ admission.kind = .enrollment)
+    (hscope : target.agentGrant.allows request.agentId = false) :
+    ¬ agentRequestAdmissible s request admission enrollmentRequest decision fresh
+      runtimeEvidence branchFieldsExact pendingDeadlineAbsent target := by
+  rcases hkind with hpeer | henrollment
+  · simp [agentRequestAdmissible, hpeer, hscope]
+  · rcases enrollmentRequest with _ | enrolledRequest <;> rcases decision with _ | approval <;>
+      simp [agentRequestAdmissible, henrollment, hscope]
 
 theorem admitted_request_within_configured_hop_bound
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}

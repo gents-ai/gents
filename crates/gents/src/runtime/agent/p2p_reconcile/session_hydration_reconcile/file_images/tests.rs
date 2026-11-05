@@ -141,6 +141,7 @@ fn fixture(selection: FileImageSelection, authorized: Vec<bool>) -> (Store, Deli
         member_ticket: "ticket".into(),
         owner_node: "node".into(),
         profile: "client".into(),
+        agent_ids: None,
         request_digest: "digest".into(),
         authorization_sequence: 1,
         authorization_expires_at: "2099-01-01T00:00:00Z".into(),

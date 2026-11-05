@@ -43,6 +43,7 @@ pub(super) async fn decide_enrollment(
         } else {
             0
         },
+        (!args.agents.is_empty()).then_some(args.agents),
     )
     .await?;
     print_json(&body)
@@ -56,6 +57,7 @@ pub(crate) async fn submit_enrollment_decision(
     request_id: &str,
     action: EnrollmentOperatorAction,
     lease_seconds: u64,
+    agent_ids: Option<Vec<String>>,
 ) -> Result<serde_json::Value> {
     let request_id = request_id.trim();
     anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
@@ -67,6 +69,7 @@ pub(crate) async fn submit_enrollment_decision(
     url.set_fragment(None);
 
     let mut command = EnrollmentOperatorDecisionCommand {
+        agent_ids,
         protocol_version: ENROLLMENT_PROTOCOL_VERSION,
         request_id: request_id.to_string(),
         lease_seconds,

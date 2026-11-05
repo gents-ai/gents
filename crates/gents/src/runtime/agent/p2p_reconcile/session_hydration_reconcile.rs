@@ -1295,6 +1295,7 @@ mod tests {
             member_ticket: "ticket-1".into(),
             owner_node: "did:key:agent-1".into(),
             profile: crate::runtime::agent::p2p_reconcile::templates::CLIENT_TEMPLATE.into(),
+            agent_ids: None,
             request_digest: "digest-1".into(),
             authorization_sequence: 1,
             authorization_expires_at: "2099-09-29T00:00:00Z".into(),

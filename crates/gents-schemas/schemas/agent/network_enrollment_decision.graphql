@@ -11,6 +11,7 @@ type NetworkEnrollmentDecision @branchable {
     candidate_peer: String @index @immutable
     owner_agent: String @index @immutable
     decision: String @index @immutable
+    agent_ids_json: String @immutable
     authorization_sequence: Int @immutable
     authorization_expires_at: DateTime @immutable
     decided_at: DateTime @immutable

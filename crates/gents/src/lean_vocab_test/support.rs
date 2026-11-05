@@ -2209,6 +2209,7 @@ pub(crate) struct LeanAgentRequestAdmissionCase {
     pub(crate) source_document_binding_current: bool,
     pub(crate) target_policy_allows: bool,
     pub(crate) peer_authority_allows: bool,
+    pub(crate) agent_scope_allows: bool,
     pub(crate) hop_within_bound: bool,
     pub(crate) expected_admitted: bool,
     pub(crate) expected_disposition: String,

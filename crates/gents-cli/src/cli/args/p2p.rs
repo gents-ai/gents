@@ -162,6 +162,9 @@ pub(crate) struct P2pEnrollmentDecisionArgs {
     /// Approval lease in seconds; ignored for deny/revoke.
     #[arg(long, default_value_t = gents_protocol::enrollment::DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS)]
     pub(crate) lease_seconds: u64,
+    /// Restrict approval to these agent IDs; omit for all agents.
+    #[arg(long = "agent")]
+    pub(crate) agents: Vec<String>,
 }
 
 #[derive(Subcommand)]

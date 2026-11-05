@@ -125,6 +125,7 @@ mod tests {
             candidate_peer: request.candidate_peer.clone(),
             owner_agent: request.owner_agent.clone(),
             decision: EnrollmentDecisionKind::Approved,
+            agent_ids: None,
             authorization_sequence: sequence,
             authorization_expires_at: expires_at.into(),
             decided_at: "2026-10-30T19:07:47Z".into(),

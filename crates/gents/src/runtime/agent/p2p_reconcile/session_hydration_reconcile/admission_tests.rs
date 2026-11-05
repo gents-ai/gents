@@ -23,6 +23,7 @@ async fn generated_hydration_routes_require_current_enrollment_materialization()
         member_ticket: text("member_ticket"),
         owner_node: text("owner_node"),
         profile: text("profile"),
+        agent_ids: None,
         request_digest: text("request_digest"),
         authorization_sequence: current["authorization_sequence"].as_u64().unwrap(),
         authorization_expires_at: text("authorization_expires_at"),
