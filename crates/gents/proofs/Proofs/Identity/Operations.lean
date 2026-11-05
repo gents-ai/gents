@@ -131,14 +131,14 @@ replicate. Terminal decisions, revisions and receipts reverse the creator and
 reader roles. A candidate User is a separate identity and must be authenticated
 independently before it is granted access to a decision. -/
 def enrollmentRequestFixture : State :=
-  { objects := [⟨"nodes", "admin-node", "user"⟩,
+  { objects := [⟨"nodes", "candidate-node", "user"⟩,
       ⟨"enrollment_records", "request", "candidate"⟩],
     relations := [⟨"enrollment_records", "request", "reader", .actor "admin"⟩],
     enrolled := [] }
 
 def enrollmentRequestWithParent : State :=
   apply enrollmentRequestFixture (.grantAs "candidate"
-    ⟨"enrollment_records", "request", "parent", .object "nodes" "admin-node"⟩)
+    ⟨"enrollment_records", "request", "parent", .object "nodes" "candidate-node"⟩)
 
 theorem request_reader_is_exact_and_read_only :
     (allowed 5 enrollmentRequestFixture "candidate" "enrollment_records" "request" "update",
