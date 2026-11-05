@@ -100,6 +100,33 @@ theorem missing_selection_does_not_select_node : freezeWorkspaceAgents "node" no
 theorem distinct_selected_agents_are_retained :
     freezeWorkspaceAgents "node" (some ⟨"writer", "integrator"⟩) = some ⟨"writer", "integrator"⟩ := by decide
 
+/-- The user selects physical Agent targets in Callback configuration. The
+Agent-to-Callback entity-set edge lets the callback's native readers resolve
+those targets without a Node identity fallback; unchanged configuration does
+not restore an explicitly revoked edge. -/
+def callbackSelectedAgentFixture : Household.State :=
+  { objects := [⟨"configuration", "callback", "user"⟩, ⟨"agents", "target", "user"⟩],
+    relations := [⟨"configuration", "callback", "reader", .actor "creator"⟩,
+      ⟨"agents", "target", "workspace_selected_by", .entitySet "configuration" "callback" "reader"⟩],
+    enrolled := [] }
+
+def callbackSelectedAgentPermission (actor : String) : Bool :=
+  Household.allowed 8 callbackSelectedAgentFixture actor "agents" "target" "read"
+
+def callbackSelectedAgentRevoked : Household.State :=
+  Household.apply callbackSelectedAgentFixture (.revoke
+    ⟨"agents", "target", "workspace_selected_by", .entitySet "configuration" "callback" "reader"⟩)
+
+theorem callback_reader_resolves_only_selected_agent :
+    callbackSelectedAgentPermission "creator" = true ∧
+    callbackSelectedAgentPermission "other" = false ∧
+    Household.allowed 8 callbackSelectedAgentRevoked "creator" "agents" "target" "read" = false := by native_decide
+
+def callbackSelectedAgentCasesJson : String :=
+  (Lean.toJson (["user", "creator", "other"].map fun actor => Lean.Json.mkObj
+    [("actor", Lean.toJson actor), ("before", Lean.toJson (callbackSelectedAgentPermission actor)),
+     ("after_revocation", Lean.toJson (Household.allowed 8 callbackSelectedAgentRevoked actor "agents" "target" "read"))])).compress
+
 /-- A filtered or malformed physical request is not proof that an exclusive
 workspace binding is stale. Release requires a visible terminal request. -/
 def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal

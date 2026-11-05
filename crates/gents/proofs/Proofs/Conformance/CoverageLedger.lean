@@ -1539,6 +1539,11 @@ def caseCoverage : List CoverageEntry :=
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
+      "workspace_callback_selection_cases"
+      "WorkspaceCallbackSelectionCases"
+      "store::config_client::desired_state::workspace_selection::tests::selected_callback_agents_follow_native_visibility")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
       "workspace_datastore_write_cases"
       "WorkspaceDatastoreWriteCases"
       "documents::write_tool::tests::workspace_datastore_create_tools_follow_the_model")

@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "store::config_client::desired_state::workspace_selection::tests::selected_callback_agents_follow_native_visibility",
+            package: "gents",
+            source_path: "crates/gents/src/store/config_client/desired_state/workspace_selection.rs",
+            module_path: "store::config_client::desired_state::workspace_selection::tests",
+            function: "selected_callback_agents_follow_native_visibility",
+        },
+        ConformanceConsumer::RustTest {
             id: "triggers::callback::tests::callback_parent_requires_the_selected_authenticated_agent",
             package: "gents",
             source_path: "crates/gents/src/triggers/callback/tests.rs",
