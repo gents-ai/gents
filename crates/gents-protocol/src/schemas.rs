@@ -74,6 +74,7 @@ pub const IDENTITY_POLICY_BINDINGS: &[(&str, &str)] = &[
     (AGENT_CONTEXT_NAME, "configuration"),
     (COMPACTION_CONFIG_NAME, "configuration"),
     (SKILL_NAME, "configuration"),
+    (REPOSITORY_PLACEMENT_NAME, "configuration"),
     (PROJECTION_ACP_BINDING_NAME, "configuration"),
     (AGENT_TARGET_NAME, "configuration"),
     (TASK_NAME, "configuration"),

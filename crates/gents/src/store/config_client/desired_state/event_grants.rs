@@ -52,7 +52,7 @@ async fn observe_callback(
             Some((_, value)) => {
                 let callback: crate::documents::Callback = serde_json::from_value(value)?;
                 match callback.handler {
-                    crate::documents::CallbackHandler::Module { module_id } => Some(module_id),
+                    crate::documents::CallbackHandler::Module { module_id, .. } => Some(module_id),
                     _ => None,
                 }
             }

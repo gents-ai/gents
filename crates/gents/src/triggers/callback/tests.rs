@@ -2231,6 +2231,7 @@ fn callback_generation_covers_modeled_input_configuration() {
             "callback_handler" => {
                 changed_callback.handler = crate::documents::CallbackHandler::Module {
                     module_id: "changed".into(),
+                    workspace_agents: None,
                 }
             }
             "binding_recreated" => changed_ids.binding = "new-binding".into(),
