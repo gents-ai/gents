@@ -183,6 +183,35 @@ describe("useQuery pages", () => {
     expect(result.current.data?.results.map((r) => r.title)).toEqual(["t3", "t4"]);
     expect(result.current.data?.next_offset).toBe(5);
   });
+
+  it("reports a malformed continuation instead of presenting partial rows as complete", async () => {
+    const t = tool(rows(4));
+    t.call.mockImplementation(async (args) =>
+      args.offset
+        ? { kind: "query", output: { count: 0 } }
+        : { kind: "query", output: { results: [{ title: "first" }], next_offset: 1 } },
+    );
+    const { result } = renderHook(() =>
+      useQuery<Out>(t.ctx, "s", "list", { intervalMs: 0, live: false, pages: "all" }),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toMatch(/continuation/i);
+    expect(result.current.data).toBeNull();
+  });
+
+  it("stops a non-advancing continuation rather than looping forever", async () => {
+    const t = tool(rows(1));
+    t.call.mockImplementation(async () => ({
+      kind: "query",
+      output: { results: [], next_offset: 0 },
+    }));
+    const { result } = renderHook(() =>
+      useQuery<Out>(t.ctx, "s", "list", { intervalMs: 0, live: false, pages: "all" }),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toMatch(/continuation/i);
+    expect(t.call).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("useQuery field recovery", () => {
