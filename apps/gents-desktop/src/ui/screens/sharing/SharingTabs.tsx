@@ -9,12 +9,10 @@ import type {
   SharingDecision,
   SharingMember,
 } from "../../../hooks/sharing";
-import type { ApprovedHere } from "@/app/approvedHere";
 import { EmptyList } from "../agent/ListDetail";
 import { DecisionRow } from "./History";
 import { InviteRow } from "./Invites";
-import { ApprovedHereRow, MemberRow } from "./Members";
-import { scopeText } from "./parts";
+import { MemberRow } from "./Members";
 
 export type SharingTab = "access" | "invites" | "history";
 
@@ -25,38 +23,32 @@ export const resetSharingTab = () => chosen.setState({ tab: "access" });
 
 /** The node's sharing one view at a time: who has access, the open invites,
     and what was decided. A view the runtime doesn't offer is left out; the
-    line under the tabs names it. Access stays while this device remembers
-    approvals the runtime can't list. */
+    line under the tabs names it. */
 export function SharingTabs({
   nodeDid,
   name,
   available,
   members,
-  approved,
   invites,
   history,
+  historyLeftOut,
   note,
 }: {
   nodeDid: string;
   name: string;
   available: SharingAvailability;
   members: SharingMember[];
-  approved: ApprovedHere[];
   invites: Invite[];
   history: SharingDecision[];
+  /** what the history leaves out, under its list */
+  historyLeftOut: string | null;
   /** what the runtime doesn't offer, under the tabs */
   note: ReactNode;
 }) {
   const stored = useStore(chosen, (s) => s.tab);
   const tabs: { id: SharingTab; label: string; count?: number }[] = [
-    ...(available.members || approved.length > 0
-      ? [
-          {
-            id: "access" as const,
-            label: "Access",
-            count: members.length + approved.length,
-          },
-        ]
+    ...(available.members
+      ? [{ id: "access" as const, label: "Access", count: members.length }]
       : []),
     ...(available.invites
       ? [{ id: "invites" as const, label: "Invites", count: invites.length }]
@@ -86,17 +78,10 @@ export function SharingTabs({
         <List
           label="Who has access"
           empty={`Nobody else has access to ${name}.`}
-          count={members.length + approved.length}
+          count={members.length}
         >
           {members.map((member) => (
-            <MemberRow
-              key={`${member.party.did} ${scopeText(member.scope)}`}
-              nodeDid={nodeDid}
-              member={member}
-            />
-          ))}
-          {approved.map((entry) => (
-            <ApprovedHereRow key={entry.requestId} nodeDid={nodeDid} entry={entry} />
+            <MemberRow key={member.requestId} nodeDid={nodeDid} member={member} />
           ))}
         </List>
       </TabsContent>
@@ -117,6 +102,9 @@ export function SharingTabs({
             <DecisionRow key={`${decision.at} ${i}`} decision={decision} />
           ))}
         </List>
+        {historyLeftOut && (
+          <p className="mt-3 text-xs text-muted-foreground">{historyLeftOut}</p>
+        )}
       </TabsContent>
     </Tabs>
   );

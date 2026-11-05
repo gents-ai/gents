@@ -59,8 +59,7 @@ import {
   type SharingScenario,
 } from "./sharingHarness";
 
-export const HARNESS_NODE_DID = "did:key:z6MkBombadilAgent";
-const NODE_DID = HARNESS_NODE_DID;
+const NODE_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_AGENT_ID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
 const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();

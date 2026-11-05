@@ -2,41 +2,31 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_LEASE_SECONDS } from "../src/hooks/sharing";
-import {
-  approvedHere,
-  resetApprovedHere,
-  restoreApprovedHere,
-  type ApprovedHere,
-} from "../src/ui/app/approvedHere";
+import { MAX_LEASE_SECONDS, type SharingAdapter } from "../src/hooks/sharing";
 import { resetJoins } from "../src/ui/lib/joinInvite";
 import { resetPreferences } from "../src/ui/preferences";
 import { AgentScreen } from "../src/ui/screens/agent/AgentScreen";
+import { historyNote } from "../src/ui/screens/sharing/History";
 import { missingText, resetSharingTab } from "../src/ui/screens/sharing/SharingTabs";
 import { node, renderIn, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import {
-  HARNESS_GAME_PACK,
+  HARNESS_BRUNO_GAME,
   createHarnessSharing,
-  seedHarnessApprovals,
   type SharingScenario,
 } from "./ui-harness/sharingHarness";
 
 const DAY = 24 * 60 * 60;
-const BRUNO = "did:key:z6MkHarnessBruno";
-const GAME = { kind: "pack", pack: HARNESS_GAME_PACK, name: "Tic-tac-toe" };
 const OWN = deployment.nodeDid;
 
 function show(scenario: SharingScenario = "sharing") {
   withFlags({ sharing: true });
-  seedHarnessApprovals(scenario, OWN);
   const sharing = createHarnessSharing(scenario);
   const spied = {
-    renew: vi.spyOn(sharing, "renew"),
-    revoke: vi.spyOn(sharing, "revoke"),
-    revokeApproval: sharing.revokeApproval
-      ? vi.spyOn(sharing, "revokeApproval")
+    renew: sharing.renew
+      ? vi.spyOn(sharing as Required<SharingAdapter>, "renew")
       : undefined,
+    revoke: vi.spyOn(sharing, "revoke"),
   };
   const app = testApp({
     sharing,
@@ -60,21 +50,9 @@ async function menu(
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 }
 
-/* the whole node for someone known by DID alone, as today's runtime asks */
-const entry = (overrides: Partial<ApprovedHere> = {}): ApprovedHere => ({
-  requestId: "request-1",
-  party: { did: "did:key:z6MkCandidate", name: null, device: false },
-  scope: { kind: "node" },
-  profile: { id: "client", name: "client", grants: [] },
-  leaseExpiresAt: new Date(Date.now() + 30 * DAY * 1000).toISOString(),
-  approvedAt: new Date().toISOString(),
-  ...overrides,
-});
-
 afterEach(() => {
   cleanup();
   resetJoins();
-  resetApprovedHere();
   resetSharingTab();
   resetPreferences();
 });
@@ -118,7 +96,11 @@ describe("who has access", () => {
     expect(options.at(-1)).toBe(`${MAX_LEASE_SECONDS / DAY} days`);
     await user.click(screen.getByRole("option", { name: "90 days" }));
     await user.click(within(game).getByRole("button", { name: "Renew" }));
-    expect(renew).toHaveBeenCalledWith(expect.any(String), BRUNO, GAME, 90 * DAY);
+    expect(renew).toHaveBeenCalledWith(
+      expect.any(String),
+      HARNESS_BRUNO_GAME,
+      90 * DAY,
+    );
     await waitFor(() =>
       expect(
         within(
@@ -145,7 +127,7 @@ describe("who has access", () => {
     expect(confirm).not.toHaveBeenCalled();
     await menu(user, game, "Revoke…");
     await user.click(within(game).getByRole("button", { name: "Revoke" }));
-    expect(revoke).toHaveBeenCalledWith(expect.any(String), BRUNO, GAME);
+    expect(revoke).toHaveBeenCalledWith(expect.any(String), HARNESS_BRUNO_GAME);
     await waitFor(() =>
       expect(
         screen.queryByRole("listitem", { name: "Bruno: Tic-tac-toe pack" }),
@@ -195,119 +177,6 @@ describe("who has access", () => {
   });
 });
 
-describe("approvals made on this desktop", () => {
-  it("shows them under Access, marked, while the runtime can't list members", async () => {
-    show("sharing-approved-here");
-    const list = await members();
-    const rows = within(list).getAllByRole("listitem");
-    expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual([
-      "did:key:z6MkHa…Tablet: Whole node",
-      "did:key:z6MkHa…dioMac: Whole node",
-    ]);
-    const [tablet, studio] = rows as [HTMLElement, HTMLElement];
-    expect(within(tablet).getByText("Approved here")).toBeTruthy();
-    expect(tablet.textContent).toContain("Ends in 29d");
-    expect(within(studio).getByText("Ends in 3d").className).toContain("text-warning");
-    expect(screen.getByRole("tab", { name: /^Access/ }).textContent).toContain("2");
-    expect(screen.queryByRole("tab", { name: /^Invites/ })).toBeNull();
-    expect(
-      screen.getByText(
-        "Access, invites and history need a newer runtime on Local Agent.",
-      ),
-    ).toBeTruthy();
-  });
-
-  it("explains the mark", async () => {
-    const user = userEvent.setup();
-    show("sharing-approved-here");
-    const list = await members();
-    await user.hover(within(list).getAllByText("Approved here")[0]!);
-    expect(
-      await screen.findByText(
-        "This runtime can't list who has access yet; this device remembers the ones you approved.",
-      ),
-    ).toBeTruthy();
-  });
-
-  it("revokes one by its request, after asking", async () => {
-    const user = userEvent.setup();
-    const { revokeApproval } = show("sharing-approved-here");
-    const tablet = within(await members()).getByRole("listitem", {
-      name: "did:key:z6MkHa…Tablet: Whole node",
-    });
-    await menu(user, tablet, "Revoke…");
-    await user.click(within(tablet).getByRole("button", { name: "Revoke" }));
-    expect(revokeApproval).toHaveBeenCalledWith(OWN, "request-harness-tablet");
-    await waitFor(() =>
-      expect(screen.queryByRole("listitem", { name: /Tablet/ })).toBeNull(),
-    );
-    expect(screen.getByRole("listitem", { name: /dioMac/ })).toBeTruthy();
-  });
-
-  it("remembers an approval where the runtime lists no members, with no way to revoke it", async () => {
-    const user = userEvent.setup();
-    show("sharing-requests-only");
-    const strip = await screen.findByRole("region", { name: "Requests to join" });
-    const jack = within(strip).getByRole("listitem", { name: "Request from Jack" });
-    await user.click(within(jack).getByRole("button", { name: "Approve" }));
-    const row = within(await members()).getByRole("listitem", {
-      name: "Jack: Tic-tac-toe pack",
-    });
-    expect(row.textContent).toContain("Approved here");
-    expect(row.textContent).toContain("Ends in 30d");
-    expect(within(row).queryByRole("button", { name: /^More for/ })).toBeNull();
-  });
-
-  it("drops one once the runtime lists that member", async () => {
-    const user = userEvent.setup();
-    show();
-    const strip = await screen.findByRole("region", { name: "Requests to join" });
-    const jack = within(strip).getByRole("listitem", { name: "Request from Jack" });
-    await user.click(within(jack).getByRole("button", { name: "Approve" }));
-    const row = await within(await members()).findByRole("listitem", {
-      name: "Jack: Tic-tac-toe pack",
-    });
-    expect(row.textContent).not.toContain("Approved here");
-    await waitFor(() =>
-      expect(localStorage.getItem("gents-sharing-approved-here")).not.toContain("Jack"),
-    );
-  });
-
-  it("drops one listed by the runtime, or whose lease has passed", () => {
-    const now = Date.now();
-    approvedHere.add(OWN, entry({ requestId: "listed" }));
-    approvedHere.add(
-      OWN,
-      entry({
-        requestId: "lapsed",
-        party: { did: "did:key:z6MkOld", name: null, device: false },
-        leaseExpiresAt: new Date(now - 1000).toISOString(),
-      }),
-    );
-    approvedHere.add(
-      OWN,
-      entry({
-        requestId: "kept",
-        party: { did: "did:key:z6MkKept", name: null, device: false },
-      }),
-    );
-    approvedHere.prune(OWN, [{ party: entry().party, scope: { kind: "node" } }], now);
-    const kept = restoreApprovedHere(
-      JSON.parse(localStorage.getItem("gents-sharing-approved-here")!).state,
-    );
-    expect(kept.byNode[OWN]?.map((e) => e.requestId)).toEqual(["kept"]);
-  });
-
-  it("reads back only well-formed entries", () => {
-    expect(
-      restoreApprovedHere({
-        byNode: { [OWN]: [entry(), { requestId: 3 }, null], other: "nope" },
-      }),
-    ).toEqual({ byNode: { [OWN]: [entry()] } });
-    expect(restoreApprovedHere(undefined)).toEqual({ byNode: {} });
-  });
-});
-
 describe("the sharing history", () => {
   it("lists what was decided, for what, by whom, newest first", async () => {
     const user = userEvent.setup();
@@ -325,6 +194,50 @@ describe("the sharing history", () => {
     expect(rows[0]!.textContent).not.toContain("By");
     expect(rows[1]!.textContent).toContain("By David");
     expect(rows[2]!.textContent).toContain("Coach agent");
+  });
+
+  it("says nothing of limits when the runtime reports none", async () => {
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole("tab", { name: /^History/ }));
+    await screen.findByRole("list", { name: "Sharing history" });
+    expect(screen.queryByText(/aren't shown|Showing the latest/)).toBeNull();
+  });
+
+  it("names what it leaves out in one line under the list", async () => {
+    const user = userEvent.setup();
+    show("sharing-history-limited");
+    await user.click(await screen.findByRole("tab", { name: /^History/ }));
+    expect(
+      await screen.findByText(
+        "Showing the latest 50 of 73. Decisions replaced by a later one, or in conflict, aren't shown.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("words what it leaves out for each thing the runtime says", () => {
+    const limits = {
+      observed: 3,
+      limit: 50,
+      omitsSuperseded: false,
+      conflictsOmitted: false,
+    };
+    expect(historyNote(null)).toBeNull();
+    expect(historyNote(limits)).toBeNull();
+    expect(historyNote({ ...limits, observed: 50 })).toBeNull();
+    expect(historyNote({ ...limits, observed: 51 })).toBe(
+      "Showing the latest 50 of 51.",
+    );
+    expect(historyNote({ ...limits, omitsSuperseded: true })).toBe(
+      "Decisions replaced by a later one aren't shown.",
+    );
+    expect(historyNote({ ...limits, conflictsOmitted: true })).toBe(
+      "Decisions in conflict aren't shown.",
+    );
+    expect(historyNote({ ...limits, observed: 0, omitsSuperseded: true })).toBeNull();
+    expect(historyNote({ ...limits, observed: 0, conflictsOmitted: true })).toBe(
+      "Decisions in conflict aren't shown.",
+    );
   });
 });
 

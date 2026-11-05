@@ -10,23 +10,21 @@ import type {
   SharingAdapter,
   SharingAvailability,
   SharingDecision,
+  SharingHistoryLimits,
   SharingMember,
   SharingParty,
   SharingState,
 } from "../../src/hooks/sharing";
-import { sameScope, unavailableSharing } from "../../src/hooks/sharing";
-import { approvedHere, resetApprovedHere } from "../../src/ui/app/approvedHere";
+import { unavailableSharing } from "../../src/hooks/sharing";
 import { joinSent, startJoin } from "../../src/ui/lib/joinInvite";
 
 /* Each is seen in the Sharing section of the node's configuration.
    "sharing" holds one of everything; "sharing-empty" a node nobody shares
    yet; "sharing-unavailable" a runtime that can't share;
-   "sharing-requests-only" a runtime that offers only requests to join, as
-   today's does, and "sharing-no-requests" one that offers all but those.
-   "sharing-approved-here" is today's runtime after approvals made from this
-   desktop, which it remembers because the runtime can't list them, with
-   revoking by request as the runtime's decide command allows.
-   The rest show the joining side: the join dialog open at an invite's
+   "sharing-requests-only" a runtime that offers only requests to join, and
+   "sharing-no-requests" one that offers all but those;
+   "sharing-history-limited" a history cut at its limit, with decisions left
+   out. The rest show the joining side: the join dialog open at an invite's
    preview to the whole node (from a device), to a pack this node lacks, or
    to one named agent; and, with the dialog closed, a request sent from an
    invite, waiting or approved. */
@@ -36,7 +34,7 @@ export const SHARING_SCENARIOS = [
   "sharing-unavailable",
   "sharing-requests-only",
   "sharing-no-requests",
-  "sharing-approved-here",
+  "sharing-history-limited",
   "sharing-invite-node",
   "sharing-invite-pack",
   "sharing-invite-agent",
@@ -95,7 +93,7 @@ const EVERYTHING: SharingAvailability = {
   history: true,
 };
 
-const TODAY: SharingAvailability = {
+const REQUESTS_ONLY: SharingAvailability = {
   requests: true,
   members: false,
   invites: false,
@@ -103,17 +101,23 @@ const TODAY: SharingAvailability = {
 };
 
 function availability(scenario: SharingScenario): SharingAvailability {
-  if (scenario === "sharing-requests-only" || scenario === "sharing-approved-here")
-    return TODAY;
+  if (scenario === "sharing-requests-only") return REQUESTS_ONLY;
   if (scenario === "sharing-no-requests") return { ...EVERYTHING, requests: false };
   return EVERYTHING;
 }
+
+const historyLimits = (scenario: SharingScenario): SharingHistoryLimits | null =>
+  scenario === "sharing-history-limited"
+    ? { observed: 73, limit: 50, omitsSuperseded: true, conflictsOmitted: true }
+    : null;
 
 const NODE: ShareScope = { kind: "node" };
 export const HARNESS_GAME_PACK = "gents/tic_tac_toe";
 const GAME: ShareScope = { kind: "pack", pack: HARNESS_GAME_PACK, name: "Tic-tac-toe" };
 const COACH: ShareScope = { kind: "agent", agent: "coach", name: "Coach" };
 const GAME_VERSION = "1.2.0";
+/** the approved request behind Bruno's access to the game */
+export const HARNESS_BRUNO_GAME = "request-harness-bruno-game";
 
 /** the packs this node has installed in a scenario: the inviting side has
     the game, the side joining for it doesn't yet */
@@ -183,8 +187,15 @@ export function createHarnessSharing(
   const available = availability(scenario);
   const state: SharingState =
     scenario === "sharing-empty"
-      ? { requests: [], members: [], invites: [], history: [], available }
-      : seeded(at, available);
+      ? {
+          requests: [],
+          members: [],
+          invites: [],
+          history: [],
+          historyLimits: null,
+          available,
+        }
+      : seeded(at, available, historyLimits(scenario));
   const listeners = new Set<() => void>();
   const changed = () => {
     for (const listener of listeners) listener();
@@ -202,21 +213,14 @@ export function createHarnessSharing(
   const asked = new Set<string>(["request-harness-seeded"]);
   let created = 0;
   let accepted = 0;
-  /* the access each approval gave, by its request; the seeded approvals
-     made on this desktop among them */
-  const approvals = new Map<string, SharingMember | null>(
-    APPROVED_HERE_REQUESTS.map((id) => [id, null]),
-  );
 
   const request = (requestId: string) => {
     const found = state.requests.find((r) => r.requestId === requestId);
     if (!found) throw new Error("That request was already decided or has expired.");
     return found;
   };
-  const member = (did: string, scope: ShareScope) => {
-    const found = state.members.find(
-      (m) => m.party.did === did && sameScope(m.scope, scope),
-    );
+  const member = (requestId: string) => {
+    const found = state.members.find((m) => m.requestId === requestId);
     if (!found) throw new Error("They no longer have access.");
     return found;
   };
@@ -228,7 +232,7 @@ export function createHarnessSharing(
     return found;
   };
 
-  const adapter: SharingAdapter = {
+  return {
     /* a part the runtime doesn't offer reads as empty */
     async read() {
       const { available } = state;
@@ -247,16 +251,13 @@ export function createHarnessSharing(
     async approve(_nodeDid, requestId, leaseSeconds) {
       const r = request(requestId);
       state.requests = state.requests.filter((x) => x !== r);
-      const given: SharingMember = {
+      state.members.push({
+        requestId,
         party: r.from,
         scope: r.scope,
         profile: r.profile,
-        since: at(0),
         leaseExpiresAt: at(leaseSeconds * 1000),
-        renewable: true,
-      };
-      state.members.push(given);
-      approvals.set(requestId, given);
+      });
       decide({ kind: "approved", party: r.from, scope: r.scope });
       changed();
     },
@@ -266,14 +267,14 @@ export function createHarnessSharing(
       decide({ kind: "denied", party: r.from, scope: r.scope });
       changed();
     },
-    async revoke(_nodeDid, memberDid, scope) {
-      const m = member(memberDid, scope);
+    async revoke(_nodeDid, requestId) {
+      const m = member(requestId);
       state.members = state.members.filter((x) => x !== m);
       decide({ kind: "revoked", party: m.party, scope: m.scope });
       changed();
     },
-    async renew(_nodeDid, memberDid, scope, leaseSeconds) {
-      member(memberDid, scope).leaseExpiresAt = at(leaseSeconds * 1000);
+    async renew(_nodeDid, requestId, leaseSeconds) {
+      member(requestId).leaseExpiresAt = at(leaseSeconds * 1000);
       changed();
     },
     async profiles(_nodeDid, scope) {
@@ -340,21 +341,6 @@ export function createHarnessSharing(
         throw new Error("That request was already decided or withdrawn.");
     },
   };
-  if (scenario === "sharing-requests-only") return adapter;
-  return {
-    ...adapter,
-    async revokeApproval(_nodeDid, requestId) {
-      if (!approvals.has(requestId))
-        throw new Error("That access was already revoked or has lapsed.");
-      const given = approvals.get(requestId);
-      approvals.delete(requestId);
-      if (given) {
-        state.members = state.members.filter((m) => m !== given);
-        decide({ kind: "revoked", party: given.party, scope: given.scope });
-      }
-      changed();
-    },
-  };
 }
 
 /** Opens the joining side's state a scenario names: the join dialog at an
@@ -376,43 +362,10 @@ export function seedHarnessJoining(scenario: string | null, now = Date.now()) {
     });
 }
 
-/* the approvals "sharing-approved-here" made from this desktop: the
-   runtime knows each party only by DID, and shares the whole node */
-const APPROVED_HERE_REQUESTS = ["request-harness-tablet", "request-harness-studio"];
-
-/** Puts back what this desktop remembers approving in a scenario, clearing
-    what another scenario left. */
-export function seedHarnessApprovals(
-  scenario: string | null,
-  nodeDid: string,
-  now = Date.now(),
-) {
-  if (!isSharingScenario(scenario)) return;
-  resetApprovedHere();
-  if (scenario !== "sharing-approved-here") return;
-  const at = (offset: number) => new Date(now + offset).toISOString();
-  const client: ShareProfile = { id: "client", name: "client", grants: [] };
-  approvedHere.add(nodeDid, {
-    requestId: "request-harness-studio",
-    party: { did: "did:key:z6MkHarnessStudioMac", name: null, device: false },
-    scope: NODE,
-    profile: client,
-    leaseExpiresAt: at(3 * DAY),
-    approvedAt: at(-27 * DAY),
-  });
-  approvedHere.add(nodeDid, {
-    requestId: "request-harness-tablet",
-    party: { did: "did:key:z6MkHarnessTablet", name: null, device: false },
-    scope: NODE,
-    profile: client,
-    leaseExpiresAt: at(29 * DAY),
-    approvedAt: at(-1 * DAY),
-  });
-}
-
 function seeded(
   at: (offset: number) => string,
   available: SharingAvailability,
+  historyLimits: SharingHistoryLimits | null,
 ): SharingState {
   const requests: JoinRequest[] = [
     {
@@ -436,28 +389,25 @@ function seeded(
   ];
   const members: SharingMember[] = [
     {
+      requestId: "request-harness-phone",
       party: PHONE,
       scope: NODE,
       profile: PROFILES.device,
-      since: at(-40 * DAY),
       leaseExpiresAt: null,
-      renewable: false,
     },
     {
+      requestId: HARNESS_BRUNO_GAME,
       party: BRUNO,
       scope: GAME,
       profile: PROFILES.player,
-      since: at(-12 * DAY),
       leaseExpiresAt: at(2 * DAY),
-      renewable: true,
     },
     {
+      requestId: "request-harness-bruno-coach",
       party: BRUNO,
       scope: COACH,
       profile: PROFILES.agentUser,
-      since: at(-12 * DAY),
       leaseExpiresAt: at(78 * DAY),
-      renewable: true,
     },
   ];
   const invites: Invite[] = [
@@ -502,7 +452,7 @@ function seeded(
     { kind: "approved", party: PHONE, scope: NODE, by: HARNESS_ME, at: at(-40 * DAY) },
   ];
   history.sort((a, b) => b.at.localeCompare(a.at));
-  return { requests, members, invites, history, available };
+  return { requests, members, invites, history, historyLimits, available };
 }
 
 function gamePreview(at: (offset: number) => string): InvitePreview {

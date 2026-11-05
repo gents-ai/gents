@@ -5,17 +5,16 @@ import { Skeleton } from "@gents/ui/components/skeleton";
 import type { SharingState } from "../../../hooks/sharing";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useApp } from "@/app/AppContext";
-import { approvedHere, isApproval, lapsed, useApprovedHere } from "@/app/approvedHere";
 import { isLocalNode } from "@/lib/firstRun";
 import { startJoin } from "@/lib/joinInvite";
 import { useHomeDid } from "@/hooks/useClient";
 import { useSharing } from "@/hooks/useSharing";
 import { readInstalledPacks, shortName, useInstalledPacks } from "../packs/model";
 import { InviteDialog, scopeKey, type ScopeOption } from "../sharing/InviteDialog";
+import { historyNote } from "../sharing/History";
 import { JoinDialog, JoinGroup, useJoining } from "../sharing/Join";
 import { RequestsStrip } from "../sharing/Requests";
 import { chooseSharingTab, missingText, SharingTabs } from "../sharing/SharingTabs";
-import { useMinute } from "../time";
 
 /** Who may use the node, and the ways in: requests waiting for a decision
     at the top, then who has access, open invites and what was decided, one
@@ -136,22 +135,13 @@ function Shared({
   onInvite: (() => void) | null;
   onJoin: (() => void) | null;
 }) {
-  const { available, requests, members, invites, history } = state;
-  const now = useMinute();
-  const remembered = useApprovedHere(nodeDid);
-  /* an approval made here is kept until the runtime lists that member, or
-     its lease passes */
-  useEffect(() => {
-    approvedHere.prune(nodeDid, members, now);
-  }, [nodeDid, members, now]);
-  const approved = remembered.filter(
-    (e) => !lapsed(e, now) && !members.some((m) => isApproval(e, m)),
-  );
+  const { available, requests, members, invites, history, historyLimits } = state;
   const missing = missingText(available, name);
   const note = missing && <Quiet>{missing}</Quiet>;
+  const historyLeftOut = historyNote(historyLimits);
   const nothing =
-    requests.length + members.length + approved.length + invites.length === 0 &&
-    history.length === 0;
+    requests.length + members.length + invites.length + history.length === 0 &&
+    historyLeftOut === null;
   return (
     <>
       <RequestsStrip nodeDid={nodeDid} requests={requests} />
@@ -174,9 +164,9 @@ function Shared({
           name={name}
           available={available}
           members={members}
-          approved={approved}
           invites={invites}
           history={history}
+          historyLeftOut={historyLeftOut}
           note={note}
         />
       )}

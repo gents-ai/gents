@@ -3,9 +3,9 @@ import ReactDOM from "react-dom/client";
 
 import App from "../../src/App";
 import { setTimingForTests } from "../../src/hooks/timing";
-import { createDesktopUiHarness, HARNESS_NODE_DID } from "./desktopHarness";
+import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
-import { seedHarnessApprovals, seedHarnessJoining } from "./sharingHarness";
+import { seedHarnessJoining } from "./sharingHarness";
 
 declare global {
   interface Window {
@@ -94,7 +94,6 @@ if (backend === "deterministic" && params.get("scenario") === "notices") {
 
 if (backend === "deterministic") {
   seedHarnessJoining(params.get("scenario"));
-  seedHarnessApprovals(params.get("scenario"), HARNESS_NODE_DID);
 }
 
 document.documentElement.dataset.desktopUiHarnessBackend = backend;

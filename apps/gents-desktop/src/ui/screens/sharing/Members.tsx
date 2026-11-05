@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenuGroup,
@@ -8,9 +7,7 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { DEFAULT_LEASE_SECONDS, type SharingMember } from "../../../hooks/sharing";
-import { approvedHere, type ApprovedHere } from "@/app/approvedHere";
 import { useSharingActions } from "@/hooks/useSharing";
-import { Hint } from "../Hint";
 import { fullTime } from "../TranscriptMarker";
 import { span, useMinute } from "../time";
 import {
@@ -27,12 +24,9 @@ import {
 /* access that ends within this long is worth a look */
 const SOON_MS = 7 * DAY_SECONDS * 1000;
 
-export const APPROVED_HERE_HINT =
-  "This runtime can't list who has access yet; this device remembers the ones you approved.";
-
 /** One grant someone holds: who, what it covers, with which profile and
-    until when. Renewing restarts the lease from now; revoking asks here
-    first, then ends the grant at once. */
+    until when. Renewing, where the runtime can, restarts the lease from now;
+    revoking asks here first, then ends the grant at once. */
 export function MemberRow({
   nodeDid,
   member,
@@ -48,14 +42,15 @@ export function MemberRow({
   const { party, scope, profile } = member;
   const who = partyName(party);
   const what = scopeText(scope);
+  const renewable = sharing.renew && member.leaseExpiresAt !== null;
 
   async function run(kind: "renew" | "revoke") {
     setBusy(true);
     setError(null);
     try {
       if (kind === "renew")
-        await sharing.renew(nodeDid, party.did, scope, Number(lease));
-      else await sharing.revoke(nodeDid, party.did, scope);
+        await sharing.renew?.(nodeDid, member.requestId, Number(lease));
+      else await sharing.revoke(nodeDid, member.requestId);
       setAsking(null);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -78,7 +73,7 @@ export function MemberRow({
       actions={
         asking === null && (
           <MoreMenu label={`More for ${who}: ${what}`}>
-            {member.renewable && (
+            {renewable && (
               <>
                 <DropdownMenuGroup>
                   <DropdownMenuItem onClick={() => setAsking("renew")}>
@@ -131,86 +126,6 @@ export function MemberRow({
             onKeep={() => setAsking(null)}
           />
         ) : null
-      }
-      error={error}
-      inline
-    />
-  );
-}
-
-/** An approval this desktop made that the runtime can't list yet: shown as
-    access, marked as only this device's memory of it. It can be revoked by
-    its request where the runtime allows that. */
-export function ApprovedHereRow({
-  nodeDid,
-  entry,
-}: {
-  nodeDid: string;
-  entry: ApprovedHere;
-}) {
-  const sharing = useSharingActions();
-  const [asking, setAsking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const { party, scope, profile } = entry;
-  const who = partyName(party);
-  const what = scopeText(scope);
-  const revocable = Boolean(sharing.revokeApproval);
-
-  async function revoke() {
-    setBusy(true);
-    setError(null);
-    try {
-      await sharing.revokeApproval?.(nodeDid, entry.requestId);
-      approvedHere.forget(nodeDid, entry.requestId);
-    } catch (cause) {
-      setError(errorMessage(cause));
-      setBusy(false);
-    }
-  }
-
-  return (
-    <ItemRow
-      label={`${who}: ${what}`}
-      title={
-        <span className="flex min-w-0 items-center gap-2">
-          <Party party={party} />
-          <Hint label={APPROVED_HERE_HINT}>
-            <Badge variant="outline" tabIndex={0} className="shrink-0">
-              Approved here
-            </Badge>
-          </Hint>
-        </span>
-      }
-      description={
-        <>
-          <span>{what}</span>
-          {profile.name && <span>{profile.name}</span>}
-          <Lease ends={entry.leaseExpiresAt} />
-        </>
-      }
-      actions={
-        revocable &&
-        !asking && (
-          <MoreMenu label={`More for ${who}: ${what}`}>
-            <DropdownMenuGroup>
-              <DropdownMenuItem variant="destructive" onClick={() => setAsking(true)}>
-                Revoke…
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </MoreMenu>
-        )
-      }
-      below={
-        asking && (
-          <RevokeAsk
-            who={who}
-            what={what}
-            busy={busy}
-            onRevoke={() => void revoke()}
-            onKeep={() => setAsking(false)}
-          />
-        )
       }
       error={error}
       inline
