@@ -38,6 +38,10 @@ def workspaceRootAfterRevocation : Household.State :=
   Household.apply workspaceRootFixture (.revoke
     ⟨"workspace_roots", "root", "parent", .object "nodes" "node"⟩)
 
+def workspaceRootAfterIntegratorRevocation : Household.State :=
+  Household.apply workspaceRootAfterRevocation (.revoke
+    ⟨"workspace_roots", "root", "reader", .actor "integrator"⟩)
+
 def workspaceRootPublicationAllowed (actor : String) : Bool :=
   Household.allowed 6 workspaceRootFixture actor "nodes" "node" "update"
 
@@ -63,6 +67,7 @@ def workspaceRootAccessCasesJson : String :=
        ("expected", Lean.toJson (workspaceRootPermission actor permission)),
        ("may_publish", Lean.toJson (workspaceRootPublicationAllowed actor)),
        ("after_parent_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterRevocation actor "workspace_roots" "root" permission)),
+       ("after_integrator_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterIntegratorRevocation actor "workspace_roots" "root" permission)),
        ("after_writer_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterWriterRevocation actor "workspace_roots" "root" permission)),
        ("aborted_document", Lean.toJson (Identity.NodeFileRequests.publish false).document)])).compress
 
