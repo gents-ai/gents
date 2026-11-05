@@ -136,6 +136,31 @@ fn root_flags_conflict_with_subcommands() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn bare_gents_with_agent_and_no_terminal_exits_2() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+
+    let output = run_gents(user_home.path(), &["--agent", "X"])?;
+
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(stderr.contains("Data and debugging"), "stderr:\n{stderr}");
+    assert_eq!(fs::read_dir(user_home.path())?.count(), 0, "wrote to HOME");
+    Ok(())
+}
+
+#[test]
+fn the_root_agent_flag_conflicts_with_subcommands() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+
+    let output = run_gents(user_home.path(), &["--agent", "X", "status"])?;
+
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(stderr.contains("cannot be used with"), "stderr:\n{stderr}");
+    Ok(())
+}
+
 fn init_home(user_home: &Path, home: &Path) -> Result<()> {
     let output = run_gents(
         user_home,

@@ -81,6 +81,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             identity.as_ref(),
             resolve_initial_tool_package(&args)?,
             Some(binding),
+            None,
         )
         .await;
         let Some(expected) = &case.expected else {
@@ -189,7 +190,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{case:?}",
             );
             drop(runtime);
-            let steps = init_next_steps(&summary, false, false, false);
+            let steps = init_next_steps(&summary, Path::new("/srv/home"), false, false, false);
             assert!(
                 !steps
                     .iter()
@@ -226,6 +227,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         identity.as_ref(),
         resolve_initial_tool_package(&args)?,
         Some(binding),
+        None,
     )
     .await?;
     let mut backend = gents::inference::backends::registry::list_all_backends(&node)

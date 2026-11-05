@@ -8,6 +8,7 @@ use gents::store::config_client::GraphqlEndpoint;
 use gents::store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
+use gents::store::local::home::INIT_PENDING_FILE_NAME;
 use gents_protocol::error_chain::ErrorChain;
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
@@ -19,21 +20,18 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
         .unwrap_or_else(default_home_dir)
 }
 
-/// Exits on a bad remembered file: `resolve_home_dir`'s many callers hold no
-/// `Result`, and falling back would open the wrong data.
+/// Exits on any failure but an unresolved user home: `resolve_home_dir`'s many
+/// callers hold no `Result`, and falling back would open the wrong data.
 #[cfg(not(test))]
 fn default_home_dir() -> PathBuf {
     use gents::store::local::home::HomeError;
     match gents::store::local::home::default_home_dir() {
         Ok(home) => home,
-        Err(
-            error
-            @ (HomeError::RememberedHomeRead { .. } | HomeError::RememberedHomeInvalid { .. }),
-        ) => {
+        Err(HomeError::HomeDirUnresolved) => PathBuf::from(".gents"),
+        Err(error) => {
             eprintln!("Error: {}", ErrorChain(&error));
             std::process::exit(1);
         }
-        Err(_) => PathBuf::from(".gents"),
     }
 }
 
@@ -88,6 +86,29 @@ pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Re
 
 pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
     Ok(gents::store::local::home::read_init_config(home_dir)?)
+}
+
+pub(crate) fn mark_init_pending(home_dir: &Path) -> Result<()> {
+    let path = home_dir.join(INIT_PENDING_FILE_NAME);
+    fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
+}
+
+pub(crate) fn clear_init_pending(home_dir: &Path) -> Result<()> {
+    let path = home_dir.join(INIT_PENDING_FILE_NAME);
+    match fs::remove_file(&path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("removing {}", path.display()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `None` also for a home `init` has not finished, which `init` can resume.
+pub(crate) fn read_finished_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
+    if home_dir.join(INIT_PENDING_FILE_NAME).exists() {
+        return Ok(None);
+    }
+    read_init_config(home_dir)
 }
 
 /// Load and register the signer recorded by an initialized home; every
