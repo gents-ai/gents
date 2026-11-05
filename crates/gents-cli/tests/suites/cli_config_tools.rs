@@ -90,7 +90,17 @@ async fn tools_set_persists_host_root_and_export_round_trips_it() -> Result<()> 
     fs::create_dir_all(&home)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--node-name", "rooted-tools-agent"])?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "rooted-tools-agent",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let owner = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
@@ -176,6 +186,10 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         &[
             "--node-name",
             "explain-live-agent",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
             "--tool-package",
             "write",
             "--tool-root",
@@ -338,6 +352,10 @@ async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result
         &[
             "--node-name",
             "explain-dangling",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
             "--tool-package",
             "minimal",
         ],
@@ -388,8 +406,17 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
         "{offline}"
     );
 
-    let other_owner =
-        node_did_from_init(&run_init_json(&other, &["--node-name", "explain-other"])?)?;
+    let other_owner = node_did_from_init(&run_init_json(
+        &other,
+        &[
+            "--node-name",
+            "explain-other",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let mut server = spawn_server(&other, port)?;
