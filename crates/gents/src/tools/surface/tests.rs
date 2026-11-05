@@ -2106,13 +2106,14 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
     let selected = ceiling.path().join("selected");
     std::fs::create_dir_all(&selected).unwrap();
     let selected_text = selected.to_string_lossy().into_owned();
-    let escaped = crate::store::graphql::escape_graphql_string(&selected_text);
-    let created = node
-        .execute(&format!(
-            r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped}", enabled:true}}) {{_docID}} }}"#
-        ))
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    crate::upsert_node(&node, &node_did, None, None, true, None)
+        .await
+        .unwrap();
+    let access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+    set_workspace_root(&access, &node_did, &selected_text, None, true)
+        .await
+        .unwrap();
 
     let mut document = preset_tools_document("runtime-root", "ReadOnly", "Off", false, false);
     document.host.as_mut().unwrap().root = Some(selected_text.clone());
@@ -2133,12 +2134,9 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
         .await
         .expect("enabled published root admits tool construction");
 
-    let revoked = node
-        .execute(&format!(
-            r#"mutation {{ update_WorkspaceRoot(filter: {{root_path: {{_eq:"{escaped}"}}}}, input: {{enabled:false}}) {{_docID}} }}"#
-        ))
-        .await;
-    assert!(!revoked.has_errors(), "{:?}", revoked.errors);
+    set_workspace_root(&access, &node_did, &selected_text, None, false)
+        .await
+        .unwrap();
     let error = match surface.build_tools(&runtime).await {
         Ok(_) => panic!("fresh tool construction must observe root revocation"),
         Err(error) => error,
@@ -2154,13 +2152,20 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let allowed = tempfile::tempdir().unwrap();
-    let escaped = crate::store::graphql::escape_graphql_string(&allowed.path().to_string_lossy());
-    let created = node
-        .execute(&format!(
-            r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped}", enabled:true}}) {{_docID}} }}"#
-        ))
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    crate::upsert_node(&node, &node_did, None, None, true, None)
+        .await
+        .unwrap();
+    let access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+    set_workspace_root(
+        &access,
+        &node_did,
+        &allowed.path().to_string_lossy(),
+        None,
+        true,
+    )
+    .await
+    .unwrap();
 
     let document = preset_tools_document("legacy-blank-root", "ReadOnly", "Off", false, false);
     assert!(document
