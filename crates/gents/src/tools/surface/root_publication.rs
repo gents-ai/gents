@@ -70,7 +70,6 @@ async fn selected_agent(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,
-    require_enabled: bool,
 ) -> Result<identity::Did> {
     let did = identity::Did::new(agent_did)?;
     anyhow::ensure!(
@@ -81,9 +80,7 @@ async fn selected_agent(
         .await?
         .context("selected root reader Agent is unavailable")?;
     anyhow::ensure!(
-        row["agent_did"] == agent_did
-            && row["node_did"] == node_did
-            && (!require_enabled || row["enabled"] != false),
+        row["agent_did"] == agent_did && row["node_did"] == node_did && row["enabled"] != false,
         "selected root reader Agent changed or is disabled"
     );
     Ok(did)
@@ -118,7 +115,7 @@ pub async fn set_workspace_root_with_readers(
         if let Some(row) = &existing { checked_root_doc(row, node_did, &node_doc)?; }
         let mut readers = Vec::new();
         for agent_did in reader_agents.iter().collect::<std::collections::BTreeSet<_>>() {
-            readers.push(selected_agent(txn, node_did, agent_did, true).await?);
+            readers.push(selected_agent(txn, node_did, agent_did).await?);
         }
         fence_node(txn, &node_doc).await?;
         let updated_at = chrono::Utc::now().to_rfc3339();
@@ -146,8 +143,8 @@ pub async fn set_workspace_root_with_readers(
     result.map_err(WorkspaceRootWriteError::Publication)
 }
 
-/// Revocation acts on the exact visible root and selected Agent in the same
-/// Node-authorized transaction. It never infers an Agent from a node identity.
+/// Revocation acts on the exact visible root and actor in the same
+/// Node-authorized transaction, even if the Agent document has been deleted.
 pub async fn revoke_workspace_root_reader(
     access: &ConfigAccess,
     root_path: &str,
@@ -164,7 +161,11 @@ pub async fn revoke_workspace_root_reader(
                     .context("workspace root is missing Node scope")?;
                 let node_doc = selected_node(txn, node_did).await?;
                 let doc = checked_root_doc(&row, node_did, &node_doc)?;
-                let reader = selected_agent(txn, node_did, agent_did, false).await?;
+                let reader = identity::Did::new(agent_did)?;
+                anyhow::ensure!(
+                    agent_did != node_did,
+                    "root reader cannot be the Node actor"
+                );
                 fence_node(txn, &node_doc).await?;
                 txn.delete_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
                     .await?;
