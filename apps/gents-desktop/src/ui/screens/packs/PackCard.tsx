@@ -9,6 +9,11 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { navigate } from "@/lib/router";
 import { Skeleton } from "@gents/ui/components/skeleton";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@gents/ui/components/collapsible";
 import { cn } from "@gents/ui/lib/utils";
 import { namespaceOf, shortName } from "./model";
 
@@ -268,5 +273,22 @@ export function PackMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** the installer's own words, folded away */
+export function ErrorDetail({ error }: { error: string }) {
+  return (
+    <Collapsible className="group/detail">
+      <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        Details
+        <ChevronDown className="size-3 transition-transform duration-150 group-data-open/detail:rotate-180 motion-reduce:transition-none" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <p className="mt-1 text-xs wrap-break-word whitespace-pre-wrap text-muted-foreground select-text">
+          {error}
+        </p>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
