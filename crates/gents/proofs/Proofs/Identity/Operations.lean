@@ -175,7 +175,7 @@ theorem terminal_reads_are_scoped_to_candidate_and_node_owner :
      allowed 5 enrollmentTerminalFixture "outsider" "enrollment_records" "terminal" "read") =
       (true, true, false, true, false, false) := by native_decide
 
-/-- Enrollment records are private; discovery metadata is separately published.
+/-- Enrollment records are private; registry and directory metadata are separately published.
 A native reader grant is per physical document and does not imply permission on
 any application document. This classification does not publish a binding: each
 writer and receiver still needs the authenticated publication path. -/
@@ -185,12 +185,13 @@ def networkProtocolResource : String → Option String
   | "NetworkEnrollmentDecision" => some "enrollment_records"
   | "NetworkEnrollmentRouteReceipt" => some "enrollment_records"
   | "NetworkAuthorizationRevision" => some "enrollment_records"
-  | "NodeDirectoryEntry" => some "discovery"
+  | "NodeDirectoryEntry" => some "scoped_discovery"
   | "PeerRegistry" => some "discovery"
   | _ => none
 
-/-- Discovery visibility is an explicit wildcard relationship on each published
-metadata document, not a grant on an enrollment record. Native ACP relationships
+/-- PeerRegistry visibility is an explicit wildcard relationship on each published
+registry document, not a grant on an enrollment record. NodeDirectoryEntry is
+scoped to attached clients rather than assumed public. Native ACP relationships
 are store-local, so a receiver cannot infer this tuple from a replicated document;
 publication on each store needs a native authorized mechanism. -/
 def publicDiscoveryFixture : State :=
