@@ -27,10 +27,11 @@ pub(super) const EXIT: Duration = Duration::from_secs(10);
 pub(super) const PROMPT: Duration = Duration::from_secs(30);
 pub(super) const TURN: Duration = Duration::from_secs(240);
 pub(super) const FOLDER_QUESTION: &str = "Data folder [";
-pub(super) const INFERENCE_QUESTION: &str = "How do you want to run inference?";
-pub(super) const TOOLS_QUESTION: &str = "What may agents do?";
+pub(super) const INFERENCE_QUESTION: &str = "Choose an inference provider";
+/// The answer to `INFERENCE_QUESTION` that picks a local server.
+pub(super) const LOCAL_PROVIDER: &str = "4";
 pub(super) const NO_MODEL_TEXT: &str = "No model answered at";
-pub(super) const ROOT_QUESTION: &str = "Which folder may agents work in?";
+pub(super) const ROOT_QUESTION: &str = "Which folder should agents work in?";
 /// A relative answer to `ROOT_QUESTION`, because every test's terminal starts in its
 /// temporary `HOME`. `LiveBox::new` creates it.
 pub(super) const WORK_FOLDER: &str = "work";
@@ -504,20 +505,19 @@ impl Terminal {
     }
 
     pub(super) async fn answer_inference(&mut self, endpoint: &str, model: &str) -> Result<()> {
-        self.answer(INFERENCE_QUESTION, "3").await?;
-        self.answer("Backend base URL", endpoint).await?;
-        self.answer("Model name:", model).await
+        self.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
+        self.answer("Server base URL", endpoint).await?;
+        self.answer("Model", model).await
     }
 
-    /// The questions after the folder: a custom backend, the default tools and where they work.
-    pub(super) async fn answer_inference_and_tools(
+    /// The questions after the data folder: where agents work, then a local backend.
+    pub(super) async fn answer_root_and_inference(
         &mut self,
         endpoint: &str,
         model: &str,
     ) -> Result<()> {
-        self.answer_inference(endpoint, model).await?;
-        self.answer(TOOLS_QUESTION, "").await?;
-        self.answer(ROOT_QUESTION, WORK_FOLDER).await
+        self.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        self.answer_inference(endpoint, model).await
     }
 
     /// Returns once the child exited and its output reached the transcript.

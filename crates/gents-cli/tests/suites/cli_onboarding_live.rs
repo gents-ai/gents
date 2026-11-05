@@ -451,11 +451,11 @@ mod no_model {
         let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("first-run"))?;
 
         for row in [
-            "      ██████  ",
-            "██████        ",
-            "          ████",
-            "    ██        ",
-            "      ██████  ",
+            "         █████████   ",
+            "█████████            ",
+            "               ██████",
+            "      ███            ",
+            "         █████████   ",
         ] {
             terminal.expect(row, PROMPT).await?;
         }
@@ -464,17 +464,34 @@ mod no_model {
             .answer(FOLDER_QUESTION, &folder.to_string_lossy())
             .await?;
         terminal
-            .answer_inference_and_tools(backend.endpoint(), NO_MODEL_NAME)
+            .answer_root_and_inference(backend.endpoint(), NO_MODEL_NAME)
             .await?;
         terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
         terminal.expect("gents chat", EXIT).await?;
         terminal.expect_exit(1).await?;
 
         let init = read_json_file(&folder.join("init.json"))?;
-        assert_eq!(init["tool_ceiling"], json!("Readonly"));
+        assert_eq!(init["tool_package"], json!("Yolo"));
+        assert_eq!(init["tool_ceiling"], json!("Readwrite"));
         assert_eq!(
             init["tool_root"],
             json!(live.root.join(WORK_FOLDER).to_string_lossy())
+        );
+        ensure!(
+            terminal.transcript().contains("not a sandbox")
+                && !terminal.transcript().contains("--yolo"),
+            "setup says what agents can do, and names no flag nobody typed: {}",
+            terminal.transcript()
+        );
+        let agents = live
+            .gents()
+            .args(["config", "agent", "list", "--home"])
+            .arg(&folder)
+            .output()?;
+        let agents = String::from_utf8_lossy(&agents.stdout);
+        ensure!(
+            agents.contains("The Engineer"),
+            "setup seeds the Engineer: {agents}"
         );
         assert_eq!(
             fs::read_to_string(live.remembered_home())?.trim_end_matches('\n'),
@@ -522,7 +539,7 @@ mod no_model {
             .answer(FOLDER_QUESTION, &file.join("sub").to_string_lossy())
             .await?;
         terminal
-            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
         let code = terminal.wait_exit(PROMPT).await?;
 
@@ -566,12 +583,14 @@ mod no_model {
 
         let mut terminal = setup_of(&live, &folder, "midway")?;
         terminal
-            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
         let code = terminal.wait_exit(RUNTIME_UP).await?;
         ensure!(code != 0, "{}", terminal.transcript());
         ensure!(
-            terminal.transcript().contains("embedded DefraDB node for init"),
+            terminal
+                .transcript()
+                .contains("embedded DefraDB node for init"),
             "this must fail after init records its key custody: {}",
             terminal.transcript()
         );
@@ -581,54 +600,10 @@ mod no_model {
 
         let mut rerun = setup_of(&live, &folder, "midway-rerun")?;
         rerun
-            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
         rerun.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         rerun.expect_exit(1).await?;
-
-        held.release().await;
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn setup_grants_write_and_unrestricted_tools_when_asked() -> Result<()> {
-        let live = LiveBox::new()?;
-        let held = HeldShimPort::serving(b"").await?;
-        let write_root = live.root.join("write root");
-        fs::create_dir(&write_root)?;
-
-        let folder = live.folder("write");
-        let mut terminal = setup_of(&live, &folder, "write")?;
-        terminal
-            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
-        terminal.answer(TOOLS_QUESTION, "2").await?;
-        terminal
-            .answer(ROOT_QUESTION, &write_root.to_string_lossy())
-            .await?;
-        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
-        let init = read_json_file(&folder.join("init.json"))?;
-        assert_eq!(init["tool_package"], json!("Write"));
-        assert_eq!(init["tool_ceiling"], json!("Readwrite"));
-        assert_eq!(init["tool_root"], json!(write_root.to_string_lossy()));
-
-        let folder = live.folder("unrestricted");
-        let mut terminal = setup_of(&live, &folder, "unrestricted")?;
-        terminal
-            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
-        terminal.answer(TOOLS_QUESTION, "3").await?;
-        terminal
-            .answer(ROOT_QUESTION, &write_root.to_string_lossy())
-            .await?;
-        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
-        let init = read_json_file(&folder.join("init.json"))?;
-        assert_eq!(init["tool_package"], json!("Yolo"));
-        assert_eq!(init["tool_ceiling"], json!("Readwrite"));
-        assert_eq!(init["tool_root"], json!(write_root.to_string_lossy()));
 
         held.release().await;
         Ok(())
@@ -644,10 +619,6 @@ mod no_model {
 
         let folder = live.folder("data");
         let mut terminal = setup_of(&live, &folder, "refused")?;
-        terminal
-            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
-        terminal.answer(TOOLS_QUESTION, "").await?;
         terminal.answer(ROOT_QUESTION, "missing").await?;
         terminal.expect("is not an existing folder", PROMPT).await?;
         terminal
@@ -659,7 +630,9 @@ mod no_model {
         terminal.answer(ROOT_QUESTION, "~").await?;
         terminal.expect("your whole home folder", PROMPT).await?;
         terminal.answer("Use it?", "n").await?;
-        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
         terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
         assert_eq!(
@@ -669,13 +642,12 @@ mod no_model {
 
         let folder = live.folder("data-home");
         let mut terminal = setup_of(&live, &folder, "home")?;
-        terminal
-            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
-        terminal.answer(TOOLS_QUESTION, "").await?;
         terminal.answer(ROOT_QUESTION, "").await?;
         terminal.expect("your whole home folder", PROMPT).await?;
         terminal.answer("Use it?", "y").await?;
+        terminal
+            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
         terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
         assert_eq!(
@@ -689,19 +661,20 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn setup_asks_again_after_a_garbage_tools_answer_without_repeating_it() -> Result<()> {
+    async fn setup_asks_again_after_a_garbage_provider_answer_without_repeating_it() -> Result<()> {
         const PASTED: &str = "sk-pasted-at-the-wrong-prompt";
         let live = LiveBox::new()?;
         let held = HeldShimPort::serving(b"").await?;
         let folder = live.folder("data");
 
         let mut terminal = setup_of(&live, &folder, "garbage")?;
-        terminal
-            .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
-        terminal.answer(TOOLS_QUESTION, PASTED).await?;
-        terminal.answer("Answer 1, 2 or 3", "1").await?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, PASTED).await?;
+        terminal.answer("Answer 1 to 5", LOCAL_PROVIDER).await?;
+        terminal
+            .answer("Server base URL", NO_MODEL_ENDPOINT)
+            .await?;
+        terminal.answer("Model", NO_MODEL_NAME).await?;
         terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
 
@@ -711,10 +684,7 @@ mod no_model {
             "{}",
             terminal.transcript()
         );
-        assert_eq!(
-            read_json_file(&folder.join("init.json"))?["tool_ceiling"],
-            json!("Readonly")
-        );
+        ensure!(folder.join("init.json").is_file(), "setup kept going");
         held.release().await;
         Ok(())
     }
@@ -753,7 +723,9 @@ mod no_model {
 
         let mut terminal =
             Terminal::spawn(&reporting_terminal_flags(&command), &live.log("key-prompt"))?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "2").await?;
         terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
         // Echo goes off just after the prompt prints, and the interrupt has to find it off.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -776,13 +748,13 @@ mod no_model {
 
         let mut terminal =
             Terminal::spawn(&reporting_terminal_flags(&command), &live.log("after-key"))?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "2").await?;
         terminal
             .answer("OpenAI API key (hidden)", "sk-not-a-real-key")
             .await?;
-        terminal.answer("Model", "").await?;
-        terminal.answer(TOOLS_QUESTION, "").await?;
-        terminal.expect(ROOT_QUESTION, PROMPT).await?;
+        terminal.expect("Model [", PROMPT).await?;
         terminal.send("\x03")?;
         terminal.expect_exit(130).await?;
 
@@ -800,15 +772,14 @@ mod no_model {
         let folder = live.folder("data");
 
         let mut terminal = setup_of(&live, &folder, "dead-model")?;
-        terminal.answer(INFERENCE_QUESTION, "3").await?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
         terminal
-            .answer("Backend base URL", NO_MODEL_ENDPOINT)
+            .answer("Server base URL", NO_MODEL_ENDPOINT)
             .await?;
         terminal.expect(NO_MODEL_TEXT, PROMPT).await?;
         terminal.expect("gents config backend set", PROMPT).await?;
         terminal.answer("Model name:", NO_MODEL_NAME).await?;
-        terminal.answer(TOOLS_QUESTION, "").await?;
-        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal
             .expect("gents config backend set --file", PROMPT)
             .await?;
@@ -828,9 +799,9 @@ mod no_model {
         let folder = live.folder("data");
 
         let mut terminal = setup_of(&live, &folder, "declined")?;
-        terminal.answer(INFERENCE_QUESTION, "4").await?;
-        terminal.answer(TOOLS_QUESTION, "").await?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "").await?;
         terminal.answer("Log in to ChatGPT now", "n").await?;
 
         terminal
@@ -861,7 +832,7 @@ mod no_model {
 
         ensure!(
             !terminal.transcript().contains(INFERENCE_QUESTION)
-                && !terminal.transcript().contains(TOOLS_QUESTION),
+                && !terminal.transcript().contains(ROOT_QUESTION),
             "an initialized folder asks nothing more: {}",
             terminal.transcript()
         );
@@ -884,7 +855,7 @@ mod no_model {
 
         let mut terminal = Terminal::spawn(&command, &live.log("given"))?;
         terminal
-            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
         terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
@@ -1111,7 +1082,7 @@ mod with_model {
         terminal
             .answer(FOLDER_QUESTION, &folder.to_string_lossy())
             .await?;
-        terminal.answer_inference_and_tools(endpoint, model).await?;
+        terminal.answer_root_and_inference(endpoint, model).await?;
         Ok(terminal)
     }
 

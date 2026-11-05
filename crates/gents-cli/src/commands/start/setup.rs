@@ -12,9 +12,7 @@ use crate::client_settings::InterfaceClient;
 use crate::commands::codex::{interface_bin, CODEX_BIN_ENV};
 use crate::commands::init::init_home;
 use crate::home_state::{read_finished_init_config, resolve_home_dir};
-use crate::interactive_backend::{
-    confirm, prompt_line, prompt_line_default, resolve_backend_interactively,
-};
+use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
 
 use super::interface_install_message;
 
@@ -22,29 +20,12 @@ use super::interface_install_message;
 /// `apps/gents-desktop/src-tauri/icons/icon.png`.
 const LOGO_GRID: [&str; 5] = ["...###.", "###....", ".....##", "..#....", "...###."];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ToolAccess {
-    ReadOnly,
-    Write,
-    Unrestricted,
-}
-
-/// One grid cell is two columns by one row, about square in a terminal.
+/// One grid cell is three columns by one row, wider than the icon's square cells so the
+/// mark holds up beside a terminal's text.
 pub(super) fn logo() -> String {
     LOGO_GRID
-        .map(|row| row.replace('#', "██").replace('.', "  "))
+        .map(|row| row.replace('#', "███").replace('.', "   "))
         .join("\n")
-}
-
-/// `None` carries nothing to repeat back: a key pasted at this prompt must not reach
-/// scrollback a second time.
-pub(super) fn parse_tool_access(answer: &str) -> Option<ToolAccess> {
-    match answer.trim() {
-        "" | "1" => Some(ToolAccess::ReadOnly),
-        "2" => Some(ToolAccess::Write),
-        "3" => Some(ToolAccess::Unrestricted),
-        _ => None,
-    }
 }
 
 /// `~user` is not expanded, so that spelling is an ordinary relative folder.
@@ -64,23 +45,22 @@ pub(super) fn resolve_folder_answer(
     }
 }
 
-pub(super) fn init_argv(home: &Path, access: ToolAccess, tool_root: Option<&Path>) -> Vec<String> {
-    let mut argv = vec![
-        "gents".to_string(),
-        "init".to_string(),
-        "--home".to_string(),
-        home.to_string_lossy().into_owned(),
-    ];
-    match access {
-        ToolAccess::ReadOnly => {}
-        ToolAccess::Write => argv.push("--write".to_string()),
-        ToolAccess::Unrestricted => argv.push("--yolo".to_string()),
-    }
-    if let Some(root) = tool_root {
-        argv.push("--tool-root".to_string());
-        argv.push(root.to_string_lossy().into_owned());
-    }
-    argv
+/// The Engineer with the authority the desktop's setup defaults to: its read/write ceiling
+/// is the `yolo` package (`server_host::ensure_standard_home`).
+pub(super) fn init_argv(home: &Path, tool_root: &Path) -> Vec<String> {
+    [
+        "gents",
+        "init",
+        "--home",
+        &home.to_string_lossy(),
+        "--tool-package",
+        "yolo",
+        "--engineer",
+        "--tool-root",
+        &tool_root.to_string_lossy(),
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 pub(super) fn binary_on_path(bin: &str, path: Option<&OsStr>) -> bool {
@@ -97,8 +77,8 @@ fn parse_init_args(argv: &[String]) -> Result<InitArgs> {
     Ok(args)
 }
 
-/// Asks in the order the store allows: inline sign-in writes to the store
-/// `init_home` creates, so the provider is chosen first and signed in to last.
+/// Asks in the desktop's order, folders then provider. Inline sign-in writes to the store
+/// `init_home` creates, so it comes after every question.
 /// Only setup remembers a home, once one exists, so an abandoned run asks again.
 pub(super) async fn setup(
     home_given: Option<PathBuf>,
@@ -140,25 +120,12 @@ pub(super) async fn setup(
         return Ok(home);
     }
 
-    let mut args = parse_init_args(&init_argv(&home, ToolAccess::ReadOnly, None))?;
+    eprintln!("Commands run as you; this folder is not a sandbox.");
+    let tool_root = ask_tool_root(&cwd, &user_home).await?;
+    eprintln!();
+    let mut args = parse_init_args(&init_argv(&home, &tool_root))?;
     args.store_key_custody = store_key_custody;
     resolve_backend_interactively(&mut args).await?;
-
-    eprintln!("What may agents do?");
-    eprintln!("  1) read files and run read-only tools (default)");
-    eprintln!("  2) write inside one folder");
-    eprintln!("  3) anything your user can do, with no sandbox");
-    let access = loop {
-        match parse_tool_access(&prompt_line("> ").await?) {
-            Some(access) => break access,
-            None => eprintln!("Answer 1, 2 or 3."),
-        }
-    };
-    let tool_root = ask_tool_root(&cwd, &user_home).await?;
-    let chosen = parse_init_args(&init_argv(&home, access, Some(&tool_root)))?;
-    args.write_tools = chosen.write_tools;
-    args.yolo = chosen.yolo;
-    args.tool_root = chosen.tool_root;
 
     let initialized = init_home(args).await?;
     for line in next_step_lines(&initialized, &home) {
@@ -180,7 +147,7 @@ pub(super) fn check_tool_root(
         .filter(|root| root.is_dir())
         .ok_or_else(|| {
             format!(
-                "{} is not an existing folder; choose a folder agents may work in.",
+                "{} is not an existing folder; choose a folder for agents to work in.",
                 answer.display()
             )
         })?;
@@ -193,8 +160,11 @@ pub(super) fn check_tool_root(
 async fn ask_tool_root(cwd: &Path, user_home: &Path) -> Result<PathBuf> {
     let canonical_home = std::fs::canonicalize(user_home).ok();
     loop {
-        let answer =
-            prompt_line_default("Which folder may agents work in?", &cwd.to_string_lossy()).await?;
+        let answer = prompt_line_default(
+            "Which folder should agents work in?",
+            &cwd.to_string_lossy(),
+        )
+        .await?;
         let answer = resolve_folder_answer(&answer, cwd, user_home, cwd);
         match check_tool_root(&answer, canonical_home.as_deref()) {
             Err(refusal) => eprintln!("{refusal}"),
@@ -239,32 +209,17 @@ fn next_step_lines(initialized: &serde_json::Value, home: &Path) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::args::ToolCeilingArg;
+    use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 
     #[test]
-    fn logo_matches_the_app_icon_grid() {
+    fn logo_keeps_the_app_icon_grid_three_columns_to_a_cell() {
         let grid = ["...###.", "###....", ".....##", "..#....", "...###."];
         let expected: Vec<String> = grid
             .iter()
-            .map(|row| row.replace('#', "██").replace('.', "  "))
+            .map(|row| row.replace('#', "███").replace('.', "   "))
             .collect();
         assert_eq!(logo().lines().collect::<Vec<_>>(), expected);
-    }
-
-    #[test]
-    fn empty_answer_is_read_only() {
-        assert_eq!(parse_tool_access(""), Some(ToolAccess::ReadOnly));
-        assert_eq!(parse_tool_access("  \n"), Some(ToolAccess::ReadOnly));
-    }
-
-    #[test]
-    fn only_exact_choices_grant_more() {
-        assert_eq!(parse_tool_access("1"), Some(ToolAccess::ReadOnly));
-        assert_eq!(parse_tool_access("2\n"), Some(ToolAccess::Write));
-        assert_eq!(parse_tool_access("3"), Some(ToolAccess::Unrestricted));
-        for garbage in ["4", "yolo", "2 3", "22", "write"] {
-            assert_eq!(parse_tool_access(garbage), None, "{garbage:?}");
-        }
+        assert!(logo().lines().all(|row| row.chars().count() == 21));
     }
 
     #[test]
@@ -363,36 +318,32 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn init_argv_parses_and_initializes() {
+    async fn init_argv_seeds_the_engineer_with_the_desktop_authority() {
         let root = Path::new("/srv/agents");
-        for (access, ceiling) in [
-            (ToolAccess::ReadOnly, ToolCeilingArg::Readonly),
-            (ToolAccess::Write, ToolCeilingArg::Readwrite),
-            (ToolAccess::Unrestricted, ToolCeilingArg::Readwrite),
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            let home = temp.path().join("my home");
-            let mut argv = init_argv(&home, access, Some(root));
-            argv.extend(
-                [
-                    "--store-key-custody",
-                    "file",
-                    "--inference-url",
-                    "http://127.0.0.1:9/v1",
-                    "--model-name",
-                    "m",
-                ]
-                .map(String::from),
-            );
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("my home");
+        let mut argv = init_argv(&home, root);
+        argv.extend(
+            [
+                "--store-key-custody",
+                "file",
+                "--inference-url",
+                "http://127.0.0.1:9/v1",
+                "--model-name",
+                "m",
+            ]
+            .map(String::from),
+        );
 
-            let Some(Command::Init(args)) = Cli::try_parse_from(argv).unwrap().command else {
-                panic!("{access:?} should parse as init");
-            };
-            crate::commands::init::init_home(args).await.unwrap();
+        let Some(Command::Init(args)) = Cli::try_parse_from(argv).unwrap().command else {
+            panic!("setup's argv should parse as init");
+        };
+        assert!(args.engineer);
+        crate::commands::init::init_home(args).await.unwrap();
 
-            let config = crate::home_state::read_init_config(&home).unwrap().unwrap();
-            assert_eq!(config.tool_ceiling, ceiling, "{access:?}");
-            assert_eq!(config.tool_root.as_deref(), root.to_str(), "{access:?}");
-        }
+        let config = crate::home_state::read_init_config(&home).unwrap().unwrap();
+        assert_eq!(config.tool_package, Some(ToolPackageArg::Yolo));
+        assert_eq!(config.tool_ceiling, ToolCeilingArg::Readwrite);
+        assert_eq!(config.tool_root.as_deref(), root.to_str());
     }
 }
