@@ -173,8 +173,8 @@ export interface SharingAdapter {
   /** ends the access a member's approved request gave */
   revoke(nodeDid: string, requestId: string): Promise<void>;
   /** extends a member's lease; absent where the runtime can't. A signed
-      approval carries one fixed expiry, so today's runtime renews only by the
-      member enrolling again. */
+      approval carries one fixed expiry, so a member renews by enrolling
+      again. */
   renew?(nodeDid: string, requestId: string, leaseSeconds: number): Promise<void>;
   /** the profiles an invite may carry for this scope */
   profiles(nodeDid: string, scope: ShareScope): Promise<ShareProfile[]>;
