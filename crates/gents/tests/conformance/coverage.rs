@@ -506,6 +506,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     {
         emitted.insert(("mailbox_native_policy".into(), "MailboxNativePolicyCases".into()));
     }
+    if !snapshot.callback_workspace_actor_cases.is_empty() {
+        emitted.insert((
+            "callback_workspace_actor_cases".into(),
+            "CallbackWorkspaceActorCases".into(),
+        ));
+    }
     emitted.insert((
         "identity_private_journal_policy".into(),
         "PrivateJournalPolicy".into(),

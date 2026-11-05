@@ -560,9 +560,13 @@ async fn execute_running_invocation(
         .await;
     }
 
-    let Some(repository) =
-        load_repository_placement(access, &action.repository_id, &invocation.owner_node_did)
-            .await?
+    let Some(repository) = load_repository_placement(
+        access,
+        &action.repository_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?
     else {
         return deny(
             node,
@@ -593,7 +597,7 @@ async fn execute_running_invocation(
     }
 
     let mut docs = load_memory_workspace_docs(
-        node,
+        access,
         &action.workspace_id,
         &invocation.owner_node_did,
         &invocation.agent_did,
@@ -972,7 +976,7 @@ pub async fn finish_succeeded_if_docs_ready(
         return Ok(false);
     };
     let docs = load_memory_workspace_docs(
-        node,
+        access,
         &workspace_id,
         &invocation.owner_node_did,
         &invocation.agent_did,

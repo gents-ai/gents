@@ -657,6 +657,41 @@ async fn test_node() -> Arc<defra_node::Node> {
 }
 
 #[tokio::test]
+async fn workspace_reads_keep_the_held_agent_actor() {
+    let node = test_node().await;
+    let agent_did = super::test_agent_did();
+    let node_did = crate::request::lifecycle::test_support::PIN_FIXED_DID;
+    let agent_access = super::test_agent_access(&node);
+    let node_access =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(node_did).unwrap());
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().callback_workspace_actor_cases {
+        let access = match case["actor"].as_str().unwrap() {
+            "agent" => &agent_access,
+            "node" => &node_access,
+            actor => panic!("unknown modeled actor {actor}"),
+        };
+        let expected = case["expected"].as_bool().unwrap();
+        let documents = super::documents::load_memory_workspace_docs(
+            access,
+            "missing-workspace",
+            node_did,
+            &agent_did,
+        )
+        .await;
+        assert_eq!(documents.is_ok(), expected, "workspace actor: {case}");
+        let repository = super::documents::load_repository_placement(
+            access,
+            "missing-repository",
+            node_did,
+            &agent_did,
+        )
+        .await;
+        assert_eq!(repository.is_ok(), expected, "repository actor: {case}");
+    }
+    node.shutdown().await.expect("node shutdown");
+}
+
+#[tokio::test]
 async fn first_seen_source_create_materializes_owner_invocation() {
     let node = test_node().await;
     let owner_node_did = crate::request::lifecycle::test_support::PIN_FIXED_DID.to_owned();

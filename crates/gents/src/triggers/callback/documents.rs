@@ -1242,7 +1242,12 @@ pub async fn load_repository_placement(
     access: &crate::ConfigAccess,
     repository_id: &str,
     owner: &str,
+    agent_did: &str,
 ) -> Result<Option<RepositoryPlacementRef>> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(agent_did),
+        "callback workspace actor mismatch"
+    );
     let row: Option<crate::documents::RepositoryPlacement> = access
         .transact_readonly("callback.read_repository_placement", |txn| {
             Box::pin(async move {
@@ -1267,16 +1272,19 @@ pub async fn load_repository_placement(
 }
 
 pub async fn load_memory_workspace_docs(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     workspace_id: &str,
     owner: &str,
     agent_did: &str,
 ) -> Result<MemoryWorkspaceDocuments> {
     let mut docs = MemoryWorkspaceDocuments::default();
-    if let Some(workspace) = load_isolated_workspace(node, workspace_id, owner, agent_did).await? {
+    if let Some(workspace) = load_isolated_workspace(access, workspace_id, owner, agent_did).await?
+    {
         docs.write_isolated_workspace(workspace)?;
     }
-    if let Some(placement) = load_workspace_placement(node, workspace_id, owner, agent_did).await? {
+    if let Some(placement) =
+        load_workspace_placement(access, workspace_id, owner, agent_did).await?
+    {
         docs.write_placement(placement)?;
     }
     Ok(docs)
@@ -1310,11 +1318,15 @@ pub async fn flush_workspace_docs(
 }
 
 pub(crate) async fn load_isolated_workspace(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     workspace_id: &str,
     owner: &str,
     agent_did: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(agent_did),
+        "callback workspace actor mismatch"
+    );
     let query = format!(
         r#"{{
             IsolatedWorkspace(
@@ -1325,29 +1337,26 @@ pub(crate) async fn load_isolated_workspace(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        Some(identity::Did::new(agent_did.to_owned())?),
-        "callback.read_workspace",
-        |txn| {
-            let query = &query;
-            Box::pin(async move { txn.execute_local_response(query).await })
-        },
-    )
-    .await?;
+    let response = access.execute(&query).await?;
+    let mut found: Vec<IsolatedWorkspaceDoc> =
+        serde_json::from_value(response["data"]["IsolatedWorkspace"].clone())?;
     anyhow::ensure!(
-        rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
+        found.len() <= 1,
         "ambiguous node-scoped callback/workspace document"
     );
-    Ok(first_row(&response, "IsolatedWorkspace")?)
+    Ok(found.pop())
 }
 
 pub(crate) async fn load_workspace_placement(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     workspace_id: &str,
     owner: &str,
     agent_did: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(agent_did),
+        "callback workspace actor mismatch"
+    );
     let query = format!(
         r#"{{
             WorkspacePlacement(
@@ -1358,19 +1367,12 @@ pub(crate) async fn load_workspace_placement(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        Some(identity::Did::new(agent_did.to_owned())?),
-        "callback.read_workspace",
-        |txn| {
-            let query = &query;
-            Box::pin(async move { txn.execute_local_response(query).await })
-        },
-    )
-    .await?;
+    let response = access.execute(&query).await?;
+    let mut found: Vec<WorkspacePlacementDoc> =
+        serde_json::from_value(response["data"]["WorkspacePlacement"].clone())?;
     anyhow::ensure!(
-        rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
+        found.len() <= 1,
         "ambiguous node-scoped callback/workspace document"
     );
-    Ok(first_row(&response, "WorkspacePlacement")?)
+    Ok(found.pop())
 }

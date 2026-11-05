@@ -63,6 +63,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "native_node_scoped_file_requests_match_modeled_access",
         },
         ConformanceConsumer::RustTest {
+            id: "triggers::callback::tests::workspace_reads_keep_the_held_agent_actor",
+            package: "gents",
+            source_path: "crates/gents/src/triggers/callback/tests.rs",
+            module_path: "triggers::callback::tests",
+            function: "workspace_reads_keep_the_held_agent_actor",
+        },
+        ConformanceConsumer::RustTest {
             id: "session::mailbox::runtime_notice::tests::runtime_notice_without_claim_is_deferred",
             package: "gents",
             source_path: "crates/gents/src/session/mailbox/runtime_notice.rs",

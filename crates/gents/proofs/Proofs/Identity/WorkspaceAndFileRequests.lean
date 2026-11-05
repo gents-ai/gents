@@ -77,4 +77,17 @@ theorem workspace_parent_supplies_user_read_without_unrelated_access :
     Household.allowed 5 workspaceFixture "agent" "agent_children" "workspace" "update" = true ∧
     Household.allowed 5 workspaceFixture "other" "agent_children" "workspace" "read" = false := by native_decide
 
+/-- The callback workspace owner retains the selected held Agent access for
+both reads and writes. Matching this execution context is not a substitute for
+the native document permission check performed by DefraDB. -/
+def callbackActorMatches (accessActor selectedAgent : String) : Bool :=
+  !selectedAgent.isEmpty && accessActor == selectedAgent
+
+theorem callback_node_identity_is_not_the_agent_actor :
+    callbackActorMatches "node" "agent" = false ∧ callbackActorMatches "agent" "agent" = true := by decide
+
+def callbackActorCasesJson : String :=
+  (Lean.toJson (["agent", "node"].map fun actor => Lean.Json.mkObj
+    [("actor", Lean.toJson actor), ("expected", Lean.toJson (callbackActorMatches actor "agent"))])).compress
+
 end Identity.WorkspaceAndFileRequests

@@ -1550,6 +1550,12 @@ def caseCoverage : List CoverageEntry :=
       "store::config_client::dormant_file_request_conformance::native_node_scoped_file_requests_match_modeled_access"
       "The retained schemas have no production publisher or consumer; this test covers native document authority, not a live hydration flow.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerWithFollowUp
+      "callback_workspace_actor_cases"
+      "CallbackWorkspaceActorCases"
+      "triggers::callback::tests::workspace_reads_keep_the_held_agent_actor"
+      "Checks execution-context binding only. Native workspace policy, relationship publication and authorization retain their separate owners.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_private_journal_policy"
       "PrivateJournalSigner"
