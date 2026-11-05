@@ -1,0 +1,4 @@
+type SharedFixtureMove @branchable {
+  move_id: String @index(unique: true)
+  mark: String
+}
