@@ -61,7 +61,7 @@ def workspaceRootAfterWriterRevocation : Household.State :=
     ⟨"workspace_roots", "root", "reader", .actor "writer"⟩)
 
 def workspaceRootAccessCasesJson : String :=
-  (Lean.toJson (["user", "runtime", "agent", "other"].flatMap fun actor =>
+  (Lean.toJson (["user", "runtime", "writer", "integrator", "other"].flatMap fun actor =>
     ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
       [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
        ("expected", Lean.toJson (workspaceRootPermission actor permission)),
