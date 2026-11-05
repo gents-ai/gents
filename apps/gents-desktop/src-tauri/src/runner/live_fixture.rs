@@ -105,6 +105,10 @@ impl LiveBridgeFixture {
             })
     }
 
+    pub(crate) fn node_home(&self) -> &Path {
+        &self.node_home
+    }
+
     pub(crate) fn data_root(&self) -> &Path {
         self.node_home
             .parent()

@@ -99,4 +99,33 @@ describe("live bridge runner startup/config adapter", () => {
     await adapter.saveEventSourceConfig(request);
     expect(postJson).toHaveBeenCalledWith("/desktop/event-source/save", request);
   });
+  it("routes pack and UX operations to the bridge", async () => {
+    const getJson = vi.fn().mockResolvedValue({ plugins: [] });
+    const postJson = vi.fn().mockResolvedValue({});
+    const adapter = createBridgeHttpAdapter({ getJson, postJson });
+    await adapter.listInstalledPacks();
+    await adapter.searchPacks("game", 2);
+    await adapter.packInfo("demo/game");
+    const install = { package: "demo/game" } as Parameters<typeof adapter.installPack>[0];
+    await adapter.installPack(install);
+    await adapter.listUxPlugins();
+    await adapter.readUxPluginSource("demo/game/board");
+    const surfaces = { ux: "demo/game/board", nodeDid: "did:test:node" };
+    await adapter.listUxDataSurfaces(surfaces);
+    const data = { ...surfaces, surface: "board", tool: "move", args: { cell: 3 } };
+    await adapter.callUxData(data);
+    const plugin = { ux: "demo/game/board", name: "game", input: { cell: 3 } };
+    await adapter.callPackPlugin(plugin);
+    expect(getJson.mock.calls).toEqual([["/desktop/packs/installed"], ["/desktop/ux/plugins"]]);
+    expect(postJson.mock.calls).toEqual([
+      ["/desktop/packs/search", { query: "game", page: 2 }],
+      ["/desktop/packs/info", { package: "demo/game" }],
+      ["/desktop/packs/install", install, 300_000],
+      ["/desktop/ux/source", { id: "demo/game/board" }],
+      ["/desktop/ux/surfaces", surfaces],
+      ["/desktop/ux/data", data],
+      ["/desktop/ux/plugin-call", plugin],
+    ]);
+  });
+
 });

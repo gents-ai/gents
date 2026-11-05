@@ -80,20 +80,20 @@ class BrowserBridgeHttpClient {
     return this.decodeJson<T>(response);
   }
 
-  async postJson<T = unknown>(path: string, body: unknown) {
+  async postJson<T = unknown>(path: string, body: unknown, timeoutMs = this.timeoutMs) {
     const response = await this.fetchWithTimeout(this.url(path), {
       method: "POST",
       headers: {
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
-    });
+    }, timeoutMs);
     return this.decodeJson<T>(response);
   }
 
-  async fetchWithTimeout(input: string, init: RequestInit) {
+  async fetchWithTimeout(input: string, init: RequestInit, timeoutMs = this.timeoutMs) {
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await fetch(input, {
         ...init,
@@ -101,7 +101,7 @@ class BrowserBridgeHttpClient {
       });
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error(`timed out after ${this.timeoutMs}ms waiting for ${input}`);
+        throw new Error(`timed out after ${timeoutMs}ms waiting for ${input}`);
       }
       throw error;
     } finally {
