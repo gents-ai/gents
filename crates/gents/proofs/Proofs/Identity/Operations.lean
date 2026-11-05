@@ -175,7 +175,7 @@ theorem terminal_reads_are_scoped_to_candidate_and_node_owner :
      allowed 5 enrollmentTerminalFixture "outsider" "enrollment_records" "terminal" "read") =
       (true, true, false, true, false, false) := by native_decide
 
-/-- These branchable protocol records carry private enrollment or routing data.
+/-- Enrollment records are private; discovery metadata is separately published.
 A native reader grant is per physical document and does not imply permission on
 any application document. This classification does not publish a binding: each
 writer and receiver still needs the authenticated publication path. -/
@@ -185,9 +185,24 @@ def networkProtocolResource : String → Option String
   | "NetworkEnrollmentDecision" => some "enrollment_records"
   | "NetworkEnrollmentRouteReceipt" => some "enrollment_records"
   | "NetworkAuthorizationRevision" => some "enrollment_records"
-  | "NodeDirectoryEntry" => some "enrollment_records"
-  | "PeerRegistry" => some "enrollment_records"
+  | "NodeDirectoryEntry" => some "discovery"
+  | "PeerRegistry" => some "discovery"
   | _ => none
+
+/-- Discovery visibility is an explicit wildcard relationship on each published
+metadata document, not a grant on an enrollment record. Native ACP relationships
+are store-local, so a receiver cannot infer this tuple from a replicated document;
+publication on each store needs a native authorized mechanism. -/
+def publicDiscoveryFixture : State :=
+  { objects := [⟨"discovery", "directory", "runtime"⟩,
+      ⟨"enrollment_records", "request", "runtime"⟩],
+    relations := [⟨"discovery", "directory", "reader", .wildcard⟩], enrolled := [] }
+
+theorem public_discovery_does_not_publish_enrollment :
+    (allowed 5 publicDiscoveryFixture "outsider" "discovery" "directory" "read",
+     allowed 5 publicDiscoveryFixture "outsider" "discovery" "directory" "update",
+     allowed 5 publicDiscoveryFixture "outsider" "enrollment_records" "request" "read") =
+      (true, false, false) := by native_decide
 
 /-- Document creation and all requested native grants commit together. The
 recipient DID must come from the authenticated protocol; naming an enrolled
