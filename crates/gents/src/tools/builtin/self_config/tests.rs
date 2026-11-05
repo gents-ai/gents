@@ -3802,29 +3802,53 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
 
 #[tokio::test]
 async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
-    let node = build_agent_node().await;
-    let identity = node_identity("tools-root-policy");
-    let owner = identity.did().to_string();
-    let agent_did = "root-policy";
-    crate::test_support::install_test_agent(&node, &owner, agent_did).await;
+    let (node, runtime) = crate::tools::mcp::meta::tests::test_node().await;
+    let runtime: Arc<dyn crate::NodeIdentity> = Arc::new(runtime);
+    let owner = runtime.did().to_owned();
+    let runtime_did = ::identity::Did::new(&owner).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        runtime.as_ref(),
+        &runtime_did,
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding(&node, &owner, "root-policy", &binding).await;
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    let agent_did = binding.agent_did.clone();
+    let access = crate::ConfigAccess::local_as(node.clone(), runtime_did);
+    access
+        .transact_write("test.self_config.root_grants", |txn| {
+            let (owner, agent_did) = (&owner, &agent_did);
+            Box::pin(async move {
+                crate::store::config_client::grant_selected_self_configuration(
+                    txn, owner, agent_did,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
     let ceiling = tempfile::tempdir().unwrap();
     let selected = ceiling.path().join("selected");
     let sibling = ceiling.path().join("sibling");
     std::fs::create_dir_all(&selected).unwrap();
     std::fs::create_dir_all(&sibling).unwrap();
     let selected_text = selected.to_string_lossy();
-    let escaped = crate::store::graphql::escape_graphql_string(&selected_text);
-    crate::store::config_client::ConfigAccess::write_local(
-        &node,
-        "test.self_config.workspace_root",
-        &format!(
-            r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped}", enabled:true}}) {{_docID}} }}"#
-        ),
+    crate::tools::surface::set_workspace_root_with_readers(
+        &access,
+        &owner,
+        &selected_text,
+        None,
+        true,
+        &[agent_did.clone()],
     )
     .await
     .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_did.into())
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_did.clone())
         .unwrap()
+        .with_agent_signer(agent.managed_agent_signer())
+        .with_runtime_identity(Some(runtime))
         .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
             file_mode: crate::tools::surface::FileToolMode::ReadOnly,
             bash_mode: crate::tools::surface::BashMode::Off,
@@ -3859,25 +3883,26 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
         .await
         .expect("apply admits the selected root");
     let tools_id = format!("{agent_did}:tools");
-    let persisted: crate::documents::Tools =
-        crate::store::config_client::ConfigAccess::local(node.clone())
-            .transact_write("test.self_config.read_tools", |txn| {
-                let owner = owner.clone();
-                let tools_id = tools_id.clone();
-                Box::pin(async move {
-                    let value = crate::store::config_client::read_desired_state_document_in_txn(
-                        txn,
-                        crate::Collection::Tools,
-                        &owner,
-                        &tools_id,
-                    )
-                    .await?
-                    .context("persisted Tools")?;
-                    Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
-                })
+    let persisted: crate::documents::Tools = core
+        .access()
+        .unwrap()
+        .transact_write("test.self_config.read_tools", |txn| {
+            let owner = owner.clone();
+            let tools_id = tools_id.clone();
+            Box::pin(async move {
+                let value = crate::store::config_client::read_desired_state_document_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &owner,
+                    &tools_id,
+                )
+                .await?
+                .context("persisted Tools")?;
+                Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
             })
-            .await
-            .unwrap();
+        })
+        .await
+        .unwrap();
     assert_eq!(
         persisted
             .host
