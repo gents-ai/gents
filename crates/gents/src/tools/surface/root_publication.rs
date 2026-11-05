@@ -209,7 +209,7 @@ mod tests {
     use crate::store::identity::NodeIdentity;
     use std::sync::Arc;
 
-    fn client(endpoint: &str, key: &crate::KeyIdentity) -> Result<ConfigAccess> {
+    fn client(endpoint: &str, key: &dyn NodeIdentity) -> Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(endpoint, key.did())
                 .with_client_signing_capability(key.client_signing_capability()?)?
@@ -223,9 +223,11 @@ mod tests {
         let user = crate::KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
         let runtime =
             crate::KeyIdentity::load_or_create(directory.path().join("runtime.key"), None)?;
-        let writer = crate::KeyIdentity::load_or_create(directory.path().join("writer.key"), None)?;
+        let writer_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let integrator_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let writer = crate::store::identity::resolve_agent_identity(&runtime, &writer_binding)?;
         let integrator =
-            crate::KeyIdentity::load_or_create(directory.path().join("integrator.key"), None)?;
+            crate::store::identity::resolve_agent_identity(&runtime, &integrator_binding)?;
         let other = crate::KeyIdentity::load_or_create(directory.path().join("other.key"), None)?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
@@ -248,7 +250,12 @@ mod tests {
             )
             .await?;
         assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-        for key in [&runtime, &writer, &integrator, &other] {
+        for key in [
+            &runtime as &dyn NodeIdentity,
+            writer.as_ref(),
+            integrator.as_ref(),
+            &other,
+        ] {
             for permission in [
                 acp::nac::NodePermission::DocumentRead,
                 acp::nac::NodePermission::DocumentUpdate,
@@ -288,11 +295,14 @@ mod tests {
                 })
             })
             .await?;
-        for agent in [&writer, &integrator] {
+        for (agent, nonce) in [
+            (writer.as_ref(), &writer_binding.creation_nonce),
+            (integrator.as_ref(), &integrator_binding.creation_nonce),
+        ] {
             owner.transact_write("test.root.agent", |txn| Box::pin(async {
                 txn.execute_client_signed_create(
                     "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                    &json!({"input":{"node_did":runtime.did(),"agent_did":agent.did(),"enabled":true}}),
+                    &json!({"input":{"node_did":runtime.did(),"agent_did":agent.did(),"creation_nonce":nonce,"enabled":true}}),
                     gents_protocol::schemas::AGENT).await?;
                 Ok::<_, anyhow::Error>(())
             })).await?;
@@ -325,10 +335,10 @@ mod tests {
         assert!(!cases.is_empty());
         for case in cases {
             let key = match case["actor"].as_str().unwrap() {
-                "user" => &user,
+                "user" => &user as &dyn NodeIdentity,
                 "runtime" => &runtime,
-                "writer" => &writer,
-                "integrator" => &integrator,
+                "writer" => writer.as_ref(),
+                "integrator" => integrator.as_ref(),
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
@@ -377,7 +387,7 @@ mod tests {
                 );
             }
         }
-        let writer_access = client(&endpoint, &writer)?;
+        let writer_access = client(&endpoint, writer.as_ref())?;
         let update = format!("mutation($input: WorkspaceRootMutationInputArg!) {{ update_WorkspaceRoot(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(&root_doc));
         let denied_update = writer_access
             .transact_write("test.root.reader_update_denied", |txn| {
@@ -482,10 +492,10 @@ mod tests {
         );
         for case in cases {
             let key = match case["actor"].as_str().unwrap() {
-                "user" => &user,
+                "user" => &user as &dyn NodeIdentity,
                 "runtime" => &runtime,
-                "writer" => &writer,
-                "integrator" => &integrator,
+                "writer" => writer.as_ref(),
+                "integrator" => integrator.as_ref(),
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
@@ -529,10 +539,10 @@ mod tests {
         );
         for case in cases {
             let key = match case["actor"].as_str().unwrap() {
-                "user" => &user,
+                "user" => &user as &dyn NodeIdentity,
                 "runtime" => &runtime,
-                "writer" => &writer,
-                "integrator" => &integrator,
+                "writer" => writer.as_ref(),
+                "integrator" => integrator.as_ref(),
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
