@@ -9,6 +9,7 @@ import {
 } from "./MessageItems.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { CompactToolGroup } from "./CompactToolGroup.js";
+import { SessionCompactionItem } from "./SessionCompactionItem.js";
 
 export function timelineKey(item: RenderedTimelineItem) {
   return `${item.kind}-${item.itemKey}`;
@@ -69,14 +70,7 @@ export const TimelineItem = memo(function TimelineItem({
         </div>
       );
     case "sessionCompaction":
-      return (
-        <div className="turn-block" data-testid="session-compaction-event">
-          <span>Session history compacted</span>
-          {item.messagesCompacted != null && (
-            <span> · {item.messagesCompacted} messages</span>
-          )}
-        </div>
-      );
+      return <SessionCompactionItem item={item} />;
     default:
       return null;
   }
