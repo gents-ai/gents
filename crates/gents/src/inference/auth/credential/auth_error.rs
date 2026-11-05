@@ -79,7 +79,7 @@ pub fn classify_chatgpt_auth_error(
 }
 
 pub(super) const MOVE_OFF_ACCOUNT: &str =
-    "Move a profile off it: gents config profile set-account <profile> <account> (gents auth accounts list).";
+    "Move a profile off it: gents config profile set-account <profile> <account> (gents accounts list).";
 
 pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
     let lower = label.to_ascii_lowercase();

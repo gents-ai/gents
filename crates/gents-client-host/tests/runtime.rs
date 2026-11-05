@@ -1079,7 +1079,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let approved = Command::new(&cli)
             .current_dir(root)
             .envs(homes.env())
-            .args(["p2p", "enrollment", "approve", pending_id, "--home"])
+            .args(["runtime", "p2p", "enrollment", "approve", pending_id, "--home"])
             .arg(&node_home)
             .kill_on_drop(true)
             .output();

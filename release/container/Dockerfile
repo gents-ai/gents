@@ -27,7 +27,7 @@ COPY --chmod=0755 release/container/bin/gents-${TARGETARCH} /usr/local/bin/gents
 COPY release/container/LICENSE /usr/share/licenses/gents/LICENSE
 
 RUN unset OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_TRACES_ENDPOINT \
-    && version_output="$(/usr/local/bin/gents version)" \
+    && version_output="$(/usr/local/bin/gents runtime version)" \
     && printf '%s\n' "${version_output}" \
     && case "${version_output}" in \
         "gents ${GENTS_VERSION} ("*) ;; \

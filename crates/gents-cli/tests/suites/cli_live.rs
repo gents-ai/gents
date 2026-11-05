@@ -474,6 +474,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let result = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "submit",
@@ -892,6 +893,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         let child = spawn_cli(
             &home_dir,
             &[
+                "utils",
                 "debug",
                 "request",
                 "submit",
@@ -1204,6 +1206,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let session = Uuid::new_v4().to_string();
     let submit = |content: &str, wait: bool| {
         let mut args = vec![
+            "utils",
             "debug",
             "request",
             "submit",
@@ -1245,7 +1248,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let pending = || {
         run_cli_json(
             &home,
-            &[&["debug", "request", "pending"][..], &scope[..]].concat(),
+            &[&["utils", "debug", "request", "pending"][..], &scope[..]].concat(),
         )
     };
     let wait_for_pending = |expected: Vec<&str>| {
@@ -1266,7 +1269,12 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         }
     };
     let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
-        let mut args = vec!["debug".to_owned(), "request".to_owned(), command.to_owned()];
+        let mut args = vec![
+            "utils".to_owned(),
+            "debug".to_owned(),
+            "request".to_owned(),
+            command.to_owned(),
+        ];
         args.extend(scope.iter().map(|arg| (*arg).to_owned()));
         for id in ids(snapshot) {
             args.extend(["--expected-request-doc-id".to_owned(), id]);
@@ -1573,6 +1581,7 @@ fn trace_project_json(
     let output = run_cli_text(
         home_dir,
         &[
+            "utils",
             "debug",
             "trace",
             "project",
@@ -1602,6 +1611,7 @@ fn trace_project_jsonl_lines(
     let output = run_cli_text(
         home_dir,
         &[
+            "utils",
             "debug",
             "trace",
             "project",

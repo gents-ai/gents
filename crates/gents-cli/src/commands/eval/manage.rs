@@ -33,7 +33,7 @@ where
             {
                 writeln!(
                     out,
-                    "this run belongs to job {job_id}; the job stops at this run, and `gents optimization run … --job-id {job_id}` resumes it"
+                    "this run belongs to job {job_id}; the job stops at this run, and `gents utils optimization run … --job-id {job_id}` resumes it"
                 )?;
             }
         }
@@ -57,13 +57,13 @@ pub(crate) fn write_marker(runs_dir: &Path, run_id: &str, out: &mut dyn Write) -
     if marker.parent().is_some_and(running_elsewhere) {
         writeln!(
             out,
-            "wrote {}; the process hosting run {run_id} stops launching at its next check, and `gents eval resume {run_id}` continues it",
+            "wrote {}; the process hosting run {run_id} stops launching at its next check, and `gents utils eval resume {run_id}` continues it",
             marker.display()
         )?;
     } else {
         writeln!(
             out,
-            "wrote {}; no process is running run {run_id} now, and the next `gents eval run --run-id {run_id}` or `gents eval resume {run_id}` clears the marker",
+            "wrote {}; no process is running run {run_id} now, and the next `gents utils eval run --run-id {run_id}` or `gents utils eval resume {run_id}` clears the marker",
             marker.display()
         )?;
     }
@@ -125,7 +125,7 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
     );
     let live = || {
         anyhow::anyhow!(
-            "run {} is being run by a live process right now (see `gents eval watch {}`); pass --force to delete its directory anyway",
+            "run {} is being run by a live process right now (see `gents utils eval watch {}`); pass --force to delete its directory anyway",
             args.run_id,
             args.run_id
         )
@@ -138,7 +138,7 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
         let owed = slots_owed(&record, &trials);
         anyhow::ensure!(
             owed == 0,
-            "run {} is unfinished: it still owes {owed} slots; `gents eval resume {}` finishes it, or pass --force to delete its directory anyway",
+            "run {} is unfinished: it still owes {owed} slots; `gents utils eval resume {}` finishes it, or pass --force to delete its directory anyway",
             args.run_id,
             args.run_id
         );

@@ -73,7 +73,7 @@ pub(crate) struct PackPublishArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents config pack login"
     )]
     pub(crate) token: Option<String>,
     #[arg(
@@ -162,7 +162,7 @@ pub(crate) struct PackOwnerArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents config pack login"
     )]
     pub(crate) token: Option<String>,
     #[arg(
@@ -188,7 +188,7 @@ pub(crate) struct PackYankArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents config pack login"
     )]
     pub(crate) token: Option<String>,
     #[arg(
@@ -316,7 +316,7 @@ pub(crate) struct PackInstallArgs {
     #[arg(
         long = "expect-digest",
         value_name = "sha256:HEX",
-        help = "Refuse the install, writing nothing, unless the pack's content digest is this one (see gents pack show)"
+        help = "Refuse the install, writing nothing, unless the pack's content digest is this one (see gents config pack show)"
     )]
     pub(crate) expect_digest: Option<String>,
     /// Whether this install was requested for its own sake, rather than only
@@ -359,7 +359,7 @@ pub(crate) struct PackRemoveArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackRunArgs {
-    #[arg(help = "Pack directory, or a name resolved as gents pack install resolves one")]
+    #[arg(help = "Pack directory, or a name resolved as gents config pack install resolves one")]
     pub(crate) pack: String,
     #[arg(long, help = "Reuse this home instead of a fresh one per run")]
     pub(crate) home: Option<PathBuf>,
@@ -397,7 +397,9 @@ pub(crate) struct PackRunArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackInitArgs {
-    #[arg(help = "Pack directory, or a pack name resolved as `gents pack install` resolves one")]
+    #[arg(
+        help = "Pack directory, or a pack name resolved as `gents config pack install` resolves one"
+    )]
     pub(crate) pack: String,
     #[arg(long, help = "Home directory to initialize")]
     pub(crate) home: PathBuf,
@@ -411,7 +413,9 @@ pub(crate) struct PackInitArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackSeedArgs {
-    #[arg(help = "Pack directory, or a pack name resolved as `gents pack install` resolves one")]
+    #[arg(
+        help = "Pack directory, or a pack name resolved as `gents config pack install` resolves one"
+    )]
     pub(crate) pack: String,
     #[arg(long, help = "Seed prompt. Defaults to the pack's default_prompt")]
     pub(crate) prompt: Option<String>,

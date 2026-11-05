@@ -534,13 +534,13 @@ pub(crate) async fn stream_turn_progress(
                         {
                             println!("[account] {line}");
                         }
-                        println!("[inspect] gents debug response show {}", submitted.request_id);
+                        println!("[inspect] gents utils debug response show {}", submitted.request_id);
                         io::stdout().flush()?;
                     } else if matches!(
                         envelope.request.lifecycle_state,
                         RequestLifecycleState::Failed | RequestLifecycleState::Dead
                     ) {
-                        println!("[inspect] gents debug response show {}", submitted.request_id);
+                        println!("[inspect] gents utils debug response show {}", submitted.request_id);
                         io::stdout().flush()?;
                     }
 
@@ -1342,7 +1342,7 @@ mod tests {
                 &[on("p", "label-b", AccountState::Disabled)],
                 &[summary("label-b", false)],
             );
-            assert!(none[0].contains("gents auth login claude"), "{none:?}");
+            assert!(none[0].contains("gents accounts login claude"), "{none:?}");
         }
 
         #[test]

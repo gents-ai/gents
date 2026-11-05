@@ -40,6 +40,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let submit = spawn_cli(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "submit",
@@ -126,6 +127,7 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
     let submit = spawn_cli(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "submit",
@@ -205,6 +207,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "submit",
@@ -248,6 +251,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let interrupted = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "interrupt",
@@ -335,6 +339,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "submit",
@@ -373,6 +378,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let interrupted = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "interrupt",
@@ -571,6 +577,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let json_output = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "show",
@@ -641,6 +648,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let text_output = run_cli_text(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "show",
@@ -682,6 +690,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let limited = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "show",
@@ -814,6 +823,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
     let submitted = run_cli_json(
         &home,
         &[
+            "utils",
             "debug",
             "request",
             "submit",
@@ -843,7 +853,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
     let pending = || {
         run_cli_json(
             &home,
-            &[&["debug", "request", "pending"][..], &scope[..]].concat(),
+            &[&["utils", "debug", "request", "pending"][..], &scope[..]].concat(),
         )
     };
     let wait_for_pending = |expected: Vec<&'static str>| {
@@ -880,6 +890,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         waiter.0 = Some(spawn_cli(
             &home,
             &[
+                "utils",
                 "debug",
                 "request",
                 "submit",
@@ -900,6 +911,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
             run_cli_json(
                 &home,
                 &[
+                    "utils",
                     "debug",
                     "request",
                     "submit",
@@ -931,7 +943,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         };
         let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
             let expected = expected_flags(snapshot);
-            let mut args = vec!["debug", "request", command];
+            let mut args = vec!["utils", "debug", "request", command];
             args.extend_from_slice(&scope);
             args.extend(expected.iter().map(String::as_str));
             args.extend_from_slice(extra);

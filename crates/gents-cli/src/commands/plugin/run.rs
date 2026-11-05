@@ -15,7 +15,7 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let record = store::read_record(&home, namespace, name).with_context(|| {
         format!(
-            "{namespace}/{name} is not installed under {}; run `gents pack plugin install {name}` \
+            "{namespace}/{name} is not installed under {}; run `gents config pack plugin install {name}` \
              first",
             home.display()
         )

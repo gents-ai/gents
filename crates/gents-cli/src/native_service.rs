@@ -899,7 +899,7 @@ where
         let path = self.config.definition_path(self.platform);
         if !path.is_file() {
             bail!(
-                "native service is not installed at {}; run `gents service install` first",
+                "native service is not installed at {}; run `gents runtime service install` first",
                 path.display()
             );
         }
