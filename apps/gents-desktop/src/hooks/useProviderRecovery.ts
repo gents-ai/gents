@@ -11,11 +11,15 @@ export function useProviderRecovery({
   sessionId,
   requestId,
   turnState,
+  readable = true,
 }: {
   nodeDid: string;
   sessionId: string;
   requestId: string;
   turnState: string | null;
+  /** whether this desktop can read the node's accounts, which takes the
+      node's own runtime; a node it joined doesn't offer it */
+  readable?: boolean;
 }) {
   const { api } = useApp();
   const scope = useMemo(
@@ -32,7 +36,7 @@ export function useProviderRecovery({
   const inFlight = useRef(false);
   const generation = useRef(0);
   const reload = useCallback(async () => {
-    if (!api.fetchProviderRecovery) return;
+    if (!api.fetchProviderRecovery || !readable) return;
     const read = ++generation.current;
     try {
       const next = await api.fetchProviderRecovery(scope);
@@ -46,7 +50,7 @@ export function useProviderRecovery({
     } catch (failed) {
       if (read === generation.current) setError(setupErrorMessage(failed));
     }
-  }, [api, scope]);
+  }, [api, scope, readable]);
   useEffect(() => {
     setPlan(null);
     setError("");
