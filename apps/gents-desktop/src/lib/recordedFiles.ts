@@ -57,10 +57,17 @@ export async function imageText(image: FileImage): Promise<string | null> {
 
 const trimEnd = (path: string) => path.replace(/[\\/]+$/, "");
 
-/** Whether a recorded change is the file the tool reported, which may be
-    given absolute or relative to the tool's root. */
-export const isReported = (change: FileChangeImages, reported: string) =>
-  change.path === reported || `${trimEnd(change.root)}/${change.path}` === reported;
+/** Whether a recorded change is the file the tool reported. The tool may
+    give it absolute, relative to the recorded root, or relative to the
+    session's folder, which can sit below that root (a change recorded
+    under the home folder for an edit of src/App.jsx in ~/project), so a
+    relative path also matches the end of the recorded one. */
+export const isReported = (change: FileChangeImages, reported: string) => {
+  const full = `${trimEnd(change.root)}/${change.path}`;
+  if (change.path === reported || full === reported) return true;
+  const relative = reported.replace(/^\.\//, "");
+  return !/^([\\/]|[A-Za-z]:)/.test(relative) && full.endsWith(`/${relative}`);
+};
 
 const sameImage = (a: FileImage, b: FileImage) =>
   a.kind === b.kind &&
