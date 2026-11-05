@@ -59,6 +59,10 @@ export function scopeText(scope: ShareScope): string {
   return `${scope.name} agent`;
 }
 
+/** what a share covers, inside a sentence */
+export const scopeInSentence = (scope: ShareScope) =>
+  scope.kind === "node" ? "the whole node" : `the ${scopeText(scope)}`;
+
 export const kindText = (kind: InviteKind) =>
   kind === "device" ? "Your device" : "A person";
 

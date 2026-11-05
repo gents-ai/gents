@@ -120,7 +120,7 @@ describe("who has access", () => {
     await menu(user, game, "Revoke…");
     const ask = within(game).getByRole("group", { name: "Revoke Bruno's access" });
     expect(ask.textContent).toContain(
-      "Revoke Bruno's access to Tic-tac-toe pack? It ends right away.",
+      "Revoke Bruno's access to the Tic-tac-toe pack? It ends right away.",
     );
     await user.click(within(ask).getByRole("button", { name: "Keep" }));
     expect(revoke).not.toHaveBeenCalled();

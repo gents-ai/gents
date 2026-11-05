@@ -18,6 +18,7 @@ import {
   MoreMenu,
   Party,
   partyName,
+  scopeInSentence,
   scopeText,
 } from "./parts";
 
@@ -120,7 +121,7 @@ export function MemberRow({
         ) : asking === "revoke" ? (
           <RevokeAsk
             who={who}
-            what={what}
+            what={scopeInSentence(scope)}
             busy={busy}
             onRevoke={() => void run("revoke")}
             onKeep={() => setAsking(null)}
@@ -162,17 +163,19 @@ function RevokeAsk({
     <div
       role="group"
       aria-label={`Revoke ${who}'s access`}
-      className="flex flex-wrap items-center gap-2 text-sm"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm"
     >
-      <span>
+      <span className="min-w-0 flex-1">
         Revoke {who}'s access to {what}? It ends right away.
       </span>
-      <Button size="sm" variant="destructive" disabled={busy} onClick={onRevoke}>
-        {busy ? "Revoking…" : "Revoke"}
-      </Button>
-      <Button size="sm" variant="ghost" disabled={busy} onClick={onKeep}>
-        Keep
-      </Button>
+      <span className="ml-auto flex shrink-0 gap-2">
+        <Button size="sm" variant="outline" disabled={busy} onClick={onKeep}>
+          Keep
+        </Button>
+        <Button size="sm" variant="destructive" disabled={busy} onClick={onRevoke}>
+          {busy ? "Revoking…" : "Revoke"}
+        </Button>
+      </span>
     </div>
   );
 }
