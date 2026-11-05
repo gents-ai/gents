@@ -9,6 +9,7 @@ mod instructions;
 pub(crate) mod journal;
 pub(crate) mod overlay;
 mod path_capability;
+mod publication;
 mod quickstart;
 mod runtime;
 
@@ -51,7 +52,8 @@ pub use journal::{
     ActionJournalState,
 };
 pub use path_capability::WorkspacePathCapability;
-pub use quickstart::provision_read_only_workspace;
+pub(crate) use publication::flush_workspace_docs;
+pub use quickstart::{provision_read_only_workspace, WorkspaceProvisioningSelection};
 pub use runtime::cleanup_workspace;
 pub(crate) use runtime::{
     integrate_on_integrator_success, materialize_workspace_binding,
