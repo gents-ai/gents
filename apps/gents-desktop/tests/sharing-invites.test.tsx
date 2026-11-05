@@ -62,8 +62,14 @@ describe("inviting to the node", () => {
     const { profiles } = show();
     await user.click(await screen.findByRole("button", { name: "Invite…" }));
     const dialog = await screen.findByTestId("invite-dialog");
+    /* a person starts on something narrower than the whole node */
+    expect(await within(dialog).findByText("Make moves as themselves")).toBeTruthy();
+    await choose(user, "What they get", "Whole node");
     expect(
       await within(dialog).findByText("Everything on this node, as you"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText(/They'd have this whole node, as you/),
     ).toBeTruthy();
     await user.click(within(dialog).getByRole("combobox", { name: "What they get" }));
     const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
@@ -89,14 +95,12 @@ describe("inviting to the node", () => {
     const { createInvite } = show("sharing-empty");
     await user.click(await screen.findByRole("button", { name: "Invite…" }));
     const dialog = await screen.findByTestId("invite-dialog");
-    await within(dialog).findByText("Everything on this node, as you");
-    await choose(user, "What they get", "tic_tac_toe pack");
     await within(dialog).findByText("Make moves as themselves");
-    await choose(user, "Profile", "Viewer");
+    await choose(user, "What they can do", "Viewer");
     await choose(user, "Expires after", "7 days");
     await choose(user, "Can be used", "Any number of times");
     await user.click(
-      within(dialog).getByRole("checkbox", { name: /Let them in without asking me/ }),
+      within(dialog).getByRole("switch", { name: "Let them in without asking me" }),
     );
     await user.click(within(dialog).getByRole("button", { name: "Make invite" }));
     expect(createInvite).toHaveBeenCalledWith(expect.any(String), {
@@ -125,10 +129,9 @@ describe("inviting to the node", () => {
     const { createInvite } = show("sharing-empty");
     await user.click(await screen.findByRole("button", { name: "Invite…" }));
     const dialog = await screen.findByTestId("invite-dialog");
+    await within(dialog).findByText("Make moves as themselves");
+    await user.click(within(dialog).getByRole("button", { name: "My device" }));
     await within(dialog).findByText("Everything on this node, as you");
-    await user.click(
-      within(dialog).getByRole("radio", { name: /One of your devices/ }),
-    );
     await user.click(within(dialog).getByRole("button", { name: "Make invite" }));
     expect(createInvite).toHaveBeenCalledWith(expect.any(String), {
       kind: "device",
@@ -146,7 +149,7 @@ describe("inviting to the node", () => {
     createInvite.mockRejectedValueOnce(new Error("invites are paused"));
     await user.click(await screen.findByRole("button", { name: "Invite…" }));
     const dialog = await screen.findByTestId("invite-dialog");
-    await within(dialog).findByText("Everything on this node, as you");
+    await within(dialog).findByText("Make moves as themselves");
     await user.click(within(dialog).getByRole("button", { name: "Make invite" }));
     expect((await within(dialog).findByRole("alert")).textContent).toContain(
       "invites are paused",

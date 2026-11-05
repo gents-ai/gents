@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
-import { Checkbox } from "@gents/ui/components/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -9,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@gents/ui/components/dialog";
-import { RadioGroup, RadioGroupItem } from "@gents/ui/components/radio-group";
 import {
   Select,
   SelectContent,
@@ -18,6 +16,8 @@ import {
   SelectValue,
 } from "@gents/ui/components/select";
 import { Spinner } from "@gents/ui/components/spinner";
+import { Switch } from "@gents/ui/components/switch";
+import { ToggleGroup, ToggleGroupItem } from "@gents/ui/components/toggle-group";
 import type {
   Invite,
   InviteKind,
@@ -100,7 +100,7 @@ export function InviteDialog({
   useEffect(() => {
     if (!open) return;
     setKind("person");
-    setKey("node");
+    setKey(scopes.find((s) => s.scope.kind !== "node")?.key ?? "node");
     setExpires(EXPIRIES[1]!.value);
     setUses("1");
     setPreApproved(false);
@@ -127,6 +127,17 @@ export function InviteDialog({
       current = false;
     };
   }, [sharing, nodeDid, key, open]);
+
+  /* a person starts on something narrower than the whole node, where there is
+     something; one's own device starts on the node */
+  const startFor = (next: InviteKind) =>
+    next === "device"
+      ? "node"
+      : (scopes.find((s) => s.scope.kind !== "node")?.key ?? "node");
+  function choose(next: InviteKind) {
+    setKind(next);
+    setKey(startFor(next));
+  }
 
   const offered = profiles.state === "read" ? profiles.profiles : [];
   const profile = offered.find((p) => p.id === profileId) ?? null;
@@ -163,161 +174,133 @@ export function InviteDialog({
         if (!next && !creating) onClose();
       }}
     >
-      <DialogContent className="sm:max-w-lg" data-testid="invite-dialog">
+      <DialogContent className="sm:max-w-xl" data-testid="invite-dialog">
         <DialogHeader>
           <DialogTitle>{made ? "Invite ready" : `Invite to ${name}`}</DialogTitle>
           <DialogDescription>
             {made
               ? "Send the link or the code, or let them scan the QR code."
-              : "Choose who it's for and what they get. Nothing is shared until they join."}
+              : "Nothing is shared until they join."}
           </DialogDescription>
         </DialogHeader>
 
         {made ? (
           <InviteDetails invite={made} />
         ) : (
-          <div className="grid gap-4 text-sm">
-            <div className="grid gap-1.5">
-              <span className="text-muted-foreground">Who it's for</span>
-              <RadioGroup
-                value={kind}
-                onValueChange={(value) => setKind(value as InviteKind)}
-                aria-label="Who it's for"
-                className="flex flex-wrap gap-4"
-              >
-                <label className="flex items-center gap-2">
-                  <RadioGroupItem value="person" disabled={creating} /> A person
-                </label>
-                <label className="flex items-center gap-2">
-                  <RadioGroupItem value="device" disabled={creating} /> One of your
-                  devices
-                </label>
-              </RadioGroup>
-            </div>
+          <div className="grid text-sm">
+            <ul className="divide-y divide-border/60 border-y border-border/60">
+              <InviteRow label="Who it's for">
+                <ToggleGroup
+                  aria-label="Who it's for"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  value={[kind]}
+                  onValueChange={(next: string[]) =>
+                    next[0] && choose(next[0] as InviteKind)
+                  }
+                >
+                  <ToggleGroupItem
+                    value="person"
+                    className="flex-1"
+                    disabled={creating}
+                  >
+                    A person
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="device"
+                    className="flex-1"
+                    disabled={creating}
+                  >
+                    My device
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </InviteRow>
 
-            <div className="grid gap-1.5">
-              <span className="text-muted-foreground">What they get</span>
-              <Select
-                items={scopeItems}
-                value={key}
-                onValueChange={(next) => next && setKey(next as string)}
+              <InviteRow
+                label="What they get"
+                hint={
+                  kind === "person" && scope.kind === "node"
+                    ? "They'd have this whole node, as you. Share a pack or an agent if that's enough."
+                    : undefined
+                }
               >
-                <SelectTrigger aria-label="What they get" disabled={creating}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {scopeItems.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+                <InviteSelect
+                  label="What they get"
+                  items={scopeItems}
+                  value={key}
+                  disabled={creating}
+                  onChange={setKey}
+                />
+              </InviteRow>
 
-            <div className="grid gap-1.5">
-              <span className="text-muted-foreground">Profile</span>
-              {profiles.state === "reading" ? (
-                <span className="flex items-center gap-2 text-muted-foreground">
-                  <Spinner /> Reading the profiles
-                </span>
-              ) : profiles.state === "unread" ? (
-                <p role="alert" className="text-destructive">
-                  Couldn't read the profiles: {profiles.error}
-                </p>
-              ) : offered.length === 0 ? (
-                <p className="text-muted-foreground">
-                  No profile is offered for this. Choose something else to share.
-                </p>
-              ) : (
-                <>
-                  <Select
+              <InviteRow
+                label="What they can do"
+                hint={profile?.grants.length ? <Grants profile={profile} /> : undefined}
+              >
+                {profiles.state === "reading" ? (
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    <Spinner /> Reading
+                  </span>
+                ) : profiles.state === "read" && offered.length > 0 ? (
+                  <InviteSelect
+                    label="What they can do"
                     items={profileItems}
                     value={profileId}
-                    onValueChange={(next) => next && setProfileId(next as string)}
-                  >
-                    <SelectTrigger aria-label="Profile" disabled={creating}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {profileItems.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {profile && <Grants profile={profile} />}
-                </>
-              )}
-            </div>
+                    disabled={creating}
+                    onChange={setProfileId}
+                  />
+                ) : (
+                  <span className="text-muted-foreground">Not available</span>
+                )}
+              </InviteRow>
 
-            <div className="flex flex-wrap gap-4">
-              <div className="grid gap-1.5">
-                <span className="text-muted-foreground">Expires after</span>
-                <Select
+              <InviteRow label="Expires after">
+                <InviteSelect
+                  label="Expires after"
                   items={EXPIRIES}
                   value={expires}
-                  onValueChange={(next) => next && setExpires(next as string)}
-                >
-                  <SelectTrigger
-                    className="w-36"
-                    aria-label="Expires after"
-                    disabled={creating}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {EXPIRIES.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <span className="text-muted-foreground">Can be used</span>
-                <Select
+                  disabled={creating}
+                  onChange={setExpires}
+                />
+              </InviteRow>
+
+              <InviteRow label="Can be used">
+                <InviteSelect
+                  label="Can be used"
                   items={USES}
                   value={uses}
-                  onValueChange={(next) => next && setUses(next as string)}
-                >
-                  <SelectTrigger
-                    className="w-48"
-                    aria-label="Can be used"
-                    disabled={creating}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {USES.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+                  disabled={creating}
+                  onChange={setUses}
+                />
+              </InviteRow>
 
-            <label className="flex items-start gap-2">
-              <Checkbox
-                className="mt-0.5"
-                checked={preApproved}
-                disabled={creating}
-                onCheckedChange={(checked) => setPreApproved(checked === true)}
-              />
-              <span className="grid gap-0.5">
-                Let them in without asking me
-                <span className="text-xs text-muted-foreground">
-                  Anyone with this invite joins as soon as they use it.
-                </span>
-              </span>
-            </label>
+              <InviteRow
+                label="Let them in without asking me"
+                hint="Anyone with this invite joins as soon as they use it."
+                end
+              >
+                <Switch
+                  aria-label="Let them in without asking me"
+                  checked={preApproved}
+                  disabled={creating}
+                  onCheckedChange={setPreApproved}
+                />
+              </InviteRow>
+            </ul>
 
+            {profiles.state === "unread" && (
+              <p role="alert" className="mt-3 text-destructive">
+                Couldn't read what they can do: {profiles.error}
+              </p>
+            )}
+            {profiles.state === "read" && offered.length === 0 && (
+              <p className="mt-3 text-muted-foreground">
+                Nothing is offered for this. Choose something else to share.
+              </p>
+            )}
             {error && (
-              <p role="alert" className="break-words text-destructive">
+              <p role="alert" className="mt-3 break-words text-destructive">
                 Couldn't make the invite: {error}
               </p>
             )}
@@ -348,6 +331,64 @@ export function InviteDialog({
 }
 
 /** what a profile lets the other side do, as the runtime words it */
+function InviteRow({
+  label,
+  hint,
+  end = false,
+  children,
+}: {
+  label: string;
+  hint?: ReactNode;
+  /** the control keeps its own size, at the row's end */
+  end?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <li className="flex items-center gap-6 py-3">
+      <div className="grid min-w-0 flex-1 gap-0.5">
+        <span>{label}</span>
+        {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
+      </div>
+      <div className={end ? "flex shrink-0 justify-end" : "w-52 shrink-0"}>
+        {children}
+      </div>
+    </li>
+  );
+}
+
+function InviteSelect({
+  label,
+  items,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  items: readonly { value: string; label: string }[];
+  value: string | null;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Select
+      items={[...items]}
+      value={value}
+      onValueChange={(next) => next && onChange(next as string)}
+    >
+      <SelectTrigger aria-label={label} disabled={disabled} className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function Grants({ profile }: { profile: ShareProfile }) {
   if (profile.grants.length === 0) return null;
   return (
