@@ -1927,6 +1927,30 @@
           "markdownDescription": "Denies the desktop_ux_data_surfaces command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_ux_data_unwatch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-data-unwatch",
+          "markdownDescription": "Enables the desktop_ux_data_unwatch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_data_unwatch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-data-unwatch",
+          "markdownDescription": "Denies the desktop_ux_data_unwatch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_ux_data_watch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-data-watch",
+          "markdownDescription": "Enables the desktop_ux_data_watch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_data_watch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-data-watch",
+          "markdownDescription": "Denies the desktop_ux_data_watch command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_ux_plugin_source command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-ux-plugin-source",
@@ -2089,10 +2113,10 @@
           "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`\n- `allow-desktop-workflows-dynamic`\n- `allow-desktop-workflow-dynamic`"
         },
         {
-          "description": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`",
+          "description": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`\n- `allow-desktop-ux-data-watch`\n- `allow-desktop-ux-data-unwatch`",
           "type": "string",
           "const": "ux-plugins-read",
-          "markdownDescription": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`"
+          "markdownDescription": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`\n- `allow-desktop-ux-data-watch`\n- `allow-desktop-ux-data-unwatch`"
         },
         {
           "description": "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`\n- `allow-desktop-ux-data-call`",

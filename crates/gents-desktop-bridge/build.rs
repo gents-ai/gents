@@ -33,6 +33,8 @@ const COMMANDS: &[&str] = &[
     "desktop_plugin_call",
     "desktop_ux_data_call",
     "desktop_ux_data_surfaces",
+    "desktop_ux_data_watch",
+    "desktop_ux_data_unwatch",
     "desktop_pack_wire",
     "desktop_pack_wire_sources",
     "desktop_workflows_dynamic",

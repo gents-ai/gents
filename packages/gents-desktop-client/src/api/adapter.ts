@@ -17,6 +17,7 @@ export function createDesktopApiAdapter(
   );
 
   return {
+    watchUxData: transport.watchUxData?.bind(transport),
     readAttachment: (path) =>
       invokeDesktop("desktop_attachment_read", { path }),
     requestAttachments: (nodeDid, sessionId, requestId, messageKey, index) =>

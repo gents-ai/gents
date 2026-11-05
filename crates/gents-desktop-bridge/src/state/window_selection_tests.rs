@@ -124,6 +124,18 @@ async fn window_scope_reaches_the_core_and_survives_core_recreation() {
 }
 
 #[test]
+fn destroying_a_window_cancels_only_its_pack_observations() {
+    let (_temp, state) = state();
+    state.register_window("main");
+    state.register_window("second");
+    let main = state.ux_watches.insert("main", "same").unwrap();
+    let other = state.ux_watches.insert("second", "same").unwrap();
+    state.window_event("main", &tauri::WindowEvent::Destroyed);
+    assert!(main.is_cancelled());
+    assert!(!other.is_cancelled());
+}
+
+#[test]
 fn destroying_or_navigating_a_window_retires_only_its_prompt_subscriptions() {
     let (_temp, state) = state();
     state.register_window("main");

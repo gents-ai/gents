@@ -91,6 +91,11 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
     data: {
       call: (listing, nodeDid, surface, tool, args) =>
         app.actions.callUxData({ ux: listing, nodeDid, surface, tool, args }),
+      watch: (listing, nodeDid, surface, tool, args, listener) =>
+        app.actions.watchUxData(
+          { ux: listing, nodeDid, surface, tool, args },
+          listener,
+        ),
       surfaces: (listing, nodeDid) =>
         app.actions
           .listUxDataSurfaces({ ux: listing, nodeDid })

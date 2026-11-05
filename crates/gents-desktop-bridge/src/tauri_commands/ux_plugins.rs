@@ -121,7 +121,7 @@ pub async fn desktop_plugin_call(
     Ok(serde_json::json!({ "output": output }))
 }
 
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UxDataCallRequest {
     /// The runtime listing of the calling ux plugin (`<ns>/<pack>/<name>`);
@@ -179,4 +179,113 @@ pub async fn desktop_ux_data_surfaces(
     packs::ux_data_surfaces(home, access, request.ux, request.node_did)
         .await
         .map_err(failed)
+}
+
+#[tauri::command]
+pub fn desktop_ux_data_watch<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopAppState>,
+    request: UxDataCallRequest,
+    channel: tauri::ipc::Channel<Value>,
+) -> Result<String, BridgeError> {
+    let home = home(&state)?;
+    let core = current_core(&state).ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::ClientNotRunning,
+            "the desktop client is not started",
+        )
+    })?;
+    let access = core
+        .local_home_operator_access(&request.node_did, &home)
+        .map_err(failed)?;
+    let gents::ConfigAccess::Graphql(endpoint) = access else {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "pack observation needs a managed runtime",
+        ));
+    };
+    let mut url = reqwest::Url::parse(endpoint.url())
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    url.set_path("/packs/ux/watch");
+    url.set_query(None);
+    url.set_fragment(None);
+    let id = uuid::Uuid::new_v4().to_string();
+    let label = window.label().to_owned();
+    let registry = state.ux_watches.clone();
+    let cancel = {
+        let bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        if !bridge.window_selects_node(&label, &request.node_did) {
+            return Err(BridgeError::untyped("the selected node changed"));
+        }
+        registry.insert(&label, &id).map_err(failed)?
+    };
+    let task_id = id.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = watch_stream(endpoint, url, request, &channel, &cancel).await;
+        if result.is_err() && !cancel.is_cancelled() {
+            let _ = channel.send(
+                serde_json::json!({"kind":"error", "message":"Pack updates are unavailable."}),
+            );
+        }
+        registry.cancel(&label, &task_id);
+    });
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn desktop_ux_data_unwatch<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopAppState>,
+    id: String,
+) {
+    state.ux_watches.cancel(window.label(), &id);
+}
+
+async fn watch_stream(
+    endpoint: gents::store::config_client::GraphqlEndpoint,
+    url: reqwest::Url,
+    request: UxDataCallRequest,
+    channel: &tauri::ipc::Channel<Value>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    loop {
+        let started = tokio::time::Instant::now();
+        let builder = endpoint.authorize(client.post(url.clone()).json(&request))?;
+        let mut response = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(()),
+            result = tokio::time::timeout(std::time::Duration::from_secs(12), builder.send()) => result??,
+        };
+        anyhow::ensure!(response.status().is_success(), "pack observation refused");
+        let mut buffer = Vec::new();
+        loop {
+            let next = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Ok(()),
+                result = response.chunk() => result?,
+            };
+            let Some(chunk) = next else { break };
+            buffer.extend_from_slice(&chunk);
+            while let Some(value) = crate::ux_watch::take_event(&mut buffer)? {
+                if cancel.is_cancelled() {
+                    return Ok(());
+                }
+                channel.send(serde_json::json!({"kind":"snapshot", "value": value}))?;
+            }
+        }
+        anyhow::ensure!(
+            buffer.is_empty(),
+            "pack observation ended with an incomplete event"
+        );
+        // The server bounds each stream. Reconnect to obtain a fresh snapshot.
+        let delay = std::time::Duration::from_secs(1).saturating_sub(started.elapsed());
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(delay) => {},
+        }
+    }
 }
